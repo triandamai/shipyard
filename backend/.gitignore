@@ -1,0 +1,20 @@
+# Build output
+/target/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+config.toml
+config.*.toml
+
+# Cargo lock (keep for applications, omit for libraries)
+# Cargo.lock
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store

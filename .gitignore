@@ -1,0 +1,57 @@
+# ── Build artifacts ──────────────────────────────────────────────────────────
+/target
+**/target/
+/frontend/node_modules
+/frontend/.svelte-kit
+/frontend/build
+
+# ── Environment / secrets — NEVER commit these ───────────────────────────────
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.test
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+**/.DS_Store
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Docker / infra local data ─────────────────────────────────────────────────
+infra/data/
+/opt/shipyard/
+
+# ── Node / frontend ───────────────────────────────────────────────────────────
+node_modules/
+.svelte-kit/
+build/
+.output/
+.vercel/
+.netlify/
+.wrangler/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# ── Certificates / keys ───────────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.local
+.cache/
+tmp/
