@@ -1,13 +1,17 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Anchor, Container, Globe, Shield, Zap, ArrowRight, Terminal, Copy, Check, ChevronRight } from '@lucide/svelte';
 	import { SHIPYARD_VERSION } from '$lib/version';
 
 	let copied = $state(false);
+	let installCmd = $state('curl -fsSL https://shipyard.trian.space/install.sh | bash');
 
-	const INSTALL_CMD = 'curl -fsSL https://get.shipyard.run/install.sh | bash';
+	onMount(() => {
+		installCmd = `curl -fsSL ${window.location.protocol}//${window.location.host}/install.sh | bash`;
+	});
 
 	async function copyInstall() {
-		await navigator.clipboard.writeText(INSTALL_CMD);
+		await navigator.clipboard.writeText(installCmd);
 		copied = true;
 		setTimeout(() => (copied = false), 2000);
 	}
@@ -168,7 +172,7 @@
 					<span>Quick install — Linux / macOS with Docker</span>
 				</div>
 				<div class="install-card-body">
-					<code class="install-cmd">{INSTALL_CMD}</code>
+					<code class="install-cmd">{installCmd}</code>
 					<button class="copy-btn" onclick={copyInstall} aria-label="Copy install command">
 						{#if copied}
 							<Check size={14} />
@@ -218,7 +222,7 @@
 						<span class="t-dot t-green"></span>
 						<span class="t-title">install.sh</span>
 					</div>
-					<pre class="terminal-body"><span class="t-dim">$</span> <span class="t-cmd">curl -fsSL https://get.shipyard.run/install.sh | bash</span>
+					<pre class="terminal-body"><span class="t-dim">$</span> <span class="t-cmd">{installCmd}</span>
 
 <span class="t-green-txt">✔</span> Docker 26.1.4 found
 <span class="t-green-txt">✔</span> Docker Compose v2.27 found
