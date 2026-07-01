@@ -115,6 +115,12 @@
 	let isDeleting = $state(false);
 	let deleteError = $state('');
 
+	// ── Webhook ───────────────────────────────────────────────────────
+	let webhookToken     = $state('');
+	let webhookProvider  = $state<'github' | 'gitlab' | 'gitea'>('github');
+	let isLoadingWebhook = $state(false);
+	let webhookCopied    = $state(false);
+
 	// ── MQTT cleanup ─────────────────────────────────────────────────
 	let unsubscribeService: (() => void) | null = null;
 	let unsubscribeDeployment: (() => void) | null = null;
@@ -682,6 +688,25 @@
 		isSavingSettings = false;
 	}
 
+	async function loadWebhookToken() {
+		if (isLoadingWebhook || webhookToken) return;
+		isLoadingWebhook = true;
+		const res = await api.getServiceEnvs(serviceId);
+		if (res.data) {
+			const tokenEnv = res.data.find(e => e.key === '__WEBHOOK_TOKEN__');
+			const val: string = (tokenEnv as any)?.value ?? '';
+			if (val && val !== '***') webhookToken = val;
+		}
+		isLoadingWebhook = false;
+	}
+
+	async function copyWebhookUrl() {
+		const url = `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`;
+		await navigator.clipboard.writeText(url);
+		webhookCopied = true;
+		setTimeout(() => { webhookCopied = false; }, 2000);
+	}
+
 	function addPort() { editPorts = [...editPorts, '']; }
 	function removePort(i: number) { editPorts = editPorts.filter((_, idx) => idx !== i); }
 	function updatePort(i: number, val: string) {
@@ -694,6 +719,7 @@
 		activeTab = tab;
 		if (tab === 'replicas' && containers.length === 0) await loadContainers();
 		if ((tab === 'deploy' || tab === 'logs') && deployments.length === 0) await loadDeployments();
+		if (tab === 'logs') void loadWebhookToken();
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'settings') initSettingsFromService();
@@ -1243,6 +1269,47 @@
 			<!-- ── Logs (deployment list) ── -->
 			{:else if activeTab === 'logs'}
 				<div class="logs-section">
+					<!-- Webhook trigger URL -->
+					<div class="webhook-section">
+						<div class="webhook-header">
+							<span class="webhook-label">Deployment webhook</span>
+							<div class="webhook-provider-tabs">
+								{#each (['github', 'gitlab', 'gitea'] as const) as p}
+									<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
+										{p.charAt(0).toUpperCase() + p.slice(1)}
+									</button>
+								{/each}
+							</div>
+						</div>
+						<div class="webhook-url-row">
+							<input
+								class="webhook-url-input"
+								readonly
+								value={webhookToken
+									? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+									: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/{token}`}
+							/>
+							<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken}>
+								{#if webhookCopied}
+									<CheckCircle2 size={13} />Copied
+								{:else}
+									<Copy size={13} />Copy
+								{/if}
+							</button>
+						</div>
+						{#if !webhookToken}
+							<div class="webhook-token-row">
+								<input
+									class="webhook-token-input"
+									placeholder="Paste __WEBHOOK_TOKEN__ value to build URL…"
+									bind:value={webhookToken}
+								/>
+							</div>
+							<div class="webhook-hint">
+								Set <code>__WEBHOOK_TOKEN__</code> as an env var on this service. Paste its value above to build the full URL.
+							</div>
+						{/if}
+					</div>
 					<div class="logs-intro">Select a deployment to view its logs.</div>
 					{#if deployments.length === 0}
 						<div class="empty-state-msg">No deployments yet.</div>
@@ -1761,7 +1828,12 @@
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 		padding: 0 8px;
+		overflow-x: auto;
+		overflow-y: hidden;
+		flex-wrap: nowrap;
+		scrollbar-width: none;
 	}
+	.tabs-row::-webkit-scrollbar { display: none; }
 	.tab-btn {
 		padding: 9px 12px;
 		font-size: 12px; font-weight: 500;
@@ -1999,6 +2071,101 @@
 		text-align: center;
 		color: var(--text-muted);
 		font-size: 13px;
+	}
+
+	/* ── Webhook section ── */
+	.webhook-section {
+		border-bottom: 1px solid var(--border);
+		padding: 10px 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+		background: var(--bg-surface);
+		flex-shrink: 0;
+	}
+	.webhook-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.webhook-label {
+		font-size: 11px; font-weight: 600;
+		color: var(--text-dim);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.webhook-provider-tabs { display: flex; gap: 2px; }
+	.webhook-provider-tabs button {
+		font-size: 10px; font-weight: 500; font-family: var(--font-sans);
+		padding: 2px 8px;
+		border-radius: 4px;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+	.webhook-provider-tabs button:hover { color: var(--text-primary); }
+	.webhook-provider-tabs button.active {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: rgba(37,99,235,0.07);
+	}
+	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
+	.webhook-url-input {
+		flex: 1;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-secondary);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 5px 8px;
+		outline: none;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.webhook-copy-btn {
+		display: flex; align-items: center; gap: 4px;
+		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
+		padding: 5px 10px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		cursor: pointer;
+		white-space: nowrap;
+		flex-shrink: 0;
+		transition: all var(--transition-fast);
+	}
+	.webhook-copy-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+	.webhook-copy-btn:disabled { opacity: 0.5; cursor: default; }
+	.webhook-token-row { display: flex; }
+	.webhook-token-input {
+		flex: 1;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-primary);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 5px 8px;
+		outline: none;
+		transition: border-color var(--transition-fast);
+	}
+	.webhook-token-input:focus { border-color: var(--accent); }
+	.webhook-token-input::placeholder { color: var(--text-dim); }
+	.webhook-hint { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
+	.webhook-hint code {
+		font-family: var(--font-mono);
+		background: var(--bg-elevated);
+		padding: 1px 4px;
+		border-radius: 3px;
+		color: var(--text-secondary);
+		font-size: 10px;
 	}
 
 	/* ── Logs tab (deployment list) ── */
@@ -2856,13 +3023,8 @@
 
 	@media (max-width: 639px) {
 		.tabs-row {
-			overflow-x: auto;
-			overflow-y: hidden;
-			flex-wrap: nowrap;
 			-webkit-overflow-scrolling: touch;
-			scrollbar-width: none;
 		}
-		.tabs-row::-webkit-scrollbar { display: none; }
 
 		.header-actions {
 			flex-wrap: wrap;

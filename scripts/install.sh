@@ -1,258 +1,491 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Shipyard PaaS Installer
-# Usage: curl -sSL https://get.shipyard.dev | bash
-#        or: sudo bash scripts/install.sh
-#
-# Requirements: Docker 24+, PostgreSQL 15+, Mosquitto 2+, openssl
+# ── Colors ────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
 
-SHIPYARD_VERSION="${SHIPYARD_VERSION:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/shipyard}"
-DATA_DIR="${DATA_DIR:-/opt/shipyard/data}"
-CONFIG_DIR="${CONFIG_DIR:-/opt/shipyard/config}"
-BINARY_RELEASE_URL="https://github.com/shipyard/shipyard/releases/${SHIPYARD_VERSION}/download"
+info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
+success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
+error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
+step()    { echo -e "\n${BOLD}── $* ──${RESET}"; }
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+INSTALL_DIR="/opt/shipyard"
+BACKEND_IMAGE="triandamai827/shipyard-backend"
+FRONTEND_IMAGE="triandamai827/shipyard-frontend"
 
-info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
-success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
-
-echo ""
-echo "  Shipyard PaaS Installer"
-echo "  ========================"
+# ── Banner ────────────────────────────────────────────────────────────────────
+echo -e "${BOLD}"
+echo "  ███████╗██╗  ██╗██╗██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ "
+echo "  ██╔════╝██║  ██║██║██╔══██╗╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗"
+echo "  ███████╗███████║██║██████╔╝ ╚████╔╝ ███████║██████╔╝██║  ██║"
+echo "  ╚════██║██╔══██║██║██╔═══╝   ╚██╔╝  ██╔══██║██╔══██╗██║  ██║"
+echo "  ███████║██║  ██║██║██║        ██║   ██║  ██║██║  ██║██████╔╝"
+echo "  ╚══════╝╚═╝  ╚═╝╚═╝╚═╝        ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ "
+echo -e "${RESET}"
+echo -e "${BOLD}  Self-hosted container orchestration platform${RESET}"
 echo ""
 
-# ── Privilege check ──────────────────────────────────────────────────────────
+# ── Root check ────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-    error "This installer must be run as root. Try: sudo bash install.sh"
+    error "Please run as root: sudo bash install.sh"
 fi
 
-# ── Detect OS ────────────────────────────────────────────────────────────────
-OS=""
+# ── Detect OS ─────────────────────────────────────────────────────────────────
+OS_ID=""
+OS_VERSION_ID=""
 if [[ -f /etc/os-release ]]; then
     # shellcheck source=/dev/null
     source /etc/os-release
-    OS="${ID:-unknown}"
+    OS_ID="${ID:-}"
+    OS_VERSION_ID="${VERSION_ID:-}"
 fi
-info "OS: ${OS:-unknown}"
+info "OS: ${OS_ID:-unknown} ${OS_VERSION_ID}"
 
-# ── Check prerequisites ──────────────────────────────────────────────────────
-info "Checking prerequisites..."
-command -v docker  &>/dev/null || error "Docker is not installed. Install Docker 24+ first."
-command -v openssl &>/dev/null || error "openssl is required for secret generation."
-command -v psql    &>/dev/null || warn  "psql not found — PostgreSQL setup will be skipped."
-command -v redis-cli &>/dev/null && HAS_REDIS=true || HAS_REDIS=false
+# ── Package installer helper ──────────────────────────────────────────────────
+install_pkg() {
+    case "${OS_ID}" in
+        ubuntu|debian|linuxmint|pop)
+            apt-get install -y -q "$@" ;;
+        centos|rhel|rocky|almalinux|ol)
+            dnf install -y "$@" 2>/dev/null || yum install -y "$@" ;;
+        fedora)
+            dnf install -y "$@" ;;
+        arch|manjaro)
+            pacman -Sy --noconfirm "$@" ;;
+        *)
+            error "Unsupported OS '${OS_ID}'. Install $* manually and re-run." ;;
+    esac
+}
 
-DOCKER_VERSION=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
-info "Docker version: ${DOCKER_VERSION}"
+# ── Base utilities ────────────────────────────────────────────────────────────
+step "Checking base utilities"
 
-# ── Initialize Docker Swarm if needed ────────────────────────────────────────
-if ! docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q "active"; then
-    warn "Docker Swarm is not active — initializing..."
-    ADVERTISE_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
-    docker swarm init --advertise-addr "${ADVERTISE_ADDR}" \
-        || error "Failed to initialize Docker Swarm."
-    success "Docker Swarm initialized (manager: ${ADVERTISE_ADDR})"
-else
-    success "Docker Swarm is active"
-fi
-
-# ── Create directories ───────────────────────────────────────────────────────
-info "Creating directories..."
-mkdir -p "${INSTALL_DIR}/bin" "${DATA_DIR}" "${CONFIG_DIR}" "${INSTALL_DIR}/backups"
-chmod 750 "${INSTALL_DIR}" "${CONFIG_DIR}"
-
-# ── Generate secrets ─────────────────────────────────────────────────────────
-info "Generating secrets..."
-JWT_SECRET=$(openssl rand -hex 32)
-SECRET_KEY=$(openssl rand -hex 32)
-DB_PASSWORD=$(openssl rand -hex 16)
-
-# ── Write config ─────────────────────────────────────────────────────────────
-info "Writing ${CONFIG_DIR}/config.toml ..."
-cat > "${CONFIG_DIR}/config.toml" <<TOML
-[server]
-host = "0.0.0.0"
-port = 3001
-
-[database]
-url = "postgres://shipyard:${DB_PASSWORD}@localhost:5432/shipyard"
-max_connections = 10
-
-[auth]
-jwt_secret = "${JWT_SECRET}"
-access_token_expiry = 3600
-refresh_token_expiry = 604800
-secret_key = "${SECRET_KEY}"
-
-[mqtt]
-host = "localhost"
-port = 1883
-client_id = "shipyard-api"
-
-[docker]
-label_prefix = "platform"
-
-[traefik]
-network = "platform_proxy"
-entrypoint_http = "web"
-entrypoint_https = "websecure"
-cert_resolver = "letsencrypt"
-
-[smtp]
-enabled = false
-host = "smtp.example.com"
-port = 587
-username = ""
-password = ""
-from_address = "noreply@example.com"
-from_name = "Shipyard"
-
-[tls]
-enabled = false
-cert_path = "/etc/shipyard/tls/cert.pem"
-key_path  = "/etc/shipyard/tls/key.pem"
-
-[redis]
-url = "redis://localhost:6379"
-
-data_dir = "${DATA_DIR}"
-TOML
-chmod 600 "${CONFIG_DIR}/config.toml"
-success "Config written"
-
-# ── Set up PostgreSQL ────────────────────────────────────────────────────────
-if command -v psql &>/dev/null; then
-    info "Setting up PostgreSQL..."
-    sudo -u postgres psql -c "CREATE USER shipyard WITH PASSWORD '${DB_PASSWORD}';" 2>/dev/null \
-        || warn "User 'shipyard' may already exist"
-    sudo -u postgres psql -c "CREATE DATABASE shipyard OWNER shipyard;" 2>/dev/null \
-        || warn "Database 'shipyard' may already exist"
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE shipyard TO shipyard;" 2>/dev/null \
-        || true
-    success "PostgreSQL ready (password saved in config)"
-else
-    warn "Create the database manually:"
-    warn "  CREATE USER shipyard WITH PASSWORD '${DB_PASSWORD}';"
-    warn "  CREATE DATABASE shipyard OWNER shipyard;"
+if ! command -v curl &>/dev/null; then
+    info "Installing curl..."
+    install_pkg curl
 fi
 
-# ── Install / verify Redis ───────────────────────────────────────────────────
-info "Setting up Redis..."
-if $HAS_REDIS; then
-    success "Redis is already installed ($(redis-cli --version))"
-else
-    case "${OS}" in
-        ubuntu|debian)
-            apt-get install -y redis-server
-            systemctl enable redis-server
-            systemctl start  redis-server
-            success "Redis installed via apt"
+if ! command -v openssl &>/dev/null; then
+    info "Installing openssl..."
+    install_pkg openssl
+fi
+
+success "Base utilities OK"
+
+# ── Docker Engine ─────────────────────────────────────────────────────────────
+step "Checking Docker"
+
+install_docker() {
+    info "Docker not found — installing via official script..."
+    case "${OS_ID}" in
+        ubuntu|debian|linuxmint|pop|centos|rhel|rocky|almalinux|ol|fedora)
+            curl -fsSL https://get.docker.com | sh
             ;;
-        centos|rhel|fedora|rocky|almalinux)
-            dnf install -y redis 2>/dev/null || yum install -y redis
-            systemctl enable redis
-            systemctl start  redis
-            success "Redis installed via dnf/yum"
+        arch|manjaro)
+            install_pkg docker
             ;;
         *)
-            warn "Could not install Redis automatically on OS '${OS}'."
-            warn "Install Redis manually and ensure it listens on localhost:6379."
-            warn "Remove the [redis] section from config.toml to disable caching."
+            error "Cannot auto-install Docker on '${OS_ID}'. Install Docker 24+ manually: https://docs.docker.com/engine/install/"
             ;;
     esac
-fi
+    systemctl enable --now docker
+    success "Docker installed and started"
+}
 
-# ── Docker overlay network ───────────────────────────────────────────────────
-info "Creating Docker overlay network 'platform_proxy'..."
-docker network create --driver overlay --attachable platform_proxy 2>/dev/null \
-    || info "Network 'platform_proxy' already exists"
-
-# ── Install binary ───────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
-WORKSPACE_CARGO="${SCRIPT_DIR}/../backend/Cargo.toml"
-
-if command -v cargo &>/dev/null && [[ -f "${WORKSPACE_CARGO}" ]]; then
-    info "Building from source (this may take several minutes)..."
-    cargo build --release --manifest-path "${WORKSPACE_CARGO}" 2>&1 | tail -5
-    cp "$(dirname "${WORKSPACE_CARGO}")/target/release/shipyard" "${INSTALL_DIR}/bin/shipyard"
-    chmod +x "${INSTALL_DIR}/bin/shipyard"
-    success "Binary built and installed"
+if ! command -v docker &>/dev/null; then
+    install_docker
 else
-    info "Downloading pre-built binary (${SHIPYARD_VERSION})..."
-    ARCH=$(uname -m)
-    case "${ARCH}" in
-        x86_64)  RUST_TARGET="x86_64-unknown-linux-gnu" ;;
-        aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
-        *)        error "Unsupported architecture: ${ARCH}" ;;
-    esac
-    curl -sSfL "${BINARY_RELEASE_URL}/shipyard-${RUST_TARGET}" \
-        -o "${INSTALL_DIR}/bin/shipyard" \
-        || error "Failed to download binary"
-    chmod +x "${INSTALL_DIR}/bin/shipyard"
-    success "Binary downloaded"
-fi
-
-# ── systemd service ──────────────────────────────────────────────────────────
-if command -v systemctl &>/dev/null; then
-    info "Installing systemd service..."
-    cat > /etc/systemd/system/shipyard.service <<UNIT
-[Unit]
-Description=Shipyard PaaS Platform
-After=network.target postgresql.service mosquitto.service redis.service redis-server.service
-Wants=postgresql.service redis.service redis-server.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${CONFIG_DIR}
-ExecStart=${INSTALL_DIR}/bin/shipyard
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=shipyard
-Environment=RUST_LOG=info
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    systemctl daemon-reload
-    systemctl enable shipyard
-    success "systemd service installed and enabled"
-fi
-
-# ── Backup script and daily cron ─────────────────────────────────────────────
-if [[ -f "${SCRIPT_DIR}/backup.sh" ]]; then
-    cp "${SCRIPT_DIR}/backup.sh" "${INSTALL_DIR}/bin/shipyard-backup"
-    chmod +x "${INSTALL_DIR}/bin/shipyard-backup"
-
-    if [[ -d /etc/cron.d ]]; then
-        printf '0 2 * * * root DATABASE_URL=postgres://shipyard:%s@localhost:5432/shipyard %s/bin/shipyard-backup >> /var/log/shipyard-backup.log 2>&1\n' \
-            "${DB_PASSWORD}" "${INSTALL_DIR}" > /etc/cron.d/shipyard-backup
-        success "Daily backup cron installed (02:00 UTC)"
+    DOCKER_VER=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "0.0.0")
+    DOCKER_MAJOR=$(echo "${DOCKER_VER}" | cut -d. -f1)
+    if [[ "${DOCKER_MAJOR}" -lt 24 ]]; then
+        warn "Docker v${DOCKER_VER} is older than the recommended minimum (24)."
+        warn "Upgrading: https://docs.docker.com/engine/install/"
+    else
+        success "Docker v${DOCKER_VER}"
     fi
 fi
 
-# ── Done ─────────────────────────────────────────────────────────────────────
-LISTEN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
+# ── Docker Compose plugin ─────────────────────────────────────────────────────
+if ! docker compose version &>/dev/null; then
+    info "Docker Compose plugin not found — installing..."
+    COMPOSE_VERSION="v2.27.1"
+    COMPOSE_DIR="/usr/local/lib/docker/cli-plugins"
+    mkdir -p "${COMPOSE_DIR}"
+
+    ARCH=$(uname -m)
+    case "${ARCH}" in
+        x86_64)  COMPOSE_ARCH="x86_64" ;;
+        aarch64) COMPOSE_ARCH="aarch64" ;;
+        armv7l)  COMPOSE_ARCH="armv7" ;;
+        *)        error "Unsupported architecture for Docker Compose: ${ARCH}" ;;
+    esac
+
+    curl -fsSL \
+        "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}" \
+        -o "${COMPOSE_DIR}/docker-compose"
+    chmod +x "${COMPOSE_DIR}/docker-compose"
+    success "Docker Compose ${COMPOSE_VERSION} installed"
+else
+    success "Docker Compose $(docker compose version --short 2>/dev/null || echo 'ok')"
+fi
+
+# ── Docker Buildx plugin ──────────────────────────────────────────────────────
+if ! docker buildx version &>/dev/null; then
+    info "Docker Buildx plugin not found — installing..."
+    BUILDX_VERSION="v0.14.1"
+    BUILDX_DIR="/usr/local/lib/docker/cli-plugins"
+    mkdir -p "${BUILDX_DIR}"
+
+    ARCH=$(uname -m)
+    case "${ARCH}" in
+        x86_64)  BUILDX_ARCH="amd64" ;;
+        aarch64) BUILDX_ARCH="arm64" ;;
+        armv7l)  BUILDX_ARCH="arm-v7" ;;
+        *)        warn "Buildx not available for ${ARCH} — skipping"; BUILDX_ARCH="" ;;
+    esac
+
+    if [[ -n "${BUILDX_ARCH}" ]]; then
+        curl -fsSL \
+            "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${BUILDX_ARCH}" \
+            -o "${BUILDX_DIR}/docker-buildx"
+        chmod +x "${BUILDX_DIR}/docker-buildx"
+        success "Docker Buildx ${BUILDX_VERSION} installed"
+    fi
+else
+    success "Docker Buildx $(docker buildx version 2>/dev/null | awk '{print $2}' | head -1)"
+fi
+
+success "Docker stack OK"
+
+# ── Already installed? ────────────────────────────────────────────────────────
+if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+    warn "Shipyard appears to already be installed at ${INSTALL_DIR}."
+    read -rp "Re-install / overwrite? [y/N] " REINSTALL
+    [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]] || { info "Aborted."; exit 0; }
+fi
+
+# ── Gather config ─────────────────────────────────────────────────────────────
+step "Configuration"
+
+read -rp "  Domain name (e.g. app.example.com): " DOMAIN
+[[ -n "${DOMAIN}" ]] || error "Domain name is required."
+
+read -rp "  Email for Let's Encrypt certificates: " ACME_EMAIL
+[[ -n "${ACME_EMAIL}" ]] || error "Email is required for Let's Encrypt."
+
+read -rp "  Image tag [latest]: " TAG
+TAG="${TAG:-latest}"
+
+BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
+FRONTEND_IMAGE_FULL="${FRONTEND_IMAGE}:${TAG}"
+
+read -rp "  Enable HTTPS / TLS? [Y/n]: " USE_HTTPS
+USE_HTTPS="${USE_HTTPS:-y}"
+
+if [[ "${USE_HTTPS}" == "y" || "${USE_HTTPS}" == "Y" || "${USE_HTTPS}" == "yes" || "${USE_HTTPS}" == "YES" || "${USE_HTTPS}" == "Yes" ]]; then
+    PROTOCOL="https"
+else
+    PROTOCOL="http"
+fi
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+step "Generating secrets"
+JWT_SECRET="$(openssl rand -hex 32)"
+SECRET_KEY="$(openssl rand -hex 32)"
+POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+success "Secrets generated"
+
+# ── Directories ───────────────────────────────────────────────────────────────
+step "Creating directories"
+mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/certs" "${INSTALL_DIR}/traefik/dynamic"
+chmod 700 "${INSTALL_DIR}"
+success "Directories ready at ${INSTALL_DIR}"
+
+# ── .env ──────────────────────────────────────────────────────────────────────
+info "Writing ${INSTALL_DIR}/.env..."
+cat > "${INSTALL_DIR}/.env" <<ENV
+# Shipyard — generated by install.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# DO NOT commit this file to version control.
+
+DOMAIN=${DOMAIN}
+ACME_EMAIL=${ACME_EMAIL}
+TAG=${TAG}
+BACKEND_IMAGE=${BACKEND_IMAGE_FULL}
+FRONTEND_IMAGE=${FRONTEND_IMAGE_FULL}
+PROTOCOL=${PROTOCOL}
+
+# Database
+POSTGRES_USER=shipyard
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_DB=shipyard
+SHIPYARD__DATABASE__URL=postgres://shipyard:${POSTGRES_PASSWORD}@postgres:5432/shipyard
+SHIPYARD__DATABASE__MAX_CONNECTIONS=10
+
+# MQTT
+SHIPYARD__MQTT__HOST=mqtt
+SHIPYARD__MQTT__PORT=1883
+SHIPYARD__MQTT__CLIENT_ID=shipyard-api
+
+# Auth
+SHIPYARD__AUTH__JWT_SECRET=${JWT_SECRET}
+SHIPYARD__AUTH__ACCESS_TOKEN_EXPIRY=3600
+SHIPYARD__AUTH__REFRESH_TOKEN_EXPIRY=604800
+SHIPYARD__AUTH__SECRET_KEY=${SECRET_KEY}
+
+# Server
+SHIPYARD__SERVER__HOST=0.0.0.0
+SHIPYARD__SERVER__PORT=3001
+
+# Docker
+SHIPYARD__DOCKER__LABEL_PREFIX=platform
+
+# Traefik
+SHIPYARD__TRAEFIK__NETWORK=platform_proxy
+SHIPYARD__TRAEFIK__ENTRYPOINT_HTTP=web
+SHIPYARD__TRAEFIK__ENTRYPOINT_HTTPS=websecure
+SHIPYARD__TRAEFIK__CERT_RESOLVER=letsencrypt
+SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR=${INSTALL_DIR}/traefik/dynamic
+
+# Data
+SHIPYARD__DATA_DIR=${INSTALL_DIR}/data
+
+RUST_LOG=shipyard=info,tower_http=warn
+ENV
+chmod 600 "${INSTALL_DIR}/.env"
+success ".env written"
+
+# ── rmqtt.toml ────────────────────────────────────────────────────────────────
+info "Writing ${INSTALL_DIR}/rmqtt.toml..."
+cat > "${INSTALL_DIR}/rmqtt.toml" <<'RMQTT'
+[node]
+id = 1
+
+[log]
+level = "warn"
+
+[listeners.tcp]
+addr = "0.0.0.0:1883"
+
+[listeners.websocket]
+addr = "0.0.0.0:8083"
+
+[mqtt]
+max_packet_size = 1048576
+RMQTT
+
+# ── Traefik static config ─────────────────────────────────────────────────────
+info "Writing Traefik config..."
+cat > "${INSTALL_DIR}/traefik/traefik.yml" <<TRAEFIK
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: platform_proxy
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: ${ACME_EMAIL}
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+api:
+  dashboard: false
+TRAEFIK
+
+# ── Traefik dynamic config ────────────────────────────────────────────────────
+cat > "${INSTALL_DIR}/traefik/dynamic/shipyard.yml" <<DYNAMIC
+http:
+  routers:
+    shipyard-frontend:
+      rule: "Host(\`${DOMAIN}\`)"
+      entryPoints: [websecure]
+      service: shipyard-frontend
+      tls:
+        certResolver: letsencrypt
+
+    shipyard-backend:
+      rule: "Host(\`api.${DOMAIN}\`)"
+      entryPoints: [websecure]
+      service: shipyard-backend
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    shipyard-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:3000"
+
+    shipyard-backend:
+      loadBalancer:
+        servers:
+          - url: "http://backend:3001"
+DYNAMIC
+success "Traefik config written"
+
+# ── docker-compose.yml ────────────────────────────────────────────────────────
+info "Writing ${INSTALL_DIR}/docker-compose.yml..."
+cat > "${INSTALL_DIR}/docker-compose.yml" <<COMPOSE
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: shipyard-postgres
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: \${POSTGRES_USER}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_DB: \${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shipyard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: shipyard-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+
+  mqtt:
+    image: rmqtt/rmqtt:latest
+    container_name: shipyard-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+    volumes:
+      - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt.toml:ro
+      - rmqtt_data:/app/data
+    networks:
+      - internal
+
+  backend:
+    image: \${BACKEND_IMAGE}
+    container_name: shipyard-backend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ${INSTALL_DIR}/data:/opt/shipyard/data
+      - ${INSTALL_DIR}/traefik/dynamic:/etc/traefik/dynamic
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    networks:
+      - internal
+      - platform_proxy
+
+  frontend:
+    image: \${FRONTEND_IMAGE}
+    container_name: shipyard-frontend
+    restart: unless-stopped
+    environment:
+      ORIGIN: "${PROTOCOL}://${DOMAIN}"
+      PRIVATE_API_URL: "http://backend:3001"
+    depends_on:
+      - backend
+    networks:
+      - internal
+      - platform_proxy
+
+  traefik:
+    image: traefik:v3.1
+    container_name: shipyard-traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${INSTALL_DIR}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ${INSTALL_DIR}/traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_certs:/letsencrypt
+    networks:
+      - platform_proxy
+
+networks:
+  internal:
+    name: shipyard_internal
+  platform_proxy:
+    name: platform_proxy
+    external: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  rmqtt_data:
+  traefik_certs:
+COMPOSE
+success "docker-compose.yml written"
+
+# ── Docker network ────────────────────────────────────────────────────────────
+step "Docker network"
+docker network inspect platform_proxy >/dev/null 2>&1 \
+    || docker network create platform_proxy
+success "platform_proxy network ready"
+
+# ── Pull images ───────────────────────────────────────────────────────────────
+step "Pulling images"
+info "This may take a few minutes on first install..."
+cd "${INSTALL_DIR}"
+docker compose pull
+
+# ── Start ─────────────────────────────────────────────────────────────────────
+step "Starting Shipyard"
+docker compose up -d
+success "All services started"
+
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-success "Installation complete!"
+echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${RESET}"
+echo -e "${GREEN}${BOLD}║       Shipyard installed successfully!        ║${RESET}"
+echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
-echo "  Next steps:"
-echo "  1. Start:         systemctl start shipyard"
-echo "  2. Setup wizard:  http://${LISTEN_IP}:3001"
-echo "  3. Create your admin account and first organization"
+echo -e "  Dashboard:   ${BOLD}${PROTOCOL}://${DOMAIN}${RESET}"
+echo -e "  API:         ${BOLD}${PROTOCOL}://api.${DOMAIN}${RESET}"
+echo -e "  Install dir: ${INSTALL_DIR}"
 echo ""
-echo "  Config:  ${CONFIG_DIR}/config.toml"
-echo "  Data:    ${DATA_DIR}"
-echo "  Logs:    journalctl -u shipyard -f"
-echo "  Backup:  ${INSTALL_DIR}/bin/shipyard-backup"
+echo -e "  Useful commands:"
+echo -e "    ${BOLD}cd ${INSTALL_DIR} && docker compose logs -f${RESET}"
+echo -e "    ${BOLD}docker compose ps${RESET}"
+echo -e "    ${BOLD}docker compose restart backend${RESET}"
+echo ""
+echo -e "  ${YELLOW}First run:${RESET} visit ${PROTOCOL}://${DOMAIN}/setup to create your admin account."
 echo ""
