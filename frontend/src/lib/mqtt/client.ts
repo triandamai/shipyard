@@ -39,6 +39,9 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 		reconnectPeriod: 0,
 		connectTimeout: 5000,
 		keepalive: 30,
+		wsOptions: {
+			protocol: 'mqtt',
+		},
 	});
 
 	client.on('connect', () => {

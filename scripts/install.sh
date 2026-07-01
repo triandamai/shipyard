@@ -406,6 +406,8 @@ http:
       rule: "Host(\`${DOMAIN}\`) && PathPrefix(\`/mqtt\`)"
       entryPoints: [websecure]
       service: shipyard-mqtt
+      middlewares:
+        - shipyard-mqtt-strip
       tls:
         certResolver: letsencrypt
 
@@ -424,6 +426,12 @@ http:
       loadBalancer:
         servers:
           - url: "http://shipyard-mqtt:8083"
+
+  middlewares:
+    shipyard-mqtt-strip:
+      stripPrefix:
+        prefixes:
+          - "/mqtt"
 DYNAMIC
 success "Traefik config written"
 
