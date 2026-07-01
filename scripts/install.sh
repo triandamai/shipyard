@@ -184,6 +184,20 @@ else
     success "Docker Buildx $(docker buildx version 2>/dev/null | awk '{print $2}' | head -1)"
 fi
 
+# ── Docker Swarm ──────────────────────────────────────────────────────────────
+step "Checking Docker Swarm"
+if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" != "active" ]]; then
+    info "Initializing Docker Swarm..."
+    PRIMARY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [[ -z "${PRIMARY_IP}" ]]; then
+        PRIMARY_IP="127.0.0.1"
+    fi
+    docker swarm init --advertise-addr "${PRIMARY_IP}"
+    success "Docker Swarm initialized"
+else
+    success "Docker Swarm is already active"
+fi
+
 success "Docker stack OK"
 
 # ── Already installed? ────────────────────────────────────────────────────────
@@ -288,6 +302,7 @@ SHIPYARD__SERVER__PORT=3001
 
 # Docker
 SHIPYARD__DOCKER__LABEL_PREFIX=platform
+SHIPYARD__DOCKER__PORT_PROXY=false
 
 # Traefik
 SHIPYARD__TRAEFIK__NETWORK=platform_proxy
@@ -557,8 +572,17 @@ success "docker-compose.yml written"
 
 # ── Docker network ────────────────────────────────────────────────────────────
 step "Docker network"
-docker network inspect platform_proxy >/dev/null 2>&1 \
-    || docker network create platform_proxy
+if docker network inspect platform_proxy >/dev/null 2>&1; then
+    DRIVER=$(docker network inspect platform_proxy --format '{{.Driver}}' 2>/dev/null)
+    if [[ "${DRIVER}" != "overlay" ]]; then
+        info "Recreating platform_proxy network as overlay..."
+        docker network rm platform_proxy
+        docker network create --driver overlay --attachable platform_proxy
+    fi
+else
+    info "Creating platform_proxy network as overlay..."
+    docker network create --driver overlay --attachable platform_proxy
+fi
 success "platform_proxy network ready"
 
 # ── Pull images ───────────────────────────────────────────────────────────────

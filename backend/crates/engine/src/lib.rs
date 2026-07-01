@@ -1817,15 +1817,20 @@ impl DeploymentEngine {
         svc_name: &str,
         ports: &[PortSpec],
     ) -> AppResult<()> {
-        if ports.is_empty() {
+        if !self.port_proxy {
+            return Ok(());
+        }
+
+        let published_ports: Vec<&PortSpec> = ports.iter().filter(|p| p.published.is_some()).collect();
+        if published_ports.is_empty() {
             return Ok(());
         }
 
         // Pull socat image; ignore error if already present or if offline
         let _ = self.docker.pull_image("alpine/socat", "latest").await;
 
-        for p in ports {
-            let host_port = p.published.unwrap_or(p.target);
+        for p in published_ports {
+            let host_port = p.published.unwrap();
             let container_port = p.target;
             let proxy_name = format!("proxy-{svc_name}-{host_port}");
 
