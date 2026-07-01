@@ -190,10 +190,10 @@ success "Docker stack OK"
 if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     warn "Shipyard appears to already be installed at ${INSTALL_DIR}."
     REINSTALL=""
-    read_input "Re-install / overwrite? [y/N] " REINSTALL "n"
+    read_input "Re-install / overwrite? (Warning: This will delete all persistent data/volumes) [y/N] " REINSTALL "n"
     if [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]]; then
-        info "Stopping running services..."
-        cd "${INSTALL_DIR}" && docker compose down || true
+        info "Stopping running services and removing persistent volumes..."
+        cd "${INSTALL_DIR}" && docker compose down -v || true
         cd - >/dev/null
     else
         info "Aborted."
@@ -344,7 +344,6 @@ providers:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
     network: platform_proxy
-    apiVersion: "1.40"
   file:
     directory: /etc/traefik/dynamic
     watch: true
@@ -499,6 +498,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - DOCKER_API_VERSION=1.40
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${INSTALL_DIR}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
