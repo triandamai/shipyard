@@ -324,6 +324,18 @@ addr = "0.0.0.0:1883"
 [listener.ws.external]
 addr = "0.0.0.0:8083"
 
+[plugins]
+dir = "rmqtt-plugins/"
+default_startups = [
+    "rmqtt-retainer",
+    "rmqtt-sys-topic",
+    "rmqtt-message-storage",
+    "rmqtt-session-storage",
+    "rmqtt-acl",
+    "rmqtt-counter",
+    "rmqtt-http-api"
+]
+
 [plugins.rmqtt-acl]
 enable = false
 
