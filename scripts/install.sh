@@ -492,7 +492,7 @@ services:
       - platform_proxy
 
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.7.6
     container_name: shipyard-traefik
     restart: unless-stopped
     ports:
