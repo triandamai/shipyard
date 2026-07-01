@@ -307,11 +307,16 @@ success ".env written"
 # ── rmqtt.toml ────────────────────────────────────────────────────────────────
 info "Writing ${INSTALL_DIR}/rmqtt.toml..."
 cat > "${INSTALL_DIR}/rmqtt.toml" <<'RMQTT'
-[node]
-id = 1
-
 [log]
 level = "warn"
+
+[node]
+id = 1
+cookie = "shipyard"
+data_path = "/app/data"
+
+[rpc]
+server_addr = "0.0.0.0:5363"
 
 [[listeners.tcp]]
 name = "external/tcp"
@@ -321,8 +326,17 @@ addr = "0.0.0.0:1883"
 name = "external/ws"
 addr = "0.0.0.0:8083"
 
+[plugins.rmqtt-acl]
+enable = false
+
+[plugins.rmqtt-auth-http]
+enable = false
+
 [mqtt]
-max_packet_size = "1mb"
+max_packet_size = "10mb"
+max_inflight = 16
+session_expiry_interval = "2h"
+allow_anonymous = true
 RMQTT
 
 # ── Traefik static config ─────────────────────────────────────────────────────
@@ -449,7 +463,7 @@ services:
       - "1883:1883"
       - "8083:8083"
     volumes:
-      - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt.toml:ro
+      - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/etc/rmqtt.toml:ro
       - rmqtt_data:/app/data
     networks:
       - internal
