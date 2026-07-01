@@ -11,6 +11,33 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
 step()    { echo -e "\n${BOLD}── $* ──${RESET}"; }
 
+read_input() {
+    local prompt="$1"
+    local var_name="$2"
+    local default_val="${3:-}"
+    
+    # If already set in environment, use it
+    eval "local current_val=\${${var_name}:-}"
+    if [[ -n "${current_val}" ]]; then
+        return 0
+    fi
+    
+    local val=""
+    if [[ -t 0 ]]; then
+        read -rp "${prompt}" val
+    elif [[ -c /dev/tty ]]; then
+        read -rp "${prompt}" val < /dev/tty
+    else
+        val="${default_val}"
+    fi
+    
+    if [[ -z "${val}" ]]; then
+        val="${default_val}"
+    fi
+    
+    eval "${var_name}=\${val}"
+}
+
 INSTALL_DIR="/opt/shipyard"
 BACKEND_IMAGE="triandamai827/shipyard-backend"
 FRONTEND_IMAGE="triandamai827/shipyard-frontend"
@@ -162,27 +189,30 @@ success "Docker stack OK"
 # ── Already installed? ────────────────────────────────────────────────────────
 if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     warn "Shipyard appears to already be installed at ${INSTALL_DIR}."
-    read -rp "Re-install / overwrite? [y/N] " REINSTALL
+    REINSTALL=""
+    read_input "Re-install / overwrite? [y/N] " REINSTALL "n"
     [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]] || { info "Aborted."; exit 0; }
 fi
 
 # ── Gather config ─────────────────────────────────────────────────────────────
 step "Configuration"
 
-read -rp "  Domain name (e.g. app.example.com): " DOMAIN
+DOMAIN=""
+read_input "  Domain name (e.g. app.example.com): " DOMAIN ""
 [[ -n "${DOMAIN}" ]] || error "Domain name is required."
 
-read -rp "  Email for Let's Encrypt certificates: " ACME_EMAIL
+ACME_EMAIL=""
+read_input "  Email for Let's Encrypt certificates: " ACME_EMAIL ""
 [[ -n "${ACME_EMAIL}" ]] || error "Email is required for Let's Encrypt."
 
-read -rp "  Image tag [latest]: " TAG
-TAG="${TAG:-latest}"
+TAG=""
+read_input "  Image tag [latest]: " TAG "latest"
 
 BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
 FRONTEND_IMAGE_FULL="${FRONTEND_IMAGE}:${TAG}"
 
-read -rp "  Enable HTTPS / TLS? [Y/n]: " USE_HTTPS
-USE_HTTPS="${USE_HTTPS:-y}"
+USE_HTTPS=""
+read_input "  Enable HTTPS / TLS? [Y/n]: " USE_HTTPS "y"
 
 if [[ "${USE_HTTPS}" == "y" || "${USE_HTTPS}" == "Y" || "${USE_HTTPS}" == "yes" || "${USE_HTTPS}" == "YES" || "${USE_HTTPS}" == "Yes" ]]; then
     PROTOCOL="https"
@@ -352,9 +382,9 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      POSTGRES_USER: \${POSTGRES_USER}
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
-      POSTGRES_DB: \${POSTGRES_DB}
+      - POSTGRES_USER=\${POSTGRES_USER}
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_DB=\${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -417,8 +447,8 @@ services:
     container_name: shipyard-frontend
     restart: unless-stopped
     environment:
-      ORIGIN: "${PROTOCOL}://${DOMAIN}"
-      PRIVATE_API_URL: "http://backend:3001"
+      - ORIGIN=${PROTOCOL}://${DOMAIN}
+      - PRIVATE_API_URL=http://backend:3001
     depends_on:
       backend:
         condition: service_started
