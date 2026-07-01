@@ -97,7 +97,7 @@
 				<li><a href="#features" class="nav-link">Features</a></li>
 				<li>
 					<a
-						href="https://github.com/shipyard-paas/shipyard"
+						href="https://github.com/triandamai/shipyard"
 						target="_blank"
 						rel="noopener noreferrer"
 						class="nav-link"
@@ -130,7 +130,7 @@
 				Open-source · Self-hosted · MIT License
 				<span class="badge-sep">·</span>
 				<a
-					href="https://github.com/shipyard-paas/shipyard/releases/tag/v{SHIPYARD_VERSION}"
+					href="https://github.com/triandamai/shipyard/releases/tag/v{SHIPYARD_VERSION}"
 					target="_blank"
 					rel="noopener noreferrer"
 					class="badge-version"
@@ -153,7 +153,7 @@
 					<ArrowRight size={16} />
 				</a>
 				<a
-					href="https://github.com/shipyard-paas/shipyard"
+					href="https://github.com/triandamai/shipyard"
 					target="_blank"
 					rel="noopener noreferrer"
 					class="btn btn-outline"
@@ -301,7 +301,7 @@
 					<ArrowRight size={16} />
 				</a>
 				<a
-					href="https://github.com/shipyard-paas/shipyard"
+					href="https://github.com/triandamai/shipyard"
 					target="_blank"
 					rel="noopener noreferrer"
 					class="btn btn-outline btn-lg"
@@ -322,13 +322,13 @@
 			<span class="footer-sep"></span>
 			<span class="footer-copy">Open-source container platform — MIT License</span>
 			<a
-				href="https://github.com/shipyard-paas/shipyard/releases/tag/v{SHIPYARD_VERSION}"
+				href="https://github.com/triandamai/shipyard/releases/tag/v{SHIPYARD_VERSION}"
 				target="_blank"
 				rel="noopener noreferrer"
 				class="footer-version"
 			>v{SHIPYARD_VERSION}</a>
 			<a
-				href="https://github.com/shipyard-paas/shipyard"
+				href="https://github.com/triandamai/shipyard"
 				target="_blank"
 				rel="noopener noreferrer"
 				class="footer-gh"
