@@ -318,12 +318,10 @@ data_path = "/app/data"
 [rpc]
 server_addr = "0.0.0.0:5363"
 
-[[listeners.tcp]]
-name = "external/tcp"
+[listener.tcp.external]
 addr = "0.0.0.0:1883"
 
-[[listeners.ws]]
-name = "external/ws"
+[listener.ws.external]
 addr = "0.0.0.0:8083"
 
 [plugins.rmqtt-acl]
@@ -463,7 +461,7 @@ services:
       - "1883:1883"
       - "8083:8083"
     volumes:
-      - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/etc/rmqtt.toml:ro
+      - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/rmqtt.toml:ro
       - rmqtt_data:/app/data
     networks:
       - internal
