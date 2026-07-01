@@ -75,7 +75,9 @@ export function initMqtt(options: MqttInitOptions = {}) {
 	const brokerUrl =
 		options.brokerUrl ??
 		import.meta.env.PUBLIC_MQTT_WS_URL ??
-		`ws://${window.location.hostname}:8083`;
+		(window.location.protocol === 'https:'
+			? `wss://${window.location.hostname}/mqtt`
+			: `ws://${window.location.hostname}:8083`);
 	retryCount = 0;
 	if (reconnectTimer) {
 		clearTimeout(reconnectTimer);

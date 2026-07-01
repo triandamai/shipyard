@@ -191,7 +191,14 @@ if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     warn "Shipyard appears to already be installed at ${INSTALL_DIR}."
     REINSTALL=""
     read_input "Re-install / overwrite? [y/N] " REINSTALL "n"
-    [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]] || { info "Aborted."; exit 0; }
+    if [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]]; then
+        info "Stopping running services..."
+        cd "${INSTALL_DIR}" && docker compose down || true
+        cd - >/dev/null
+    else
+        info "Aborted."
+        exit 0
+    fi
 fi
 
 # ── Gather config ─────────────────────────────────────────────────────────────
@@ -225,7 +232,18 @@ step "Generating secrets"
 JWT_SECRET="$(openssl rand -hex 32)"
 SECRET_KEY="$(openssl rand -hex 32)"
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
-success "Secrets generated"
+
+if [[ -f "${INSTALL_DIR}/.env" ]]; then
+    info "Preserving existing secrets from ${INSTALL_DIR}/.env..."
+    EXISTING_JWT_SECRET=$(grep -E "^SHIPYARD__AUTH__JWT_SECRET=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+    EXISTING_SECRET_KEY=$(grep -E "^SHIPYARD__AUTH__SECRET_KEY=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+    EXISTING_POSTGRES_PASSWORD=$(grep -E "^POSTGRES_PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+    
+    JWT_SECRET="${EXISTING_JWT_SECRET:-$JWT_SECRET}"
+    SECRET_KEY="${EXISTING_SECRET_KEY:-$SECRET_KEY}"
+    POSTGRES_PASSWORD="${EXISTING_POSTGRES_PASSWORD:-$POSTGRES_PASSWORD}"
+fi
+success "Secrets ready"
 
 # ── Directories ───────────────────────────────────────────────────────────────
 step "Creating directories"
@@ -358,6 +376,13 @@ http:
       tls:
         certResolver: letsencrypt
 
+    shipyard-mqtt:
+      rule: "Host(\`${DOMAIN}\`) && PathPrefix(\`/mqtt\`)"
+      entryPoints: [websecure]
+      service: shipyard-mqtt
+      tls:
+        certResolver: letsencrypt
+
   services:
     shipyard-frontend:
       loadBalancer:
@@ -368,6 +393,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://shipyard-backend:3001"
+
+    shipyard-mqtt:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-mqtt:8083"
 DYNAMIC
 success "Traefik config written"
 
