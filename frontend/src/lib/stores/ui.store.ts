@@ -3,6 +3,7 @@ import type { SvelteComponent } from 'svelte';
 
 interface PanelEntry {
 	id: string;
+	key?: string;
 	component: any; // Svelte component constructor
 	props: Record<string, unknown>;
 	title: string;
@@ -30,21 +31,40 @@ function createUIStore() {
 			update((state) => ({ ...state, sidebarCollapsed: !state.sidebarCollapsed }));
 		},
 
-		/** Push a new slide panel onto the stack. */
-		pushPanel(entry: { component: any; props?: Record<string, unknown>; title: string }) {
+		/** Push a new slide panel onto the stack.
+		 *  If `key` is provided and a panel with the same key already exists,
+		 *  that panel is moved to the top instead of creating a duplicate.
+		 */
+		pushPanel(entry: { component: any; props?: Record<string, unknown>; title: string; key?: string }) {
 			const id = `panel-${++panelIdCounter}`;
-			update((state) => ({
-				...state,
-				panelStack: [
-					...state.panelStack,
-					{
-						id,
-						component: entry.component,
-						props: entry.props ?? {},
-						title: entry.title
+			update((state) => {
+				if (entry.key) {
+					const existing = state.panelStack.find((p) => p.key === entry.key);
+					if (existing) {
+						// Move existing panel to the top of the stack
+						return {
+							...state,
+							panelStack: [
+								...state.panelStack.filter((p) => p.key !== entry.key),
+								existing
+							]
+						};
 					}
-				]
-			}));
+				}
+				return {
+					...state,
+					panelStack: [
+						...state.panelStack,
+						{
+							id,
+							key: entry.key,
+							component: entry.component,
+							props: entry.props ?? {},
+							title: entry.title
+						}
+					]
+				};
+			});
 			return id;
 		},
 

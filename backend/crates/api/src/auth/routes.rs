@@ -1,7 +1,7 @@
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use argon2::{
@@ -81,6 +81,12 @@ pub struct MeResponse {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
@@ -90,6 +96,7 @@ pub fn routes() -> Router<AppState> {
         .route("/refresh", post(refresh))
         .route("/logout", post(logout))
         .route("/me", get(me))
+        .route("/me/password", put(change_password))
 }
 
 // ─── Cookie helpers ───────────────────────────────────────────────────────────
@@ -390,4 +397,52 @@ async fn me(
         email: user.email,
         created_at: user.created_at,
     })))
+}
+
+/// PUT /auth/me/password
+async fn change_password(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    if body.new_password.len() < 8 {
+        return Err(ApiAppError(AppError::Validation(
+            "New password must be at least 8 characters".to_string(),
+        )));
+    }
+
+    let user: User = sqlx::query_as::<_, User>(
+        "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
+    )
+    .bind(auth_user.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound("User not found".to_string())))?;
+
+    let parsed_hash = PasswordHash::new(&user.password_hash)
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to parse hash: {e}"))))?;
+
+    Argon2::default()
+        .verify_password(body.current_password.as_bytes(), &parsed_hash)
+        .map_err(|_| ApiAppError(AppError::Unauthorized(
+            "Current password is incorrect".to_string(),
+        )))?;
+
+    let salt = SaltString::generate(&mut OsRng);
+    let new_hash = Argon2::default()
+        .hash_password(body.new_password.as_bytes(), &salt)
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to hash password: {e}"))))?
+        .to_string();
+
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&new_hash)
+        .bind(auth_user.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "message": "Password updated successfully"
+    }))))
 }

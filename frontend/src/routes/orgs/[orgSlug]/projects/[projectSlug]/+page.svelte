@@ -62,6 +62,7 @@
 		if (node.type === 'service') {
 			const serviceId = node.id.replace(/^svc_/, '');
 			uiStore.pushPanel({
+				key: `service:${serviceId}`,
 				component: ServiceDetailPanel,
 				props: {
 					serviceId,
@@ -78,6 +79,7 @@
 			const domainId = node.id.replace(/^dom_/, '');
 			const svcId    = ((node.data?.service_id as string) || '').replace(/^svc_/, '');
 			uiStore.pushPanel({
+				key: `domain:${domainId}`,
 				component: DomainDetailPanel,
 				props: {
 					domainId,
@@ -92,6 +94,7 @@
 		} else if (node.type === 'network') {
 			const networkId = node.id.replace(/^net_/, '');
 			uiStore.pushPanel({
+				key: `network:${networkId}`,
 				component: NetworkDetailPanel,
 				props: {
 					networkId,
@@ -103,6 +106,7 @@
 		} else if (node.type === 'volume') {
 			const volumeId = node.id.replace(/^vol_/, '');
 			uiStore.pushPanel({
+				key: `volume:${volumeId}`,
 				component: VolumeDetailPanel,
 				props: {
 					volumeId,
@@ -117,6 +121,7 @@
 			// — strip the prefix to get the raw API service UUID.
 			const svcId = ((node.data?.service_id as string) || '').replace(/^svc_/, '');
 			uiStore.pushPanel({
+				key: `container:${containerId}`,
 				component: ContainerDetailPanel,
 				props: { containerId, serviceId: svcId },
 				title: `Replica #${node.data?.replica_index ?? ''}`

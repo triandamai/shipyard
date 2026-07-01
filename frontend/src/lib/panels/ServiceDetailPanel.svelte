@@ -2359,7 +2359,7 @@
 		width: 67vw;
 		min-width: 480px;
 		background: #0B1120;
-		border-left: 1px solid rgba(255,255,255,0.08);
+		border-left: 1px solid rgba(0,0,0,0.3);
 		display: flex;
 		flex-direction: column;
 		z-index: 801;
@@ -2368,7 +2368,7 @@
 
 	:global(.clog-panel) .log-overlay-header {
 		background: #0F172A;
-		border-bottom-color: rgba(255,255,255,0.08);
+		border-bottom-color: rgba(0,0,0,0.2);
 		flex-wrap: wrap;
 		gap: 6px;
 	}
@@ -2594,7 +2594,7 @@
 		background: #0F172A;
 		padding: 6px 0;
 		font-family: var(--font-mono);
-		border-top: 1px solid rgba(255,255,255,0.06);
+		border-top: 1px solid rgba(0,0,0,0.2);
 	}
 	.acc-empty {
 		padding: 10px 14px;
@@ -2986,10 +2986,10 @@
 		padding: 2px 7px;
 		border-radius: 99px;
 	}
-	.net-chip.rx    { background: rgba(99,102,241,0.10);  color: #818CF8; }
-	.net-chip.tx    { background: rgba(244,114,182,0.10); color: #F472B6; }
-	.net-chip.blk-r { background: rgba(251,191,36,0.10);  color: #FBBF24; }
-	.net-chip.blk-w { background: rgba(249,115,22,0.10);  color: #FB923C; }
+	.net-chip.rx    { background: rgba(99,102,241,0.12);  color: #4F46E5; border: 1px solid rgba(99,102,241,0.25); }
+	.net-chip.tx    { background: rgba(219,39,119,0.10);  color: #BE185D; border: 1px solid rgba(219,39,119,0.25); }
+	.net-chip.blk-r { background: rgba(217,119,6,0.10);   color: #B45309; border: 1px solid rgba(217,119,6,0.25); }
+	.net-chip.blk-w { background: rgba(234,88,12,0.10);   color: #C2410C; border: 1px solid rgba(234,88,12,0.25); }
 
 	.monitor-footer {
 		display: flex;

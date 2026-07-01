@@ -182,7 +182,7 @@
 		flex-direction: column;
 		height: 100%;
 		background: #0B1120;
-		border: 1px solid rgba(255,255,255,0.08);
+		border: 1px solid rgba(0,0,0,0.18);
 		border-radius: var(--radius-md);
 		overflow: hidden;
 		position: relative;
@@ -195,7 +195,7 @@
 		align-items: center;
 		justify-content: space-between;
 		padding: 6px 10px;
-		border-bottom: 1px solid rgba(255,255,255,0.06);
+		border-bottom: 1px solid rgba(0,0,0,0.25);
 		flex-shrink: 0;
 		background: #0F172A;
 		gap: 12px;
@@ -326,7 +326,7 @@
 		padding: 5px 14px;
 		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
 		background: #1E293B;
-		border: 1px solid rgba(255,255,255,0.12);
+		border: 1px solid rgba(255,255,255,0.18);
 		border-radius: 100px;
 		color: #9CA3AF;
 		cursor: pointer;

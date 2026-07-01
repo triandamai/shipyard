@@ -191,6 +191,10 @@ class ApiClient {
 		return this.post('/auth/logout');
 	}
 
+	async changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<{ message: string }>> {
+		return this.put('/auth/me/password', { current_password: currentPassword, new_password: newPassword });
+	}
+
 	// ─── Setup ───────────────────────────────────────────────────────
 	async getSetupStatus(): Promise<ApiResponse<{ initialized: boolean; step: string }>> {
 		return this.get('/setup/status');

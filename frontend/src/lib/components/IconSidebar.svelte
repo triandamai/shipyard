@@ -56,15 +56,18 @@
 
 	function openProfile() {
 		closeMenu();
-		goto(`/orgs/${orgSlug}/settings/profile`);
+		goto(`/orgs/${orgSlug}/profile`);
 	}
 
 	async function logout() {
 		closeMenu();
+		// Invalidate the HttpOnly refresh token on the server first.
+		await api.logout();
 		clearAuthCookies();
 		authStore.logout();
 		api.setToken(null);
-		await goto('/login');
+		// Hard navigation so the root layout re-reads cookies from scratch.
+		window.location.href = '/login';
 	}
 
 	async function runUpdate() {
@@ -85,11 +88,11 @@
 	}
 </script>
 
-{#if menuOpen}
-	<div class="menu-backdrop" onclick={closeMenu} role="presentation"></div>
-{/if}
-
 <aside class="icon-sidebar">
+	{#if menuOpen}
+		<div class="menu-backdrop" onclick={closeMenu} role="presentation"></div>
+	{/if}
+
 	<!-- Logo -->
 	<div class="logo-slot">
 		<div class="logo-icon" title="Shipyard">
