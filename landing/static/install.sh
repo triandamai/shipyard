@@ -451,6 +451,7 @@ services:
       - rmqtt_data:/app/data
     networks:
       - internal
+      - platform_proxy
 
   backend:
     image: \${BACKEND_IMAGE}
