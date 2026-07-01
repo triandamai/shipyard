@@ -344,6 +344,7 @@ providers:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
     network: platform_proxy
+    apiVersion: "1.40"
   file:
     directory: /etc/traefik/dynamic
     watch: true
