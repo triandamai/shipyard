@@ -1,0 +1,78 @@
+use axum::{
+    routing::get,
+    Router,
+    Json,
+};
+
+use crate::AppState;
+use crate::auth;
+use crate::compose;
+use crate::setup;
+use crate::orgs;
+use crate::projects;
+use crate::services;
+use crate::resources;
+use crate::containers;
+use crate::deployments;
+use crate::topology;
+use crate::logs;
+use crate::templates;
+use crate::webhooks;
+use crate::settings;
+use crate::shorthand;
+use shipyard_common::types::ApiResponse;
+
+/// Build the main API router with all route groups.
+///
+/// Route groups completed by milestone:
+/// - /auth/*  (Milestone 2.1)
+/// - /setup/* (Milestone 2.2)
+/// - /orgs/*  (Milestone 2.3)
+/// - /projects/* (Milestone 2.4–2.9)
+/// - /webhooks/* (Milestone 2.10)
+///
+/// NOTE: The `setup::require_initialized_middleware` is applied in main.rs
+/// via `axum::middleware::from_fn_with_state(state.clone(), ...)` after the
+/// router is built, so the real AppState is available.
+pub fn api_router() -> Router<AppState> {
+    Router::new()
+        .route("/status", get(api_status))
+        .nest("/auth", auth::routes::routes())
+        .merge(auth::oauth::routes())
+        .nest("/setup", setup::routes())
+        .nest("/orgs", orgs::routes())
+        // Public invite routes — no auth required
+        .nest("/invite", orgs::public_routes())
+        // Projects — /orgs/:org_id/projects/...
+        .nest("/orgs/:org_id", projects::routes())
+        // Services — /projects/:project_id/services/...
+        .merge(services::routes())
+        // Domains, Volumes, Networks
+        .merge(resources::routes())
+        // Containers & Docker events
+        .merge(containers::routes())
+        // Deployments — /projects/:project_id/services/:service_id/deploy, /deployments, etc.
+        .merge(deployments::routes())
+        // Topology — /projects/:project_id/topology
+        .nest("/projects/:project_id", topology::routes())
+        // Logs & Replicas — /services/:service_id/logs, /replicas, /logs/stream
+        .merge(logs::routes())
+        // Templates — /templates, /templates/:id
+        .merge(templates::routes())
+        // Webhooks — /webhooks/github/:service_id/:token, etc.
+        .nest("/webhooks", webhooks::routes())
+        // Docker Compose import — /projects/:project_id/compose/import
+        .merge(compose::routes())
+        // Platform settings — /settings
+        .merge(settings::routes())
+        // Shorthand service routes — /services/:id/... (no project prefix)
+        .merge(shorthand::routes())
+}
+
+async fn api_status() -> Json<ApiResponse<serde_json::Value>> {
+    Json(ApiResponse::ok(serde_json::json!({
+        "name": "Shipyard PaaS",
+        "version": env!("CARGO_PKG_VERSION"),
+        "initialized": false,
+    })))
+}

@@ -1,0 +1,17 @@
+[package]
+name = "shipyard-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+redis = { workspace = true }

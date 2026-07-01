@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+  # ─── PostgreSQL ───────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: shipyard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shipyard
+      POSTGRES_PASSWORD: shipyard
+      POSTGRES_DB: shipyard
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shipyard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── MQTT Broker (RMQTT) ─────────────────────────────────────
+  mqtt:
+    image: rmqtt/rmqtt:latest
+    container_name: shipyard-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT TCP  (backend → broker)
+      - "8883:8883"
+      - "11883:11883"
+      - "8083:8080"   # MQTT WebSocket (browser → broker)
+    volumes:
+      - ./rmqtt/rmqtt.toml:/app/rmqtt.toml:ro
+      - rmqtt_data:/app/data
+
+  # ─── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: shipyard-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── Traefik Reverse Proxy ───────────────────────────────────
+  traefik:
+    image: traefik:v3.1
+    container_name: shipyard-traefik
+    restart: unless-stopped
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik_certs:/letsencrypt
+    networks:
+      - platform_proxy
+
+networks:
+  platform_proxy:
+    name: platform_proxy
+    external: true
+
+volumes:
+  postgres_data:
+  rmqtt_data:
+  redis_data:
+  traefik_certs:

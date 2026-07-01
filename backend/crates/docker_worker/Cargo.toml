@@ -1,0 +1,22 @@
+[package]
+name = "shipyard-docker-worker"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+shipyard-db = { path = "../db" }
+shipyard-docker = { path = "../docker" }
+shipyard-mqtt = { path = "../mqtt_broker" }
+bollard = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }

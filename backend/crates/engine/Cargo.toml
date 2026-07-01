@@ -1,0 +1,24 @@
+[package]
+name = "shipyard-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+shipyard-db = { path = "../db" }
+shipyard-docker = { path = "../docker" }
+shipyard-mqtt = { path = "../mqtt_broker" }
+shipyard-traefik = { path = "../traefik" }
+shipyard-git = { path = "../git" }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }

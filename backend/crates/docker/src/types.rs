@@ -1,0 +1,135 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Specification for creating/updating a swarm service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSpec {
+    pub name: String,
+    pub image: String,
+    pub replicas: u64,
+    pub env: Vec<String>,
+    pub labels: HashMap<String, String>,
+    pub mounts: Vec<MountSpec>,
+    pub networks: Vec<String>,
+    pub ports: Vec<PortSpec>,
+    pub resources: Option<ResourceSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountSpec {
+    pub source: String,
+    pub target: String,
+    pub mount_type: MountType,
+    pub readonly: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MountType {
+    Volume,
+    Bind,
+    Tmpfs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortSpec {
+    pub target: u16,
+    pub published: Option<u16>,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceSpec {
+    pub cpu_limit: Option<f64>,
+    pub memory_limit_mb: Option<u64>,
+    pub cpu_reservation: Option<f64>,
+    pub memory_reservation_mb: Option<u64>,
+}
+
+/// Information about a swarm task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub id: String,
+    pub service_id: String,
+    pub node_id: Option<String>,
+    pub status: String,
+    pub desired_state: String,
+    pub container_id: Option<String>,
+    pub image: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub error: Option<String>,
+    pub exit_code: Option<i64>,
+    pub slot: Option<i64>,
+}
+
+/// Detailed task/container information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDetail {
+    pub id: String,
+    pub service_id: String,
+    pub node_id: Option<String>,
+    pub container_id: Option<String>,
+    pub status: String,
+    pub message: Option<String>,
+    pub image: String,
+    pub slot: Option<i64>,
+}
+
+/// A single published port binding from Docker inspect.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortBinding {
+    pub container_port: u16,
+    pub protocol: String,
+    pub host_ip: String,
+    pub host_port: u16,
+}
+
+/// Detailed container information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerDetail {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub status: String,
+    pub state: String,
+    pub created: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub exit_code: Option<i64>,
+    pub restart_count: i64,
+    pub platform: Option<String>,
+    pub port_bindings: Vec<PortBinding>,
+    pub env: Vec<String>,
+    pub labels: HashMap<String, String>,
+}
+
+/// Swarm information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmInfo {
+    pub node_id: String,
+    pub node_addr: String,
+    pub is_manager: bool,
+    pub nodes: u64,
+    pub managers: u64,
+}
+
+/// Log streaming options.
+#[derive(Debug, Clone, Default)]
+pub struct LogOpts {
+    pub follow: bool,
+    pub stdout: bool,
+    pub stderr: bool,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub tail: Option<String>,
+    pub timestamps: bool,
+}
+
+/// Filters for Docker event stream.
+#[derive(Debug, Clone, Default)]
+pub struct EventFilters {
+    pub event_types: Vec<String>,
+    pub actions: Vec<String>,
+    pub labels: Vec<String>,
+}

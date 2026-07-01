@@ -1,0 +1,33 @@
+# RMQTT Configuration — Development
+
+[log]
+level = "info"
+
+[node]
+id = 1
+cookie = "shipyard"
+data_path = "/app/data"
+
+[rpc]
+server_addr = "0.0.0.0:5363"
+# internal RPC — not exposed outside container
+
+[[listeners.tcp]]
+name = "external/tcp"
+addr = "0.0.0.0:1883"
+
+[[listeners.ws]]
+name = "external/ws"
+addr = "0.0.0.0:8083"
+
+[plugins.rmqtt-acl]
+enable = false
+
+[plugins.rmqtt-auth-http]
+enable = false
+
+[mqtt]
+max_packet_size = "10mb"
+max_inflight = 16
+session_expiry_interval = "2h"
+allow_anonymous = true

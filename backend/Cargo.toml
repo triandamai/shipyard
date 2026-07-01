@@ -1,0 +1,101 @@
+[workspace]
+members = [
+    "crates/api",
+    "crates/common",
+    "crates/db",
+    "crates/docker",
+    "crates/docker_worker",
+    "crates/engine",
+    "crates/git",
+    "crates/mqtt_broker",
+    "crates/traefik",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/shipyard/shipyard"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
+
+# Database
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio",
+    "uuid",
+    "chrono",
+    "time",
+    "json",
+    "migrate",
+] }
+
+# Docker
+bollard = "0.17"
+
+# MQTT
+rumqttc = "0.24"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Auth
+jsonwebtoken = "9"
+argon2 = "0.5"
+
+# Git
+git2 = "0.19"
+
+# Crypto
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# IDs
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["serde"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Config
+config = "0.14"
+dotenvy = "0.15"
+
+# Rate limiting
+governor = { version = "0.6", features = ["dashmap"] }
+dashmap = "5"
+
+# Email
+lettre = { version = "0.11", features = ["tokio1-native-tls", "smtp-transport", "builder"] }
+
+# HTTP client (OAuth token exchange)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+urlencoding = "2"
+
+# Redis
+redis = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
+
+# Misc
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"

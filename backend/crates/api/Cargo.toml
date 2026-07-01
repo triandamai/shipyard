@@ -1,0 +1,46 @@
+[package]
+name = "shipyard-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "shipyard"
+path = "src/main.rs"
+
+[dependencies]
+shipyard-common = { path = "../common" }
+shipyard-db = { path = "../db" }
+shipyard-docker = { path = "../docker" }
+shipyard-docker-worker = { path = "../docker_worker" }
+shipyard-engine = { path = "../engine" }
+shipyard-mqtt = { path = "../mqtt_broker" }
+shipyard-traefik = { path = "../traefik" }
+shipyard-git = { path = "../git" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonwebtoken = { workspace = true }
+argon2 = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { version = "0.1", features = ["time"] }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde_yaml = { workspace = true }
+governor = { workspace = true }
+dashmap = { workspace = true }
+lettre = { workspace = true }
+reqwest = { workspace = true }
+urlencoding = { workspace = true }
+redis = { workspace = true }
