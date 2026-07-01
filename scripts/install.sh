@@ -446,6 +446,8 @@ services:
     image: \${FRONTEND_IMAGE}
     container_name: shipyard-frontend
     restart: unless-stopped
+    ports:
+      - "3000:3000"
     environment:
       - ORIGIN=${PROTOCOL}://${DOMAIN}
       - PRIVATE_API_URL=http://backend:3001
