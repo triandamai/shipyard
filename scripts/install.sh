@@ -250,11 +250,11 @@ PROTOCOL=${PROTOCOL}
 POSTGRES_USER=shipyard
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=shipyard
-SHIPYARD__DATABASE__URL=postgres://shipyard:${POSTGRES_PASSWORD}@postgres:5432/shipyard
+SHIPYARD__DATABASE__URL=postgres://shipyard:${POSTGRES_PASSWORD}@shipyard-postgres:5432/shipyard
 SHIPYARD__DATABASE__MAX_CONNECTIONS=10
 
 # MQTT
-SHIPYARD__MQTT__HOST=mqtt
+SHIPYARD__MQTT__HOST=shipyard-mqtt
 SHIPYARD__MQTT__PORT=1883
 SHIPYARD__MQTT__CLIENT_ID=shipyard-api
 
@@ -362,12 +362,12 @@ http:
     shipyard-frontend:
       loadBalancer:
         servers:
-          - url: "http://frontend:3000"
+          - url: "http://shipyard-frontend:3000"
 
     shipyard-backend:
       loadBalancer:
         servers:
-          - url: "http://backend:3001"
+          - url: "http://shipyard-backend:3001"
 DYNAMIC
 success "Traefik config written"
 
@@ -450,7 +450,7 @@ services:
       - "3000:3000"
     environment:
       - ORIGIN=${PROTOCOL}://${DOMAIN}
-      - PRIVATE_API_URL=http://backend:3001
+      - PRIVATE_API_URL=http://shipyard-backend:3001
     depends_on:
       backend:
         condition: service_started
