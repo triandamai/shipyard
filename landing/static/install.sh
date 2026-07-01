@@ -420,7 +420,8 @@ services:
       ORIGIN: "${PROTOCOL}://${DOMAIN}"
       PRIVATE_API_URL: "http://backend:3001"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     networks:
       - internal
       - platform_proxy
