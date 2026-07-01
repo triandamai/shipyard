@@ -313,14 +313,16 @@ id = 1
 [log]
 level = "warn"
 
-[listeners.tcp]
+[[listeners.tcp]]
+name = "external/tcp"
 addr = "0.0.0.0:1883"
 
-[listeners.websocket]
+[[listeners.ws]]
+name = "external/ws"
 addr = "0.0.0.0:8083"
 
 [mqtt]
-max_packet_size = 1048576
+max_packet_size = "1mb"
 RMQTT
 
 # ── Traefik static config ─────────────────────────────────────────────────────
