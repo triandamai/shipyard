@@ -575,6 +575,14 @@ info "Writing ${INSTALL_DIR}/update.sh..."
 cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
 # Shipyard self-update script — run by the backend when a user triggers an update.
+#
+# The backend runs this script inside the shipyard-backend container. That means
+# "docker compose up -d" would kill this very container mid-execution before
+# other services are restarted. Instead we:
+#   1. Pull new images (safe — doesn't touch running containers)
+#   2. Restart non-backend containers synchronously via docker CLI
+#   3. Fire a restart request for the backend via the Docker socket and exit.
+#      The daemon handles the backend restart after this container dies.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
@@ -585,10 +593,25 @@ source .env 2>/dev/null || true
 echo "[shipyard] Pulling latest images..."
 docker compose pull
 
-echo "[shipyard] Restarting services with new images..."
-docker compose up -d --remove-orphans
+echo "[shipyard] Restarting support services..."
+for container in shipyard-traefik shipyard-frontend shipyard-mqtt; do
+    if docker inspect "$container" &>/dev/null; then
+        docker restart "$container" \
+            && echo "[shipyard] Restarted $container" \
+            || echo "[shipyard] Warning: could not restart $container"
+    fi
+done
 
-echo "[shipyard] Update complete. All services are restarting."
+# The backend restart must be fire-and-forget: send the request to the Docker
+# daemon via the socket and exit immediately. The daemon will stop this
+# container (killing us) and start a fresh one with the new image.
+echo "[shipyard] Queuing backend restart — this container will be replaced..."
+curl --unix-socket /var/run/docker.sock \
+    --max-time 2 -s \
+    -X POST "http://localhost/v1.41/containers/shipyard-backend/restart?t=30" \
+    -o /dev/null || true
+
+echo "[shipyard] Update complete. Backend restarting in background."
 UPDATE
 chmod +x "${INSTALL_DIR}/update.sh"
 success "update.sh written"
