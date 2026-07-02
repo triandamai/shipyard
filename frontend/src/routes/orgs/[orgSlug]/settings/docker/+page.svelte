@@ -1,0 +1,506 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { api } from '$lib/api/client';
+	import {
+		Box, Layers, HardDrive, Network, RefreshCw,
+		Search, ChevronDown, ChevronRight, Circle
+	} from '@lucide/svelte';
+
+	type Tab = 'containers' | 'services' | 'volumes' | 'networks';
+	let activeTab = $state<Tab>('containers');
+
+	interface ContainerSummary {
+		id: string; names: string[]; image: string;
+		status: string; state: string; created: number;
+		ports: string[]; labels: Record<string, string>;
+	}
+	interface ServiceSummary {
+		id: string; name: string; image: string;
+		replicas_running: number; replicas_desired: number;
+		mode: string; ports: string[];
+		labels: Record<string, string>;
+		created_at: string | null; updated_at: string | null;
+	}
+	interface VolumeSummary {
+		name: string; driver: string; mountpoint: string;
+		scope: string; labels: Record<string, string>; created_at: string | null;
+	}
+	interface NetworkSummary {
+		id: string; name: string; driver: string; scope: string;
+		internal: boolean; attachable: boolean; ipam_subnet: string | null;
+		labels: Record<string, string>; containers: number;
+	}
+
+	let containers = $state<ContainerSummary[]>([]);
+	let services   = $state<ServiceSummary[]>([]);
+	let volumes    = $state<VolumeSummary[]>([]);
+	let networks   = $state<NetworkSummary[]>([]);
+
+	let loadingC = $state(false), loadingS = $state(false);
+	let loadingV = $state(false), loadingN = $state(false);
+
+	let search = $state('');
+	let expanded = $state<string | null>(null);
+
+	async function loadContainers() {
+		loadingC = true;
+		const r = await api.get<ContainerSummary[]>('/admin/docker/containers');
+		if (r.data) containers = r.data;
+		loadingC = false;
+	}
+	async function loadServices() {
+		loadingS = true;
+		const r = await api.get<ServiceSummary[]>('/admin/docker/services');
+		if (r.data) services = r.data;
+		loadingS = false;
+	}
+	async function loadVolumes() {
+		loadingV = true;
+		const r = await api.get<VolumeSummary[]>('/admin/docker/volumes');
+		if (r.data) volumes = r.data;
+		loadingV = false;
+	}
+	async function loadNetworks() {
+		loadingN = true;
+		const r = await api.get<NetworkSummary[]>('/admin/docker/networks');
+		if (r.data) networks = r.data;
+		loadingN = false;
+	}
+
+	async function switchTab(t: Tab) {
+		activeTab = t;
+		search = '';
+		expanded = null;
+		if (t === 'containers' && containers.length === 0) await loadContainers();
+		if (t === 'services'   && services.length === 0)   await loadServices();
+		if (t === 'volumes'    && volumes.length === 0)     await loadVolumes();
+		if (t === 'networks'   && networks.length === 0)    await loadNetworks();
+	}
+
+	async function refresh() {
+		search = ''; expanded = null;
+		if (activeTab === 'containers') { containers = []; await loadContainers(); }
+		if (activeTab === 'services')   { services = [];   await loadServices(); }
+		if (activeTab === 'volumes')    { volumes = [];    await loadVolumes(); }
+		if (activeTab === 'networks')   { networks = [];   await loadNetworks(); }
+	}
+
+	function toggle(id: string) { expanded = expanded === id ? null : id; }
+
+	const stateColor: Record<string, string> = {
+		running: '#16a34a', exited: '#9ca3af', created: '#2563eb',
+		paused: '#d97706', dead: '#ef4444', restarting: '#f97316',
+	};
+
+	function ago(unixSecs: number): string {
+		const diff = Math.floor(Date.now() / 1000) - unixSecs;
+		if (diff < 60)   return `${diff}s ago`;
+		if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+		if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+		return `${Math.floor(diff / 86400)}d ago`;
+	}
+
+	function shortImg(img: string): string {
+		const parts = img.split('@sha256:');
+		if (parts.length > 1) return parts[0] + '@' + parts[1].slice(0, 12);
+		return img;
+	}
+
+	let q = $derived(search.toLowerCase());
+
+	let filteredContainers = $derived(containers.filter(c =>
+		!q || c.names.some(n => n.includes(q)) || c.image.includes(q) || c.state.includes(q)
+	));
+	let filteredServices = $derived(services.filter(s =>
+		!q || s.name.includes(q) || s.image.includes(q)
+	));
+	let filteredVolumes = $derived(volumes.filter(v =>
+		!q || v.name.includes(q) || v.driver.includes(q)
+	));
+	let filteredNetworks = $derived(networks.filter(n =>
+		!q || n.name.includes(q) || n.driver.includes(q)
+	));
+
+	let isLoading = $derived(
+		(activeTab === 'containers' && loadingC) ||
+		(activeTab === 'services'   && loadingS) ||
+		(activeTab === 'volumes'    && loadingV) ||
+		(activeTab === 'networks'   && loadingN)
+	);
+
+	onMount(() => loadContainers());
+</script>
+
+<div class="docker-page">
+
+	<div class="toolbar">
+		<div class="tabs">
+			<button class="tab" class:active={activeTab==='containers'} onclick={() => switchTab('containers')}>
+				<Box size={13} /> Containers
+				{#if containers.length}<span class="badge">{containers.length}</span>{/if}
+			</button>
+			<button class="tab" class:active={activeTab==='services'} onclick={() => switchTab('services')}>
+				<Layers size={13} /> Services
+				{#if services.length}<span class="badge">{services.length}</span>{/if}
+			</button>
+			<button class="tab" class:active={activeTab==='volumes'} onclick={() => switchTab('volumes')}>
+				<HardDrive size={13} /> Volumes
+				{#if volumes.length}<span class="badge">{volumes.length}</span>{/if}
+			</button>
+			<button class="tab" class:active={activeTab==='networks'} onclick={() => switchTab('networks')}>
+				<Network size={13} /> Networks
+				{#if networks.length}<span class="badge">{networks.length}</span>{/if}
+			</button>
+		</div>
+		<button class="refresh-btn" onclick={refresh} disabled={isLoading}>
+			<RefreshCw size={14} class={isLoading ? 'spin' : ''} /> Refresh
+		</button>
+	</div>
+
+	<div class="search-bar">
+		<Search size={13} />
+		<input class="search-input" placeholder="Filter…" bind:value={search} />
+	</div>
+
+	<!-- ── Containers ── -->
+	{#if activeTab === 'containers'}
+		{#if loadingC}
+			<div class="empty"><div class="spinner"></div>Loading containers…</div>
+		{:else if filteredContainers.length === 0}
+			<div class="empty"><Box size={28} />No containers</div>
+		{:else}
+			<div class="card">
+				<table class="tbl">
+					<thead><tr>
+						<th style="width:28px"></th>
+						<th>Name</th><th>Image</th><th>State</th>
+						<th>Status</th><th>Ports</th><th>Created</th>
+					</tr></thead>
+					<tbody>
+						{#each filteredContainers as c (c.id)}
+							{@const isExp = expanded === c.id}
+							{@const name = c.names[0] ?? c.id.slice(0,12)}
+							<tr class="row" class:exp={isExp} onclick={() => toggle(c.id)}>
+								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+								<td class="mono bold">{name}</td>
+								<td class="mono dim">{shortImg(c.image)}</td>
+								<td>
+									<span class="state-dot" style="background:{stateColor[c.state]??'#9ca3af'}"></span>
+									{c.state}
+								</td>
+								<td class="dim">{c.status}</td>
+								<td class="mono dim">{c.ports.slice(0,2).join(', ')}{c.ports.length>2?` +${c.ports.length-2}`:''}</td>
+								<td class="dim ts">{ago(c.created)}</td>
+							</tr>
+							{#if isExp}
+								<tr class="detail-row">
+									<td colspan="7">
+										<div class="detail-box">
+											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{c.id}</span></div>
+											<div class="detail-field"><span class="dk">Names</span><span class="dv">{c.names.join(', ')}</span></div>
+											<div class="detail-field"><span class="dk">Image</span><span class="dv mono">{c.image}</span></div>
+											<div class="detail-field"><span class="dk">Ports</span><span class="dv mono">{c.ports.join(', ') || '—'}</span></div>
+											{#if Object.keys(c.labels).length}
+												<div class="detail-field full"><span class="dk">Labels</span>
+													<div class="label-chips">
+														{#each Object.entries(c.labels) as [k,v]}
+															<span class="lchip"><b>{k}</b>={v}</span>
+														{/each}
+													</div>
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
+
+	<!-- ── Services ── -->
+	{#if activeTab === 'services'}
+		{#if loadingS}
+			<div class="empty"><div class="spinner"></div>Loading services…</div>
+		{:else if filteredServices.length === 0}
+			<div class="empty"><Layers size={28} />No swarm services</div>
+		{:else}
+			<div class="card">
+				<table class="tbl">
+					<thead><tr>
+						<th style="width:28px"></th>
+						<th>Name</th><th>Image</th><th>Mode</th>
+						<th>Replicas</th><th>Ports</th>
+					</tr></thead>
+					<tbody>
+						{#each filteredServices as s (s.id)}
+							{@const isExp = expanded === s.id}
+							{@const healthy = s.replicas_running >= s.replicas_desired && s.replicas_desired > 0}
+							<tr class="row" class:exp={isExp} onclick={() => toggle(s.id)}>
+								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+								<td class="mono bold">{s.name}</td>
+								<td class="mono dim">{shortImg(s.image)}</td>
+								<td><span class="mode-chip">{s.mode}</span></td>
+								<td>
+									<span class="replica-badge" class:healthy class:degraded={!healthy}>
+										{s.replicas_running}/{s.replicas_desired}
+									</span>
+								</td>
+								<td class="mono dim">{s.ports.join(', ') || '—'}</td>
+							</tr>
+							{#if isExp}
+								<tr class="detail-row">
+									<td colspan="6">
+										<div class="detail-box">
+											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{s.id}</span></div>
+											<div class="detail-field"><span class="dk">Created</span><span class="dv">{s.created_at ?? '—'}</span></div>
+											<div class="detail-field"><span class="dk">Updated</span><span class="dv">{s.updated_at ?? '—'}</span></div>
+											{#if Object.keys(s.labels).length}
+												<div class="detail-field full"><span class="dk">Labels</span>
+													<div class="label-chips">
+														{#each Object.entries(s.labels) as [k,v]}
+															<span class="lchip"><b>{k}</b>={v}</span>
+														{/each}
+													</div>
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
+
+	<!-- ── Volumes ── -->
+	{#if activeTab === 'volumes'}
+		{#if loadingV}
+			<div class="empty"><div class="spinner"></div>Loading volumes…</div>
+		{:else if filteredVolumes.length === 0}
+			<div class="empty"><HardDrive size={28} />No volumes</div>
+		{:else}
+			<div class="card">
+				<table class="tbl">
+					<thead><tr>
+						<th style="width:28px"></th>
+						<th>Name</th><th>Driver</th><th>Scope</th><th>Mountpoint</th>
+					</tr></thead>
+					<tbody>
+						{#each filteredVolumes as v (v.name)}
+							{@const isExp = expanded === v.name}
+							<tr class="row" class:exp={isExp} onclick={() => toggle(v.name)}>
+								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+								<td class="mono bold">{v.name}</td>
+								<td><span class="mode-chip">{v.driver}</span></td>
+								<td class="dim">{v.scope}</td>
+								<td class="mono dim truncate">{v.mountpoint}</td>
+							</tr>
+							{#if isExp}
+								<tr class="detail-row">
+									<td colspan="5">
+										<div class="detail-box">
+											<div class="detail-field"><span class="dk">Mountpoint</span><span class="dv mono">{v.mountpoint}</span></div>
+											{#if v.created_at}<div class="detail-field"><span class="dk">Created</span><span class="dv">{v.created_at}</span></div>{/if}
+											{#if Object.keys(v.labels).length}
+												<div class="detail-field full"><span class="dk">Labels</span>
+													<div class="label-chips">
+														{#each Object.entries(v.labels) as [k,lv]}
+															<span class="lchip"><b>{k}</b>={lv}</span>
+														{/each}
+													</div>
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
+
+	<!-- ── Networks ── -->
+	{#if activeTab === 'networks'}
+		{#if loadingN}
+			<div class="empty"><div class="spinner"></div>Loading networks…</div>
+		{:else if filteredNetworks.length === 0}
+			<div class="empty"><Network size={28} />No networks</div>
+		{:else}
+			<div class="card">
+				<table class="tbl">
+					<thead><tr>
+						<th style="width:28px"></th>
+						<th>Name</th><th>Driver</th><th>Scope</th>
+						<th>Subnet</th><th>Containers</th><th>Flags</th>
+					</tr></thead>
+					<tbody>
+						{#each filteredNetworks as n (n.id)}
+							{@const isExp = expanded === n.id}
+							<tr class="row" class:exp={isExp} onclick={() => toggle(n.id)}>
+								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+								<td class="mono bold">{n.name}</td>
+								<td><span class="mode-chip">{n.driver}</span></td>
+								<td class="dim">{n.scope}</td>
+								<td class="mono dim">{n.ipam_subnet ?? '—'}</td>
+								<td class="dim">{n.containers}</td>
+								<td>
+									{#if n.internal}<span class="flag-chip">internal</span>{/if}
+									{#if n.attachable}<span class="flag-chip">attachable</span>{/if}
+								</td>
+							</tr>
+							{#if isExp}
+								<tr class="detail-row">
+									<td colspan="7">
+										<div class="detail-box">
+											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{n.id}</span></div>
+											<div class="detail-field"><span class="dk">Subnet</span><span class="dv mono">{n.ipam_subnet ?? '—'}</span></div>
+											{#if Object.keys(n.labels).length}
+												<div class="detail-field full"><span class="dk">Labels</span>
+													<div class="label-chips">
+														{#each Object.entries(n.labels) as [k,v]}
+															<span class="lchip"><b>{k}</b>={v}</span>
+														{/each}
+													</div>
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
+
+</div>
+
+<style>
+	.docker-page { display: flex; flex-direction: column; gap: 14px; }
+
+	.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+	.tabs { display: flex; gap: 4px; }
+	.tab {
+		display: flex; align-items: center; gap: 6px;
+		padding: 6px 12px; font-size: 12px; font-weight: 500;
+		background: var(--bg-surface); border: 1px solid var(--border);
+		border-radius: var(--radius); color: var(--text-muted);
+		cursor: pointer; transition: all var(--transition-fast);
+	}
+	.tab:hover { color: var(--text-primary); border-color: var(--border-hover); }
+	.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+	.tab.active .badge { background: rgba(255,255,255,0.25); }
+	.badge {
+		background: var(--bg-muted); color: var(--text-muted);
+		border-radius: 10px; padding: 1px 6px; font-size: 11px; font-weight: 600;
+	}
+	.refresh-btn {
+		display: flex; align-items: center; gap: 6px;
+		padding: 6px 12px; font-size: 12px; font-weight: 500;
+		background: var(--bg-surface); border: 1px solid var(--border);
+		border-radius: var(--radius); color: var(--text-secondary);
+		cursor: pointer; transition: all var(--transition-fast);
+	}
+	.refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+	.refresh-btn:disabled { opacity: 0.5; cursor: default; }
+
+	:global(.spin) { animation: spin 0.8s linear infinite; }
+	@keyframes spin { to { transform: rotate(360deg); } }
+
+	.search-bar {
+		display: flex; align-items: center; gap: 8px;
+		padding: 8px 12px;
+		background: var(--bg-surface); border: 1px solid var(--border);
+		border-radius: var(--radius); color: var(--text-muted);
+	}
+	.search-input {
+		flex: 1; border: none; outline: none; background: transparent;
+		font-size: 13px; color: var(--text-primary); font-family: var(--font-sans);
+	}
+	.search-input::placeholder { color: var(--text-muted); }
+
+	.empty {
+		display: flex; flex-direction: column; align-items: center; justify-content: center;
+		gap: 10px; padding: 60px; color: var(--text-muted); font-size: 13px;
+	}
+	.spinner {
+		width: 18px; height: 18px; border: 2px solid var(--border);
+		border-top-color: var(--accent); border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+
+	.card {
+		background: var(--bg-surface); border: 1px solid var(--border);
+		border-radius: var(--radius-lg); overflow: hidden;
+	}
+
+	.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+	.tbl thead th {
+		padding: 9px 12px; text-align: left;
+		font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+		color: var(--text-muted); background: var(--bg-muted);
+		border-bottom: 1px solid var(--border);
+	}
+	.row td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+	.row:last-child td { border-bottom: none; }
+	.row:hover td { background: var(--bg-muted); cursor: pointer; }
+	.row.exp td { background: var(--bg-muted); }
+
+	.exp-cell { color: var(--text-muted); width: 28px; }
+	.mono { font-family: var(--font-mono, monospace); font-size: 12px; }
+	.bold { font-weight: 600; color: var(--text-primary); }
+	.dim  { color: var(--text-secondary); }
+	.ts   { white-space: nowrap; }
+	.truncate { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	.state-dot {
+		display: inline-block; width: 7px; height: 7px;
+		border-radius: 50%; margin-right: 6px; vertical-align: middle;
+	}
+
+	.mode-chip {
+		display: inline-block; padding: 2px 7px;
+		background: var(--bg-muted); border: 1px solid var(--border);
+		border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-secondary);
+	}
+
+	.replica-badge {
+		display: inline-block; padding: 2px 8px;
+		border-radius: 4px; font-size: 12px; font-weight: 600;
+	}
+	.replica-badge.healthy  { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+	.replica-badge.degraded { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+
+	.flag-chip {
+		display: inline-block; margin-right: 4px; padding: 1px 6px;
+		background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe;
+		border-radius: 4px; font-size: 10px; font-weight: 600;
+	}
+
+	.detail-row td { padding: 0; background: var(--bg-base); }
+	.detail-box {
+		display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		gap: 8px; padding: 12px 14px;
+		border-bottom: 1px solid var(--border);
+	}
+	.detail-field { display: flex; flex-direction: column; gap: 2px; }
+	.detail-field.full { grid-column: 1 / -1; }
+	.dk { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+	.dv { font-size: 12px; color: var(--text-primary); word-break: break-all; }
+
+	.label-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+	.lchip {
+		display: inline-block; padding: 2px 7px;
+		background: var(--bg-muted); border: 1px solid var(--border);
+		border-radius: 4px; font-size: 11px; color: var(--text-secondary);
+		max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+</style>

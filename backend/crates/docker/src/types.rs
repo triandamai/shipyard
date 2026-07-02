@@ -133,3 +133,56 @@ pub struct EventFilters {
     pub actions: Vec<String>,
     pub labels: Vec<String>,
 }
+
+/// Summary of a container (from `docker ps -a`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerSummary {
+    pub id: String,
+    pub names: Vec<String>,
+    pub image: String,
+    pub status: String,
+    pub state: String,
+    pub created: i64,
+    pub ports: Vec<String>,
+    pub labels: HashMap<String, String>,
+}
+
+/// Summary of a Docker volume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolumeSummary {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    pub scope: String,
+    pub labels: HashMap<String, String>,
+    pub created_at: Option<String>,
+}
+
+/// Summary of a Docker network.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkSummary {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    pub internal: bool,
+    pub attachable: bool,
+    pub ipam_subnet: Option<String>,
+    pub labels: HashMap<String, String>,
+    pub containers: usize,
+}
+
+/// Summary of a swarm service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSummary {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub replicas_running: u64,
+    pub replicas_desired: u64,
+    pub mode: String,
+    pub ports: Vec<String>,
+    pub labels: HashMap<String, String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}

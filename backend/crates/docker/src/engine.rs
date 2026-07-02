@@ -99,6 +99,18 @@ pub trait DockerEngine: Send + Sync {
 
     /// List all swarm services, each summarised as a `TaskInfo`.
     async fn list_services(&self) -> AppResult<Vec<TaskInfo>>;
+
+    /// List all containers (running + stopped).
+    async fn list_all_containers(&self) -> AppResult<Vec<ContainerSummary>>;
+
+    /// List all volumes.
+    async fn list_all_volumes(&self) -> AppResult<Vec<VolumeSummary>>;
+
+    /// List all networks.
+    async fn list_all_networks(&self) -> AppResult<Vec<NetworkSummary>>;
+
+    /// List all swarm services with full summary.
+    async fn list_all_services(&self) -> AppResult<Vec<ServiceSummary>>;
 }
 
 // ─── Concrete implementation ──────────────────────────────────────────────────
@@ -945,6 +957,129 @@ impl DockerEngine for BollardDockerEngine {
             .collect();
 
         Ok(infos)
+    }
+
+    async fn list_all_containers(&self) -> AppResult<Vec<ContainerSummary>> {
+        use bollard::container::ListContainersOptions;
+        let opts = ListContainersOptions::<String> { all: true, ..Default::default() };
+        let raw = self.client
+            .list_containers(Some(opts))
+            .await
+            .map_err(|e| AppError::Docker(format!("list_containers failed: {e}")))?;
+
+        Ok(raw.into_iter().map(|c| {
+            let ports = c.ports.unwrap_or_default().into_iter()
+                .filter_map(|p| {
+                    let ip      = p.ip.as_deref().unwrap_or("0.0.0.0");
+                    let private = p.private_port;
+                    let proto   = p.typ.as_ref().map(|t| format!("{t:?}")).unwrap_or_default().to_lowercase();
+                    match p.public_port {
+                        Some(pub_p) => Some(format!("{ip}:{pub_p}->{private}/{proto}")),
+                        None        => Some(format!("{private}/{proto}")),
+                    }
+                })
+                .collect();
+
+            ContainerSummary {
+                id:      c.id.unwrap_or_default(),
+                names:   c.names.unwrap_or_default().into_iter().map(|n| n.trim_start_matches('/').to_string()).collect(),
+                image:   c.image.unwrap_or_default(),
+                status:  c.status.unwrap_or_default(),
+                state:   c.state.unwrap_or_default(),
+                created: c.created.unwrap_or(0),
+                ports,
+                labels:  c.labels.unwrap_or_default(),
+            }
+        }).collect())
+    }
+
+    async fn list_all_volumes(&self) -> AppResult<Vec<VolumeSummary>> {
+        use bollard::volume::ListVolumesOptions;
+        let result = self.client
+            .list_volumes(None::<ListVolumesOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("list_volumes failed: {e}")))?;
+
+        Ok(result.volumes.unwrap_or_default().into_iter().map(|v| {
+            VolumeSummary {
+                name:       v.name,
+                driver:     v.driver,
+                mountpoint: v.mountpoint,
+                scope:      v.scope.map(|s| format!("{s:?}")).unwrap_or_default().to_lowercase().trim_matches('"').to_string(),
+                labels:     v.labels,
+                created_at: v.created_at,
+            }
+        }).collect())
+    }
+
+    async fn list_all_networks(&self) -> AppResult<Vec<NetworkSummary>> {
+        use bollard::network::ListNetworksOptions;
+        let raw = self.client
+            .list_networks(None::<ListNetworksOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("list_networks failed: {e}")))?;
+
+        Ok(raw.into_iter().map(|n| {
+            let subnet = n.ipam
+                .as_ref()
+                .and_then(|ipam| ipam.config.as_ref())
+                .and_then(|cfgs| cfgs.first())
+                .and_then(|cfg| cfg.subnet.clone());
+
+            let containers = n.containers.as_ref().map(|m| m.len()).unwrap_or(0);
+
+            NetworkSummary {
+                id:         n.id.unwrap_or_default(),
+                name:       n.name.unwrap_or_default(),
+                driver:     n.driver.unwrap_or_default(),
+                scope:      n.scope.unwrap_or_default(),
+                internal:   n.internal.unwrap_or(false),
+                attachable: n.attachable.unwrap_or(false),
+                ipam_subnet: subnet,
+                labels:     n.labels.unwrap_or_default(),
+                containers,
+            }
+        }).collect())
+    }
+
+    async fn list_all_services(&self) -> AppResult<Vec<ServiceSummary>> {
+        let raw = self.client
+            .list_services(None::<ListServicesOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("list_services failed: {e}")))?;
+
+        Ok(raw.into_iter().map(|svc| {
+            let id   = svc.id.clone().unwrap_or_default();
+            let spec = svc.spec.as_ref();
+            let name  = spec.and_then(|s| s.name.clone()).unwrap_or_else(|| id.clone());
+            let image = spec
+                .and_then(|s| s.task_template.as_ref())
+                .and_then(|t| t.container_spec.as_ref())
+                .and_then(|c| c.image.clone())
+                .unwrap_or_default();
+            let labels = spec.and_then(|s| s.labels.clone()).unwrap_or_default();
+            let mode = if spec.and_then(|s| s.mode.as_ref()).and_then(|m| m.global.as_ref()).is_some() {
+                "global".to_string()
+            } else {
+                "replicated".to_string()
+            };
+            let replicas_running = svc.service_status.as_ref().and_then(|ss| ss.running_tasks).unwrap_or(0);
+            let replicas_desired = svc.service_status.as_ref().and_then(|ss| ss.desired_tasks).unwrap_or(0);
+            let ports = svc.endpoint
+                .as_ref()
+                .and_then(|ep| ep.ports.as_ref())
+                .map(|ps| ps.iter().filter_map(|p| {
+                    let target = p.target_port?;
+                    let published = p.published_port?;
+                    let proto = p.protocol.as_ref().map(|pr| format!("{pr:?}")).unwrap_or_default().to_lowercase().trim_matches('"').to_string();
+                    Some(format!("{published}:{target}/{proto}"))
+                }).collect())
+                .unwrap_or_default();
+            let created_at = svc.created_at.map(|dt| dt.to_string());
+            let updated_at = svc.updated_at.map(|dt| dt.to_string());
+
+            ServiceSummary { id, name, image, replicas_running, replicas_desired, mode, ports, labels, created_at, updated_at }
+        }).collect())
     }
 }
 

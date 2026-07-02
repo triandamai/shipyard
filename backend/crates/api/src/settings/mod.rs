@@ -15,6 +15,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
+use shipyard_docker::{ContainerSummary, NetworkSummary, ServiceSummary, VolumeSummary};
 use crate::auth::AuthUser;
 use crate::cache;
 use crate::error::ApiAppError;
@@ -111,6 +112,10 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/mqtt/subscriptions", get(mqtt_subscriptions))
         .route("/admin/mqtt/topics", get(mqtt_topics))
         .route("/admin/system", get(system_info))
+        .route("/admin/docker/containers", get(docker_containers))
+        .route("/admin/docker/services", get(docker_services))
+        .route("/admin/docker/volumes", get(docker_volumes))
+        .route("/admin/docker/networks", get(docker_networks))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -747,4 +752,42 @@ async fn system_info(
     .map_err(|e| ApiAppError(AppError::Internal(format!("system info error: {e}"))))?;
 
     Ok(Json(ApiResponse::ok(info)))
+}
+
+// ── Docker engine routes ──────────────────────────────────────────────────────
+
+async fn docker_containers(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<ContainerSummary>>>, ApiAppError> {
+    let data = state.docker.list_all_containers().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_services(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<ServiceSummary>>>, ApiAppError> {
+    let data = state.docker.list_all_services().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_volumes(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<VolumeSummary>>>, ApiAppError> {
+    let data = state.docker.list_all_volumes().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_networks(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<NetworkSummary>>>, ApiAppError> {
+    let data = state.docker.list_all_networks().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
 }
