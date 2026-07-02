@@ -26,6 +26,14 @@ RUN apt-get update && apt-get install -y \
     docker.io \
     && rm -rf /var/lib/apt/lists/*
 
+ARG GIT_SHA=dev
+ARG BUILD_DATE=unknown
+ARG DOCKER_REPO=
+
+ENV SHIPYARD_GIT_SHA=$GIT_SHA \
+    SHIPYARD_BUILD_DATE=$BUILD_DATE \
+    SHIPYARD_DOCKER_REPO=$DOCKER_REPO
+
 COPY --from=builder /app/target/release/shipyard /usr/local/bin/shipyard
 
 EXPOSE 3001

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
@@ -69,10 +69,19 @@ pub struct TraefikDynamicResponse {
     pub error: Option<String>,
 }
 
-/// GitHub repository for release checks (owner/repo).
-const GITHUB_REPO: &str = "shipyard-paas/shipyard";
+/// Build info baked in at image build time via Docker build-args.
+static BUILD_INFO: OnceLock<(String, String, String)> = OnceLock::new();
 
-/// In-memory cache for the latest GitHub release (TTL: 1 hour).
+fn get_build_info() -> &'static (String, String, String) {
+    BUILD_INFO.get_or_init(|| {
+        let sha  = std::env::var("SHIPYARD_GIT_SHA").unwrap_or_else(|_| "dev".to_string());
+        let date = std::env::var("SHIPYARD_BUILD_DATE").unwrap_or_else(|_| "unknown".to_string());
+        let repo = std::env::var("SHIPYARD_DOCKER_REPO").unwrap_or_default();
+        (sha, date, repo)
+    })
+}
+
+/// In-memory cache for the Docker Hub update check (TTL: 1 hour).
 static VERSION_CACHE: OnceLock<Mutex<Option<(Instant, VersionInfo)>>> = OnceLock::new();
 
 fn version_cache() -> &'static Mutex<Option<(Instant, VersionInfo)>> {
@@ -82,10 +91,10 @@ fn version_cache() -> &'static Mutex<Option<(Instant, VersionInfo)>> {
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionInfo {
     pub current: String,
-    pub latest: String,
+    pub git_sha: String,
+    pub build_date: String,
     pub update_available: bool,
-    pub release_url: String,
-    pub release_notes: Option<String>,
+    pub remote_sha: Option<String>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -97,6 +106,7 @@ pub fn routes() -> Router<AppState> {
         .route("/settings/traefik/logs/stream", get(traefik_log_stream))
         .route("/admin/version", get(get_version))
         .route("/admin/update", post(trigger_update))
+        .route("/admin/update/stream", get(update_stream))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -361,93 +371,110 @@ async fn traefik_log_stream(
 
 // ── Version check ────────────────────────────────────────────────────────────
 
-/// GET /admin/version
+/// GET /admin/version[?force=true]
 ///
-/// Returns the current running version and the latest release on GitHub.
-/// Result is cached in-process for 1 hour to avoid rate-limiting.
+/// Returns the running git SHA, build date, and whether a newer image exists
+/// on Docker Hub. Result is cached for 1 hour; pass ?force=true to bypass.
 async fn get_version(
     _auth: AuthUser,
     State(_state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<ApiResponse<VersionInfo>>, ApiAppError> {
+    let (git_sha, build_date, docker_repo) = get_build_info();
     let current = env!("CARGO_PKG_VERSION").to_string();
+    let force = params.get("force").map(|v| v == "true" || v == "1").unwrap_or(false);
+
     let cache = version_cache();
     let mut guard = cache.lock().await;
 
-    // Return cached value if fresh (< 1 hour old).
-    if let Some((fetched_at, info)) = guard.as_ref() {
-        if fetched_at.elapsed() < std::time::Duration::from_secs(3600) {
-            return Ok(Json(ApiResponse::ok(info.clone())));
+    if !force {
+        if let Some((fetched_at, info)) = guard.as_ref() {
+            if fetched_at.elapsed() < std::time::Duration::from_secs(3600) {
+                return Ok(Json(ApiResponse::ok(info.clone())));
+            }
         }
     }
 
-    // Fetch from GitHub releases API.
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let client = reqwest::Client::builder()
-        .user_agent(format!("shipyard/{current}"))
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    let (update_available, remote_sha) = check_hub_update(docker_repo, git_sha).await;
 
-    let info = match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let body: serde_json::Value = resp.json().await
-                .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
-
-            let latest = body["tag_name"]
-                .as_str()
-                .unwrap_or(&current)
-                .trim_start_matches('v')
-                .to_string();
-
-            let release_url = body["html_url"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-
-            let release_notes = body["body"]
-                .as_str()
-                .map(|s| s.chars().take(500).collect());
-
-            let update_available = version_gt(&latest, &current);
-
-            VersionInfo { current, latest, update_available, release_url, release_notes }
-        }
-        _ => {
-            // GitHub unreachable — return current version with no update info.
-            VersionInfo {
-                latest: current.clone(),
-                update_available: false,
-                release_url: format!("https://github.com/{GITHUB_REPO}/releases"),
-                release_notes: None,
-                current,
-            }
-        }
+    let info = VersionInfo {
+        current,
+        git_sha: git_sha.clone(),
+        build_date: build_date.clone(),
+        update_available,
+        remote_sha,
     };
 
     *guard = Some((Instant::now(), info.clone()));
     Ok(Json(ApiResponse::ok(info)))
 }
 
-/// Compare two semver strings. Returns true if `a` is strictly greater than `b`.
-fn version_gt(a: &str, b: &str) -> bool {
-    let parse = |s: &str| -> (u32, u32, u32) {
-        let mut parts = s.splitn(3, '.').map(|p| p.parse::<u32>().unwrap_or(0));
-        (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+/// Query Docker Hub for the most recently pushed SHA tag and compare it with
+/// the SHA baked into this running container.
+///
+/// Docker Hub returns tags ordered by `last_updated` descending. We look for
+/// the first tag that looks like a 7-char git short SHA (all hex digits) and
+/// compare it against `current_sha`. If they differ, an update is available.
+async fn check_hub_update(repo: &str, current_sha: &str) -> (bool, Option<String>) {
+    if repo.is_empty() || current_sha == "dev" {
+        return (false, None);
+    }
+
+    let url = format!(
+        "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&ordering=last_updated"
+    );
+    let client = match reqwest::Client::builder()
+        .user_agent(format!("shipyard/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return (false, None),
     };
-    parse(a) > parse(b)
+
+    let body: serde_json::Value = match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(v) => v,
+            Err(_) => return (false, None),
+        },
+        _ => return (false, None),
+    };
+
+    let results = match body["results"].as_array() {
+        Some(a) => a,
+        None => return (false, None),
+    };
+
+    // The 7-char short SHA tag is the fingerprint for each CI push.
+    let current_short = &current_sha[..7.min(current_sha.len())];
+    let latest_sha = results
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .find(|name| name.len() == 7 && name.chars().all(|c| c.is_ascii_hexdigit()));
+
+    match latest_sha {
+        Some(sha) => (sha != current_short, Some(sha.to_string())),
+        None => (false, None),
+    }
 }
 
 // ── Self-update ───────────────────────────────────────────────────────────────
 
-/// POST /admin/update
-///
-/// Pulls the latest Docker images and recreates containers in-place.
-/// Requires the caller to be an owner of any org (platform-level action).
+fn resolve_update_command() -> Option<(&'static str, Vec<&'static str>)> {
+    if std::path::Path::new("/opt/shipyard/update.sh").exists() {
+        Some(("bash", vec!["/opt/shipyard/update.sh"]))
+    } else if std::path::Path::new("/opt/shipyard/docker-compose.yml").exists() {
+        Some(("docker", vec!["compose", "-f", "/opt/shipyard/docker-compose.yml", "pull"]))
+    } else {
+        None
+    }
+}
+
+/// POST /admin/update — blocking one-shot update (kept for backwards compat).
 async fn trigger_update(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    // Require platform owner: the caller must be owner of at least one org.
     let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
         "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
     )
@@ -462,21 +489,13 @@ async fn trigger_update(
         )));
     }
 
-    // Run the update script if present, otherwise fall back to docker compose commands.
-    let update_script = "/opt/shipyard/update.sh";
-    let compose_dir = "/opt/shipyard";
-
-    let (program, args): (&str, Vec<&str>) = if std::path::Path::new(update_script).exists() {
-        ("bash", vec![update_script])
-    } else if std::path::Path::new(compose_dir).join("docker-compose.yml").exists() {
-        ("docker", vec!["compose", "-f", "/opt/shipyard/docker-compose.yml", "pull"])
-    } else {
-        return Err(ApiAppError(AppError::Internal(
+    let (program, args) = resolve_update_command().ok_or_else(|| {
+        ApiAppError(AppError::Internal(
             "No update script or compose file found at /opt/shipyard".to_string()
-        )));
-    };
+        ))
+    })?;
 
-    tracing::info!(user_id = %auth.user_id, "Platform update triggered");
+    tracing::info!(user_id = %auth.user_id, "Platform update triggered (blocking)");
 
     let out = tokio::process::Command::new(program)
         .args(&args)
@@ -488,16 +507,100 @@ async fn trigger_update(
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
 
     if !out.status.success() {
-        return Err(ApiAppError(AppError::Internal(format!(
-            "Update failed: {stderr}"
-        ))));
+        return Err(ApiAppError(AppError::Internal(format!("Update failed:\n{stderr}"))));
     }
 
-    // Invalidate version cache so the next /admin/version reflects the new tag.
     *version_cache().lock().await = None;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "message": "Update complete. Restart services to apply.",
+        "message": "Update complete.",
         "output": stdout,
     }))))
+}
+
+/// GET /admin/update/stream — SSE stream of update progress.
+///
+/// Streams stdout + stderr of update.sh line-by-line as `data:` events.
+/// Sends an `event: done` or `event: error` event when finished.
+/// The SSE connection will drop when services restart — the frontend should
+/// handle this as an expected "services restarting" disconnect.
+async fn update_stream(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, ApiAppError> {
+    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if is_owner.is_none() {
+        return Err(ApiAppError(AppError::Forbidden(
+            "Only platform owners can trigger updates".to_string()
+        )));
+    }
+
+    let (program, args) = resolve_update_command().ok_or_else(|| {
+        ApiAppError(AppError::Internal(
+            "No update script or compose file found at /opt/shipyard".to_string()
+        ))
+    })?;
+
+    tracing::info!(user_id = %auth.user_id, "Platform update stream started");
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+
+    tokio::spawn(async move {
+        let mut child = match tokio::process::Command::new(program)
+            .args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Ok(
+                    Event::default().event("error").data(format!("Failed to start update: {e}"))
+                )).await;
+                return;
+            }
+        };
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        let tx_out = tx.clone();
+        let tx_err = tx.clone();
+
+        let h_out = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tx_out.send(Ok(Event::default().data(line))).await.is_err() { break; }
+            }
+        });
+
+        let h_err = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tx_err.send(Ok(Event::default().data(line))).await.is_err() { break; }
+            }
+        });
+
+        let _ = tokio::join!(h_out, h_err);
+
+        let status = child.wait().await;
+        let ok = status.map(|s| s.success()).unwrap_or(false);
+
+        *version_cache().lock().await = None;
+
+        let final_event = if ok {
+            Event::default().event("done").data("Update complete. Services are restarting…")
+        } else {
+            Event::default().event("error").data("Update script exited with an error.")
+        };
+        let _ = tx.send(Ok(final_event)).await;
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
 }

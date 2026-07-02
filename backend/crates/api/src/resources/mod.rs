@@ -205,6 +205,14 @@ pub fn routes() -> Router<AppState> {
             "/projects/:project_id/networks/:network_id/attach",
             post(attach_service),
         )
+        .route(
+            "/projects/:project_id/networks/:network_id/services/:service_id",
+            delete(detach_service),
+        )
+        .route(
+            "/services/:service_id/networks",
+            get(list_service_networks),
+        )
 }
 
 // ─── Domain Handlers ──────────────────────────────────────────────────────────
@@ -911,6 +919,61 @@ async fn attach_service(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Service attached to network successfully",
         "service_id": body.service_id,
+        "network_id": network_id,
+    }))))
+}
+
+/// GET /services/:service_id/networks — list networks a service is attached to
+async fn list_service_networks(
+    auth_user: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Network>>>, ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+    let networks = sqlx::query_as::<_, Network>(
+        "SELECT n.id, n.project_id, n.name, n.driver, n.subnet, n.docker_network_id, n.created_at
+         FROM networks n
+         JOIN service_networks sn ON sn.network_id = n.id
+         WHERE sn.service_id = $1
+         ORDER BY n.created_at ASC",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(networks)))
+}
+
+/// DELETE /projects/:project_id/networks/:network_id/services/:service_id
+/// Detaches a service from a network without deleting the network itself.
+async fn detach_service(
+    auth_user: AuthUser,
+    Path((project_id, network_id, service_id)): Path<(Uuid, Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:network:write").await.map_err(ApiAppError)?;
+
+    let rows = sqlx::query(
+        "DELETE FROM service_networks WHERE network_id = $1 AND service_id = $2",
+    )
+    .bind(network_id)
+    .bind(service_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .rows_affected();
+
+    if rows == 0 {
+        return Err(ApiAppError(AppError::NotFound(format!(
+            "Service '{}' is not attached to network '{}'",
+            service_id, network_id
+        ))));
+    }
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "message": "Service detached from network",
+        "service_id": service_id,
         "network_id": network_id,
     }))))
 }

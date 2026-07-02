@@ -270,13 +270,21 @@ class ApiClient {
 	async updateService(
 		projectId: string,
 		serviceId: string,
-		data: Partial<{ name: string; replicas: number; ports: string[] }>
+		data: Partial<{ name: string; replicas: number; ports: string[]; image: string }>
 	): Promise<ApiResponse<Service>> {
 		return this.put(`/projects/${projectId}/services/${serviceId}`, data);
 	}
 
 	async deleteService(projectId: string, serviceId: string): Promise<ApiResponse<null>> {
 		return this.delete(`/projects/${projectId}/services/${serviceId}`);
+	}
+
+	async getWebhookToken(projectId: string, serviceId: string): Promise<ApiResponse<{ token: string }>> {
+		return this.get(`/projects/${projectId}/services/${serviceId}/webhook`);
+	}
+
+	async rotateWebhookToken(projectId: string, serviceId: string): Promise<ApiResponse<{ token: string }>> {
+		return this.post(`/projects/${projectId}/services/${serviceId}/webhook/rotate`, {});
 	}
 
 	async deployService(serviceId: string): Promise<ApiResponse<Deployment>> {
@@ -421,6 +429,14 @@ class ApiClient {
 
 	async attachNetwork(projectId: string, networkId: string, serviceId: string): Promise<ApiResponse<unknown>> {
 		return this.post(`/projects/${projectId}/networks/${networkId}/attach`, { service_id: serviceId });
+	}
+
+	async detachNetwork(projectId: string, networkId: string, serviceId: string): Promise<ApiResponse<unknown>> {
+		return this.delete(`/projects/${projectId}/networks/${networkId}/services/${serviceId}`);
+	}
+
+	async getServiceNetworks(serviceId: string): Promise<ApiResponse<Network[]>> {
+		return this.get(`/services/${serviceId}/networks`);
 	}
 
 	// ─── Templates ───────────────────────────────────────────────────

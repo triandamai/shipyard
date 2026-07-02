@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,7 @@ pub struct UpdateServiceRequest {
     pub status: Option<String>,
     pub replicas: Option<i32>,
     pub ports: Option<Vec<String>>,
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +143,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/projects/:project_id/services/:service_id/env/:key",
             delete(delete_env),
+        )
+        .route(
+            "/projects/:project_id/services/:service_id/webhook",
+            get(get_webhook),
+        )
+        .route(
+            "/projects/:project_id/services/:service_id/webhook/rotate",
+            post(rotate_webhook),
         )
 }
 
@@ -248,6 +257,10 @@ async fn create_service(
         }
     })?;
 
+    // Auto-generate a webhook token so the URL is ready immediately.
+    let webhook_token = Uuid::new_v4().to_string().replace('-', "");
+    upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &webhook_token).await.ok();
+
     crate::middleware::audit::write_audit_log(
         &state.db,
         Some(auth_user.user_id),
@@ -309,7 +322,7 @@ async fn update_service(
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
 
-    if body.name.is_none() && body.status.is_none() && body.replicas.is_none() && body.ports.is_none() {
+    if body.name.is_none() && body.status.is_none() && body.replicas.is_none() && body.ports.is_none() && body.image.is_none() {
         return Err(ApiAppError(AppError::BadRequest(
             "At least one field must be provided".to_string(),
         )));
@@ -335,17 +348,19 @@ async fn update_service(
         Some(p) => serde_json::to_value(p).unwrap_or(current.ports),
         None => current.ports,
     };
+    let new_image = body.image.unwrap_or(current.image);
 
     let service = sqlx::query_as::<_, Service>(
         "UPDATE services
-         SET name = $1, status = $2, replicas = $3, ports = $4, updated_at = NOW()
-         WHERE id = $5 AND project_id = $6
+         SET name = $1, status = $2, replicas = $3, ports = $4, image = $5, updated_at = NOW()
+         WHERE id = $6 AND project_id = $7
          RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at",
     )
     .bind(&new_name)
     .bind(&new_status)
     .bind(new_replicas)
     .bind(&new_ports)
+    .bind(&new_image)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)
@@ -736,4 +751,96 @@ async fn verify_service_project(
         ))));
     }
     Ok(())
+}
+
+// ─── Webhook token helpers ────────────────────────────────────────────────────
+
+async fn upsert_webhook_token(
+    db: &sqlx::PgPool,
+    secret_key: &str,
+    service_id: Uuid,
+    token: &str,
+) -> Result<(), ApiAppError> {
+    let encrypted = shipyard_common::crypto::encrypt_or_passthrough(secret_key, token);
+    sqlx::query(
+        "INSERT INTO service_envs (id, service_id, key, value_encrypted, is_secret, created_at)
+         VALUES ($1, $2, '__WEBHOOK_TOKEN__', $3, TRUE, NOW())
+         ON CONFLICT (service_id, key) DO UPDATE
+           SET value_encrypted = EXCLUDED.value_encrypted",
+    )
+    .bind(Uuid::new_v4())
+    .bind(service_id)
+    .bind(&encrypted)
+    .execute(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    Ok(())
+}
+
+async fn read_webhook_token(
+    db: &sqlx::PgPool,
+    secret_key: &str,
+    service_id: Uuid,
+) -> Result<String, ApiAppError> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT value_encrypted FROM service_envs
+         WHERE service_id = $1 AND key = '__WEBHOOK_TOKEN__'
+         LIMIT 1",
+    )
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let stored = row.map(|(v,)| v).ok_or_else(|| {
+        ApiAppError(AppError::NotFound(
+            "No webhook token found for this service".to_string(),
+        ))
+    })?;
+    Ok(shipyard_common::crypto::decrypt_or_passthrough(secret_key, &stored))
+}
+
+// ─── Webhook handlers ─────────────────────────────────────────────────────────
+
+/// GET /projects/:project_id/services/:service_id/webhook
+///
+/// Returns the current (decrypted) webhook token so the frontend can build the URL.
+async fn get_webhook(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    check_project_access(&state.db, auth_user.user_id, project_id).await?;
+    verify_service_project(&state.db, service_id, project_id).await?;
+
+    let token = read_webhook_token(&state.db, &state.config.auth.secret_key, service_id).await?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "token": token,
+        "service_id": service_id,
+    }))))
+}
+
+/// POST /projects/:project_id/services/:service_id/webhook/rotate
+///
+/// Generates a fresh token, replaces the old one, and returns the new value.
+async fn rotate_webhook(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(
+        &state.db, auth_user.user_id, project_id, "app:project:service:write",
+    ).await.map_err(ApiAppError)?;
+    verify_service_project(&state.db, service_id, project_id).await?;
+
+    let token = Uuid::new_v4().to_string().replace('-', "");
+    upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &token).await?;
+
+    tracing::info!(service_id = %service_id, "webhook token rotated");
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "token": token,
+        "service_id": service_id,
+    }))))
 }

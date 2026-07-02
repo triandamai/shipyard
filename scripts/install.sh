@@ -570,6 +570,29 @@ volumes:
 COMPOSE
 success "docker-compose.yml written"
 
+# ── update.sh ─────────────────────────────────────────────────────────────────
+info "Writing ${INSTALL_DIR}/update.sh..."
+cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
+#!/usr/bin/env bash
+# Shipyard self-update script — run by the backend when a user triggers an update.
+set -euo pipefail
+INSTALL_DIR="/opt/shipyard"
+cd "${INSTALL_DIR}"
+
+echo "[shipyard] Reading current image tags from .env..."
+source .env 2>/dev/null || true
+
+echo "[shipyard] Pulling latest images..."
+docker compose pull
+
+echo "[shipyard] Restarting services with new images..."
+docker compose up -d --remove-orphans
+
+echo "[shipyard] Update complete. All services are restarting."
+UPDATE
+chmod +x "${INSTALL_DIR}/update.sh"
+success "update.sh written"
+
 # ── Docker network ────────────────────────────────────────────────────────────
 step "Docker network"
 if docker network inspect platform_proxy >/dev/null 2>&1; then

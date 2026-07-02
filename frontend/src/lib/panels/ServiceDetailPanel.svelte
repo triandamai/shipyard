@@ -5,9 +5,12 @@
 		GitBranch, Box, FileCode, Terminal, Settings, X,
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, Copy, Globe, Plus, Shield, ShieldOff, FileText,
-		CheckCircle2, AlertCircle, Loader2
+		CheckCircle2, AlertCircle, Loader2, Network, HardDrive
 	} from '@lucide/svelte';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
+	import NetworkPickerPanel from './resources/NetworkPickerPanel.svelte';
+	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
+	import type { VolumeMount } from '$lib/components/VolumeMountList.svelte';
 	import { formatDistanceToNow } from 'date-fns';
 
 	import { api } from '$lib/api/client';
@@ -22,7 +25,8 @@
 	import EnvManagerPanel from './EnvManagerPanel.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
-		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats
+		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
+		Network as NetworkType
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -105,6 +109,15 @@
 	// ── Settings edit state ──────────────────────────────────────────
 	let editReplicas = $state(1);
 	let editPorts = $state<string[]>([]);
+	let editImage = $state('');
+	let editRegistryUrl = $state('');
+	let editRegistryUser = $state('');
+	let editRegistryPass = $state('');
+	let registryPassIsSet = $state(false);
+	let editVolumeMounts = $state<VolumeMount[]>([]);
+	let isLoadingSettingsEnvs = $state(false);
+	let editNetworks = $state<NetworkType[]>([]);
+	let isLoadingSettingsNetworks = $state(false);
 	let isSavingSettings = $state(false);
 	let settingsSaveError = $state('');
 	let settingsSaveSuccess = $state(false);
@@ -120,6 +133,8 @@
 	let webhookProvider  = $state<'github' | 'gitlab' | 'gitea'>('github');
 	let isLoadingWebhook = $state(false);
 	let webhookCopied    = $state(false);
+	let isRotatingWebhook = $state(false);
+	let rotateConfirm    = $state(false);
 
 	// ── MQTT cleanup ─────────────────────────────────────────────────
 	let unsubscribeService: (() => void) | null = null;
@@ -662,8 +677,59 @@
 		if (!service) return;
 		editReplicas = service.replicas;
 		editPorts = [...(service.ports ?? [])];
+		editImage = service.image ?? '';
 		settingsSaveError = '';
 		settingsSaveSuccess = false;
+	}
+
+	async function loadSettingsEnvs() {
+		isLoadingSettingsEnvs = true;
+		const res = await api.getServiceEnvs(serviceId);
+		if (res.data) {
+			for (const env of res.data) {
+				if (env.key === 'DOCKER_REGISTRY')  editRegistryUrl  = (env as any).value ?? '';
+				if (env.key === 'DOCKER_USERNAME')  editRegistryUser = (env as any).value ?? '';
+				if (env.key === 'DOCKER_PASSWORD') {
+					editRegistryPass = '';
+					registryPassIsSet = true;
+				}
+				if (env.key === '__VOLUME_MOUNTS__') {
+					try { editVolumeMounts = JSON.parse((env as any).value ?? '[]'); } catch { editVolumeMounts = []; }
+				}
+			}
+		}
+		isLoadingSettingsEnvs = false;
+	}
+
+	async function loadSettingsNetworks() {
+		isLoadingSettingsNetworks = true;
+		const res = await api.getServiceNetworks(serviceId);
+		if (res.data) editNetworks = res.data;
+		isLoadingSettingsNetworks = false;
+	}
+
+	function openNetworkPickerForSettings() {
+		uiStore.pushPanel({
+			component: NetworkPickerPanel,
+			title: 'Add Network',
+			props: {
+				projectId,
+				initialSelected: editNetworks.map(n => n.id),
+				onConfirm: async (_ids: string[], items: NetworkType[]) => {
+					for (const net of items) {
+						if (!editNetworks.find(n => n.id === net.id)) {
+							await api.attachNetwork(projectId, net.id, serviceId);
+							editNetworks = [...editNetworks, net];
+						}
+					}
+				},
+			},
+		});
+	}
+
+	async function removeSettingsNetwork(networkId: string) {
+		await api.detachNetwork(projectId, networkId, serviceId);
+		editNetworks = editNetworks.filter(n => n.id !== networkId);
 	}
 
 	async function saveSettings() {
@@ -672,32 +738,62 @@
 		settingsSaveError = '';
 		settingsSaveSuccess = false;
 		const ports = editPorts.map(p => p.trim()).filter(Boolean);
+		const image = editImage.trim();
 		const res = await api.updateService(projectId, serviceId, {
 			replicas: editReplicas,
 			ports,
+			...(image ? { image } : {}),
 		});
 		if (res.error) {
 			settingsSaveError = res.error.message;
-		} else if (res.data) {
+			isSavingSettings = false;
+			return;
+		}
+		if (res.data) {
 			service = res.data;
 			editPorts = [...(res.data.ports ?? [])];
 			editReplicas = res.data.replicas;
-			settingsSaveSuccess = true;
-			setTimeout(() => { settingsSaveSuccess = false; }, 2500);
+			editImage = res.data.image ?? '';
 		}
+
+		// Save registry credentials as env vars (only if non-empty)
+		const registryEnvs: Array<{ key: string; value: string; is_secret: boolean }> = [];
+		if (editRegistryUrl.trim())  registryEnvs.push({ key: 'DOCKER_REGISTRY', value: editRegistryUrl.trim(), is_secret: false });
+		if (editRegistryUser.trim()) registryEnvs.push({ key: 'DOCKER_USERNAME', value: editRegistryUser.trim(), is_secret: false });
+		if (editRegistryPass.trim()) registryEnvs.push({ key: 'DOCKER_PASSWORD', value: editRegistryPass.trim(), is_secret: true });
+		for (const env of registryEnvs) {
+			await api.upsertEnv(serviceId, env);
+		}
+		if (editRegistryPass.trim()) { editRegistryPass = ''; registryPassIsSet = true; }
+
+		// Save volume mounts as __VOLUME_MOUNTS__ env var
+		const validMounts = editVolumeMounts.filter(m => m.source.trim() && m.target.trim());
+		await api.upsertEnv(serviceId, {
+			key: '__VOLUME_MOUNTS__',
+			value: JSON.stringify(validMounts),
+			is_secret: false,
+		});
+
+		settingsSaveSuccess = true;
+		setTimeout(() => { settingsSaveSuccess = false; }, 2500);
 		isSavingSettings = false;
 	}
 
 	async function loadWebhookToken() {
 		if (isLoadingWebhook || webhookToken) return;
 		isLoadingWebhook = true;
-		const res = await api.getServiceEnvs(serviceId);
-		if (res.data) {
-			const tokenEnv = res.data.find(e => e.key === '__WEBHOOK_TOKEN__');
-			const val: string = (tokenEnv as any)?.value ?? '';
-			if (val && val !== '***') webhookToken = val;
-		}
+		const res = await api.getWebhookToken(projectId, serviceId);
+		if (res.data?.token) webhookToken = res.data.token;
 		isLoadingWebhook = false;
+	}
+
+	async function rotateWebhook() {
+		if (!rotateConfirm) { rotateConfirm = true; return; }
+		rotateConfirm = false;
+		isRotatingWebhook = true;
+		const res = await api.rotateWebhookToken(projectId, serviceId);
+		if (res.data?.token) webhookToken = res.data.token;
+		isRotatingWebhook = false;
 	}
 
 	async function copyWebhookUrl() {
@@ -722,7 +818,16 @@
 		if (tab === 'logs') void loadWebhookToken();
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
-		if (tab === 'settings') initSettingsFromService();
+		if (tab === 'settings') {
+			initSettingsFromService();
+			editRegistryUrl = '';
+			editRegistryUser = '';
+			editRegistryPass = '';
+			registryPassIsSet = false;
+			editVolumeMounts = [];
+			editNetworks = [];
+			await Promise.all([loadSettingsEnvs(), loadSettingsNetworks()]);
+		}
 		if (tab === 'monitor') {
 			if (containers.length === 0) await loadContainers();
 			if (monitorTarget) {
@@ -1281,32 +1386,39 @@
 								{/each}
 							</div>
 						</div>
-						<div class="webhook-url-row">
-							<input
-								class="webhook-url-input"
-								readonly
-								value={webhookToken
-									? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
-									: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/{token}`}
-							/>
-							<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken}>
-								{#if webhookCopied}
-									<CheckCircle2 size={13} />Copied
-								{:else}
-									<Copy size={13} />Copy
-								{/if}
-							</button>
-						</div>
-						{#if !webhookToken}
-							<div class="webhook-token-row">
+
+						{#if isLoadingWebhook}
+							<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
+						{:else}
+							<div class="webhook-url-row">
 								<input
-									class="webhook-token-input"
-									placeholder="Paste __WEBHOOK_TOKEN__ value to build URL…"
-									bind:value={webhookToken}
+									class="webhook-url-input"
+									readonly
+									value={webhookToken
+										? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+										: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
 								/>
+								<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
+									{#if webhookCopied}
+										<CheckCircle2 size={13} />Copied
+									{:else}
+										<Copy size={13} />Copy
+									{/if}
+								</button>
 							</div>
-							<div class="webhook-hint">
-								Set <code>__WEBHOOK_TOKEN__</code> as an env var on this service. Paste its value above to build the full URL.
+
+							<div class="webhook-actions">
+								{#if rotateConfirm}
+									<span class="webhook-rotate-confirm-text">This will invalidate the current URL. Continue?</span>
+									<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+										{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
+									</button>
+									<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
+								{:else}
+									<button class="webhook-rotate-btn" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+										<RefreshCw size={11} />Rotate URL
+									</button>
+								{/if}
 							</div>
 						{/if}
 					</div>
@@ -1640,6 +1752,72 @@
 						Changes saved here take effect on the next <strong>Redeploy</strong>.
 					</div>
 
+					<!-- Docker Image & Registry -->
+					<div class="settings-group">
+						<div class="settings-group-header">
+							<Box size={13} />
+							<span class="settings-group-title">Docker Image</span>
+							<span class="settings-group-desc">Image to pull for the next deployment.</span>
+						</div>
+						<div class="settings-field">
+							<label class="settings-label" for="edit-image">Image</label>
+							<input
+								id="edit-image"
+								class="settings-input font-mono"
+								type="text"
+								placeholder="nginx:latest"
+								bind:value={editImage}
+								spellcheck="false"
+							/>
+						</div>
+						<div class="settings-group-header" style="margin-top:10px">
+							<span class="settings-group-title">Registry Credentials</span>
+							<span class="settings-group-desc">Leave blank to keep existing values.</span>
+						</div>
+						{#if isLoadingSettingsEnvs}
+							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						{:else}
+							<div class="settings-field">
+								<label class="settings-label" for="edit-reg-url">Registry URL</label>
+								<input
+									id="edit-reg-url"
+									class="settings-input font-mono"
+									type="text"
+									placeholder="registry-1.docker.io"
+									bind:value={editRegistryUrl}
+									spellcheck="false"
+								/>
+							</div>
+							<div class="settings-row">
+								<div class="settings-field" style="flex:1">
+									<label class="settings-label" for="edit-reg-user">Username</label>
+									<input
+										id="edit-reg-user"
+										class="settings-input"
+										type="text"
+										placeholder="myuser"
+										bind:value={editRegistryUser}
+										autocomplete="off"
+									/>
+								</div>
+								<div class="settings-field" style="flex:1">
+									<label class="settings-label" for="edit-reg-pass">
+										Password / Token
+										{#if registryPassIsSet}<span class="already-set-badge">set</span>{/if}
+									</label>
+									<input
+										id="edit-reg-pass"
+										class="settings-input font-mono"
+										type="password"
+										placeholder={registryPassIsSet ? '(unchanged)' : '••••••••'}
+										bind:value={editRegistryPass}
+										autocomplete="new-password"
+									/>
+								</div>
+							</div>
+						{/if}
+					</div>
+
 					<!-- Replicas -->
 					<div class="settings-group">
 						<div class="settings-group-header">
@@ -1700,6 +1878,52 @@
 								Add Port
 							</button>
 						</div>
+					</div>
+
+					<!-- Volume Mounts -->
+					<div class="settings-group">
+						<div class="settings-group-header">
+							<HardDrive size={13} />
+							<span class="settings-group-title">Volume Mounts</span>
+							<span class="settings-group-desc">Bind named volumes or host paths into the container.</span>
+						</div>
+						{#if isLoadingSettingsEnvs}
+							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						{:else}
+							<VolumeMountList {projectId} bind:mounts={editVolumeMounts} />
+						{/if}
+					</div>
+
+					<!-- Networks -->
+					<div class="settings-group">
+						<div class="settings-group-header-row">
+							<div class="settings-group-header" style="flex:1;margin-bottom:0">
+								<Network size={13} />
+								<span class="settings-group-title">Networks</span>
+								<span class="settings-group-desc">Docker networks this service is connected to.</span>
+							</div>
+							<button class="btn btn-secondary btn-xs" type="button" onclick={openNetworkPickerForSettings}>
+								<Plus size={11} />Add
+							</button>
+						</div>
+						{#if isLoadingSettingsNetworks}
+							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						{:else if editNetworks.length === 0}
+							<div class="settings-empty">No networks attached.</div>
+						{:else}
+							<div class="settings-network-list">
+								{#each editNetworks as net (net.id)}
+									<div class="settings-network-row">
+										<Network size={12} class="net-icon" />
+										<span class="net-name">{net.name}</span>
+										<span class="net-driver">{net.driver}</span>
+										<button class="net-remove-btn" type="button" onclick={() => removeSettingsNetwork(net.id)} title="Detach">
+											<X size={12} />
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 
 					<!-- Save feedback -->
@@ -2143,30 +2367,34 @@
 	}
 	.webhook-copy-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 	.webhook-copy-btn:disabled { opacity: 0.5; cursor: default; }
-	.webhook-token-row { display: flex; }
-	.webhook-token-input {
-		flex: 1;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-		background: var(--bg-base);
+	.webhook-loading { display: flex; align-items: center; gap: 6px; padding: 10px 14px; font-size: 12px; color: var(--text-dim); }
+	.spinner-xs { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+	.webhook-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 14px 10px;
+		flex-wrap: wrap;
+	}
+	.webhook-rotate-confirm-text { font-size: 11px; color: var(--text-muted); flex: 1; }
+	.webhook-rotate-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		padding: 5px 8px;
-		outline: none;
-		transition: border-color var(--transition-fast);
+		color: var(--text-muted);
+		font-size: 11px;
+		font-family: var(--font-sans);
+		padding: 3px 9px;
+		cursor: pointer;
+		transition: all var(--transition-fast);
 	}
-	.webhook-token-input:focus { border-color: var(--accent); }
-	.webhook-token-input::placeholder { color: var(--text-dim); }
-	.webhook-hint { font-size: 10px; color: var(--text-muted); line-height: 1.4; }
-	.webhook-hint code {
-		font-family: var(--font-mono);
-		background: var(--bg-elevated);
-		padding: 1px 4px;
-		border-radius: 3px;
-		color: var(--text-secondary);
-		font-size: 10px;
-	}
+	.webhook-rotate-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+	.webhook-rotate-btn.danger { border-color: rgba(239,68,68,0.5); color: #EF4444; }
+	.webhook-rotate-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.08); }
+	.webhook-rotate-btn:disabled { opacity: 0.5; cursor: default; }
 
 	/* ── Logs tab (deployment list) ── */
 	.logs-section { display: flex; flex-direction: column; height: 100%; }
@@ -2771,7 +2999,6 @@
 		flex-direction: column;
 		gap: 10px;
 	}
-	.settings-group-header { display: flex; flex-direction: column; gap: 2px; }
 	.settings-group-title {
 		font-size: 13px;
 		font-weight: 600;
@@ -2883,6 +3110,80 @@
 		padding: 14px;
 		display: flex;
 		gap: 8px;
+	}
+
+	.settings-input {
+		height: 30px;
+		padding: 0 10px;
+		font-size: 12px;
+		color: var(--text-primary);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		outline: none;
+		transition: border-color var(--transition-fast);
+		font-family: var(--font-sans);
+		width: 100%;
+	}
+	.settings-input:focus { border-color: var(--accent); }
+	.settings-input.font-mono { font-family: var(--font-mono); }
+
+	.settings-row { display: flex; gap: 10px; }
+
+	.settings-group-header {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.settings-group-header-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+	}
+
+	.settings-empty {
+		font-size: 12px;
+		color: var(--text-dim);
+		padding: 6px 0;
+	}
+
+	.settings-network-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.settings-network-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 10px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		font-size: 12px;
+	}
+	:global(.net-icon) { color: var(--text-dim); flex-shrink: 0; }
+	.net-name { flex: 1; font-weight: 500; color: var(--text-primary); }
+	.net-driver { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+	.net-remove-btn {
+		width: 22px; height: 22px;
+		background: transparent; border: none;
+		cursor: pointer; color: var(--text-dim);
+		display: flex; align-items: center; justify-content: center;
+		border-radius: 3px; flex-shrink: 0;
+		transition: color var(--transition-fast);
+	}
+	.net-remove-btn:hover { color: var(--accent-red); }
+
+	.already-set-badge {
+		font-size: 9px; font-weight: 600; text-transform: uppercase;
+		padding: 1px 5px; border-radius: 99px;
+		background: rgba(16,185,129,0.12);
+		color: #10B981;
+		letter-spacing: 0.05em;
+		border: 1px solid rgba(16,185,129,0.25);
 	}
 
 	/* ── Monitor tab ── */
