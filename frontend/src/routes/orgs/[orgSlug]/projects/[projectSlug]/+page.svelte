@@ -366,6 +366,29 @@
 		background: var(--bg-base);
 	}
 
+	/* Edge labels — transparent background, theme-aware text */
+	.canvas-wrapper :global(.svelte-flow__edge-textbg) {
+		fill: transparent;
+	}
+	.canvas-wrapper :global(.svelte-flow__edge-text) {
+		fill: var(--text-muted);
+		font-size: 10px;
+		font-family: var(--font-sans);
+		font-weight: 500;
+	}
+	.canvas-wrapper :global(.svelte-flow__edge-path) {
+		stroke: var(--border-hover);
+	}
+	.canvas-wrapper :global(.svelte-flow__edge.selected .svelte-flow__edge-path) {
+		stroke: var(--accent);
+	}
+
+	/* Background dot/grid pattern respects theme */
+	.canvas-wrapper :global(.svelte-flow__background pattern circle),
+	.canvas-wrapper :global(.svelte-flow__background pattern rect) {
+		fill: var(--border);
+	}
+
 	.canvas-wrapper :global(.svelte-flow__minimap) {
 		border-radius: var(--radius-md);
 	}

@@ -23,6 +23,12 @@
 	}
 
 	onMount(() => {
+		// Apply saved theme before first paint so login/setup pages also respect it
+		try {
+			const saved = localStorage.getItem('shipyard_theme');
+			if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+		} catch { /* localStorage unavailable */ }
+
 		if (token) {
 			api.getMe().then((res) => {
 				if (res.data) {

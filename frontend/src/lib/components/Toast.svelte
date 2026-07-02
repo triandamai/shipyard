@@ -15,7 +15,7 @@
 		{#each $toastStore as toast (toast.id)}
 			<div
 				class="toast toast--{toast.type}"
-				in:fly={{ y: 20, duration: 200 }}
+				in:fly={{ y: -20, duration: 200 }}
 				out:fade={{ duration: 150 }}
 			>
 				<span class="toast__icon">{icons[toast.type]}</span>
@@ -36,13 +36,16 @@
 <style>
 	.toast-container {
 		position: fixed;
-		bottom: 1.5rem;
-		right: 1.5rem;
+		top: 1.25rem;
+		left: 50%;
+		transform: translateX(-50%);
 		z-index: 9999;
 		display: flex;
 		flex-direction: column;
+		align-items: center;
 		gap: 0.5rem;
-		max-width: 360px;
+		width: max-content;
+		max-width: min(420px, calc(100vw - 2rem));
 		pointer-events: none;
 	}
 
@@ -52,11 +55,13 @@
 		gap: 0.625rem;
 		padding: 0.75rem 1rem;
 		border-radius: 8px;
-		background: #ffffff;
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		box-shadow: var(--shadow-lg);
 		border-left: 3px solid transparent;
 		font-size: 0.8125rem;
 		pointer-events: all;
+		width: 100%;
 	}
 
 	.toast--success { border-left-color: #16a34a; }
@@ -84,11 +89,11 @@
 
 	.toast__title {
 		font-weight: 500;
-		color: var(--text-primary, #0f172a);
+		color: var(--text-primary);
 	}
 
 	.toast__msg {
-		color: var(--text-muted, #6b7280);
+		color: var(--text-muted);
 		font-size: 0.75rem;
 		line-height: 1.4;
 	}
@@ -99,7 +104,7 @@
 		border: none;
 		padding: 0;
 		cursor: pointer;
-		color: var(--text-muted, #6b7280);
+		color: var(--text-muted);
 		font-size: 0.75rem;
 		line-height: 1;
 		opacity: 0.6;
