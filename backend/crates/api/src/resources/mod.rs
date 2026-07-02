@@ -19,6 +19,14 @@ use crate::AppState;
 
 // ─── Traefik dynamic config writer ───────────────────────────────────────────
 
+/// nip.io and traefik.me are wildcard DNS convenience domains.
+/// They must never use certResolver — each unique subdomain would consume a LE
+/// certificate slot, exhausting the rate limit very quickly.
+/// These domains are served over plain HTTP instead.
+fn is_convenience_domain(hostname: &str) -> bool {
+    hostname.ends_with(".nip.io") || hostname.ends_with(".traefik.me")
+}
+
 /// Regenerates the Traefik file-provider dynamic config for a service's domains.
 ///
 /// Writes `{dir}/{slug}.yml`. If there are no domains the file is removed.
@@ -73,15 +81,27 @@ async fn sync_traefik_dynamic_config(
     out.push_str("  routers:\n");
 
     for (hostname, tls_enabled, cert_provider, _port, router_name) in &rows {
-        // HTTP router
+        let convenience = is_convenience_domain(hostname);
+
+        // HTTP router (present for all domains; global entryPoint redirect sends it to HTTPS)
         let _ = write!(out, "    {router_name}-http:\n");
         let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
         let _ = write!(out, "      entryPoints:\n");
         let _ = write!(out, "        - {entrypoint_http}\n");
         let _ = write!(out, "      service: {router_name}\n");
 
-        // HTTPS router (only when TLS enabled)
-        if *tls_enabled {
+        if convenience {
+            // nip.io / traefik.me: HTTPS with Traefik's self-signed cert.
+            // Using certResolver would burn one LE slot per unique subdomain.
+            // Browser shows a one-time "Not Secure" warning — proceed to accept.
+            let _ = write!(out, "    {router_name}-https:\n");
+            let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
+            let _ = write!(out, "      entryPoints:\n");
+            let _ = write!(out, "        - {entrypoint_https}\n");
+            let _ = write!(out, "      tls: {{}}\n");
+            let _ = write!(out, "      service: {router_name}\n");
+        } else if *tls_enabled {
+            // Real custom domain: HTTPS with a proper LE certificate.
             let _ = write!(out, "    {router_name}-https:\n");
             let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
             let _ = write!(out, "      entryPoints:\n");
@@ -268,6 +288,9 @@ async fn create_domain(
 
     let traefik_router_name = format!("svc-{}", service_id.to_string().replace("-", ""));
 
+    // Convenience wildcard-DNS domains must never request LE certs.
+    let tls_enabled = body.tls_enabled && !is_convenience_domain(&body.hostname);
+
     let domain = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
@@ -276,7 +299,7 @@ async fn create_domain(
     .bind(Uuid::new_v4())
     .bind(service_id)
     .bind(&body.hostname)
-    .bind(body.tls_enabled)
+    .bind(tls_enabled)
     .bind(&traefik_router_name)
     .bind(&body.cert_provider)
     .bind(body.port)

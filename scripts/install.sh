@@ -209,9 +209,14 @@ if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     REINSTALL=""
     read_input "Re-install / overwrite? (Warning: This will delete all persistent data/volumes) [y/N] " REINSTALL "n"
     if [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]]; then
-        info "Stopping running services and removing persistent volumes..."
-        cd "${INSTALL_DIR}" && docker compose down -v || true
+        info "Stopping running services..."
+        cd "${INSTALL_DIR}" && docker compose down || true
         cd - >/dev/null
+        # Remove app data volumes but preserve traefik_certs (contains ACME/TLS cert).
+        # Deleting traefik_certs triggers a fresh LE cert request and burns the rate limit.
+        for vol in postgres_data redis_data rmqtt_data; do
+            docker volume rm "shipyard_${vol}" 2>/dev/null || true
+        done
     else
         info "Aborted."
         exit 0
