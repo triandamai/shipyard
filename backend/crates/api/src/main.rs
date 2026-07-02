@@ -4,9 +4,11 @@ use dashmap::DashMap;
 
 use axum::{
     extract::State,
-    http::HeaderValue,
+    http::{HeaderValue, StatusCode},
     middleware as axum_middleware,
     routing::get,
+    routing::post,
+    Form,
     Router,
     Json,
 };
@@ -402,6 +404,9 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
+        // Internal MQTT auth callback — called by rmqtt-auth-http, not by clients.
+        // Lives outside /api so it bypasses the init gate and rate limiter.
+        .route("/internal/mqtt/auth", post(mqtt_auth))
         .nest("/api", api)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
         .layer(axum::Extension(rate_limiter))
@@ -522,4 +527,53 @@ async fn metrics(State(state): State<AppState>) -> String {
          # TYPE shipyard_containers_running gauge\n\
          shipyard_containers_running {container_running}\n"
     )
+}
+
+// ─── MQTT internal auth callback ─────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct MqttAuthForm {
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+}
+
+/// Called by rmqtt-auth-http for every MQTT CONNECT attempt.
+///
+/// Two credential types are accepted:
+/// - Backend service: username = configured `SHIPYARD__MQTT__USERNAME`,
+///   password = `SHIPYARD__MQTT__PASSWORD`.
+/// - Browser clients: username = any `shipyard-web-*` client ID,
+///   password = a valid (non-expired) JWT access token.
+async fn mqtt_auth(
+    State(state): State<AppState>,
+    Form(body): Form<MqttAuthForm>,
+) -> StatusCode {
+    let cfg_user = state.config.mqtt.username.as_deref().unwrap_or("shipyard-api");
+    let cfg_pass = state.config.mqtt.password.as_deref().unwrap_or("");
+
+    // Backend MQTT client
+    if body.username == cfg_user {
+        return if !cfg_pass.is_empty() && body.password == cfg_pass {
+            StatusCode::OK
+        } else {
+            tracing::warn!("MQTT auth: invalid password for backend client '{}'", body.username);
+            StatusCode::UNAUTHORIZED
+        };
+    }
+
+    // Browser / frontend clients use their JWT as the password
+    if body.username.starts_with("shipyard-web") {
+        return match auth::decode_token(&body.password, &state.config.auth.jwt_secret) {
+            Ok(_) => StatusCode::OK,
+            Err(_) => {
+                tracing::warn!("MQTT auth: invalid JWT for frontend client '{}'", body.username);
+                StatusCode::UNAUTHORIZED
+            }
+        };
+    }
+
+    tracing::warn!("MQTT auth: unknown username '{}'", body.username);
+    StatusCode::UNAUTHORIZED
 }

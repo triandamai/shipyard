@@ -119,6 +119,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/services", get(docker_services))
         .route("/admin/docker/volumes", get(docker_volumes))
         .route("/admin/docker/networks", get(docker_networks))
+        .route("/admin/host-ip", get(get_host_ip))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -805,4 +806,82 @@ async fn docker_networks(
     let data = state.docker.list_all_networks().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
+}
+
+#[derive(Debug, Serialize)]
+struct HostIpResponse {
+    ip: String,
+    is_public: bool,
+}
+
+/// Returns the server's detected public IP so the frontend can generate
+/// appropriate wildcard domains (nip.io for VPS, traefik.me for localhost).
+async fn get_host_ip(
+    _auth: AuthUser,
+) -> Json<ApiResponse<HostIpResponse>> {
+    // 1. Prefer the DOMAIN env var if it looks like an IPv4 address
+    if let Ok(domain) = std::env::var("DOMAIN") {
+        let trimmed = domain.trim().to_string();
+        if trimmed.parse::<std::net::IpAddr>().is_ok() {
+            let is_public = !is_loopback_or_private(&trimmed);
+            return Json(ApiResponse::ok(HostIpResponse { ip: trimmed, is_public }));
+        }
+    }
+
+    // 2. Try to detect the public IP via external service (3 s timeout)
+    let detected = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        fetch_public_ip(),
+    )
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(ip) = detected {
+        let is_public = !is_loopback_or_private(&ip);
+        return Json(ApiResponse::ok(HostIpResponse { ip, is_public }));
+    }
+
+    // 3. Fall back to localhost
+    Json(ApiResponse::ok(HostIpResponse {
+        ip: "127.0.0.1".to_string(),
+        is_public: false,
+    }))
+}
+
+async fn fetch_public_ip() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?;
+    // api4.ipify.org returns only IPv4
+    let text = client
+        .get("https://api4.ipify.org")
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    let ip = text.trim().to_string();
+    if ip.parse::<std::net::Ipv4Addr>().is_ok() { Some(ip) } else { None }
+}
+
+fn is_loopback_or_private(ip: &str) -> bool {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(addr) => addr.is_loopback() || is_private_ip(&addr),
+        Err(_) => true,
+    }
+}
+
+fn is_private_ip(addr: &std::net::IpAddr) -> bool {
+    match addr {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            o[0] == 10
+                || (o[0] == 172 && o[1] >= 16 && o[1] <= 31)
+                || (o[0] == 192 && o[1] == 168)
+        }
+        std::net::IpAddr::V6(_) => false,
+    }
 }

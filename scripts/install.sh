@@ -249,16 +249,19 @@ step "Generating secrets"
 JWT_SECRET="$(openssl rand -hex 32)"
 SECRET_KEY="$(openssl rand -hex 32)"
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+MQTT_PASSWORD="$(openssl rand -hex 24)"
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info "Preserving existing secrets from ${INSTALL_DIR}/.env..."
     EXISTING_JWT_SECRET=$(grep -E "^SHIPYARD__AUTH__JWT_SECRET=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_SECRET_KEY=$(grep -E "^SHIPYARD__AUTH__SECRET_KEY=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_POSTGRES_PASSWORD=$(grep -E "^POSTGRES_PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
-    
+    EXISTING_MQTT_PASSWORD=$(grep -E "^SHIPYARD__MQTT__PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+
     JWT_SECRET="${EXISTING_JWT_SECRET:-$JWT_SECRET}"
     SECRET_KEY="${EXISTING_SECRET_KEY:-$SECRET_KEY}"
     POSTGRES_PASSWORD="${EXISTING_POSTGRES_PASSWORD:-$POSTGRES_PASSWORD}"
+    MQTT_PASSWORD="${EXISTING_MQTT_PASSWORD:-$MQTT_PASSWORD}"
 fi
 success "Secrets ready"
 
@@ -292,6 +295,8 @@ SHIPYARD__DATABASE__MAX_CONNECTIONS=10
 SHIPYARD__MQTT__HOST=shipyard-mqtt
 SHIPYARD__MQTT__PORT=1883
 SHIPYARD__MQTT__CLIENT_ID=shipyard-api
+SHIPYARD__MQTT__USERNAME=shipyard-api
+SHIPYARD__MQTT__PASSWORD=${MQTT_PASSWORD}
 
 # Auth
 SHIPYARD__AUTH__JWT_SECRET=${JWT_SECRET}
@@ -324,7 +329,7 @@ success ".env written"
 
 # ── rmqtt.toml ────────────────────────────────────────────────────────────────
 info "Writing ${INSTALL_DIR}/rmqtt.toml..."
-cat > "${INSTALL_DIR}/rmqtt.toml" <<'RMQTT'
+cat > "${INSTALL_DIR}/rmqtt.toml" <<RMQTT
 [log]
 level = "warn"
 
@@ -349,6 +354,7 @@ default_startups = [
     "rmqtt-sys-topic",
     "rmqtt-message-storage",
     "rmqtt-session-storage",
+    "rmqtt-auth-http",
     "rmqtt-acl",
     "rmqtt-counter",
     "rmqtt-http-api"
@@ -357,8 +363,18 @@ default_startups = [
 [plugins.rmqtt-acl]
 enable = false
 
+# Auth: delegate to Shipyard backend so the backend uses its static password
+# and browser clients pass their JWT as the MQTT password.
 [plugins.rmqtt-auth-http]
-enable = false
+enable = true
+http_timeout = "5s"
+http_connections = 50
+concurrency_limit = 10
+
+[[plugins.rmqtt-auth-http.rules]]
+uri = "http://shipyard-backend:3001/internal/mqtt/auth"
+method = "post"
+params = {clientid = "\${clientid}", username = "\${username}", password = "\${password}", ipaddr = "\${ipaddr}"}
 
 [plugins.rmqtt-http-api]
 addr = "0.0.0.0:6060"
@@ -367,7 +383,7 @@ addr = "0.0.0.0:6060"
 max_packet_size = "10mb"
 max_inflight = 16
 session_expiry_interval = "2h"
-allow_anonymous = true
+allow_anonymous = false
 RMQTT
 
 # ── Traefik static config ─────────────────────────────────────────────────────
@@ -498,9 +514,9 @@ services:
     image: rmqtt/rmqtt:latest
     container_name: shipyard-mqtt
     restart: unless-stopped
-    ports:
-      - "1883:1883"
-      - "8083:8083"
+    # Ports are NOT published to the host — the broker is only reachable from
+    # inside Docker (backend via internal network, browsers via Traefik /mqtt).
+    # This prevents public internet scanners from reaching port 1883.
     volumes:
       - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/rmqtt.toml:ro
       - rmqtt_data:/app/data

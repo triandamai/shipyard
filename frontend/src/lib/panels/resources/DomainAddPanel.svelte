@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
 	import type { Domain } from '$lib/api/types';
@@ -25,9 +26,25 @@
 		'bison','camel','dingo','finch','goose','heron','ibis','jaguar','kite',
 	];
 
+	let serverIp = $state('127.0.0.1');
+	let serverIpPublic = $state(false);
+
+	onMount(async () => {
+		const res = await api.get<{ ip: string; is_public: boolean }>('/admin/host-ip');
+		if (res.data) {
+			serverIp = res.data.ip;
+			serverIpPublic = res.data.is_public;
+		}
+	});
+
 	function randomName(): string {
 		const adj  = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
 		const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+		if (serverIpPublic) {
+			// nip.io resolves adj-noun.X.X.X.X.nip.io → X.X.X.X
+			return `${adj}-${noun}.${serverIp}.nip.io`;
+		}
+		// traefik.me resolves *.traefik.me → 127.0.0.1
 		return `${adj}-${noun}.traefik.me`;
 	}
 
@@ -99,7 +116,11 @@
 			</div>
 			<span class="form-hint">
 				Use any domain you own, or click <Dice5 size={10} class="hint-icon" /> to generate a
-				<code class="mono">*.traefik.me</code> wildcard domain (resolves to 127.0.0.1).
+				{#if serverIpPublic}
+					<code class="mono">*.{serverIp}.nip.io</code> domain (resolves to your server IP <code class="mono">{serverIp}</code>).
+				{:else}
+					<code class="mono">*.traefik.me</code> domain (resolves to <code class="mono">127.0.0.1</code>).
+				{/if}
 			</span>
 		</div>
 

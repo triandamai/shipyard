@@ -1,6 +1,7 @@
 import mqtt from 'mqtt';
 import { mqttStore } from '$lib/stores/mqtt.store';
 import { eventBus } from './eventBus';
+import { getAuthToken } from '$lib/auth/cookies';
 import type { MqttPayload } from '$lib/api/types';
 
 let client: mqtt.MqttClient | null = null;
@@ -47,6 +48,7 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 		client = null;
 	}
 
+	const token = getAuthToken();
 	client = mqtt.connect(brokerUrl, {
 		clientId: getClientId(),
 		clean: true,
@@ -54,6 +56,9 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 		reconnectPeriod: 0,
 		connectTimeout: 5000,
 		keepalive: 30,
+		// Authenticate with the user's JWT token so rmqtt can verify the connection
+		username: 'shipyard-web',
+		password: token ?? undefined,
 		wsOptions: {
 			protocol: 'mqtt',
 		},
