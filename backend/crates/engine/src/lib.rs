@@ -172,13 +172,23 @@ impl DeploymentEngine {
             }
         };
 
-        let _ = sqlx::query(
-            "UPDATE deployments SET status = $1, finished_at = NOW() WHERE id = $2",
+        // Explicit enum cast required — prepared statement parameters are typed
+        // as `text` by default, and PostgreSQL won't implicitly coerce text to
+        // deployment_status in the extended query protocol.
+        if let Err(e) = sqlx::query(
+            "UPDATE deployments SET status = $1::deployment_status, finished_at = NOW() WHERE id = $2",
         )
         .bind(final_status)
         .bind(deployment_id)
         .execute(&self.db)
-        .await;
+        .await
+        {
+            tracing::error!(
+                deployment_id = %deployment_id,
+                error = %e,
+                "failed to persist deployment final status"
+            );
+        }
 
         let _ = self
             .mqtt

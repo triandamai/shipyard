@@ -621,10 +621,23 @@
 		isDeploying = true;
 		const res = await api.post<Deployment>(`/services/${serviceId}/deploy`);
 		if (res.data) {
+			const depId = res.data.id;
 			deployments = [res.data, ...deployments];
 			deploymentStore.setActiveDeployment(res.data);
 			unsubscribeDeployment?.();
-			unsubscribeDeployment = subscribeToDeployment(orgId, projectId, serviceId, res.data.id);
+			unsubscribeDeployment = subscribeToDeployment(orgId, projectId, serviceId, depId);
+
+			// Listen for the completion event so the list row updates live.
+			const depStatusTopic = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/deployments/${depId}/status`;
+			const onDepDone = (payload: MqttPayload) => {
+				const evt = payload.event ?? '';
+				if (!evt.startsWith('deployment.success') && !evt.startsWith('deployment.failed')) return;
+				const finalStatus: Deployment['status'] = evt.includes('success') ? 'success' : 'failed';
+				deployments = deployments.map(d => d.id === depId ? { ...d, status: finalStatus } : d);
+				eventBus.off(depStatusTopic, onDepDone);
+			};
+			eventBus.on(depStatusTopic, onDepDone);
+
 			await loadStepsForLatest();
 		}
 		isDeploying = false;
@@ -814,7 +827,7 @@
 		if (activeTab === 'monitor' && tab !== 'monitor') disconnectStats();
 		activeTab = tab;
 		if (tab === 'replicas' && containers.length === 0) await loadContainers();
-		if ((tab === 'deploy' || tab === 'logs') && deployments.length === 0) await loadDeployments();
+		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();

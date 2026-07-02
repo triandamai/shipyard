@@ -7,6 +7,21 @@ let client: mqtt.MqttClient | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let retryCount = 0;
 const MAX_RETRY_DELAY_MS = 60_000;
+const STORAGE_KEY = 'shipyard_mqtt_cid';
+
+/** Return a stable client ID for this browser, persisted across page loads. */
+function getClientId(): string {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) return stored;
+        const id = `shipyard-ui-${Math.random().toString(36).substring(2, 9)}`;
+        localStorage.setItem(STORAGE_KEY, id);
+        return id;
+    } catch {
+        // localStorage unavailable (private browsing, etc.) — fall back to ephemeral
+        return `shipyard-ui-${Math.random().toString(36).substring(2, 9)}`;
+    }
+}
 
 interface MqttInitOptions {
 	brokerUrl?: string;
@@ -33,7 +48,7 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 	}
 
 	client = mqtt.connect(brokerUrl, {
-		clientId: `shipyard-ui-${Math.random().toString(36).substring(7)}`,
+		clientId: getClientId(),
 		clean: true,
 		// Disable the library's built-in reconnect — we handle it ourselves
 		reconnectPeriod: 0,
