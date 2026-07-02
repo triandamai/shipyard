@@ -173,4 +173,6 @@ jobs:
       - name: Trigger deployment via webhook
         run: |
           curl -f -s -o /dev/null -w "%{http_code}" \
-            -X POST "${{ secrets.LANDING_WEBHOOK_URL }}"
+            -X POST "${{ secrets.LANDING_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"${{ github.ref_name }}","sha":"${{ github.sha }}"}'
