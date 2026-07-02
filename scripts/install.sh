@@ -363,18 +363,8 @@ default_startups = [
 [plugins.rmqtt-acl]
 enable = false
 
-# Auth: delegate to Shipyard backend so the backend uses its static password
-# and browser clients pass their JWT as the MQTT password.
 [plugins.rmqtt-auth-http]
 enable = true
-http_timeout = "5s"
-http_connections = 50
-concurrency_limit = 10
-
-[[plugins.rmqtt-auth-http.rules]]
-uri = "http://shipyard-backend:3001/internal/mqtt/auth"
-method = "post"
-params = {clientid = "\${clientid}", username = "\${username}", password = "\${password}", ipaddr = "\${ipaddr}"}
 
 [plugins.rmqtt-http-api]
 addr = "0.0.0.0:6060"
@@ -385,6 +375,27 @@ max_inflight = 16
 session_expiry_interval = "2h"
 allow_anonymous = false
 RMQTT
+
+# ── rmqtt-auth-http plugin config ─────────────────────────────────────────────
+# This file is loaded by the rmqtt-auth-http plugin from its plugins dir.
+# The [plugins.rmqtt-auth-http] section in rmqtt.toml only enables/disables it;
+# the URL and rules must live here.
+info "Writing ${INSTALL_DIR}/rmqtt-auth-http.toml..."
+cat > "${INSTALL_DIR}/rmqtt-auth-http.toml" <<'AUTHHTTP'
+http_timeout = "5s"
+http_connections = 50
+http_keepalive_timeout = "60s"
+concurrency_limit = 10
+
+[[rules]]
+uri = "http://shipyard-backend:3001/internal/mqtt/auth"
+method = "post"
+params.clientid = "${clientid}"
+params.username = "${username}"
+params.password = "${password}"
+params.ipaddr = "${ipaddr}"
+AUTHHTTP
+success "rmqtt-auth-http.toml written"
 
 # ── Traefik static config ─────────────────────────────────────────────────────
 info "Writing Traefik config..."
@@ -519,6 +530,7 @@ services:
     # This prevents public internet scanners from reaching port 1883.
     volumes:
       - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/rmqtt.toml:ro
+      - ${INSTALL_DIR}/rmqtt-auth-http.toml:/app/rmqtt/rmqtt-plugins/rmqtt-auth-http.toml:ro
       - rmqtt_data:/app/data
     networks:
       - internal
