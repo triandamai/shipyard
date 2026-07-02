@@ -411,7 +411,7 @@ http:
         certResolver: letsencrypt
 
     shipyard-backend:
-      rule: "Host(\`api.${DOMAIN}\`)"
+      rule: "Host(\`api-${DOMAIN}\`)"
       entryPoints: [websecure]
       service: shipyard-backend
       tls:
@@ -603,7 +603,7 @@ echo -e "${GREEN}${BOLD}║       Shipyard installed successfully!        ║${R
 echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  Dashboard:   ${BOLD}${PROTOCOL}://${DOMAIN}${RESET}"
-echo -e "  API:         ${BOLD}${PROTOCOL}://api.${DOMAIN}${RESET}"
+echo -e "  API:         ${BOLD}${PROTOCOL}://api-${DOMAIN}${RESET}"
 echo -e "  Install dir: ${INSTALL_DIR}"
 echo ""
 echo -e "  Useful commands:"
