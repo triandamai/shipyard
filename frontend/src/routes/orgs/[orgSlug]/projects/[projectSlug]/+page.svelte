@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { SvelteFlow, Controls, Background, MiniMap, type NodeTypes, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { Plus } from '@lucide/svelte';
+	import { Plus, ChevronDown, RefreshCw } from '@lucide/svelte';
 
 	import { page } from '$app/state';
 	import { api } from '$lib/api/client';
@@ -196,6 +196,22 @@
 		}
 	}
 
+	// ── App bar state ──────────────────────────────────────────────────────────
+	let projectMenuOpen = $state(false);
+	let activeProjectName = $derived(
+		$projectStore.projects.find((p) => p.slug === projectSlug)?.name ?? projectSlug
+	);
+	let allProjects = $derived($projectStore.projects);
+
+	function closeProjectMenu() { projectMenuOpen = false; }
+
+	function switchProject(slug: string) {
+		closeProjectMenu();
+		if (slug !== projectSlug) {
+			import('$app/navigation').then(({ goto }) => goto(`/orgs/${orgSlug}/projects/${slug}`));
+		}
+	}
+
 	// Set active project whenever the slug resolves in the store
 	$effect(() => {
 		const project = $projectStore.projects.find((p) => p.slug === projectSlug);
@@ -242,6 +258,52 @@
 		};
 	});
 </script>
+
+<!-- Canvas app bar -->
+<div class="canvas-appbar">
+	{#if projectMenuOpen}
+		<div class="appbar-backdrop" onclick={closeProjectMenu} role="presentation"></div>
+	{/if}
+
+	<div class="project-switcher">
+		<button
+			class="project-btn"
+			onclick={() => projectMenuOpen = !projectMenuOpen}
+			aria-haspopup="true"
+			aria-expanded={projectMenuOpen}
+		>
+			<span class="project-name">{activeProjectName}</span>
+			<ChevronDown size={14} class={projectMenuOpen ? 'rotate-180' : ''} />
+		</button>
+
+		{#if projectMenuOpen}
+			<div class="project-menu" role="menu">
+				{#each allProjects as project}
+					<button
+						class="project-menu-item"
+						class:active={project.slug === projectSlug}
+						onclick={() => switchProject(project.slug)}
+						role="menuitem"
+					>
+						{project.name}
+					</button>
+				{/each}
+				{#if allProjects.length === 0}
+					<div class="project-menu-empty">No projects</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<button
+		class="appbar-action"
+		onclick={() => syncTopology(orgId, projectId)}
+		title="Reload topology"
+		aria-label="Reload topology"
+	>
+		<RefreshCw size={14} />
+	</button>
+</div>
 
 <div class="canvas-wrapper">
 	{#if isLoading}
@@ -364,4 +426,109 @@
 			transform: rotate(360deg);
 		}
 	}
+
+	/* ── Canvas app bar ── */
+	.canvas-appbar {
+		position: fixed;
+		top: 10px;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 20;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		padding: 4px 6px 4px 4px;
+		box-shadow: var(--shadow-md);
+	}
+
+	.appbar-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 100;
+	}
+
+	.project-switcher { position: relative; }
+
+	.project-btn {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 5px 10px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-primary);
+		transition: all var(--transition-fast);
+	}
+
+	.project-btn:hover {
+		background: var(--bg-hover);
+		border-color: var(--border-hover);
+	}
+
+	.project-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	.project-menu {
+		position: absolute;
+		top: calc(100% + 6px);
+		left: 0;
+		min-width: 180px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-lg);
+		z-index: 200;
+		overflow: hidden;
+		padding: 4px;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+
+	.project-menu-item {
+		display: block;
+		width: 100%;
+		text-align: left;
+		padding: 7px 10px;
+		background: none;
+		border: none;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		font-size: 13px;
+		color: var(--text-secondary);
+		transition: all var(--transition-fast);
+	}
+
+	.project-menu-item:hover { background: var(--bg-elevated); color: var(--text-primary); }
+	.project-menu-item.active { color: var(--accent); font-weight: 600; background: var(--accent-muted); }
+
+	.project-menu-empty {
+		padding: 8px 10px;
+		font-size: 12px;
+		color: var(--text-muted);
+	}
+
+	.appbar-action {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		background: none;
+		border: none;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		color: var(--text-muted);
+		transition: all var(--transition-fast);
+	}
+
+	.appbar-action:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+	:global(.rotate-180) { transform: rotate(180deg); transition: transform var(--transition-fast); }
 </style>

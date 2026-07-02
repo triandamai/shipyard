@@ -18,6 +18,7 @@
 		git_gitlab_token?: string;
 		git_bitbucket_token?: string;
 		git_webhook_secret?: string;
+		max_parallel_deployments?: number;
 	}
 
 	// ── Version info ────────────────────────────────────────────────────────────
@@ -312,6 +313,32 @@
 				<span class="webhook-url-label">Incoming Webhook URL</span>
 				<code class="webhook-url">{window.location.origin}/api/webhooks/github/:service_id/:token</code>
 				<span class="field-hint">Replace <code>:service_id</code> and <code>:token</code> from the service detail panel.</span>
+			</div>
+		</section>
+
+		<!-- Deployment Parallelism -->
+		<section class="settings-section">
+			<div class="section-header">
+				<div class="section-icon"><Zap size={16} /></div>
+				<div>
+					<h2 class="section-title">Deployment Parallelism</h2>
+					<p class="section-desc">Maximum number of deployments that can run at the same time. When the limit is reached, new deployments are queued and started automatically when a slot opens. Set to <code>0</code> for unlimited.</p>
+				</div>
+			</div>
+			<div class="fields">
+				<div class="field" style="max-width: 200px;">
+					<label class="field-label" for="max-parallel">Max parallel deployments</label>
+					<input
+						id="max-parallel"
+						class="field-input"
+						type="number"
+						min="0"
+						max="20"
+						bind:value={settings.max_parallel_deployments}
+						placeholder="0 (unlimited)"
+					/>
+					<span class="field-hint">Queued deployments start automatically when a slot opens.</span>
+				</div>
 			</div>
 		</section>
 

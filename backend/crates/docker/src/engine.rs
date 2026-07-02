@@ -100,6 +100,9 @@ pub trait DockerEngine: Send + Sync {
     /// List all swarm services, each summarised as a `TaskInfo`.
     async fn list_services(&self) -> AppResult<Vec<TaskInfo>>;
 
+    /// Remove all stopped containers. Returns the number removed.
+    async fn prune_containers(&self) -> AppResult<u64>;
+
     /// List all containers (running + stopped).
     async fn list_all_containers(&self) -> AppResult<Vec<ContainerSummary>>;
 
@@ -957,6 +960,15 @@ impl DockerEngine for BollardDockerEngine {
             .collect();
 
         Ok(infos)
+    }
+
+    async fn prune_containers(&self) -> AppResult<u64> {
+        use bollard::container::PruneContainersOptions;
+        let result = self.client
+            .prune_containers(None::<PruneContainersOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("prune_containers failed: {e}")))?;
+        Ok(result.containers_deleted.map(|v| v.len() as u64).unwrap_or(0))
     }
 
     async fn list_all_containers(&self) -> AppResult<Vec<ContainerSummary>> {

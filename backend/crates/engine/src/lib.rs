@@ -130,6 +130,67 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        self.execute_deployment(
+            org_id, project_id, service_id, deployment_id,
+            triggered_by, source_ref, &svc_type,
+        )
+        .await?;
+        Ok(deployment_id)
+    }
+
+    /// Resume a deployment row that is already in the DB with status='queued'.
+    /// Updates the row to 'running' then executes the same steps as `deploy`.
+    pub async fn deploy_queued(
+        &self,
+        deployment_id: Uuid,
+        service_id: Uuid,
+        triggered_by: &str,
+        source_ref: &str,
+    ) -> AppResult<Uuid> {
+        let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, i32, String)>(
+            "SELECT s.id, p.org_id, s.project_id::text, p.id::text, s.replicas, s.type::text
+             FROM services s
+             JOIN projects p ON p.id = s.project_id
+             WHERE s.id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (_, org_id, project_id_str, _, _, svc_type) = row
+            .ok_or_else(|| AppError::NotFound(format!("Service '{service_id}' not found")))?;
+
+        let project_id: Uuid = project_id_str
+            .parse()
+            .map_err(|_| AppError::Internal("Invalid project_id UUID".to_string()))?;
+
+        sqlx::query(
+            "UPDATE deployments SET status = 'running'::deployment_status WHERE id = $1",
+        )
+        .bind(deployment_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        self.execute_deployment(
+            org_id, project_id, service_id, deployment_id,
+            triggered_by, source_ref, &svc_type,
+        )
+        .await?;
+        Ok(deployment_id)
+    }
+
+    async fn execute_deployment(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        triggered_by: &str,
+        source_ref: &str,
+        svc_type: &str,
+    ) -> AppResult<()> {
         // Publish overall deployment start
         let status_topic = topics::deployment_status(org_id, project_id, service_id, deployment_id);
         let _ = self
@@ -172,9 +233,6 @@ impl DeploymentEngine {
             }
         };
 
-        // Explicit enum cast required — prepared statement parameters are typed
-        // as `text` by default, and PostgreSQL won't implicitly coerce text to
-        // deployment_status in the extended query protocol.
         if let Err(e) = sqlx::query(
             "UPDATE deployments SET status = $1::deployment_status, finished_at = NOW() WHERE id = $2",
         )
@@ -206,8 +264,6 @@ impl DeploymentEngine {
             )
             .await;
 
-        // Notify the canvas to refresh the topology view after every deployment
-        // so status badges and node states update without a manual page reload.
         let topology_topic = topics::topology(org_id, project_id);
         let _ = self
             .mqtt
@@ -223,7 +279,7 @@ impl DeploymentEngine {
             .await;
 
         result?;
-        Ok(deployment_id)
+        Ok(())
     }
 
     /// Execute all 8 deployment steps in sequence.

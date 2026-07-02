@@ -78,6 +78,26 @@
   }
 }
 
+/* ─── Dark Theme ────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg-base: #0D1117;
+  --bg-surface: #161B22;
+  --bg-elevated: #1C2128;
+  --bg-hover: #21262D;
+
+  --border: #30363D;
+  --border-hover: #484F58;
+
+  --text-primary: #E6EDF3;
+  --text-secondary: #C9D1D9;
+  --text-muted: #8B949E;
+  --text-dim: #6E7681;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4), 0 1px 1px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.4);
+  --shadow-lg: 0 10px 36px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.5);
+}
+
 /* ─── Reset & Base ──────────────────────────────────────────────── */
 * {
   box-sizing: border-box;

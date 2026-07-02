@@ -3,7 +3,7 @@
 	import { api } from '$lib/api/client';
 	import {
 		Box, Layers, HardDrive, Network, RefreshCw,
-		Search, ChevronDown, ChevronRight, Circle
+		Search, ChevronDown, ChevronRight, Trash2
 	} from '@lucide/svelte';
 
 	type Tab = 'containers' | 'services' | 'volumes' | 'networks';
@@ -85,6 +85,27 @@
 		if (activeTab === 'networks')   { networks = [];   await loadNetworks(); }
 	}
 
+	let pruning       = $state(false);
+	let pruneConfirm  = $state(false);
+	let pruneResult   = $state<string | null>(null);
+
+	async function pruneContainers() {
+		if (!pruneConfirm) { pruneConfirm = true; return; }
+		pruning = true;
+		pruneConfirm = false;
+		pruneResult = null;
+		const r = await api.post<{ removed: number }>('/admin/docker/containers/prune', {});
+		if (r.data) {
+			pruneResult = `Removed ${r.data.removed} stopped container${r.data.removed !== 1 ? 's' : ''}.`;
+			containers = [];
+			await loadContainers();
+		} else {
+			pruneResult = r.error?.message ?? 'Prune failed.';
+		}
+		pruning = false;
+		setTimeout(() => { pruneResult = null; }, 4000);
+	}
+
 	function toggle(id: string) { expanded = expanded === id ? null : id; }
 
 	const stateColor: Record<string, string> = {
@@ -152,10 +173,33 @@
 				{#if networks.length}<span class="badge">{networks.length}</span>{/if}
 			</button>
 		</div>
-		<button class="refresh-btn" onclick={refresh} disabled={isLoading}>
-			<RefreshCw size={14} class={isLoading ? 'spin' : ''} /> Refresh
-		</button>
+		<div class="toolbar-right">
+			{#if activeTab === 'containers'}
+				{#if pruneConfirm}
+					<span class="prune-confirm-text">Remove all stopped containers?</span>
+				{/if}
+				<button
+					class="prune-btn"
+					class:danger={pruneConfirm}
+					onclick={pruneContainers}
+					disabled={pruning}
+				>
+					<Trash2 size={14} />
+					{pruning ? 'Pruning…' : pruneConfirm ? 'Confirm' : 'Prune stopped'}
+				</button>
+				{#if pruneConfirm}
+					<button class="cancel-btn" onclick={() => pruneConfirm = false}>Cancel</button>
+				{/if}
+			{/if}
+			<button class="refresh-btn" onclick={refresh} disabled={isLoading}>
+				<RefreshCw size={14} class={isLoading ? 'spin' : ''} /> Refresh
+			</button>
+		</div>
 	</div>
+
+	{#if pruneResult}
+		<div class="prune-toast">{pruneResult}</div>
+	{/if}
 
 	<div class="search-bar">
 		<Search size={13} />
@@ -386,7 +430,8 @@
 <style>
 	.docker-page { display: flex; flex-direction: column; gap: 14px; }
 
-	.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+	.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+	.toolbar-right { display: flex; align-items: center; gap: 8px; }
 	.tabs { display: flex; gap: 4px; }
 	.tab {
 		display: flex; align-items: center; gap: 6px;
@@ -411,6 +456,33 @@
 	}
 	.refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 	.refresh-btn:disabled { opacity: 0.5; cursor: default; }
+
+	.prune-btn {
+		display: flex; align-items: center; gap: 6px;
+		padding: 6px 12px; font-size: 12px; font-weight: 500;
+		background: var(--bg-surface); border: 1px solid var(--border);
+		border-radius: var(--radius); color: var(--text-secondary);
+		cursor: pointer; transition: all var(--transition-fast);
+	}
+	.prune-btn:hover:not(:disabled) { border-color: #ef4444; color: #ef4444; }
+	.prune-btn.danger { background: #fef2f2; border-color: #ef4444; color: #ef4444; font-weight: 600; }
+	.prune-btn:disabled { opacity: 0.5; cursor: default; }
+
+	.cancel-btn {
+		padding: 6px 10px; font-size: 12px; font-weight: 500;
+		background: transparent; border: 1px solid var(--border);
+		border-radius: var(--radius); color: var(--text-muted); cursor: pointer;
+	}
+	.cancel-btn:hover { border-color: var(--border-hover); color: var(--text-primary); }
+
+	.prune-confirm-text { font-size: 12px; color: #ef4444; font-weight: 500; white-space: nowrap; }
+
+	.prune-toast {
+		padding: 10px 14px;
+		background: #f0fdf4; border: 1px solid #bbf7d0;
+		border-radius: var(--radius); color: #15803d;
+		font-size: 13px; font-weight: 500;
+	}
 
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 	@keyframes spin { to { transform: rotate(360deg); } }

@@ -291,6 +291,7 @@
 		switch (s) {
 			case 'success': return 'running';
 			case 'running': return 'pending';
+			case 'queued':  return 'queued';
 			case 'failed':  return 'failed';
 			default:        return 'stopped';
 		}
@@ -444,7 +445,7 @@
 		expandedSteps = new Set();
 
 		// Subscribe to MQTT FIRST (before HTTP fetch) so no events are missed
-		const isActive = dep.status === 'running' || dep.status === 'pending';
+		const isActive = dep.status === 'running' || dep.status === 'pending' || dep.status === 'queued';
 		if (isActive) startDepMqtt(dep);
 
 		// ONE-TIME HTTP fetch for initial state (step names + existing logs)
@@ -2449,6 +2450,7 @@
 	.dep-row-badge.running-ok,
 	.dep-row-badge.success  { background: rgba(16,185,129,0.12); color: #10B981; }
 	.dep-row-badge.failed   { background: rgba(239,68,68,0.12);  color: #EF4444; }
+	.dep-row-badge.queued   { background: rgba(245,158,11,0.12); color: #F59E0B; }
 	.dep-row-badge.stopped,
 	.dep-row-badge.pending  { background: var(--bg-elevated);     color: var(--text-muted); }
 	:global(.dep-row-arrow) { color: var(--text-dim); flex-shrink: 0; }

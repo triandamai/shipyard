@@ -31,6 +31,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "git_gitlab_token",
     "git_bitbucket_token",
     "git_webhook_secret",
+    "max_parallel_deployments",
 ];
 
 const TRAEFIK_CONTAINER: &str = "shipyard-traefik";
@@ -48,6 +49,7 @@ pub struct PlatformSettings {
     pub git_gitlab_token: Option<String>,
     pub git_bitbucket_token: Option<String>,
     pub git_webhook_secret: Option<String>,
+    pub max_parallel_deployments: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +115,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/mqtt/topics", get(mqtt_topics))
         .route("/admin/system", get(system_info))
         .route("/admin/docker/containers", get(docker_containers))
+        .route("/admin/docker/containers/prune", post(docker_prune_containers))
         .route("/admin/docker/services", get(docker_services))
         .route("/admin/docker/volumes", get(docker_volumes))
         .route("/admin/docker/networks", get(docker_networks))
@@ -135,7 +138,7 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
         .collect();
 
     Ok(PlatformSettings {
-        main_domain:              map.remove("main_domain"),
+        main_domain:              map.remove("main_domain").or_else(|| std::env::var("DOMAIN").ok()),
         traefik_network:          map.remove("traefik_network").or_else(|| Some(state.config.traefik.network.clone())),
         traefik_entrypoint_http:  map.remove("traefik_entrypoint_http").or_else(|| Some(state.config.traefik.entrypoint_http.clone())),
         traefik_entrypoint_https: map.remove("traefik_entrypoint_https").or_else(|| Some(state.config.traefik.entrypoint_https.clone())),
@@ -144,6 +147,8 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
         git_gitlab_token:         map.remove("git_gitlab_token"),
         git_bitbucket_token:      map.remove("git_bitbucket_token"),
         git_webhook_secret:       map.remove("git_webhook_secret"),
+        max_parallel_deployments: map.remove("max_parallel_deployments")
+            .and_then(|v| v.parse::<u32>().ok()),
     })
 }
 
@@ -210,6 +215,7 @@ async fn update_settings(
         ("git_gitlab_token",         body.git_gitlab_token.clone()),
         ("git_bitbucket_token",      body.git_bitbucket_token.clone()),
         ("git_webhook_secret",       body.git_webhook_secret.clone()),
+        ("max_parallel_deployments", body.max_parallel_deployments.map(|v| v.to_string())),
     ];
 
     for (key, val) in pairs {
@@ -763,6 +769,15 @@ async fn docker_containers(
     let data = state.docker.list_all_containers().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_prune_containers(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let removed = state.docker.prune_containers().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
 }
 
 async fn docker_services(

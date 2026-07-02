@@ -5,7 +5,7 @@
 export type MemberRole = 'owner' | 'admin' | 'member' | 'viewer';
 export type ServiceType = 'git' | 'docker' | 'docker_compose' | 'manual' | 'static' | 'database';
 export type ContainerStatus = 'pending' | 'preparing' | 'running' | 'complete' | 'failed' | 'shutdown' | 'rejected' | 'orphan';
-export type DeploymentStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
+export type DeploymentStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 export type StepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export type EdgeType = 'network' | 'volume' | 'domain' | 'depends_on' | 'replica' | 'compose_child';

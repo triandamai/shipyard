@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink } from '@lucide/svelte';
+	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -70,6 +70,20 @@
 		window.location.href = '/login';
 	}
 
+	// ── Dark theme toggle ────────────────────────────────────────────────────────
+	let isDark = $state(false);
+
+	$effect(() => {
+		isDark = localStorage.getItem('shipyard_theme') === 'dark';
+		document.documentElement.setAttribute('data-theme', isDark ? 'dark' : '');
+	});
+
+	function toggleTheme() {
+		isDark = !isDark;
+		localStorage.setItem('shipyard_theme', isDark ? 'dark' : 'light');
+		document.documentElement.setAttribute('data-theme', isDark ? 'dark' : '');
+	}
+
 	async function runUpdate() {
 		if (updating) return;
 		closeMenu();
@@ -118,6 +132,20 @@
 
 	<!-- Bottom: toggle + avatar -->
 	<div class="bottom-slot">
+		<button
+			class="nav-icon-btn toggle-btn"
+			onclick={toggleTheme}
+			title={isDark ? 'Light mode' : 'Dark mode'}
+			aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+		>
+			{#if isDark}
+				<Sun size={16} />
+			{:else}
+				<Moon size={16} />
+			{/if}
+			<span class="tooltip">{isDark ? 'Light mode' : 'Dark mode'}</span>
+		</button>
+
 		<button
 			class="nav-icon-btn toggle-btn"
 			onclick={() => uiStore.toggleSidebar()}

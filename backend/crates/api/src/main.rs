@@ -312,6 +312,82 @@ async fn main() {
         auth_limiter,
     };
 
+    // ── Deployment scheduler ──────────────────────────────────────────────────
+    // Polls every 5 s for queued deployments when running count is below the
+    // max_parallel_deployments setting. When max is 0 (default) the gate in
+    // trigger_deploy is off and no queued rows are ever created, so the loop
+    // is effectively a no-op in that case.
+    {
+        let sched_db     = state.db.clone();
+        let sched_docker = Arc::clone(&state.docker);
+        let sched_mqtt   = Arc::clone(&state.mqtt);
+        let sched_config = Arc::clone(&state.config);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+
+                // Read current max_parallel setting
+                let max_parallel: i64 = match sqlx::query_as::<_, (String,)>(
+                    "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
+                )
+                .fetch_optional(&sched_db)
+                .await
+                {
+                    Ok(Some((v,))) => v.trim_matches('"').parse::<i64>().unwrap_or(0),
+                    _ => 0,
+                };
+
+                if max_parallel <= 0 { continue; }
+
+                let running: i64 = match sqlx::query_as::<_, (i64,)>(
+                    "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+                )
+                .fetch_one(&sched_db)
+                .await
+                {
+                    Ok((n,)) => n,
+                    Err(e) => { tracing::warn!("scheduler: running count query failed: {e}"); continue; }
+                };
+
+                let slots = (max_parallel - running).max(0) as usize;
+                if slots == 0 { continue; }
+
+                let queued = match sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, String)>(
+                    "SELECT id, service_id, triggered_by, source_ref
+                     FROM deployments
+                     WHERE status = 'queued'::deployment_status
+                     ORDER BY created_at ASC
+                     LIMIT $1",
+                )
+                .bind(slots as i64)
+                .fetch_all(&sched_db)
+                .await
+                {
+                    Ok(rows) => rows,
+                    Err(e) => { tracing::warn!("scheduler: queued fetch failed: {e}"); continue; }
+                };
+
+                for (dep_id, svc_id, triggered_by, source_ref) in queued {
+                    let engine = shipyard_engine::DeploymentEngine::new(
+                        Arc::clone(&sched_docker),
+                        sched_db.clone(),
+                        Arc::clone(&sched_mqtt),
+                        sched_config.docker.label_prefix.clone(),
+                        sched_config.traefik.network.clone(),
+                        sched_config.auth.secret_key.clone(),
+                        sched_config.docker.port_proxy,
+                    );
+                    tokio::spawn(async move {
+                        if let Err(e) = engine.deploy_queued(dep_id, svc_id, &triggered_by, &source_ref).await {
+                            tracing::error!(deployment_id = %dep_id, "scheduled deployment failed: {e}");
+                        }
+                    });
+                }
+            }
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
