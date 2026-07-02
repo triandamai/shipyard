@@ -360,6 +360,9 @@ enable = false
 [plugins.rmqtt-auth-http]
 enable = false
 
+[plugins.rmqtt-http-api]
+addr = "0.0.0.0:6060"
+
 [mqtt]
 max_packet_size = "10mb"
 max_inflight = 16

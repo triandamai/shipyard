@@ -107,6 +107,10 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/version", get(get_version))
         .route("/admin/update", post(trigger_update))
         .route("/admin/update/stream", get(update_stream))
+        .route("/admin/mqtt/clients", get(mqtt_clients))
+        .route("/admin/mqtt/subscriptions", get(mqtt_subscriptions))
+        .route("/admin/mqtt/topics", get(mqtt_topics))
+        .route("/admin/system", get(system_info))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -603,4 +607,144 @@ async fn update_stream(
     });
 
     Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
+}
+
+// ── MQTT proxy ───────────────────────────────────────────────────────────────
+
+fn mqtt_base_url() -> String {
+    std::env::var("RMQTT_HTTP_API_URL")
+        .unwrap_or_else(|_| "http://shipyard-mqtt:6060".to_string())
+}
+
+async fn mqtt_proxy(path: &str) -> Result<Json<ApiResponse<Value>>, ApiAppError> {
+    let url = format!("{}/api/v1/{}", mqtt_base_url(), path);
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("MQTT API unreachable: {e}"))))?;
+
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("MQTT API parse error: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(body)))
+}
+
+async fn mqtt_clients(
+    _auth: AuthUser,
+) -> Result<Json<ApiResponse<Value>>, ApiAppError> {
+    mqtt_proxy("clients").await
+}
+
+async fn mqtt_subscriptions(
+    _auth: AuthUser,
+) -> Result<Json<ApiResponse<Value>>, ApiAppError> {
+    mqtt_proxy("subscriptions").await
+}
+
+async fn mqtt_topics(
+    _auth: AuthUser,
+) -> Result<Json<ApiResponse<Value>>, ApiAppError> {
+    mqtt_proxy("topics").await
+}
+
+// ── System metrics ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct DiskInfo {
+    mount: String,
+    total_gb: f64,
+    used_gb: f64,
+    used_pct: f64,
+}
+
+#[derive(Serialize)]
+struct NetInfo {
+    iface: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct SystemInfo {
+    cpu_usage_pct: f64,
+    memory_total_mb: u64,
+    memory_used_mb: u64,
+    memory_used_pct: f64,
+    swap_total_mb: u64,
+    swap_used_mb: u64,
+    uptime_secs: u64,
+    disks: Vec<DiskInfo>,
+    networks: Vec<NetInfo>,
+}
+
+async fn system_info(
+    _auth: AuthUser,
+) -> Result<Json<ApiResponse<SystemInfo>>, ApiAppError> {
+    use sysinfo::{Disks, Networks, System};
+
+    let info = tokio::task::spawn_blocking(|| {
+        let mut sys = System::new_all();
+        // Two refreshes needed for an accurate CPU snapshot
+        sys.refresh_all();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+
+        let cpu_usage_pct = {
+            let cpus = sys.cpus();
+            if cpus.is_empty() { 0.0 }
+            else { cpus.iter().map(|c| c.cpu_usage() as f64).sum::<f64>() / cpus.len() as f64 }
+        };
+
+        let mem_total = sys.total_memory();
+        let mem_used  = sys.used_memory();
+        let mem_pct   = if mem_total > 0 { mem_used as f64 / mem_total as f64 * 100.0 } else { 0.0 };
+
+        let swap_total = sys.total_swap();
+        let swap_used  = sys.used_swap();
+
+        let disks: Vec<DiskInfo> = Disks::new_with_refreshed_list()
+            .iter()
+            .map(|d| {
+                let total = d.total_space();
+                let avail = d.available_space();
+                let used  = total.saturating_sub(avail);
+                DiskInfo {
+                    mount:    d.mount_point().to_string_lossy().into_owned(),
+                    total_gb: total as f64 / 1_073_741_824.0,
+                    used_gb:  used  as f64 / 1_073_741_824.0,
+                    used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
+                }
+            })
+            .collect();
+
+        let networks: Vec<NetInfo> = Networks::new_with_refreshed_list()
+            .iter()
+            .map(|(name, data)| NetInfo {
+                iface:    name.clone(),
+                rx_bytes: data.total_received(),
+                tx_bytes: data.total_transmitted(),
+            })
+            .collect();
+
+        SystemInfo {
+            cpu_usage_pct,
+            memory_total_mb: mem_total / 1_048_576,
+            memory_used_mb:  mem_used  / 1_048_576,
+            memory_used_pct: mem_pct,
+            swap_total_mb:   swap_total / 1_048_576,
+            swap_used_mb:    swap_used  / 1_048_576,
+            uptime_secs:     System::uptime(),
+            disks,
+            networks,
+        }
+    })
+    .await
+    .map_err(|e| ApiAppError(AppError::Internal(format!("system info error: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(info)))
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Settings2, Users, Server } from '@lucide/svelte';
+	import { Settings2, Users, Server, Radio, Cpu } from '@lucide/svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole } from '$lib/auth/permissions';
 
@@ -21,9 +21,11 @@
 	});
 
 	const tabs = [
-		{ label: 'General', href: (slug: string) => `/orgs/${slug}/settings/general`, icon: Settings2 },
+		{ label: 'General',  href: (slug: string) => `/orgs/${slug}/settings/general`, icon: Settings2 },
 		{ label: 'Traefik',  href: (slug: string) => `/orgs/${slug}/settings/traefik`,  icon: Server },
-		{ label: 'Members', href: (slug: string) => `/orgs/${slug}/settings/members`, icon: Users },
+		{ label: 'Members',  href: (slug: string) => `/orgs/${slug}/settings/members`, icon: Users },
+		{ label: 'MQTT',     href: (slug: string) => `/orgs/${slug}/settings/mqtt`,    icon: Radio },
+		{ label: 'Infra',    href: (slug: string) => `/orgs/${slug}/settings/infra`,   icon: Cpu },
 	];
 
 	function isActive(tabHref: string) {
