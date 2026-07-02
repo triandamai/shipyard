@@ -246,6 +246,21 @@ async fn handle_push(
         "webhook: triggering deployment"
     );
 
+    let source_ref = source_ref.to_string();
+
+    let deployment_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+    )
+    .bind(deployment_id)
+    .bind(service_id)
+    .bind("webhook")
+    .bind(&source_ref)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
     let engine = DeploymentEngine::new(
         Arc::clone(&state.docker),
         state.db.clone(),
@@ -256,12 +271,11 @@ async fn handle_push(
         state.config.docker.port_proxy,
     );
 
-    let source_ref = source_ref.to_string();
-
     tokio::spawn(async move {
-        if let Err(e) = engine.deploy(service_id, "webhook", &source_ref).await {
+        if let Err(e) = engine.deploy(deployment_id, service_id, "webhook", &source_ref).await {
             tracing::error!(
                 service_id = %service_id,
+                deployment_id = %deployment_id,
                 error = %e,
                 "webhook-triggered deployment failed"
             );

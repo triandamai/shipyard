@@ -78,7 +78,6 @@ async fn get_logs(
                  FROM deployment_logs dl
                  JOIN deployments d ON d.id = dl.deployment_id
                  WHERE d.service_id = $1
-                   AND d.status = 'success'
                    AND dl.level::text = $2
                    AND dl.timestamp >= $3
                  ORDER BY dl.timestamp DESC
@@ -98,7 +97,6 @@ async fn get_logs(
                  FROM deployment_logs dl
                  JOIN deployments d ON d.id = dl.deployment_id
                  WHERE d.service_id = $1
-                   AND d.status = 'success'
                    AND dl.level::text = $2
                  ORDER BY dl.timestamp DESC
                  LIMIT $3",
@@ -117,7 +115,6 @@ async fn get_logs(
              FROM deployment_logs dl
              JOIN deployments d ON d.id = dl.deployment_id
              WHERE d.service_id = $1
-               AND d.status = 'success'
                AND dl.timestamp >= $2
              ORDER BY dl.timestamp DESC
              LIMIT $3",
@@ -135,7 +132,6 @@ async fn get_logs(
              FROM deployment_logs dl
              JOIN deployments d ON d.id = dl.deployment_id
              WHERE d.service_id = $1
-               AND d.status = 'success'
              ORDER BY dl.timestamp DESC
              LIMIT $2",
         )
@@ -194,7 +190,6 @@ async fn log_stream(
                  FROM deployment_logs dl
                  JOIN deployments d ON d.id = dl.deployment_id
                  WHERE d.service_id = $1
-                   AND d.status = 'success'
                    AND dl.timestamp > $2
                  ORDER BY dl.timestamp ASC
                  LIMIT 50",

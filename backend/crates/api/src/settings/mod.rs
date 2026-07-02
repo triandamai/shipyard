@@ -202,10 +202,24 @@ async fn get_settings(
 }
 
 async fn update_settings(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
     Json(body): Json<PlatformSettings>,
 ) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
+    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if is_owner.is_none() {
+        return Err(ApiAppError(AppError::Forbidden(
+            "Only platform owners can update settings".to_string(),
+        )));
+    }
+
     let pairs: Vec<(&str, Option<String>)> = vec![
         ("main_domain",              body.main_domain.clone()),
         ("traefik_network",          body.traefik_network.clone()),
@@ -238,7 +252,7 @@ async fn update_settings(
     let mqtt_payload = shipyard_common::types::MqttPayload::new("settings.traefik.updated");
     state.mqtt.publish_status("settings/traefik", &mqtt_payload).await.ok();
 
-    get_settings(_auth, State(state)).await
+    get_settings(auth, State(state)).await
 }
 
 /// GET /settings/traefik/static

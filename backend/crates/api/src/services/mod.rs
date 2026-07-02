@@ -583,21 +583,29 @@ async fn bulk_update_env(
     rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
-    // Delete all existing env vars and re-insert
-    sqlx::query("DELETE FROM service_envs WHERE service_id = $1")
-        .bind(service_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    let mut results: Vec<ServiceEnvResponse> = Vec::new();
     let secret_key = state.config.auth.secret_key.clone();
 
+    // Validate all keys up-front before touching the DB.
     for item in &body {
         if item.key.is_empty() {
             return Err(ApiAppError(AppError::BadRequest("env var key cannot be empty".to_string())));
         }
+    }
 
+    // Delete + re-insert inside a single transaction so the service never ends
+    // up with zero env vars if an insert fails mid-way.
+    let mut tx = state.db.begin().await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    sqlx::query("DELETE FROM service_envs WHERE service_id = $1")
+        .bind(service_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let mut results: Vec<ServiceEnvResponse> = Vec::new();
+
+    for item in &body {
         let encrypted = shipyard_common::crypto::encrypt_or_passthrough(&secret_key, &item.value);
 
         let env = sqlx::query_as::<_, ServiceEnv>(
@@ -610,12 +618,15 @@ async fn bulk_update_env(
         .bind(&item.key)
         .bind(&encrypted)
         .bind(item.is_secret)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
         results.push(ServiceEnvResponse::from_env(env, &secret_key));
     }
+
+    tx.commit().await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",

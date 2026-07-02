@@ -89,10 +89,11 @@ impl DeploymentEngine {
         }
     }
 
-    /// Entry point. Returns the deployment_id immediately.
-    /// The caller should use this in a `tokio::spawn`.
+    /// Entry point. Caller pre-inserts the deployment row and passes the ID so
+    /// the API can return it immediately without a race-condition sleep/retry.
     pub async fn deploy(
         &self,
+        deployment_id: Uuid,
         service_id: Uuid,
         triggered_by: &str,
         source_ref: &str,
@@ -115,20 +116,6 @@ impl DeploymentEngine {
         let project_id: Uuid = project_id_str
             .parse()
             .map_err(|_| AppError::Internal("Invalid project_id UUID".to_string()))?;
-
-        // ── Create the deployment record ─────────────────────────────────────
-        let deployment_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
-             VALUES ($1, $2, $3, $4, 'running', NOW())",
-        )
-        .bind(deployment_id)
-        .bind(service_id)
-        .bind(triggered_by)
-        .bind(source_ref)
-        .execute(&self.db)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
 
         self.execute_deployment(
             org_id, project_id, service_id, deployment_id,
@@ -1675,8 +1662,8 @@ impl DeploymentEngine {
         service_id: Uuid,
         _project_id: Uuid,
     ) -> AppResult<HashMap<String, String>> {
-        let rows = sqlx::query_as::<_, (String, bool, String)>(
-            "SELECT hostname, tls_enabled, traefik_router_name
+        let rows = sqlx::query_as::<_, (String, bool)>(
+            "SELECT hostname, tls_enabled
              FROM domains
              WHERE service_id = $1
              ORDER BY created_at ASC",
@@ -1695,34 +1682,55 @@ impl DeploymentEngine {
 
         labels.insert("traefik.enable".to_string(), "true".to_string());
 
-        for (hostname, tls_enabled, router_name) in &rows {
-            // HTTP router
+        for (hostname, tls_enabled) in &rows {
+            // Derive a unique router name from the hostname so that two different
+            // domains on the same service never share the same YAML/label key.
+            let rn = hostname_to_router_name(hostname);
+            let convenience = is_convenience_domain(hostname);
+
+            // HTTP router (always present — Traefik can redirect it to HTTPS)
             labels.insert(
-                format!("traefik.http.routers.{router_name}.rule"),
+                format!("traefik.http.routers.{rn}.rule"),
                 format!("Host(`{hostname}`)"),
             );
             labels.insert(
-                format!("traefik.http.routers.{router_name}.entrypoints"),
+                format!("traefik.http.routers.{rn}.entrypoints"),
                 "web".to_string(),
             );
 
-            if *tls_enabled {
-                // HTTPS router
-                let tls_router = format!("{router_name}-tls");
+            if convenience {
+                // Convenience domains (nip.io / traefik.me): HTTPS with self-signed cert.
+                // Do NOT attach a certresolver — that would burn a Let's Encrypt slot.
+                let tls_rn = format!("{rn}-tls");
                 labels.insert(
-                    format!("traefik.http.routers.{tls_router}.rule"),
+                    format!("traefik.http.routers.{tls_rn}.rule"),
                     format!("Host(`{hostname}`)"),
                 );
                 labels.insert(
-                    format!("traefik.http.routers.{tls_router}.entrypoints"),
+                    format!("traefik.http.routers.{tls_rn}.entrypoints"),
                     "websecure".to_string(),
                 );
                 labels.insert(
-                    format!("traefik.http.routers.{tls_router}.tls"),
+                    format!("traefik.http.routers.{tls_rn}.tls"),
+                    "true".to_string(),
+                );
+            } else if *tls_enabled {
+                // Real domain with TLS: use Let's Encrypt.
+                let tls_rn = format!("{rn}-tls");
+                labels.insert(
+                    format!("traefik.http.routers.{tls_rn}.rule"),
+                    format!("Host(`{hostname}`)"),
+                );
+                labels.insert(
+                    format!("traefik.http.routers.{tls_rn}.entrypoints"),
+                    "websecure".to_string(),
+                );
+                labels.insert(
+                    format!("traefik.http.routers.{tls_rn}.tls"),
                     "true".to_string(),
                 );
                 labels.insert(
-                    format!("traefik.http.routers.{tls_router}.tls.certresolver"),
+                    format!("traefik.http.routers.{tls_rn}.tls.certresolver"),
                     "letsencrypt".to_string(),
                 );
             }
@@ -1970,6 +1978,20 @@ impl DeploymentEngine {
         tracing::info!("Service {service_id} marked as running");
         Ok(())
     }
+}
+
+/// Sanitize a hostname into a valid Traefik router/service name (ASCII alphanum + hyphens).
+/// Must be unique per hostname so no two domains share the same YAML key.
+fn hostname_to_router_name(hostname: &str) -> String {
+    hostname
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn is_convenience_domain(hostname: &str) -> bool {
+    hostname.ends_with(".nip.io") || hostname.ends_with(".traefik.me")
 }
 
 /// Map a `docker compose ps` State/Status string to a `container_status` enum value.

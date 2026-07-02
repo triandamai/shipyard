@@ -153,7 +153,21 @@ async fn trigger_deploy(
     }
     // ────────────────────────────────────────────────────────────────────────
 
-    // Build engine inline (no DeploymentEngine in AppState yet)
+    // Pre-insert the deployment row so the ID is available immediately —
+    // no sleep/retry/oneshot race. Pass the same ID into the engine.
+    let deployment_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+    )
+    .bind(deployment_id)
+    .bind(service_id)
+    .bind(&triggered_by)
+    .bind(&source_ref)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
     let engine = DeploymentEngine::new(
         Arc::clone(&state.docker),
         state.db.clone(),
@@ -164,53 +178,11 @@ async fn trigger_deploy(
         state.config.docker.port_proxy,
     );
 
-    // Pre-generate the deployment_id so we can return it immediately.
-    // The engine will create its own deployment row internally, so we kick
-    // off the spawn and return what the engine will use.
-    // Because the engine creates its own UUID, we spawn and capture the result
-    // via a oneshot channel so we can return the deployment_id to the caller.
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Uuid, String>>();
-
     tokio::spawn(async move {
-        let result = engine.deploy(service_id, &triggered_by, &source_ref).await;
-        let _ = tx.send(result.map_err(|e| e.to_string()));
+        if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
+            tracing::error!(deployment_id = %deployment_id, "Deployment error: {e}");
+        }
     });
-
-    // Wait briefly (50ms) to let the engine create the deployment row and
-    // return the id. If it takes longer, return a 202 with a generated id
-    // that will match what the engine inserts (engines uses its own uuid).
-    // A cleaner approach: pre-insert the deployment row here and pass the id
-    // to the engine. Since the engine creates its own id, we do a short wait.
-    let deployment_id = match tokio::time::timeout(
-        std::time::Duration::from_millis(100),
-        rx,
-    )
-    .await
-    {
-        Ok(Ok(Ok(id))) => id,
-        Ok(Ok(Err(e))) => {
-            return Err(ApiAppError(AppError::Internal(format!(
-                "Deployment failed immediately: {e}"
-            ))))
-        }
-        // Timeout or channel error: deployment is still running in background.
-        // We need the id — fetch the latest deployment for this service.
-        _ => {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let row = sqlx::query_as::<_, (Uuid,)>(
-                "SELECT id FROM deployments WHERE service_id = $1 ORDER BY created_at DESC LIMIT 1",
-            )
-            .bind(service_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-            match row {
-                Some((id,)) => id,
-                None => Uuid::new_v4(), // fallback (should not happen)
-            }
-        }
-    };
 
     crate::middleware::audit::write_audit_log(
         &state.db,
@@ -539,25 +511,23 @@ async fn redeploy_service(
 ) -> Result<(StatusCode, Json<ApiResponse<TriggerDeployResponse>>), ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
 
-    // Find the last deployment (any status) to re-use its source_ref.
-    // A prior successful deployment is preferred but not required — users
-    // should be able to redeploy even if the first attempt failed.
-    let last = sqlx::query_as::<_, (String,)>(
-        "SELECT source_ref FROM deployments
-         WHERE service_id = $1
-         ORDER BY created_at DESC
-         LIMIT 1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    // source_ref carries the trigger label, not a git ref — always "manual"
-    // for user-initiated redeploys regardless of how the previous one was triggered.
-    let _ = last;
+    // source_ref is a trigger label ("manual", "webhook", etc.), not a git ref.
+    // The engine reads the actual git branch/image from the service config.
     let source_ref = "manual".to_string();
     let triggered_by = auth_user.email.clone();
+
+    let deployment_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+    )
+    .bind(deployment_id)
+    .bind(service_id)
+    .bind(&triggered_by)
+    .bind(&source_ref)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     let engine = DeploymentEngine::new(
         Arc::clone(&state.docker),
@@ -569,41 +539,11 @@ async fn redeploy_service(
         state.config.docker.port_proxy,
     );
 
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Uuid, String>>();
-
     tokio::spawn(async move {
-        let result = engine.deploy(service_id, &triggered_by, &source_ref).await;
-        let _ = tx.send(result.map_err(|e| e.to_string()));
+        if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
+            tracing::error!(deployment_id = %deployment_id, "Redeploy error: {e}");
+        }
     });
-
-    let deployment_id = match tokio::time::timeout(
-        std::time::Duration::from_millis(100),
-        rx,
-    )
-    .await
-    {
-        Ok(Ok(Ok(id))) => id,
-        Ok(Ok(Err(e))) => {
-            return Err(ApiAppError(AppError::Internal(format!(
-                "Redeploy failed immediately: {e}"
-            ))))
-        }
-        _ => {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let row = sqlx::query_as::<_, (Uuid,)>(
-                "SELECT id FROM deployments WHERE service_id = $1 ORDER BY created_at DESC LIMIT 1",
-            )
-            .bind(service_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-            match row {
-                Some((id,)) => id,
-                None => Uuid::new_v4(),
-            }
-        }
-    };
 
     Ok((
         StatusCode::ACCEPTED,
