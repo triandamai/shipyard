@@ -137,6 +137,25 @@ async fn main() {
             std::process::exit(1);
         });
 
+    // Mark any deployment still in 'running' state after a restart as failed.
+    // These are left over from a previous process that crashed or was killed
+    // before it could persist the final status.
+    match sqlx::query(
+        "UPDATE deployments \
+         SET status = 'failed'::deployment_status, finished_at = NOW() \
+         WHERE status = 'running'::deployment_status AND finished_at IS NULL",
+    )
+    .execute(&pool)
+    .await
+    {
+        Ok(r) if r.rows_affected() > 0 => tracing::warn!(
+            count = r.rows_affected(),
+            "Marked stuck 'running' deployments as failed on startup"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Failed to clean up stuck deployments: {e}"),
+    }
+
     // Connect to Docker
     let docker_engine: Arc<dyn DockerEngine> = {
         let engine = match config.docker.socket_path.as_deref() {

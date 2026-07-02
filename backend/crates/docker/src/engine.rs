@@ -4,7 +4,9 @@ use bollard::models::{
     EndpointPortConfig, EndpointPortConfigProtocolEnum, EndpointPortConfigPublishModeEnum,
     EndpointSpec, EndpointSpecModeEnum, Limit, Mount, MountTypeEnum,
     NetworkAttachmentConfig, ResourceObject, ServiceSpec as BollardServiceSpec,
-    ServiceSpecMode, ServiceSpecModeReplicated, SwarmInitRequest, TaskSpec,
+    ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig,
+    ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
+    ServiceSpecUpdateConfigOrderEnum, SwarmInitRequest, TaskSpec,
     TaskSpecContainerSpec, TaskSpecResources,
 };
 use bollard::network::CreateNetworkOptions;
@@ -239,6 +241,23 @@ impl BollardDockerEngine {
             ports: if endpoint_ports.is_empty() { None } else { Some(endpoint_ports) },
         });
 
+        // Start the new task before stopping the old one so there is no
+        // availability gap during redeploys. Swarm will still record one
+        // shutdown task per update (task history), which we keep at 1 via
+        // the install-time `docker swarm update --task-history-limit 1`.
+        let update_config = Some(ServiceSpecUpdateConfig {
+            parallelism: Some(1),
+            order: Some(ServiceSpecUpdateConfigOrderEnum::START_FIRST),
+            failure_action: Some(ServiceSpecUpdateConfigFailureActionEnum::ROLLBACK),
+            monitor: Some(5_000_000_000), // 5 s in nanoseconds
+            ..Default::default()
+        });
+
+        let rollback_config = Some(ServiceSpecRollbackConfig {
+            parallelism: Some(1),
+            ..Default::default()
+        });
+
         BollardServiceSpec {
             name: Some(spec.name.clone()),
             labels: if spec.labels.is_empty() {
@@ -253,6 +272,8 @@ impl BollardDockerEngine {
                 }),
                 ..Default::default()
             }),
+            update_config,
+            rollback_config,
             endpoint_spec,
             ..Default::default()
         }

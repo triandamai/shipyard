@@ -198,6 +198,9 @@ else
     success "Docker Swarm is already active"
 fi
 
+# Keep only 1 old (shutdown) task per slot so redeploys don't accumulate orphans.
+docker swarm update --task-history-limit 1 &>/dev/null || true
+
 success "Docker stack OK"
 
 # ── Already installed? ────────────────────────────────────────────────────────
@@ -576,13 +579,16 @@ cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
 # Shipyard self-update script — run by the backend when a user triggers an update.
 #
-# The backend runs this script inside the shipyard-backend container. That means
-# "docker compose up -d" would kill this very container mid-execution before
-# other services are restarted. Instead we:
-#   1. Pull new images (safe — doesn't touch running containers)
-#   2. Restart non-backend containers synchronously via docker CLI
-#   3. Fire a restart request for the backend via the Docker socket and exit.
-#      The daemon handles the backend restart after this container dies.
+# Problem: this script runs INSIDE the shipyard-backend container. Calling
+# "docker compose up -d" from here would cause Docker to stop this very
+# container mid-execution, killing the script before all services restart,
+# AND "docker restart" reuses the old image so the new pull never takes effect.
+#
+# Solution: spawn a lightweight detached container (using the current backend
+# image, which has docker + compose installed) that runs "docker compose up -d"
+# independently. Because that container is NOT part of the compose stack,
+# Docker will not kill it when shipyard-backend is replaced. It exits on its
+# own after the restart completes.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
@@ -593,25 +599,19 @@ source .env 2>/dev/null || true
 echo "[shipyard] Pulling latest images..."
 docker compose pull
 
-echo "[shipyard] Restarting support services..."
-for container in shipyard-traefik shipyard-frontend shipyard-mqtt; do
-    if docker inspect "$container" &>/dev/null; then
-        docker restart "$container" \
-            && echo "[shipyard] Restarted $container" \
-            || echo "[shipyard] Warning: could not restart $container"
-    fi
-done
+echo "[shipyard] Spawning detached updater to apply new images..."
+# Remove any leftover updater from a previous run, then spawn a new one.
+docker rm -f shipyard-updater 2>/dev/null || true
+BACKEND_IMG=$(docker inspect shipyard-backend --format '{{.Config.Image}}')
+docker run --rm -d \
+    --name shipyard-updater \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "${INSTALL_DIR}:${INSTALL_DIR}" \
+    -w "${INSTALL_DIR}" \
+    "$BACKEND_IMG" \
+    bash -c 'sleep 5 && docker compose up -d --remove-orphans'
 
-# The backend restart must be fire-and-forget: send the request to the Docker
-# daemon via the socket and exit immediately. The daemon will stop this
-# container (killing us) and start a fresh one with the new image.
-echo "[shipyard] Queuing backend restart — this container will be replaced..."
-curl --unix-socket /var/run/docker.sock \
-    --max-time 2 -s \
-    -X POST "http://localhost/v1.41/containers/shipyard-backend/restart?t=30" \
-    -o /dev/null || true
-
-echo "[shipyard] Update complete. Backend restarting in background."
+echo "[shipyard] Images pulled. All services will restart with new images in ~5 seconds."
 UPDATE
 chmod +x "${INSTALL_DIR}/update.sh"
 success "update.sh written"
