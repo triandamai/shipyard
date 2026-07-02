@@ -27,6 +27,17 @@ fn is_convenience_domain(hostname: &str) -> bool {
     hostname.ends_with(".nip.io") || hostname.ends_with(".traefik.me")
 }
 
+/// Converts a hostname into a safe Traefik router/service name.
+/// Each domain gets a unique name, avoiding duplicate YAML keys when a service
+/// has multiple domains attached.
+fn hostname_to_router_name(hostname: &str) -> String {
+    hostname
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
 /// Regenerates the Traefik file-provider dynamic config for a service's domains.
 ///
 /// Writes `{dir}/{slug}.yml`. If there are no domains the file is removed.
@@ -80,43 +91,46 @@ async fn sync_traefik_dynamic_config(
     out.push_str("http:\n");
     out.push_str("  routers:\n");
 
-    for (hostname, tls_enabled, cert_provider, _port, router_name) in &rows {
+    for (hostname, tls_enabled, cert_provider, _port, _stored_router_name) in &rows {
+        // Derive a unique router name from the hostname so multiple domains on the
+        // same service never produce duplicate YAML keys (which silently drop entries).
+        let rn = hostname_to_router_name(hostname);
         let convenience = is_convenience_domain(hostname);
 
-        // HTTP router (present for all domains; global entryPoint redirect sends it to HTTPS)
-        let _ = write!(out, "    {router_name}-http:\n");
+        // HTTP router (global entryPoint redirect sends plain-HTTP requests to HTTPS)
+        let _ = write!(out, "    {rn}-http:\n");
         let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
         let _ = write!(out, "      entryPoints:\n");
         let _ = write!(out, "        - {entrypoint_http}\n");
-        let _ = write!(out, "      service: {router_name}\n");
+        let _ = write!(out, "      service: {rn}\n");
 
         if convenience {
             // nip.io / traefik.me: HTTPS with Traefik's self-signed cert.
-            // Using certResolver would burn one LE slot per unique subdomain.
-            // Browser shows a one-time "Not Secure" warning — proceed to accept.
-            let _ = write!(out, "    {router_name}-https:\n");
+            // Using certResolver burns one LE slot per unique subdomain.
+            let _ = write!(out, "    {rn}-https:\n");
             let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
             let _ = write!(out, "      entryPoints:\n");
             let _ = write!(out, "        - {entrypoint_https}\n");
             let _ = write!(out, "      tls: {{}}\n");
-            let _ = write!(out, "      service: {router_name}\n");
+            let _ = write!(out, "      service: {rn}\n");
         } else if *tls_enabled {
             // Real custom domain: HTTPS with a proper LE certificate.
-            let _ = write!(out, "    {router_name}-https:\n");
+            let _ = write!(out, "    {rn}-https:\n");
             let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
             let _ = write!(out, "      entryPoints:\n");
             let _ = write!(out, "        - {entrypoint_https}\n");
             let _ = write!(out, "      tls:\n");
             let _ = write!(out, "        certResolver: {cert_provider}\n");
-            let _ = write!(out, "      service: {router_name}\n");
+            let _ = write!(out, "      service: {rn}\n");
         }
     }
 
     out.push_str("  services:\n");
 
-    for (_, _, _, port, router_name) in &rows {
+    for (hostname, _, _, port, _) in &rows {
+        let rn = hostname_to_router_name(hostname);
         let backend_port = port.unwrap_or(80);
-        let _ = write!(out, "    {router_name}:\n");
+        let _ = write!(out, "    {rn}:\n");
         let _ = write!(out, "      loadBalancer:\n");
         let _ = write!(out, "        servers:\n");
         let _ = write!(out, "          - url: \"http://{docker_svc_name}:{backend_port}\"\n");
@@ -286,7 +300,10 @@ async fn create_domain(
         ))));
     }
 
-    let traefik_router_name = format!("svc-{}", service_id.to_string().replace("-", ""));
+    let domain_id = Uuid::new_v4();
+    // Router name is hostname-derived (unique per domain) so multiple domains on
+    // the same service never collide in the Traefik YAML file.
+    let traefik_router_name = hostname_to_router_name(&body.hostname);
 
     // Convenience wildcard-DNS domains must never request LE certs.
     let tls_enabled = body.tls_enabled && !is_convenience_domain(&body.hostname);
@@ -296,7 +313,7 @@ async fn create_domain(
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          RETURNING id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(domain_id)
     .bind(service_id)
     .bind(&body.hostname)
     .bind(tls_enabled)
