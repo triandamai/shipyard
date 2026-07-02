@@ -19,11 +19,16 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libpq5 \
     libssl3 \
     git \
     openssh-client \
     docker.io \
+    && mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL "https://github.com/docker/compose/releases/download/v2.27.1/docker-compose-linux-$(uname -m)" \
+       -o /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && rm -rf /var/lib/apt/lists/*
 
 ARG GIT_SHA=dev

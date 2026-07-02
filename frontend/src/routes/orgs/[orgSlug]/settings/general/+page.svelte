@@ -427,7 +427,7 @@
 	@keyframes spin { to { transform: rotate(360deg); } }
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 
-	.settings-form { display: flex; flex-direction: column; gap: 20px; max-width: 800px; }
+	.settings-form { display: flex; flex-direction: column; gap: 20px; }
 
 	.settings-section {
 		background: var(--bg-surface);

@@ -508,7 +508,7 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ${INSTALL_DIR}/data:/opt/shipyard/data
+      - ${INSTALL_DIR}:/opt/shipyard
       - ${INSTALL_DIR}/traefik/dynamic:/etc/traefik/dynamic
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
