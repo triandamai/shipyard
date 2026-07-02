@@ -303,6 +303,20 @@
 	>
 		<RefreshCw size={14} />
 	</button>
+
+	<div class="appbar-divider"></div>
+
+	<button
+		class="appbar-add-btn"
+		onclick={() => uiStore.pushPanel({
+			component: AddResourcePanel,
+			props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
+			title: 'Add Resource'
+		})}
+	>
+		<Plus size={13} />
+		Add Resource
+	</button>
 </div>
 
 <div class="canvas-wrapper">
@@ -337,19 +351,6 @@
 			/>
 		</SvelteFlow>
 
-		<!-- Floating add resource button -->
-		<button
-			class="add-resource-btn btn btn-primary"
-			aria-label="Add resource"
-			onclick={() => uiStore.pushPanel({
-				component: AddResourcePanel,
-				props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
-				title: 'Add Resource'
-			})}
-		>
-			<Plus size={16} />
-			Add Resource
-		</button>
 	{/if}
 </div>
 
@@ -393,6 +394,12 @@
 		border-radius: var(--radius-md);
 	}
 
+	@media (max-width: 640px) {
+		.canvas-wrapper :global(.svelte-flow__minimap) {
+			display: none;
+		}
+	}
+
 	.canvas-wrapper :global(.svelte-flow__controls) {
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
@@ -415,13 +422,31 @@
 		border-bottom: none;
 	}
 
-	.add-resource-btn {
-		position: absolute;
-		bottom: 24px;
-		right: 24px;
-		z-index: 10;
-		box-shadow: var(--shadow-md);
+	.appbar-divider {
+		width: 1px;
+		height: 18px;
+		background: var(--border);
+		flex-shrink: 0;
 	}
+
+	.appbar-add-btn {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 5px 10px;
+		background: var(--accent);
+		color: #fff;
+		border: none;
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		font-size: 12px;
+		font-weight: 600;
+		font-family: var(--font-sans);
+		transition: background var(--transition-fast);
+		white-space: nowrap;
+	}
+
+	.appbar-add-btn:hover { background: var(--accent-hover); }
 
 	.canvas-loading,
 	.canvas-error {
