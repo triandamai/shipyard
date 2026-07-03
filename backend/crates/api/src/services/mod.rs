@@ -154,6 +154,10 @@ pub fn routes() -> Router<AppState> {
             "/projects/:project_id/services/:service_id/webhook/rotate",
             post(rotate_webhook),
         )
+        .route(
+            "/projects/:project_id/services/:service_id/connection",
+            get(get_connection_info),
+        )
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -861,4 +865,90 @@ async fn rotate_webhook(
         "token": token,
         "service_id": service_id,
     }))))
+}
+
+// ─── Connection info ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct ConnectionInfo {
+    /// DNS hostname reachable by other services on the same overlay network.
+    host: String,
+    port: u16,
+    /// Best-guess connection URL template — replace USER/PASSWORD/DATABASE with env var values.
+    url_template: String,
+    /// Human-readable driver name (e.g. "PostgreSQL").
+    driver: String,
+}
+
+fn infer_connection(image: &str, host: &str) -> ConnectionInfo {
+    let base = image.split(':').next().unwrap_or(image).to_lowercase();
+    let img = base.split('/').last().unwrap_or(&base);
+
+    if img.contains("postgres") {
+        return ConnectionInfo { host: host.into(), port: 5432, driver: "PostgreSQL".into(),
+            url_template: format!("postgresql://USER:PASSWORD@{host}:5432/DATABASE") };
+    }
+    if img.contains("mysql") {
+        return ConnectionInfo { host: host.into(), port: 3306, driver: "MySQL".into(),
+            url_template: format!("mysql://USER:PASSWORD@{host}:3306/DATABASE") };
+    }
+    if img.contains("mariadb") {
+        return ConnectionInfo { host: host.into(), port: 3306, driver: "MariaDB".into(),
+            url_template: format!("mysql://USER:PASSWORD@{host}:3306/DATABASE") };
+    }
+    if img.contains("redis") {
+        return ConnectionInfo { host: host.into(), port: 6379, driver: "Redis".into(),
+            url_template: format!("redis://{host}:6379") };
+    }
+    if img.contains("mongo") {
+        return ConnectionInfo { host: host.into(), port: 27017, driver: "MongoDB".into(),
+            url_template: format!("mongodb://USER:PASSWORD@{host}:27017/DATABASE") };
+    }
+    if img.contains("rabbitmq") {
+        return ConnectionInfo { host: host.into(), port: 5672, driver: "RabbitMQ".into(),
+            url_template: format!("amqp://USER:PASSWORD@{host}:5672") };
+    }
+    if img.contains("minio") {
+        return ConnectionInfo { host: host.into(), port: 9000, driver: "MinIO".into(),
+            url_template: format!("http://{host}:9000") };
+    }
+    ConnectionInfo { host: host.into(), port: 80, driver: "TCP".into(),
+        url_template: format!("http://{host}:PORT") }
+}
+
+async fn get_connection_info(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<ConnectionInfo>>, ApiAppError> {
+    check_project_access(&state.db, auth_user.user_id, project_id).await?;
+
+    let (image, ports): (String, serde_json::Value) = sqlx::query_as::<_, (String, serde_json::Value)>(
+        "SELECT image, ports FROM services WHERE id = $1 AND project_id = $2",
+    )
+    .bind(service_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service {service_id} not found"))))?;
+
+    let host = format!("{}-{}", state.config.docker.label_prefix, service_id);
+    let mut info = infer_connection(&image, &host);
+
+    // Override port if the service has an explicit port configured
+    if let Some(first) = ports.as_array().and_then(|a| a.first()) {
+        let raw = first.as_str().unwrap_or("").split(':').last().unwrap_or("").split('/').next().unwrap_or("");
+        if let Ok(p) = raw.parse::<u16>() {
+            if p > 0 {
+                let default_port = infer_connection(&image, &host).port;
+                info.url_template = info.url_template.replace(
+                    &format!(":{default_port}"), &format!(":{p}"),
+                );
+                info.port = p;
+            }
+        }
+    }
+
+    Ok(Json(ApiResponse::ok(info)))
 }

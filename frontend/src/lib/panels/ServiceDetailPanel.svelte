@@ -26,7 +26,7 @@
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
-		Network as NetworkType, SwarmNode
+		Network as NetworkType, SwarmNode, ConnectionInfo
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -142,6 +142,22 @@
 	let deleteSlugInput = $state('');
 	let isDeleting = $state(false);
 	let deleteError = $state('');
+
+	// ── Connection info (database services) ──────────────────────────
+	let connInfo        = $state<ConnectionInfo | null>(null);
+	let connInfoLoading = $state(false);
+	let connInfoCopied  = $state(false);
+
+	async function loadConnectionInfo() {
+		if (!service || service.type !== 'database') return;
+		connInfoLoading = true;
+		try {
+			const res = await api.getConnectionInfo(projectId, service.id);
+			if (!res.error && res.data) connInfo = res.data;
+		} catch { /* ignore */ } finally {
+			connInfoLoading = false;
+		}
+	}
 
 	// ── Webhook ───────────────────────────────────────────────────────
 	let webhookToken     = $state('');
@@ -857,6 +873,7 @@
 	async function switchTab(tab: Tab) {
 		if (activeTab === 'monitor' && tab !== 'monitor') disconnectStats();
 		activeTab = tab;
+		if (tab === 'overview' && !connInfo) void loadConnectionInfo();
 		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
 		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
@@ -920,6 +937,7 @@
 		await loadService();
 		await Promise.all([loadDeployments(), loadContainers()]);
 		if (latestDeployment) await loadStepsForLatest();
+		void loadConnectionInfo();
 		unsubscribeService = subscribeToService(orgId, projectId, serviceId);
 		eventBus.on(serviceStatusTopic, handleServiceStatus);
 		eventBus.on(serviceContainersTopic, handleContainers);
@@ -1304,6 +1322,55 @@
 							</div>
 						{/if}
 					</div>
+
+					<!-- Database connection info card -->
+					{#if service.type === 'database'}
+						<div class="info-card conn-info-card">
+							<div class="info-card-header">
+								<Network size={13} />
+								<span>Internal Connection</span>
+							</div>
+							{#if connInfoLoading}
+								<div class="info-card-body"><span class="conn-loading">Loading…</span></div>
+							{:else if connInfo}
+								<div class="info-card-body">
+									<div class="conn-row">
+										<span class="conn-label">Driver</span>
+										<span class="conn-driver-badge">{connInfo.driver}</span>
+									</div>
+									<div class="conn-row">
+										<span class="conn-label">Host</span>
+										<code class="conn-val">{connInfo.host}:{connInfo.port}</code>
+									</div>
+									<div class="conn-url-block">
+										<span class="conn-label">URL template</span>
+										<div class="conn-url-row">
+											<code class="conn-url">{connInfo.url_template}</code>
+											<button
+												class="conn-copy-btn"
+												title="Copy URL"
+												onclick={async () => {
+													await navigator.clipboard.writeText(connInfo.url_template);
+													connInfoCopied = true;
+													setTimeout(() => connInfoCopied = false, 1500);
+												}}
+											>
+												{#if connInfoCopied}
+													<CheckCircle2 size={13} />
+												{:else}
+													<Copy size={13} />
+												{/if}
+											</button>
+										</div>
+									</div>
+								</div>
+							{:else}
+								<div class="info-card-body">
+									<span class="conn-loading">No connection info available — set an image first.</span>
+								</div>
+							{/if}
+						</div>
+					{/if}
 
 					<!-- Metadata grid -->
 					<div class="overview-grid">
@@ -2305,6 +2372,64 @@
 		font-size: 11px;
 		color: var(--text-secondary);
 	}
+
+	/* ── Connection info card ─────────────────────────────────────── */
+	.conn-info-card { margin-top: 10px; }
+	.conn-loading { font-size: 12px; color: var(--text-muted); }
+	.conn-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 6px;
+	}
+	.conn-label {
+		font-size: 11px;
+		color: var(--text-muted);
+		min-width: 60px;
+	}
+	.conn-val {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--text-primary);
+	}
+	.conn-driver-badge {
+		font-size: 11px;
+		font-weight: 600;
+		padding: 1px 6px;
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+		color: var(--accent);
+		text-transform: uppercase;
+	}
+	.conn-url-block { margin-top: 6px; }
+	.conn-url-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 4px;
+	}
+	.conn-url {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-secondary);
+		word-break: break-all;
+		flex: 1;
+	}
+	.conn-copy-btn {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: none;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: border-color 0.15s, color 0.15s;
+	}
+	.conn-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 	.overview-grid {
 		display: grid;

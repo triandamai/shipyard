@@ -457,6 +457,13 @@ export interface CreateApiKeyRequest {
 	expires_at?: string | null;
 }
 
+export interface ConnectionInfo {
+	host: string;
+	port: number;
+	url_template: string;
+	driver: string;
+}
+
 export interface SwarmNode {
 	id: string;
 	hostname: string;

@@ -287,6 +287,10 @@ class ApiClient {
 		return this.post(`/projects/${projectId}/services/${serviceId}/webhook/rotate`, {});
 	}
 
+	async getConnectionInfo(projectId: string, serviceId: string): Promise<ApiResponse<import('./types').ConnectionInfo>> {
+		return this.get(`/projects/${projectId}/services/${serviceId}/connection`);
+	}
+
 	async deployService(serviceId: string): Promise<ApiResponse<Deployment>> {
 		return this.post(`/services/${serviceId}/deploy`);
 	}
