@@ -17,7 +17,7 @@ use std::sync::Arc;
 use shipyard_common::error::{AppError, AppResult};
 use shipyard_common::types::{LogLevel, MqttPayload};
 use shipyard_docker::engine::DockerEngine;
-use shipyard_docker::types::{MountSpec, MountType, PortSpec, ServiceSpec};
+use shipyard_docker::types::{MountSpec, MountType, PortSpec, ResourceSpec, ServiceSpec};
 use shipyard_git::GitService;
 use shipyard_mqtt::publisher::MqttPublisher;
 use shipyard_mqtt::topics;
@@ -123,6 +123,185 @@ impl DeploymentEngine {
         )
         .await?;
         Ok(deployment_id)
+    }
+
+    /// Rollback to a specific image reference (previously recorded in `deployed_image`).
+    /// Skips validate+acquire steps and uses `image_ref` directly.
+    pub async fn rollback(
+        &self,
+        deployment_id: Uuid,
+        service_id: Uuid,
+        triggered_by: &str,
+        image_ref: &str,
+    ) -> AppResult<Uuid> {
+        let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, i32, String)>(
+            "SELECT s.id, p.org_id, s.project_id::text, p.id::text, s.replicas, s.type::text
+             FROM services s
+             JOIN projects p ON p.id = s.project_id
+             WHERE s.id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (_, org_id, project_id_str, _, _, _) = row
+            .ok_or_else(|| AppError::NotFound(format!("Service '{service_id}' not found")))?;
+
+        let project_id: Uuid = project_id_str
+            .parse()
+            .map_err(|_| AppError::Internal("Invalid project_id UUID".to_string()))?;
+
+        self.execute_rollback(org_id, project_id, service_id, deployment_id, triggered_by, image_ref)
+            .await?;
+        Ok(deployment_id)
+    }
+
+    async fn execute_rollback(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        triggered_by: &str,
+        image_ref: &str,
+    ) -> AppResult<()> {
+        let status_topic = topics::deployment_status(org_id, project_id, service_id, deployment_id);
+        let _ = self.mqtt.publish_status(
+            &status_topic,
+            &MqttPayload::new("deployment.started")
+                .with_message(LogLevel::Info, "Rollback started")
+                .with_meta(serde_json::json!({
+                    "deployment_id": deployment_id,
+                    "service_id": service_id,
+                    "triggered_by": triggered_by,
+                    "image_ref": image_ref,
+                })),
+        ).await;
+
+        // Pre-insert steps — steps 0+1 are immediately marked skipped.
+        for (order_index, name) in &STEPS {
+            sqlx::query(
+                "INSERT INTO deployment_steps (id, deployment_id, name, status, order_index, started_at)
+                 VALUES ($1, $2, $3, 'pending', $4, NULL)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(deployment_id)
+            .bind(name)
+            .bind(order_index)
+            .execute(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        // Skip step 0 (validate) and step 1 (pull_image) — mark them skipped.
+        for idx in [0i32, 1i32] {
+            sqlx::query(
+                "UPDATE deployment_steps
+                 SET status = 'skipped', started_at = NOW(), finished_at = NOW()
+                 WHERE deployment_id = $1 AND order_index = $2",
+            )
+            .bind(deployment_id)
+            .bind(idx)
+            .execute(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        let msg = format!("Rolling back to pinned image: {image_ref}");
+        self.insert_log(deployment_id, None, "info", &msg).await;
+
+        // Record the image being rolled back to.
+        let _ = sqlx::query("UPDATE deployments SET deployed_image = $1 WHERE id = $2")
+            .bind(image_ref)
+            .bind(deployment_id)
+            .execute(&self.db)
+            .await;
+
+        // Steps 2–7: identical to a normal deployment.
+        let result = self.run_steps_from_image(
+            org_id, project_id, service_id, deployment_id, image_ref,
+        ).await;
+
+        let (final_status, log_level, log_msg) = match &result {
+            Ok(_) => ("success", "info", "Rollback completed successfully"),
+            Err(e) => {
+                tracing::error!("Rollback {deployment_id} failed: {e}");
+                ("failed", "error", "Rollback failed")
+            }
+        };
+
+        let _ = sqlx::query(
+            "UPDATE deployments SET status = $1::deployment_status, finished_at = NOW() WHERE id = $2",
+        )
+        .bind(final_status)
+        .bind(deployment_id)
+        .execute(&self.db)
+        .await;
+
+        let _ = self.mqtt.publish_status(
+            &status_topic,
+            &MqttPayload::new(format!("deployment.{final_status}"))
+                .with_message(
+                    if log_level == "info" { LogLevel::Info } else { LogLevel::Error },
+                    log_msg,
+                )
+                .with_meta(serde_json::json!({ "deployment_id": deployment_id, "status": final_status })),
+        ).await;
+
+        result?;
+        Ok(())
+    }
+
+    /// Run deployment steps 2–7 with a pre-resolved image reference.
+    /// Used by rollback (steps 0+1 already skipped).
+    async fn run_steps_from_image(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        image_ref: &str,
+    ) -> AppResult<()> {
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
+        let env_result = self.step_apply_env_vars(service_id).await;
+        let env_vars = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, env_result).await? {
+            Some(v) => v,
+            None => return Err(AppError::Internal("apply_env_vars returned no value".into())),
+        };
+
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
+        let vol_result = self.step_configure_volumes(service_id).await;
+        let mounts = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, vol_result).await? {
+            Some(v) => v,
+            None => return Err(AppError::Internal("configure_volumes returned no value".into())),
+        };
+
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
+        let net_result = self.step_configure_networks(service_id).await;
+        let networks = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, net_result).await? {
+            Some(v) => v,
+            None => return Err(AppError::Internal("configure_networks returned no value".into())),
+        };
+
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
+        let dom_result = self.step_configure_domains(service_id, project_id).await;
+        let traefik_labels = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, dom_result).await? {
+            Some(v) => v,
+            None => return Err(AppError::Internal("configure_domains returned no value".into())),
+        };
+
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 6).await?;
+        let svc_result = self.step_create_or_update_service(
+            org_id, project_id, service_id, image_ref, env_vars, mounts, networks, traefik_labels,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, svc_result).await?;
+
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 7).await?;
+        let fin_result = self.step_finalize(service_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, fin_result).await?;
+
+        Ok(())
     }
 
     /// Resume a deployment row that is already in the DB with status='queued'.
@@ -315,6 +494,13 @@ impl DeploymentEngine {
             Some(v) => v,
             None => return Err(AppError::Internal("acquire_image returned no value".into())),
         };
+
+        // Record the resolved image so rollback can re-use the exact artifact.
+        let _ = sqlx::query("UPDATE deployments SET deployed_image = $1 WHERE id = $2")
+            .bind(&resolved_image_ref)
+            .bind(deployment_id)
+            .execute(&self.db)
+            .await;
 
         // Step 2: Apply env vars — returns Vec<String> of "KEY=VALUE"
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
@@ -1372,6 +1558,9 @@ impl DeploymentEngine {
             // ── Image-based service ──────────────────────────────────────────
             let image_full = if !image_col.is_empty() {
                 image_col
+            } else if svc_type == "static" {
+                // Static services default to nginx:alpine when no image is configured.
+                "nginx:alpine".to_string()
             } else {
                 let row = sqlx::query_as::<_, (String,)>(
                     "SELECT value_encrypted FROM service_envs \
@@ -1781,16 +1970,16 @@ impl DeploymentEngine {
     ) -> AppResult<()> {
         let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
 
-        // Read the intended replica count and port config from the DB.
-        let svc_row = sqlx::query_as::<_, (i32, Option<serde_json::Value>)>(
-            "SELECT replicas, ports FROM services WHERE id = $1",
+        // Read the intended replica count, port config, and resource limits from the DB.
+        let svc_row = sqlx::query_as::<_, (i32, Option<serde_json::Value>, Option<f64>, Option<i64>)>(
+            "SELECT replicas, ports, cpu_limit, memory_limit_mb FROM services WHERE id = $1",
         )
         .bind(service_id)
         .fetch_optional(&self.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let (db_replicas, db_ports_json) = svc_row.unwrap_or((1, None));
+        let (db_replicas, db_ports_json, db_cpu_limit, db_mem_limit) = svc_row.unwrap_or((1, None, None, None));
         let intended_replicas = (db_replicas.max(1)) as u64;
 
         // Parse port strings into PortSpec structs.
@@ -1846,6 +2035,17 @@ impl DeploymentEngine {
         let proxy_ports = if self.port_proxy { ports.clone() } else { vec![] };
         let swarm_ports = if self.port_proxy { vec![] } else { ports };
 
+        let resources = if db_cpu_limit.is_some() || db_mem_limit.is_some() {
+            Some(ResourceSpec {
+                cpu_limit: db_cpu_limit,
+                memory_limit_mb: db_mem_limit.map(|m| m as u64),
+                cpu_reservation: None,
+                memory_reservation_mb: None,
+            })
+        } else {
+            None
+        };
+
         let spec = ServiceSpec {
             name: docker_svc_name.clone(),
             image: image_ref.to_string(),
@@ -1855,7 +2055,7 @@ impl DeploymentEngine {
             mounts,
             networks,
             ports: swarm_ports,
-            resources: None,
+            resources,
         };
 
         // Upsert: try update first; create when the service doesn't exist yet.

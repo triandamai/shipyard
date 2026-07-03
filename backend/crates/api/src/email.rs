@@ -5,6 +5,37 @@ use lettre::{
 };
 use shipyard_common::config::SmtpConfig;
 
+/// Load SMTP config from `system_config` DB table, falling back to the
+/// static app config (env vars / config file).
+pub async fn load_smtp_config(db: &sqlx::PgPool, fallback: &SmtpConfig) -> SmtpConfig {
+    let keys = &["smtp_enabled","smtp_host","smtp_port","smtp_username","smtp_password","smtp_from_address","smtp_from_name"];
+    let rows: Vec<(String, String)> = match sqlx::query_as(
+        "SELECT key, value::text FROM system_config WHERE key = ANY($1)",
+    )
+    .bind(keys)
+    .fetch_all(db)
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return fallback.clone(),
+    };
+
+    let map: std::collections::HashMap<String, String> = rows
+        .into_iter()
+        .map(|(k, v)| (k, v.trim_matches('"').to_string()))
+        .collect();
+
+    SmtpConfig {
+        enabled:      map.get("smtp_enabled").map(|v| v == "true").unwrap_or(fallback.enabled),
+        host:         map.get("smtp_host").cloned().unwrap_or_else(|| fallback.host.clone()),
+        port:         map.get("smtp_port").and_then(|v| v.parse().ok()).unwrap_or(fallback.port),
+        username:     map.get("smtp_username").cloned().unwrap_or_else(|| fallback.username.clone()),
+        password:     map.get("smtp_password").cloned().unwrap_or_else(|| fallback.password.clone()),
+        from_address: map.get("smtp_from_address").cloned().unwrap_or_else(|| fallback.from_address.clone()),
+        from_name:    map.get("smtp_from_name").cloned().unwrap_or_else(|| fallback.from_name.clone()),
+    }
+}
+
 pub async fn send_invitation_email(
     config: &SmtpConfig,
     to_email: &str,

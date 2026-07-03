@@ -90,6 +90,8 @@ pub struct Service {
     pub ports: serde_json::Value,
     pub status: String,
     pub replicas: i32,
+    pub cpu_limit: Option<f64>,
+    pub memory_limit_mb: Option<i64>,
     pub service_parent_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

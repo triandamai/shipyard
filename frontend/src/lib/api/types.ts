@@ -228,6 +228,7 @@ export interface Deployment {
 	triggered_by: string;
 	source_ref: string;
 	status: DeploymentStatus;
+	deployed_image: string | null;
 	created_at: string;
 	finished_at: string | null;
 }
@@ -385,6 +386,18 @@ export interface VersionInfo {
 	release_notes: string | null;
 }
 
+// Audit log
+export interface AuditLogEntry {
+	id: string;
+	user_id: string | null;
+	action: string;
+	resource_type: string | null;
+	resource_id: string | null;
+	ip_address: string | null;
+	metadata: Record<string, unknown> | null;
+	created_at: string;
+}
+
 // Admin deployments view
 export interface AdminDeploymentRow {
 	id: string;
@@ -442,4 +455,20 @@ export interface CreateApiKeyRequest {
 	name: string;
 	scopes: ApiKeyScope[];
 	expires_at?: string | null;
+}
+
+export interface SwarmNode {
+	id: string;
+	hostname: string;
+	role: string;
+	status: string;
+	availability: string;
+	engine_version: string | null;
+	addr: string | null;
+}
+
+export interface SwarmJoinTokens {
+	worker: string;
+	manager: string;
+	addr: string;
 }

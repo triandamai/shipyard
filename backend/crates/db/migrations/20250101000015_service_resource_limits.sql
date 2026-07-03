@@ -1,0 +1,3 @@
+ALTER TABLE services
+    ADD COLUMN IF NOT EXISTS cpu_limit DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS memory_limit_mb BIGINT;

@@ -89,6 +89,10 @@ pub fn routes() -> Router<AppState> {
             "/projects/:project_id/services/:service_id/redeploy",
             post(redeploy_service),
         )
+        .route(
+            "/projects/:project_id/services/:service_id/deployments/:deployment_id/rollback",
+            post(rollback_deployment),
+        )
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -544,6 +548,89 @@ async fn redeploy_service(
             tracing::error!(deployment_id = %deployment_id, "Redeploy error: {e}");
         }
     });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ApiResponse::ok(TriggerDeployResponse { deployment_id })),
+    ))
+}
+
+/// POST /projects/:project_id/services/:service_id/deployments/:deployment_id/rollback
+///
+/// Re-deploys the exact image artifact captured in the target deployment's
+/// `deployed_image` field, bypassing validate + pull steps.
+async fn rollback_deployment(
+    auth_user: AuthUser,
+    Path((_project_id, service_id, target_deployment_id)): Path<(Uuid, Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<ApiResponse<TriggerDeployResponse>>), ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+
+    // Find the image that was used in the target deployment.
+    let row = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT deployed_image FROM deployments WHERE id = $1 AND service_id = $2",
+    )
+    .bind(target_deployment_id)
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound(
+        format!("Deployment '{target_deployment_id}' not found for this service"),
+    )))?;
+
+    let image_ref = row.0.ok_or_else(|| ApiAppError(AppError::BadRequest(
+        "This deployment has no recorded image — it cannot be used as a rollback target. \
+         Only deployments created after the rollback feature was enabled have a recorded image."
+            .to_string(),
+    )))?;
+
+    let triggered_by = format!("rollback by {}", auth_user.email);
+    let source_ref = format!("rollback:{target_deployment_id}");
+
+    let deployment_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+    )
+    .bind(deployment_id)
+    .bind(service_id)
+    .bind(&triggered_by)
+    .bind(&source_ref)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let engine = DeploymentEngine::new(
+        Arc::clone(&state.docker),
+        state.db.clone(),
+        Arc::clone(&state.mqtt),
+        state.config.docker.label_prefix.clone(),
+        state.config.traefik.network.clone(),
+        state.config.auth.secret_key.clone(),
+        state.config.docker.port_proxy,
+    );
+
+    let image_ref_clone = image_ref.clone();
+    tokio::spawn(async move {
+        if let Err(e) = engine.rollback(deployment_id, service_id, &triggered_by, &image_ref_clone).await {
+            tracing::error!(deployment_id = %deployment_id, "Rollback error: {e}");
+        }
+    });
+
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        Some(auth_user.user_id),
+        "rollback_deployment",
+        Some("deployment"),
+        Some(deployment_id),
+        None,
+        Some(serde_json::json!({
+            "service_id": service_id,
+            "target_deployment_id": target_deployment_id,
+            "image_ref": image_ref,
+        })),
+    ).await;
 
     Ok((
         StatusCode::ACCEPTED,

@@ -18,7 +18,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
-use shipyard_docker::{ContainerSummary, NetworkSummary, ServiceSummary, VolumeSummary};
+use shipyard_docker::{ContainerSummary, NetworkSummary, NodeInfo, ServiceSummary, SwarmJoinTokens, VolumeSummary};
 use crate::auth::AuthUser;
 use crate::cache;
 use crate::error::ApiAppError;
@@ -35,6 +35,13 @@ const SETTINGS_KEYS: &[&str] = &[
     "git_bitbucket_token",
     "git_webhook_secret",
     "max_parallel_deployments",
+    "smtp_enabled",
+    "smtp_host",
+    "smtp_port",
+    "smtp_username",
+    "smtp_password",
+    "smtp_from_address",
+    "smtp_from_name",
 ];
 
 const TRAEFIK_CONTAINER: &str = "shipyard-traefik";
@@ -53,6 +60,14 @@ pub struct PlatformSettings {
     pub git_bitbucket_token: Option<String>,
     pub git_webhook_secret: Option<String>,
     pub max_parallel_deployments: Option<u32>,
+    // SMTP
+    pub smtp_enabled: Option<bool>,
+    pub smtp_host: Option<String>,
+    pub smtp_port: Option<u16>,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_from_address: Option<String>,
+    pub smtp_from_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,10 +138,13 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/services", get(docker_services))
         .route("/admin/docker/volumes", get(docker_volumes))
         .route("/admin/docker/networks", get(docker_networks))
+        .route("/admin/docker/nodes", get(docker_nodes))
+        .route("/admin/docker/swarm/join-tokens", get(docker_swarm_join_tokens))
         .route("/admin/host-ip", get(get_host_ip))
         .route("/admin/api-keys", get(list_api_keys).post(create_api_key))
         .route("/admin/api-keys/:key_id", delete(revoke_api_key))
         .route("/admin/deployments", get(list_all_deployments))
+        .route("/admin/smtp/test", post(test_smtp))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -157,6 +175,15 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
         git_webhook_secret:       map.remove("git_webhook_secret"),
         max_parallel_deployments: map.remove("max_parallel_deployments")
             .and_then(|v| v.parse::<u32>().ok()),
+        smtp_enabled:      map.remove("smtp_enabled").map(|v| v == "true")
+                              .or(Some(state.config.smtp.enabled)),
+        smtp_host:         map.remove("smtp_host").or_else(|| Some(state.config.smtp.host.clone()).filter(|s| !s.is_empty())),
+        smtp_port:         map.remove("smtp_port").and_then(|v| v.parse::<u16>().ok())
+                              .or(Some(state.config.smtp.port)),
+        smtp_username:     map.remove("smtp_username").or_else(|| Some(state.config.smtp.username.clone()).filter(|s| !s.is_empty())),
+        smtp_password:     map.remove("smtp_password"),
+        smtp_from_address: map.remove("smtp_from_address").or_else(|| Some(state.config.smtp.from_address.clone()).filter(|s| !s.is_empty())),
+        smtp_from_name:    map.remove("smtp_from_name").or_else(|| Some(state.config.smtp.from_name.clone()).filter(|s| !s.is_empty())),
     })
 }
 
@@ -238,6 +265,13 @@ async fn update_settings(
         ("git_bitbucket_token",      body.git_bitbucket_token.clone()),
         ("git_webhook_secret",       body.git_webhook_secret.clone()),
         ("max_parallel_deployments", body.max_parallel_deployments.map(|v| v.to_string())),
+        ("smtp_enabled",             body.smtp_enabled.map(|v| v.to_string())),
+        ("smtp_host",                body.smtp_host.clone()),
+        ("smtp_port",                body.smtp_port.map(|v| v.to_string())),
+        ("smtp_username",            body.smtp_username.clone()),
+        ("smtp_password",            body.smtp_password.clone()),
+        ("smtp_from_address",        body.smtp_from_address.clone()),
+        ("smtp_from_name",           body.smtp_from_name.clone()),
     ];
 
     for (key, val) in pairs {
@@ -924,6 +958,24 @@ async fn docker_networks(
     Ok(Json(ApiResponse::ok(data)))
 }
 
+async fn docker_nodes(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<NodeInfo>>>, ApiAppError> {
+    let data = state.docker.list_nodes().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_swarm_join_tokens(
+    _auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<SwarmJoinTokens>>, ApiAppError> {
+    let data = state.docker.get_join_tokens().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
 #[derive(Debug, Serialize)]
 struct HostIpResponse {
     ip: String,
@@ -1194,6 +1246,38 @@ struct CreateApiKeyRequest {
     name: String,
     scopes: Vec<String>,
     expires_at: Option<DateTime<Utc>>,
+}
+
+/// POST /admin/smtp/test
+///
+/// Saves current SMTP settings and sends a test email to the requesting user.
+async fn test_smtp(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let smtp_cfg = crate::email::load_smtp_config(&state.db, &state.config.smtp).await;
+
+    if !smtp_cfg.enabled {
+        return Err(ApiAppError(AppError::BadRequest(
+            "SMTP is not enabled. Enable it and save settings first.".to_string(),
+        )));
+    }
+
+    let base_url = state.config.git.frontend_url.clone();
+    let test_token = "test-email-verify";
+    crate::email::send_invitation_email(
+        &smtp_cfg,
+        &auth.email,
+        "Shipyard (test)",
+        test_token,
+        &base_url,
+    )
+    .await
+    .map_err(|e| ApiAppError(AppError::Internal(format!("SMTP test failed: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "message": format!("Test email sent to {}", auth.email)
+    }))))
 }
 
 fn generate_api_key() -> (String, String, String) {

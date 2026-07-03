@@ -5,7 +5,7 @@
 	import { page } from '$app/stores';
 	import {
 		Globe, GitBranch, Save, Check, AlertCircle, Key, Loader2,
-		RefreshCw, Terminal, Zap, PackageOpen
+		RefreshCw, Terminal, Zap, PackageOpen, Mail, Eye, EyeOff
 	} from '@lucide/svelte';
 
 	interface PlatformSettings {
@@ -19,7 +19,36 @@
 		git_bitbucket_token?: string;
 		git_webhook_secret?: string;
 		max_parallel_deployments?: number;
+		smtp_enabled?: boolean;
+		smtp_host?: string;
+		smtp_port?: number;
+		smtp_username?: string;
+		smtp_password?: string;
+		smtp_from_address?: string;
+		smtp_from_name?: string;
 	}
+
+	let showSmtpPassword = $state(false);
+
+	async function testSmtp() {
+		smtpTesting = true;
+		smtpTestResult = null;
+		// Save first, then test by sending to the logged-in user's email
+		await api.put('/settings', {
+			smtp_enabled: settings.smtp_enabled,
+			smtp_host: settings.smtp_host,
+			smtp_port: settings.smtp_port,
+			smtp_username: settings.smtp_username,
+			smtp_password: settings.smtp_password,
+			smtp_from_address: settings.smtp_from_address,
+			smtp_from_name: settings.smtp_from_name,
+		});
+		const res = await api.post<{ message: string }>('/admin/smtp/test', {});
+		smtpTestResult = res.error ? { ok: false, msg: res.error.message } : { ok: true, msg: res.data?.message ?? 'Test email sent' };
+		smtpTesting = false;
+	}
+	let smtpTesting = $state(false);
+	let smtpTestResult = $state<{ ok: boolean; msg: string } | null>(null);
 
 	// ── Version info ────────────────────────────────────────────────────────────
 	interface VersionInfo {
@@ -316,6 +345,76 @@
 			</div>
 		</section>
 
+		<!-- SMTP / Email -->
+		<section class="settings-section">
+			<div class="section-header">
+				<div class="section-icon smtp-icon"><Mail size={16} /></div>
+				<div>
+					<h2 class="section-title">Email (SMTP)</h2>
+					<p class="section-desc">Configure outgoing email for invitation links and notifications.</p>
+				</div>
+			</div>
+
+			<div class="smtp-toggle-row">
+				<label class="toggle-label">
+					<input type="checkbox" bind:checked={settings.smtp_enabled} />
+					<span class="toggle-track"></span>
+					<span class="toggle-text">{settings.smtp_enabled ? 'Enabled' : 'Disabled'}</span>
+				</label>
+			</div>
+
+			{#if settings.smtp_enabled}
+				<div class="fields-grid">
+					<div class="field">
+						<label class="field-label" for="smtp-host">SMTP Host</label>
+						<input id="smtp-host" class="field-input font-mono" type="text" bind:value={settings.smtp_host} placeholder="smtp.example.com" />
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-port">Port</label>
+						<input id="smtp-port" class="field-input font-mono" type="number" bind:value={settings.smtp_port} placeholder="587" min="1" max="65535" />
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-user">Username</label>
+						<input id="smtp-user" class="field-input" type="text" bind:value={settings.smtp_username} placeholder="user@example.com" autocomplete="off" />
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-pass">Password</label>
+						<div class="password-row">
+							<input
+								id="smtp-pass"
+								class="field-input"
+								type={showSmtpPassword ? 'text' : 'password'}
+								bind:value={settings.smtp_password}
+								placeholder="••••••••"
+								autocomplete="new-password"
+							/>
+							<button type="button" class="eye-btn" onclick={() => (showSmtpPassword = !showSmtpPassword)}>
+								{#if showSmtpPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+							</button>
+						</div>
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-from">From Address</label>
+						<input id="smtp-from" class="field-input" type="email" bind:value={settings.smtp_from_address} placeholder="noreply@example.com" />
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-name">From Name</label>
+						<input id="smtp-name" class="field-input" type="text" bind:value={settings.smtp_from_name} placeholder="Shipyard" />
+					</div>
+				</div>
+				<div class="smtp-test-bar">
+					<button type="button" class="smtp-test-btn" disabled={smtpTesting} onclick={testSmtp}>
+						{#if smtpTesting}<Loader2 size={12} class="spin" />Sending…{:else}<Mail size={12} />Send test email{/if}
+					</button>
+					{#if smtpTestResult}
+						<span class="smtp-test-result" class:ok={smtpTestResult.ok} class:fail={!smtpTestResult.ok}>
+							{smtpTestResult.ok ? '✓' : '✗'} {smtpTestResult.msg}
+						</span>
+					{/if}
+				</div>
+			{/if}
+		</section>
+
 {#if saveError}
 			<div class="error-banner"><AlertCircle size={14} />{saveError}</div>
 		{/if}
@@ -526,6 +625,44 @@
 	.pat-oauth-link { font-size: 11px; color: var(--text-dim); margin: 0; }
 	.link-btn { background: none; border: none; padding: 0; cursor: pointer; color: var(--accent); font-size: 11px; font-family: inherit; }
 	.link-btn:hover { text-decoration: underline; }
+
+	/* ── SMTP ── */
+	.smtp-icon { background: rgba(16,185,129,0.10); color: #10B981; }
+	.smtp-toggle-row { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+	.toggle-label { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+	.toggle-label input[type="checkbox"] { display: none; }
+	.toggle-track {
+		width: 34px; height: 18px;
+		background: var(--border);
+		border-radius: 99px;
+		position: relative;
+		transition: background 0.2s;
+		flex-shrink: 0;
+	}
+	.toggle-track::after {
+		content: '';
+		position: absolute;
+		width: 13px; height: 13px;
+		background: white;
+		border-radius: 50%;
+		top: 2.5px; left: 2.5px;
+		transition: left 0.2s;
+		box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+	}
+	.toggle-label input:checked ~ .toggle-track { background: #10B981; }
+	.toggle-label input:checked ~ .toggle-track::after { left: 18.5px; }
+	.toggle-text { font-size: 13px; color: var(--text-secondary); }
+	.password-row { display: flex; align-items: center; gap: 4px; }
+	.password-row .field-input { flex: 1; }
+	.eye-btn { background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); padding: 8px 9px; cursor: pointer; display: flex; align-items: center; transition: color var(--transition-fast); flex-shrink: 0; }
+	.eye-btn:hover { color: var(--text-primary); }
+	.smtp-test-bar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border); }
+	.smtp-test-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 12px; font-weight: 500; font-family: var(--font-sans); cursor: pointer; transition: all var(--transition-fast); }
+	.smtp-test-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
+	.smtp-test-btn:disabled { opacity: 0.5; cursor: default; }
+	.smtp-test-result { font-size: 12px; font-weight: 500; }
+	.smtp-test-result.ok   { color: #10B981; }
+	.smtp-test-result.fail { color: #EF4444; }
 
 	/* ── Platform Update ── */
 	.update-section { margin-top: 8px; }

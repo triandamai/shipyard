@@ -26,7 +26,7 @@
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
-		Network as NetworkType
+		Network as NetworkType, SwarmNode
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -64,11 +64,24 @@
 	let deployments = $state<Deployment[]>([]);
 	let steps = $state<DeploymentStep[]>([]);
 
+	// node_id → hostname map, loaded once for the replica tab
+	let nodeMap = $state<Map<string, SwarmNode>>(new Map());
+	async function ensureNodes() {
+		if (nodeMap.size > 0) return;
+		try {
+			const res = await api.getSwarmNodes();
+			if (!res.error && res.data) {
+				nodeMap = new Map(res.data.map(n => [n.id, n]));
+			}
+		} catch { /* single-node setup — no swarm, ignore */ }
+	}
+
 	let isLoadingService = $state(true);
 	let isLoadingContainers = $state(false);
 	let isDeploying = $state(false);
 	let isStopping = $state(false);
 	let isRestarting = $state(false);
+	let isRollingBack = $state<string | null>(null); // deployment id being rolled back
 	let serviceError = $state<string | null>(null);
 
 	// ── Deployment log viewer ────────────────────────────────────────
@@ -110,6 +123,8 @@
 	let editReplicas = $state(1);
 	let editPorts = $state<string[]>([]);
 	let editImage = $state('');
+	let editCpuLimit = $state<number | null>(null);
+	let editMemLimit = $state<number | null>(null);
 	let editRegistryUrl = $state('');
 	let editRegistryUser = $state('');
 	let editRegistryPass = $state('');
@@ -666,6 +681,15 @@
 		isDeploying = false;
 	}
 
+	async function triggerRollback(dep: Deployment, e: MouseEvent) {
+		e.stopPropagation();
+		if (isRollingBack) return;
+		isRollingBack = dep.id;
+		const res = await api.rollbackDeployment(serviceId, dep.id);
+		if (res.data) await loadDeployments();
+		isRollingBack = null;
+	}
+
 	async function deleteService() {
 		if (!service || !deleteSlugValid || isDeleting) return;
 		isDeleting = true;
@@ -692,6 +716,8 @@
 		editReplicas = service.replicas;
 		editPorts = [...(service.ports ?? [])];
 		editImage = service.image ?? '';
+		editCpuLimit = (service as any).cpu_limit ?? null;
+		editMemLimit = (service as any).memory_limit_mb ?? null;
 		settingsSaveError = '';
 		settingsSaveSuccess = false;
 	}
@@ -757,6 +783,8 @@
 			replicas: editReplicas,
 			ports,
 			...(image ? { image } : {}),
+			...(editCpuLimit !== null ? { cpu_limit: editCpuLimit } : {}),
+			...(editMemLimit !== null ? { memory_limit_mb: editMemLimit } : {}),
 		});
 		if (res.error) {
 			settingsSaveError = res.error.message;
@@ -768,6 +796,8 @@
 			editPorts = [...(res.data.ports ?? [])];
 			editReplicas = res.data.replicas;
 			editImage = res.data.image ?? '';
+			editCpuLimit = (res.data as any).cpu_limit ?? null;
+			editMemLimit = (res.data as any).memory_limit_mb ?? null;
 		}
 
 		// Save registry credentials as env vars (only if non-empty)
@@ -827,7 +857,7 @@
 	async function switchTab(tab: Tab) {
 		if (activeTab === 'monitor' && tab !== 'monitor') disconnectStats();
 		activeTab = tab;
-		if (tab === 'replicas' && containers.length === 0) await loadContainers();
+		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
 		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
@@ -1250,6 +1280,20 @@
 									<code class="info-val">{service.directory_path || 'docker-compose.yml'}</code>
 								</div>
 							</div>
+						{:else if service.type === 'static'}
+							<div class="info-card-header">
+								<Globe size={13} />
+								<span>Static Site</span>
+							</div>
+							<div class="info-card-body">
+								<div class="info-row">
+									<span class="info-key">Serves via</span>
+									<code class="info-val">{service.image || 'nginx:alpine'}</code>
+								</div>
+								<div class="info-hint">
+									Mount files at <code>/usr/share/nginx/html</code> via a volume to serve static assets.
+								</div>
+							</div>
 						{:else}
 							<div class="info-card-header">
 								<Terminal size={13} />
@@ -1442,7 +1486,7 @@
 					{:else}
 						<ul class="dep-list">
 							{#each deployments as dep (dep.id)}
-								<li>
+								<li class="dep-list-item">
 									<button
 										class="dep-list-row"
 										onclick={() => openDeploymentLogs(dep)}
@@ -1459,6 +1503,16 @@
 										<span class="dep-row-badge {deployStatusClass(dep.status)}">{dep.status}</span>
 										<ChevronRight size={14} class="dep-row-arrow" />
 									</button>
+									{#if dep.status === 'success' && dep.deployed_image}
+										<button
+											class="dep-rollback-btn"
+											title="Rollback to this deployment"
+											disabled={!!isRollingBack}
+											onclick={(e) => triggerRollback(dep, e)}
+										>
+											{isRollingBack === dep.id ? '…' : '↩'}
+										</button>
+									{/if}
 								</li>
 							{/each}
 						</ul>
@@ -1488,8 +1542,16 @@
 										<div class="replica-meta">
 											<span class="font-mono">{c.docker_container_id.slice(0, 12)}</span>
 											{#if c.node_id}
+												{@const node = nodeMap.get(c.node_id)}
 												<span class="meta-sep">·</span>
-												<span>{c.node_id}</span>
+												<span class="node-badge" title={c.node_id}>
+													{#if node}
+														<span class="node-role-dot node-role-{node.role}"></span>
+														{node.hostname}
+													{:else}
+														{c.node_id.slice(0, 10)}
+													{/if}
+												</span>
 											{/if}
 											{#if !terminal && c.started_at}
 												<span class="meta-sep">·</span>
@@ -1773,13 +1835,40 @@
 							<span class="settings-group-title">Docker Image</span>
 							<span class="settings-group-desc">Image to pull for the next deployment.</span>
 						</div>
+						{#if service.type === 'database'}
+							<div class="settings-field">
+								<label class="settings-label">Presets</label>
+								<div class="preset-btns">
+									{#each ['postgres:16', 'mysql:8', 'redis:7-alpine', 'mongo:7', 'mariadb:11'] as preset}
+										<button
+											class="preset-btn"
+											class:active={editImage === preset}
+											onclick={() => editImage = preset}
+										>{preset}</button>
+									{/each}
+								</div>
+							</div>
+						{:else if service.type === 'static'}
+							<div class="settings-field">
+								<label class="settings-label">Presets</label>
+								<div class="preset-btns">
+									{#each ['nginx:alpine', 'nginx:stable-alpine', 'httpd:alpine'] as preset}
+										<button
+											class="preset-btn"
+											class:active={editImage === preset}
+											onclick={() => editImage = preset}
+										>{preset}</button>
+									{/each}
+								</div>
+							</div>
+						{/if}
 						<div class="settings-field">
 							<label class="settings-label" for="edit-image">Image</label>
 							<input
 								id="edit-image"
 								class="settings-input font-mono"
 								type="text"
-								placeholder="nginx:latest"
+								placeholder={service.type === 'database' ? 'postgres:16' : service.type === 'static' ? 'nginx:alpine' : 'nginx:latest'}
 								bind:value={editImage}
 								spellcheck="false"
 							/>
@@ -1861,6 +1950,43 @@
 									onclick={() => editReplicas = Math.min(20, editReplicas + 1)}
 									disabled={editReplicas >= 20}
 								>+</button>
+							</div>
+						</div>
+					</div>
+
+					<!-- Resource limits -->
+					<div class="settings-group">
+						<div class="settings-group-header">
+							<span class="settings-group-title">Resource Limits</span>
+							<span class="settings-group-desc">Limit CPU and memory per container. Leave blank for no limit.</span>
+						</div>
+						<div class="settings-fields-row">
+							<div class="settings-field">
+								<label class="settings-label" for="edit-cpu">CPU limit (cores)</label>
+								<input
+									id="edit-cpu"
+									class="settings-input"
+									type="number"
+									min="0.1"
+									max="64"
+									step="0.1"
+									placeholder="e.g. 0.5"
+									value={editCpuLimit ?? ''}
+									oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); editCpuLimit = isNaN(v) ? null : v; }}
+								/>
+							</div>
+							<div class="settings-field">
+								<label class="settings-label" for="edit-mem">Memory limit (MB)</label>
+								<input
+									id="edit-mem"
+									class="settings-input"
+									type="number"
+									min="32"
+									step="32"
+									placeholder="e.g. 512"
+									value={editMemLimit ?? ''}
+									oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); editMemLimit = isNaN(v) ? null : v; }}
+								/>
 							</div>
 						</div>
 					</div>
@@ -2168,6 +2294,18 @@
 		word-break: break-all;
 	}
 
+	.info-hint {
+		font-size: 11px;
+		color: var(--text-muted);
+		margin-top: 6px;
+		line-height: 1.5;
+	}
+	.info-hint code {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-secondary);
+	}
+
 	.overview-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
@@ -2419,6 +2557,25 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.dep-list { list-style: none; margin: 0; padding: 4px 0; }
+	.dep-list-item { position: relative; display: flex; align-items: stretch; }
+	.dep-list-item .dep-list-row { flex: 1; }
+	.dep-rollback-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		flex-shrink: 0;
+		background: transparent;
+		border: none;
+		border-bottom: 1px solid var(--border);
+		border-left: 1px solid var(--border);
+		cursor: pointer;
+		color: var(--text-muted);
+		font-size: 14px;
+		transition: background var(--transition-fast), color var(--transition-fast);
+	}
+	.dep-rollback-btn:hover:not(:disabled) { background: var(--bg-elevated); color: var(--accent); }
+	.dep-rollback-btn:disabled { opacity: 0.4; cursor: default; }
 	.dep-list-row {
 		display: flex;
 		width: 100%;
@@ -2493,6 +2650,19 @@
 	.replica-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 	.replica-del-btn { color: var(--text-dim); }
 	.replica-del-btn:hover { color: #EF4444 !important; }
+
+	.node-badge {
+		display: inline-flex; align-items: center; gap: 4px;
+		padding: 1px 6px; border-radius: 4px;
+		background: var(--bg-muted); border: 1px solid var(--border);
+		font-size: 10px; font-weight: 500; color: var(--text-secondary);
+		font-family: var(--font-mono);
+	}
+	.node-role-dot {
+		width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+	}
+	.node-role-manager { background: #6366f1; }
+	.node-role-worker  { background: #16a34a; }
 
 	/* ── Domains ── */
 	.domains-section { display: flex; flex-direction: column; }
@@ -3029,6 +3199,7 @@
 		padding: 1px 4px;
 		border-radius: 3px;
 	}
+	.settings-fields-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 16px; }
 	.settings-field { display: flex; flex-direction: column; gap: 5px; }
 	.settings-label {
 		font-size: 11px;
@@ -3142,6 +3313,16 @@
 	}
 	.settings-input:focus { border-color: var(--accent); }
 	.settings-input.font-mono { font-family: var(--font-mono); }
+
+	.preset-btns { display: flex; flex-wrap: wrap; gap: 5px; }
+	.preset-btn {
+		padding: 3px 8px; font-size: 11px; font-family: var(--font-mono);
+		border: 1px solid var(--border); border-radius: 4px;
+		background: var(--bg-muted); color: var(--text-secondary);
+		cursor: pointer; transition: all var(--transition-fast);
+	}
+	.preset-btn:hover { border-color: var(--accent); color: var(--accent); }
+	.preset-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb, 99,102,241), 0.08); }
 
 	.settings-row { display: flex; gap: 10px; }
 

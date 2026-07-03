@@ -85,6 +85,8 @@ pub struct UpdateServiceRequest {
     pub replicas: Option<i32>,
     pub ports: Option<Vec<String>>,
     pub image: Option<String>,
+    pub cpu_limit: Option<f64>,
+    pub memory_limit_mb: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +167,7 @@ async fn list_services(
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
 
     let services = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE project_id = $1
          ORDER BY created_at ASC",
@@ -223,9 +225,9 @@ async fn create_service(
     let ports = serde_json::to_value(&body.ports).unwrap_or_default();
     let replicas = body.replicas.max(1);
     let service = sqlx::query_as::<_, Service>(
-        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, $9, $10, 'stopped', $11, NULL, NOW(), NOW())
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at",
+        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, $9, $10, 'stopped', $11, NULL, NULL, NULL, NOW(), NOW())
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
     )
     .bind(service_id)
     .bind(project_id)
@@ -299,7 +301,7 @@ async fn get_service(
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
     let service = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -330,7 +332,7 @@ async fn update_service(
 
     // Fetch current service first
     let current = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -349,18 +351,23 @@ async fn update_service(
         None => current.ports,
     };
     let new_image = body.image.unwrap_or(current.image);
+    let new_cpu = match body.cpu_limit { Some(v) => Some(v), None => current.cpu_limit };
+    let new_mem = match body.memory_limit_mb { Some(v) => Some(v), None => current.memory_limit_mb };
 
     let service = sqlx::query_as::<_, Service>(
         "UPDATE services
-         SET name = $1, status = $2, replicas = $3, ports = $4, image = $5, updated_at = NOW()
-         WHERE id = $6 AND project_id = $7
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, service_parent_id, created_at, updated_at",
+         SET name = $1, status = $2, replicas = $3, ports = $4, image = $5,
+             cpu_limit = $6, memory_limit_mb = $7, updated_at = NOW()
+         WHERE id = $8 AND project_id = $9
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
     )
     .bind(&new_name)
     .bind(&new_status)
     .bind(new_replicas)
     .bind(&new_ports)
     .bind(&new_image)
+    .bind(new_cpu)
+    .bind(new_mem)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)

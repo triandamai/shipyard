@@ -24,6 +24,7 @@ import type {
 	TraefikFileResponse,
 	TraefikDynamicResponse,
 	ImportComposeResponse,
+	AuditLogEntry,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -298,6 +299,10 @@ class ApiClient {
 		return this.post(`/services/${serviceId}/redeploy`);
 	}
 
+	async rollbackDeployment(serviceId: string, deploymentId: string): Promise<ApiResponse<{ deployment_id: string }>> {
+		return this.post(`/services/${serviceId}/deployments/${deploymentId}/rollback`);
+	}
+
 	async restartService(serviceId: string): Promise<ApiResponse<unknown>> {
 		return this.post(`/services/${serviceId}/restart`);
 	}
@@ -475,6 +480,10 @@ class ApiClient {
 	}
 
 	// ─── Invitations ──────────────────────────────────────────────────
+	async getAuditLogs(orgId: string, page = 1, perPage = 50): Promise<ApiResponse<AuditLogEntry[]>> {
+		return this.get(`/orgs/${orgId}/audit-logs?page=${page}&per_page=${perPage}`);
+	}
+
 	async getInvitations(orgId: string): Promise<ApiResponse<Invitation[]>> {
 		return this.get(`/orgs/${orgId}/invitations`);
 	}
@@ -548,6 +557,14 @@ class ApiClient {
 	// ─── Admin ────────────────────────────────────────────────────────
 	async checkVersion(): Promise<ApiResponse<import('./types').VersionInfo>> {
 		return this.get('/admin/version');
+	}
+
+	async getSwarmNodes(): Promise<ApiResponse<import('./types').SwarmNode[]>> {
+		return this.get('/admin/docker/nodes');
+	}
+
+	async getSwarmJoinTokens(): Promise<ApiResponse<import('./types').SwarmJoinTokens>> {
+		return this.get('/admin/docker/swarm/join-tokens');
 	}
 
 	async triggerUpdate(): Promise<ApiResponse<{ message: string; output: string }>> {

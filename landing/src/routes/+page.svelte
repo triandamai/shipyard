@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Anchor, Container, Globe, Shield, Zap, ArrowRight, Terminal, Copy, Check, ChevronRight } from '@lucide/svelte';
+	import {
+		Anchor, Container, Globe, Shield, Zap, ArrowRight, Terminal, Copy, Check, ChevronRight,
+		GitBranch, RotateCcw, Key, ShieldCheck, Mail, Cpu, Server, FileCode, Activity, Webhook
+	} from '@lucide/svelte';
 	import { SHIPYARD_VERSION } from '$lib/version';
 
 	let copied = $state(false);
@@ -23,10 +26,66 @@
 	];
 
 	const features = [
-		{ icon: Container, title: 'Container Orchestration', desc: 'Run Docker services as single containers or scaled replicas across your fleet.' },
-		{ icon: Globe, title: 'Automatic HTTPS', desc: 'Traefik handles TLS termination and Let\'s Encrypt certificates out of the box.' },
-		{ icon: Zap, title: 'Live Topology Canvas', desc: 'Visual graph of services, networks, and volumes with real-time MQTT updates.' },
-		{ icon: Shield, title: 'Role-based Access', desc: 'Owner, admin, member, and viewer roles with fine-grained permission grants.' },
+		{
+			icon: Container,
+			title: 'Container Orchestration',
+			desc: 'Run any Docker image as a replicated Swarm service. Scale up, scale down, or pin to a node — all from the dashboard.',
+		},
+		{
+			icon: GitBranch,
+			title: 'Git-based Deployments',
+			desc: 'Connect a repo and push to deploy. Shipyard auto-detects Dockerfile or Nixpacks and builds the image on the server.',
+		},
+		{
+			icon: RotateCcw,
+			title: 'One-click Rollback',
+			desc: 'Every successful deployment records its exact image digest. Roll back to any prior version instantly — no guesswork.',
+		},
+		{
+			icon: Globe,
+			title: 'Automatic HTTPS',
+			desc: 'Traefik handles TLS termination and Let\'s Encrypt certificate issuance. Add a domain and HTTPS is live in seconds.',
+		},
+		{
+			icon: Zap,
+			title: 'Live Topology Canvas',
+			desc: 'Visual graph of services, networks, and volumes with real-time status updates pushed over MQTT — no polling.',
+		},
+		{
+			icon: Cpu,
+			title: 'Resource Limits',
+			desc: 'Set CPU and memory limits per service, enforced by Docker Swarm. Prevent one noisy container from starving the rest.',
+		},
+		{
+			icon: Shield,
+			title: 'Role-based Access',
+			desc: 'Owner, admin, member, and viewer roles with fine-grained permission grants per org and per project.',
+		},
+		{
+			icon: Key,
+			title: 'API Keys & Webhooks',
+			desc: 'Generate SHA-256-hashed API keys for CI/CD pipelines. Trigger deployments via webhook from GitHub Actions or any script.',
+		},
+		{
+			icon: FileCode,
+			title: 'Docker Compose Import',
+			desc: 'Paste a Compose file and Shipyard turns it into managed services, networks, and volumes — preserving all dependencies.',
+		},
+		{
+			icon: ShieldCheck,
+			title: 'Audit Logs',
+			desc: 'Full audit trail of every action across your organization — who deployed what, when, and from which IP.',
+		},
+		{
+			icon: Server,
+			title: 'Multi-node Swarm',
+			desc: 'Join additional VPS nodes to the cluster. Swarm schedules replicas across all nodes and re-schedules on failure.',
+		},
+		{
+			icon: Activity,
+			title: 'Live Monitoring',
+			desc: 'Per-service CPU, memory, and network charts plus host-level disk and network metrics streamed in real time.',
+		},
 	];
 
 	const stack = [
@@ -95,6 +154,7 @@
 			<ul class="nav-links" role="list">
 				<li><a href="#install" class="nav-link">Install</a></li>
 				<li><a href="#features" class="nav-link">Features</a></li>
+				<li><a href="/docs" class="nav-link">Docs</a></li>
 				<li>
 					<a
 						href="https://github.com/triandamai/shipyard"
@@ -143,8 +203,9 @@
 			</h1>
 
 			<p class="hero-sub">
-				Shipyard is a self-hosted PaaS. Deploy containers, manage domains,
-				scale replicas, and monitor your stack — from one dashboard you own.
+				Shipyard is a self-hosted PaaS built on Docker Swarm. Deploy from Git or any image,
+				roll back in one click, manage domains with auto-TLS, and monitor your entire
+				cluster — from a dashboard that runs on your own server.
 			</p>
 
 			<div class="hero-ctas">
@@ -245,7 +306,7 @@
 	<section class="features-section" id="features">
 		<div class="wrap">
 			<div class="section-label">Features</div>
-			<h2 class="section-title">Everything in one place</h2>
+			<h2 class="section-title">Everything you need to ship</h2>
 			<div class="features-grid">
 				{#each features as f}
 					<div class="feature-card">
@@ -784,12 +845,21 @@
 	}
 	.features-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		grid-template-columns: repeat(4, 1fr);
 		gap: 1px;
 		background: rgba(255,255,255,0.06);
 		border: 1px solid rgba(255,255,255,0.06);
 		border-radius: 12px;
 		overflow: hidden;
+	}
+	@media (max-width: 1024px) {
+		.features-grid { grid-template-columns: repeat(3, 1fr); }
+	}
+	@media (max-width: 720px) {
+		.features-grid { grid-template-columns: repeat(2, 1fr); }
+	}
+	@media (max-width: 480px) {
+		.features-grid { grid-template-columns: 1fr; }
 	}
 	.feature-card {
 		padding: 32px 28px;

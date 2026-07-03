@@ -120,6 +120,13 @@ pub trait DockerEngine: Send + Sync {
 
     /// List all swarm services with full summary.
     async fn list_all_services(&self) -> AppResult<Vec<ServiceSummary>>;
+
+    /// List all nodes in the swarm.
+    async fn list_nodes(&self) -> AppResult<Vec<NodeInfo>>;
+
+    /// Return the swarm join tokens (worker + manager) and the advertise address.
+    /// Returns an error if this node is not a swarm manager.
+    async fn get_join_tokens(&self) -> AppResult<SwarmJoinTokens>;
 }
 
 // ─── Concrete implementation ──────────────────────────────────────────────────
@@ -1081,6 +1088,61 @@ impl DockerEngine for BollardDockerEngine {
                 containers,
             }
         }).collect())
+    }
+
+    async fn list_nodes(&self) -> AppResult<Vec<NodeInfo>> {
+        let body = BollardDockerEngine::raw_unix_request("GET", "/v1.45/nodes", None).await?;
+
+        let nodes: Vec<serde_json::Value> = serde_json::from_str(&body)
+            .map_err(|e| AppError::Docker(format!("Failed to parse node list: {e}")))?;
+
+        Ok(nodes.into_iter().map(|n| {
+            let id       = n["ID"].as_str().unwrap_or("").to_string();
+            let hostname = n["Description"]["Hostname"].as_str().unwrap_or("").to_string();
+            let role     = n["Spec"]["Role"].as_str().unwrap_or("worker").to_string();
+            let status   = n["Status"]["State"].as_str().unwrap_or("unknown").to_string();
+            let avail    = n["Spec"]["Availability"].as_str().unwrap_or("active").to_string();
+            let engine_version = n["Description"]["Engine"]["EngineVersion"]
+                .as_str().map(String::from);
+            let addr = n["Status"]["Addr"].as_str().map(String::from);
+            NodeInfo { id, hostname, role, status, availability: avail, engine_version, addr }
+        }).collect())
+    }
+
+    async fn get_join_tokens(&self) -> AppResult<SwarmJoinTokens> {
+        let body = BollardDockerEngine::raw_unix_request("GET", "/v1.45/swarm", None).await
+            .map_err(|e| AppError::Docker(format!("GET /swarm failed: {e}")))?;
+
+        let v: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| AppError::Docker(format!("Failed to parse swarm response: {e}")))?;
+
+        let worker = v["JoinTokens"]["Worker"].as_str()
+            .ok_or_else(|| AppError::Docker("Node is not a swarm manager or swarm not initialized".into()))?
+            .to_string();
+        let manager = v["JoinTokens"]["Manager"].as_str()
+            .unwrap_or("")
+            .to_string();
+
+        // SwarmSpec > CAConfig > ExternalCAs is not what we want; use the node's own addr.
+        let addr = v["Spec"]["CAConfig"]["ExternalCAs"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|ca| ca["URL"].as_str())
+            .unwrap_or("");
+
+        // Fall back to the node's advertised address from the swarm info.
+        let addr = if addr.is_empty() {
+            let sys = self.client.info().await
+                .map_err(|e| AppError::Docker(format!("docker info failed: {e}")))?;
+            sys.swarm
+                .and_then(|s| s.node_addr)
+                .map(|a| format!("{a}:2377"))
+                .unwrap_or_default()
+        } else {
+            addr.to_string()
+        };
+
+        Ok(SwarmJoinTokens { worker, manager, addr })
     }
 
     async fn list_all_services(&self) -> AppResult<Vec<ServiceSummary>> {

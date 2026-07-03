@@ -114,6 +114,14 @@ pub struct SwarmInfo {
     pub managers: u64,
 }
 
+/// Swarm join tokens for worker and manager nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmJoinTokens {
+    pub worker: String,
+    pub manager: String,
+    pub addr: String,
+}
+
 /// Log streaming options.
 #[derive(Debug, Clone, Default)]
 pub struct LogOpts {
@@ -185,4 +193,16 @@ pub struct ServiceSummary {
     pub labels: HashMap<String, String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+/// Summary of a swarm node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeInfo {
+    pub id: String,
+    pub hostname: String,
+    pub role: String,       // "manager" | "worker"
+    pub status: String,     // "ready" | "down" | "disconnected"
+    pub availability: String, // "active" | "pause" | "drain"
+    pub engine_version: Option<String>,
+    pub addr: Option<String>,
 }

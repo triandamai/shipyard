@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket } from '@lucide/svelte';
+	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck } from '@lucide/svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole } from '$lib/auth/permissions';
 
@@ -29,6 +29,7 @@
 		{ label: 'Docker',    href: (slug: string) => `/orgs/${slug}/settings/docker`,    icon: Container },
 		{ label: 'API Keys',     href: (slug: string) => `/orgs/${slug}/settings/api-keys`,     icon: KeyRound },
 		{ label: 'Deployments',  href: (slug: string) => `/orgs/${slug}/settings/deployments`,  icon: Rocket },
+		{ label: 'Audit',        href: (slug: string) => `/orgs/${slug}/settings/audit`,        icon: ShieldCheck },
 	];
 
 	function isActive(tabHref: string) {

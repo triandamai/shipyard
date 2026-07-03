@@ -8,6 +8,7 @@ on:
       - 'frontend/**'
       - 'landing/**'
       - 'scripts/install.sh'
+      - 'scripts/worker-setup.sh'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
@@ -131,8 +132,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Sync install script
-        run: cp scripts/install.sh landing/static/install.sh
+      - name: Sync scripts
+        run: |
+          cp scripts/install.sh landing/static/install.sh
+          cp scripts/worker-setup.sh landing/static/worker-setup.sh
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
