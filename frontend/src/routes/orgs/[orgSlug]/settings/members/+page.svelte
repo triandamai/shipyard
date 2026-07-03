@@ -2,16 +2,16 @@
 	import { api } from '$lib/api/client';
 	import { authStore } from '$lib/stores/auth.store';
 	import { orgStore } from '$lib/stores/org.store';
-	import { PERMISSION_GROUPS } from '$lib/api/types';
 	import {
 		UserPlus, Shield, Trash2, Crown, Eye, ChevronDown,
-		Mail, Loader2, AlertCircle, Check, X, Clock, SlidersHorizontal,
-		Lock, Link, CheckCheck, Folder, FolderOpen
+		Loader2, AlertCircle, Check, X, Clock, SlidersHorizontal,
+		Link, CheckCheck, Folder
 	} from '@lucide/svelte';
 	import { formatDistanceToNow, isPast } from 'date-fns';
-	import type { OrgMember, MemberRole, Invitation, Project, ProjectAssignment } from '$lib/api/types';
+	import type { OrgMember, MemberRole, Invitation, Project } from '$lib/api/types';
 	import SlidePanel from '$lib/components/SlidePanel.svelte';
 	import MemberManagePanel from '$lib/panels/MemberManagePanel.svelte';
+	import InvitePanel from '$lib/panels/InvitePanel.svelte';
 
 	let orgId         = $derived($orgStore.activeOrg?.id ?? '');
 	let currentUserId = $derived($authStore.user?.id ?? '');
@@ -35,22 +35,8 @@
 	let cancellingInvite = $state('');
 	let copiedInviteId   = $state('');
 
-	// ── Invite form ───────────────────────────────────────────────────
-	let inviteEmail        = $state('');
-	let inviteRole         = $state<MemberRole>('member');
-	let invitePermissions  = $state<Set<string>>(new Set());
-	let inviting           = $state(false);
-	let inviteError        = $state('');
-	let inviteSuccess      = $state('');
-
-	// Project assignments: selected project IDs, and per-project permission sets
-	let selectedProjectIds   = $state<Set<string>>(new Set());
-	let projectPermissions   = $state<Record<string, Set<string>>>({});
-	const PROJECT_PERM_OPTIONS = [
-		{ id: 'view',    label: 'View',    desc: 'Read-only access to services and deployments' },
-		{ id: 'deploy',  label: 'Deploy',  desc: 'Trigger deployments and restarts' },
-		{ id: 'manage',  label: 'Manage',  desc: 'Create, edit, and delete services' },
-	];
+	// ── Invite panel ──────────────────────────────────────────────────
+	let showInvitePanel = $state(false);
 
 	// ── Member manage panel ───────────────────────────────────────────
 	let panelMember = $state<OrgMember | null>(null);
@@ -146,70 +132,6 @@
 		loadingProjects = false;
 	}
 
-	// ── Project assignment helpers ────────────────────────────────────
-	function toggleProjectSelection(projectId: string) {
-		const next = new Set(selectedProjectIds);
-		if (next.has(projectId)) {
-			next.delete(projectId);
-			const { [projectId]: _, ...rest } = projectPermissions;
-			projectPermissions = rest;
-		} else {
-			next.add(projectId);
-			projectPermissions = { ...projectPermissions, [projectId]: new Set(['view']) };
-		}
-		selectedProjectIds = next;
-	}
-
-	function toggleProjectPerm(projectId: string, permId: string) {
-		const current = projectPermissions[projectId] ?? new Set<string>();
-		const next = new Set(current);
-		if (next.has(permId)) next.delete(permId);
-		else next.add(permId);
-		projectPermissions = { ...projectPermissions, [projectId]: next };
-	}
-
-	function buildProjectAssignments(): ProjectAssignment[] {
-		return [...selectedProjectIds].map(pid => ({
-			project_id: pid,
-			permissions: [...(projectPermissions[pid] ?? [])],
-		}));
-	}
-
-	// ── Invite form actions ───────────────────────────────────────────
-	function toggleInvitePermission(permId: string) {
-		const next = new Set(invitePermissions);
-		if (next.has(permId)) next.delete(permId);
-		else next.add(permId);
-		invitePermissions = next;
-	}
-
-	async function handleInvite() {
-		if (!inviteEmail.trim() || inviting) return;
-		inviting = true;
-		inviteError = '';
-		inviteSuccess = '';
-		const res = await api.inviteMember(
-			orgId,
-			inviteEmail.trim(),
-			inviteRole,
-			[...invitePermissions],
-			buildProjectAssignments()
-		);
-		if (res.error) {
-			inviteError = res.error.message;
-		} else {
-			inviteSuccess = `Invitation sent to ${inviteEmail.trim()}`;
-			inviteEmail = '';
-			inviteRole = 'member';
-			invitePermissions = new Set();
-			selectedProjectIds = new Set();
-			projectPermissions = {};
-			setTimeout(() => (inviteSuccess = ''), 5000);
-			await loadInvitations();
-		}
-		inviting = false;
-	}
-
 	// ── Invitation actions ────────────────────────────────────────────
 	async function copyInviteLink(inv: Invitation) {
 		const link = `${window.location.origin}/accept-invite/${inv.token}`;
@@ -273,148 +195,18 @@
 
 <div class="members-page">
 
-	<!-- ── Invite form ─────────────────────────────────────────────── -->
+	<!-- ── Invite button ───────────────────────────────────────────── -->
 	{#if canManage}
-		<section class="settings-section">
-			<div class="section-header">
-				<div class="section-icon"><UserPlus size={16} /></div>
-				<div>
-					<h2 class="section-title">Invite Member</h2>
-					<p class="section-desc">Send an invitation and optionally pre-assign org permissions and project access.</p>
-				</div>
+		<div class="invite-bar">
+			<div class="invite-bar-text">
+				<h2 class="invite-bar-title">Members</h2>
+				<p class="invite-bar-desc">Manage who has access to this organization.</p>
 			</div>
-			<div class="invite-form">
-				<!-- Email + role row -->
-				<div class="invite-fields">
-					<div class="invite-email-wrap">
-						<Mail size={13} class="invite-icon" />
-						<input
-							class="field-input invite-email"
-							type="email"
-							placeholder="colleague@example.com"
-							bind:value={inviteEmail}
-							onkeydown={(e) => e.key === 'Enter' && handleInvite()}
-						/>
-					</div>
-					<select class="field-input role-select" bind:value={inviteRole}>
-						{#each assignableRoles() as r}
-							<option value={r}>{roleLabel(r)}</option>
-						{/each}
-					</select>
-					<button
-						class="btn btn-primary invite-btn"
-						disabled={!inviteEmail.trim() || inviting}
-						onclick={handleInvite}
-					>
-						{#if inviting}
-							<Loader2 size={13} class="spin" />Sending…
-						{:else}
-							<UserPlus size={13} />Invite
-						{/if}
-					</button>
-				</div>
-
-				{#if inviteError}
-					<div class="invite-msg invite-error"><AlertCircle size={12} />{inviteError}</div>
-				{/if}
-				{#if inviteSuccess}
-					<div class="invite-msg invite-success"><Check size={12} />{inviteSuccess}</div>
-				{/if}
-
-				<!-- Org-level permission picker -->
-				<div class="perm-section">
-					<div class="perm-section-label">
-						<Lock size={12} />
-						Org permissions on accept
-						{#if invitePermissions.size > 0}
-							<span class="perm-count">{invitePermissions.size} selected</span>
-						{/if}
-					</div>
-					<div class="perm-groups">
-						{#each PERMISSION_GROUPS as group}
-							<div class="perm-group">
-								<div class="perm-group-name">{group.group}</div>
-								<div class="perm-grid">
-									{#each group.permissions as perm}
-										<label class="perm-check" class:checked={invitePermissions.has(perm.id)} title={perm.description}>
-											<input
-												type="checkbox"
-												checked={invitePermissions.has(perm.id)}
-												onchange={() => toggleInvitePermission(perm.id)}
-											/>
-											<span class="perm-check-box">
-												{#if invitePermissions.has(perm.id)}<Check size={9} />{/if}
-											</span>
-											<span class="perm-label">{perm.label}</span>
-										</label>
-									{/each}
-								</div>
-							</div>
-						{/each}
-					</div>
-				</div>
-
-				<!-- Project assignment picker -->
-				<div class="perm-section">
-					<div class="perm-section-label">
-						<Folder size={12} />
-						Assign to projects
-						{#if selectedProjectIds.size > 0}
-							<span class="perm-count">{selectedProjectIds.size} project{selectedProjectIds.size === 1 ? '' : 's'}</span>
-						{/if}
-					</div>
-
-					{#if loadingProjects}
-						<div class="projects-loading"><div class="spinner"></div><span>Loading projects…</span></div>
-					{:else if projects.length === 0}
-						<p class="no-projects-hint">No projects yet — create one first.</p>
-					{:else}
-						<div class="project-list">
-							{#each projects as project}
-								{@const isSelected = selectedProjectIds.has(project.id)}
-								<div class="project-item" class:selected={isSelected}>
-									<button
-										class="project-toggle"
-										type="button"
-										onclick={() => toggleProjectSelection(project.id)}
-									>
-										<span class="project-check-box">
-											{#if isSelected}<Check size={9} />{/if}
-										</span>
-										{#if isSelected}
-											<FolderOpen size={13} class="project-icon selected-icon" />
-										{:else}
-											<Folder size={13} class="project-icon" />
-										{/if}
-										<span class="project-name">{project.name}</span>
-										<span class="project-slug">{project.slug}</span>
-									</button>
-
-									{#if isSelected}
-										<div class="project-perms">
-											{#each PROJECT_PERM_OPTIONS as opt}
-												{@const hasPerm = projectPermissions[project.id]?.has(opt.id) ?? false}
-												<label class="perm-check perm-check-sm" class:checked={hasPerm} title={opt.desc}>
-													<input
-														type="checkbox"
-														checked={hasPerm}
-														onchange={() => toggleProjectPerm(project.id, opt.id)}
-													/>
-													<span class="perm-check-box">
-														{#if hasPerm}<Check size={9} />{/if}
-													</span>
-													<span class="perm-label">{opt.label}</span>
-												</label>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			</div>
-		</section>
+			<button class="btn-invite-open" onclick={() => (showInvitePanel = true)}>
+				<UserPlus size={14} />
+				Invite Member
+			</button>
+		</div>
 	{/if}
 
 	<!-- ── Pending Invitations ─────────────────────────────────────── -->
@@ -489,6 +281,19 @@
 		</section>
 	{/if}
 
+	<!-- ── Invite slide panel ──────────────────────────────────────── -->
+	{#if showInvitePanel}
+		<SlidePanel title="Invite Member" onClose={() => (showInvitePanel = false)} zIndex={70}>
+			<InvitePanel
+				{orgId}
+				allProjects={projects}
+				{isOwner}
+				onClose={() => (showInvitePanel = false)}
+				onInvited={() => loadInvitations()}
+			/>
+		</SlidePanel>
+	{/if}
+
 	<!-- ── Member manage slide panel ─────────────────────────────────── -->
 	{#if panelMember}
 		<SlidePanel
@@ -513,8 +318,8 @@
 		<div class="section-header">
 			<div class="section-icon"><Shield size={16} /></div>
 			<div>
-				<h2 class="section-title">Members</h2>
-				<p class="section-desc">{members.length} member{members.length === 1 ? '' : 's'} in this organization</p>
+				<h2 class="section-title">{members.length} member{members.length === 1 ? '' : 's'}</h2>
+				<p class="section-desc">Current members of this organization</p>
 			</div>
 		</div>
 
@@ -619,6 +424,33 @@
 
 	.members-page { display: flex; flex-direction: column; gap: 20px; }
 
+	/* ── Invite bar ── */
+	.invite-bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.invite-bar-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
+	.invite-bar-desc  { font-size: 13px; color: var(--text-muted); margin: 0; }
+	.btn-invite-open {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 8px 16px;
+		background: var(--accent);
+		color: #fff;
+		border: none;
+		border-radius: 7px;
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		white-space: nowrap;
+		flex-shrink: 0;
+		transition: opacity .15s;
+	}
+	.btn-invite-open:hover { opacity: .88; }
+
 	/* ── Shared section chrome ── */
 	.settings-section {
 		background: var(--bg-surface);
@@ -661,62 +493,6 @@
 	}
 	.field-input:focus { border-color: var(--accent); }
 
-	/* ── Invite form ── */
-	.invite-form { padding: 18px 20px; display: flex; flex-direction: column; gap: 16px; }
-	.invite-fields { display: flex; gap: 8px; align-items: center; }
-	.invite-email-wrap { position: relative; flex: 1; }
-	:global(.invite-icon) { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; }
-	.invite-email { width: 100%; padding-left: 30px; box-sizing: border-box; }
-
-	.role-select {
-		width: 130px; flex-shrink: 0; cursor: pointer;
-		appearance: none; -webkit-appearance: none;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-		background-repeat: no-repeat; background-position: right 8px center; padding-right: 28px;
-	}
-
-	.invite-btn { flex-shrink: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-	.invite-msg { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 10px; border-radius: var(--radius-sm); }
-	.invite-error   { background: rgba(239,68,68,0.08);  color: #EF4444; border: 1px solid rgba(239,68,68,0.2); }
-	.invite-success { background: rgba(16,185,129,0.08); color: #10B981; border: 1px solid rgba(16,185,129,0.2); }
-
-	/* ── Project picker ── */
-	.projects-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
-	.no-projects-hint { font-size: 12px; color: var(--text-dim); font-style: italic; margin: 0; }
-
-	.project-list { display: flex; flex-direction: column; gap: 4px; }
-
-	.project-item {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		overflow: hidden;
-		transition: border-color var(--transition-fast);
-	}
-	.project-item.selected { border-color: rgba(37,99,235,0.35); background: rgba(37,99,235,0.03); }
-
-	.project-toggle {
-		display: flex; align-items: center; gap: 8px; width: 100%;
-		padding: 7px 10px; background: transparent; border: none;
-		cursor: pointer; text-align: left;
-		transition: background var(--transition-fast);
-	}
-	.project-toggle:hover { background: var(--bg-elevated); }
-	.project-item.selected .project-toggle { background: transparent; }
-
-	:global(.project-icon) { color: var(--text-dim); flex-shrink: 0; }
-	:global(.selected-icon) { color: var(--accent); }
-
-	.project-name { font-size: 13px; font-weight: 500; color: var(--text-primary); flex: 1; }
-	.project-slug { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
-
-	.project-perms {
-		display: flex; flex-wrap: wrap; gap: 4px;
-		padding: 6px 10px 8px 34px;
-		border-top: 1px solid var(--border);
-		background: rgba(37,99,235,0.02);
-	}
-
-	.perm-check-sm { font-size: 11px; padding: 3px 7px; }
 
 	/* ── Pending invitations ── */
 	.invite-list { list-style: none; margin: 0; padding: 0; }
@@ -825,88 +601,17 @@
 	.action-btn.danger:hover { color: #EF4444; background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
 	.action-btn:disabled { opacity: 0.4; cursor: default; }
 
-	/* ── Permission editor ── */
-	.perm-editor {
-		border-top: 1px solid var(--border);
-		background: var(--bg-base);
-		padding: 16px 20px;
-		display: flex; flex-direction: column; gap: 14px;
-	}
-
-	.perm-editor-header {
-		display: flex; align-items: center; justify-content: space-between; gap: 12px;
-		flex-wrap: wrap;
-	}
-	.perm-editor-title {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 13px; color: var(--text-muted);
-	}
-	.perm-editor-title strong { color: var(--text-primary); font-weight: 600; }
-	.perm-editor-actions { display: flex; align-items: center; gap: 6px; }
-	.perm-selected-count { font-size: 11px; color: var(--text-dim); }
-
-	/* ── Permission groups & checkboxes ── */
-	.perm-section {
-		display: flex; flex-direction: column; gap: 10px;
-		padding-top: 4px; border-top: 1px solid var(--border);
-	}
-	.perm-section-label {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-	.perm-count {
-		margin-left: 4px; font-size: 10px; font-weight: 700;
-		padding: 1px 6px; border-radius: 999px;
-		background: rgba(37,99,235,0.1); color: var(--accent);
-		border: 1px solid rgba(37,99,235,0.2);
-	}
-
-	.perm-groups { display: flex; flex-direction: column; gap: 10px; }
+	/* ── Permission groups (used by MemberManagePanel via shared classes) ── */
 	.perm-editor-groups { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; }
-	.perm-group { display: flex; flex-direction: column; gap: 6px; }
-	.perm-group-name { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
-	.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
-
-	.perm-check {
-		display: flex; align-items: center; gap: 7px;
-		padding: 5px 8px; border-radius: var(--radius-sm);
-		cursor: pointer; user-select: none;
-		font-size: 12px; color: var(--text-muted);
-		border: 1px solid transparent;
-		transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-	}
-	.perm-check:hover { background: var(--bg-elevated); color: var(--text-primary); }
-	.perm-check.checked { background: rgba(37,99,235,0.06); border-color: rgba(37,99,235,0.2); color: var(--text-primary); }
-	.perm-check input { display: none; }
-
-	.perm-check-box {
-		width: 14px; height: 14px; flex-shrink: 0;
-		border: 1.5px solid var(--border);
-		border-radius: 3px;
-		display: flex; align-items: center; justify-content: center;
-		background: var(--bg-base);
-		transition: background var(--transition-fast), border-color var(--transition-fast);
-		color: white;
-	}
-	.perm-check.checked .perm-check-box { background: var(--accent); border-color: var(--accent); }
-	.perm-label { line-height: 1; }
 
 	@media (max-width: 639px) {
 		.members-page { gap: 16px; }
 		.section-header { padding: 14px 16px; }
-		.invite-form { padding: 14px 16px; }
-		.invite-fields { flex-wrap: wrap; }
-		.invite-email-wrap { width: 100%; }
-		.invite-email { width: 100%; }
-		.role-select { width: 100%; }
-		.invite-btn { width: 100%; justify-content: center; }
+		.invite-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
+		.btn-invite-open { align-self: flex-start; }
 		.member-row { padding: 10px 16px; gap: 10px; }
 		.member-email { font-size: 12px; }
 		.member-role-wrap { display: none; }
 		.invite-item { padding: 10px 16px; }
-		.perm-editor { padding: 14px 16px; }
-		.perm-editor-header { flex-direction: column; align-items: flex-start; }
-		.perm-grid { grid-template-columns: 1fr 1fr; }
 	}
 </style>

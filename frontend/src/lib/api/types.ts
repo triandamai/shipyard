@@ -144,26 +144,6 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 			{ id: 'app:project:delete', label: 'Delete projects',        description: 'Permanently delete projects and all their resources' },
 		],
 	},
-	{
-		group: 'Services',
-		permissions: [
-			{ id: 'app:project:service:read',   label: 'View services',          description: 'View service configuration, logs, and deployment history' },
-			{ id: 'app:project:service:write',  label: 'Create & edit services', description: 'Create services and edit their configuration' },
-			{ id: 'app:project:service:deploy', label: 'Deploy services',         description: 'Trigger deployments, rollbacks, and restarts' },
-			{ id: 'app:project:service:delete', label: 'Delete services',         description: 'Remove services and their associated resources' },
-		],
-	},
-	{
-		group: 'Infrastructure',
-		permissions: [
-			{ id: 'app:project:volume:read',   label: 'View volumes',    description: 'See volumes attached to services' },
-			{ id: 'app:project:volume:write',  label: 'Manage volumes',  description: 'Create, attach, and delete volumes' },
-			{ id: 'app:project:network:read',  label: 'View networks',   description: 'See project networks and their topology' },
-			{ id: 'app:project:network:write', label: 'Manage networks', description: 'Create networks and attach services' },
-			{ id: 'app:project:domain:read',   label: 'View domains',    description: 'See domain mappings and TLS status' },
-			{ id: 'app:project:domain:write',  label: 'Manage domains',  description: 'Add, configure, and remove domain mappings' },
-		],
-	},
 ];
 
 export interface Project {
