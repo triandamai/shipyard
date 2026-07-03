@@ -291,6 +291,10 @@ class ApiClient {
 		return this.get(`/projects/${projectId}/services/${serviceId}/connection`);
 	}
 
+	async revealEnv(projectId: string, serviceId: string, envId: string): Promise<ApiResponse<{ value: string }>> {
+		return this.get(`/projects/${projectId}/services/${serviceId}/env/${envId}/reveal`);
+	}
+
 	async deployService(serviceId: string): Promise<ApiResponse<Deployment>> {
 		return this.post(`/services/${serviceId}/deploy`);
 	}

@@ -8,10 +8,11 @@
 
 	interface Props {
 		serviceId: string;
+		projectId: string;
 		serviceName?: string;
 	}
 
-	let { serviceId, serviceName = 'Service' }: Props = $props();
+	let { serviceId, projectId, serviceName = 'Service' }: Props = $props();
 
 	let canEnvWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], 'env:write'));
 
@@ -29,6 +30,7 @@
 		value: string;
 		is_secret: boolean;
 		revealed: boolean;
+		revealing: boolean;
 		dirty: boolean;
 	}
 	let edits = $state<Record<string, EditState>>({});
@@ -52,6 +54,7 @@
 				value: e.is_secret ? '***' : e.value_encrypted,
 				is_secret: e.is_secret,
 				revealed: false,
+				revealing: false,
 				dirty: false
 			};
 		}
@@ -99,9 +102,27 @@
 		edits[id].dirty = true;
 	}
 
-	function toggleReveal(id: string) {
+	async function toggleReveal(id: string) {
 		if (!edits[id]) return;
-		edits[id].revealed = !edits[id].revealed;
+		if (edits[id].revealed) {
+			// hide: mask again
+			edits[id].revealed = false;
+			edits[id].value = '***';
+			edits[id].dirty = false;
+			return;
+		}
+		// reveal: fetch real value if still masked
+		if (edits[id].value === '***') {
+			edits[id].revealing = true;
+			const res = await api.revealEnv(projectId, serviceId, id);
+			edits[id].revealing = false;
+			if (res.error || !res.data) {
+				error = res.error?.message ?? 'Failed to reveal secret';
+				return;
+			}
+			edits[id].value = res.data.value;
+		}
+		edits[id].revealed = true;
 	}
 
 	async function saveRow(id: string) {
@@ -316,9 +337,12 @@
 									<button
 										class="reveal-btn"
 										onclick={() => toggleReveal(env.id)}
+										disabled={edit.revealing}
 										title={edit.revealed ? 'Hide' : 'Reveal'}
 									>
-										{#if edit.revealed}
+										{#if edit.revealing}
+											<span class="reveal-spinner"></span>
+										{:else if edit.revealed}
 											<EyeOff size={13} />
 										{:else}
 											<Eye size={13} />
@@ -520,6 +544,17 @@
 	}
 
 	.reveal-btn:hover { color: var(--text-primary); }
+	.reveal-btn:disabled { opacity: 0.5; cursor: default; }
+	.reveal-spinner {
+		width: 12px;
+		height: 12px;
+		border: 2px solid var(--border);
+		border-top-color: var(--text-muted);
+		border-radius: 50%;
+		animation: spin 0.6s linear infinite;
+		display: inline-block;
+	}
+	@keyframes spin { to { transform: rotate(360deg); } }
 
 	.secret-toggle {
 		display: flex;

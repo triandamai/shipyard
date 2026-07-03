@@ -147,6 +147,10 @@ pub fn routes() -> Router<AppState> {
             delete(delete_env),
         )
         .route(
+            "/projects/:project_id/services/:service_id/env/:env_id/reveal",
+            get(reveal_env),
+        )
+        .route(
             "/projects/:project_id/services/:service_id/webhook",
             get(get_webhook),
         )
@@ -748,6 +752,32 @@ async fn delete_env(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Env var deleted successfully"
     }))))
+}
+
+/// GET /projects/:project_id/services/:service_id/env/:env_id/reveal
+/// Returns the decrypted value for a single secret env var.
+async fn reveal_env(
+    auth_user: AuthUser,
+    Path((project_id, service_id, env_id)): Path<(Uuid, Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    verify_service_project(&state.db, service_id, project_id).await?;
+
+    let row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
+        "SELECT value_encrypted, is_secret FROM service_envs WHERE id = $1 AND service_id = $2",
+    )
+    .bind(env_id)
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (encrypted, is_secret) = row.ok_or_else(|| ApiAppError(AppError::NotFound(format!("Env var {env_id} not found"))))?;
+    let value = shipyard_common::crypto::decrypt_or_passthrough(&state.config.auth.secret_key, &encrypted);
+    let _ = is_secret; // always decrypt regardless
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "value": value }))))
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

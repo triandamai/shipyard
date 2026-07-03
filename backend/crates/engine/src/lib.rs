@@ -1599,6 +1599,32 @@ impl DeploymentEngine {
     /// For `Registry` sources: pulls from Docker Hub / registry, returns `"image:tag"`.
     /// For `Git` sources: clones/pulls the repo, builds with `docker build`, returns
     ///   `"shipyard/{slug}:{short_sha}"`.
+    /// Load DOCKER_REGISTRY / DOCKER_USERNAME / DOCKER_PASSWORD for a service.
+    async fn load_registry_credentials(&self, service_id: Uuid) -> (String, String, String) {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value_encrypted FROM service_envs
+             WHERE service_id = $1 AND key IN ('DOCKER_REGISTRY','DOCKER_USERNAME','DOCKER_PASSWORD')",
+        )
+        .bind(service_id)
+        .fetch_all(&self.db)
+        .await
+        .unwrap_or_default();
+
+        let mut registry = String::new();
+        let mut username = String::new();
+        let mut password = String::new();
+        for (k, v) in rows {
+            let plain = shipyard_common::crypto::decrypt_or_passthrough(&self.secret_key, &v);
+            match k.as_str() {
+                "DOCKER_REGISTRY" => registry = plain,
+                "DOCKER_USERNAME" => username = plain,
+                "DOCKER_PASSWORD" => password = plain,
+                _ => {}
+            }
+        }
+        (registry, username, password)
+    }
+
     async fn step_acquire_image(
         &self,
         org_id: Uuid,
@@ -1611,7 +1637,15 @@ impl DeploymentEngine {
         match source {
             ImageSource::Registry { image, tag } => {
                 tracing::info!("Pulling image: {image}:{tag}");
-                let lines = self.docker.pull_image(image, tag).await?;
+                let (registry, username, password) = self.load_registry_credentials(service_id).await;
+                let auth = if !username.is_empty() && !password.is_empty() {
+                    let server = if registry.is_empty() { "https://index.docker.io/v1/".to_string() } else { registry.clone() };
+                    tracing::info!("Using registry credentials for user '{username}' at '{server}'");
+                    Some((username, password, server))
+                } else {
+                    None
+                };
+                let lines = self.docker.pull_image(image, tag, auth.as_ref().map(|(u, p, s)| (u.as_str(), p.as_str(), s.as_str()))).await?;
                 for line in &lines {
                     self.insert_log(deployment_id, Some(step_id), "info", line).await;
                 }
@@ -2107,7 +2141,7 @@ impl DeploymentEngine {
         }
 
         // Pull socat image; ignore error if already present or if offline
-        let _ = self.docker.pull_image("alpine/socat", "latest").await;
+        let _ = self.docker.pull_image("alpine/socat", "latest", None).await;
 
         for p in published_ports {
             let host_port = p.published.unwrap();

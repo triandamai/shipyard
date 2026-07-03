@@ -62,7 +62,8 @@ pub trait DockerEngine: Send + Sync {
     async fn remove_volume(&self, name: &str) -> AppResult<()>;
 
     /// Pull an image; returns the status lines emitted by the daemon.
-    async fn pull_image(&self, image: &str, tag: &str) -> AppResult<Vec<String>>;
+    /// Pass `auth` as `Some((username, password, server_address))` for private registries.
+    async fn pull_image(&self, image: &str, tag: &str, auth: Option<(&str, &str, &str)>) -> AppResult<Vec<String>>;
 
     /// After pulling, return the canonical digest reference
     /// (e.g. `docker.io/library/nginx@sha256:abc...`) so that Docker Swarm
@@ -662,7 +663,15 @@ impl DockerEngine for BollardDockerEngine {
 
     // ── Image management ──────────────────────────────────────────────────────
 
-    async fn pull_image(&self, image: &str, tag: &str) -> AppResult<Vec<String>> {
+    async fn pull_image(&self, image: &str, tag: &str, auth: Option<(&str, &str, &str)>) -> AppResult<Vec<String>> {
+        let docker_auth = auth.map(|(username, password, server_address)| {
+            bollard::auth::DockerCredentials {
+                username: Some(username.to_string()),
+                password: Some(password.to_string()),
+                serveraddress: Some(server_address.to_string()),
+                ..Default::default()
+            }
+        });
         let mut stream = self.client.create_image(
             Some(CreateImageOptions {
                 from_image: image,
@@ -670,7 +679,7 @@ impl DockerEngine for BollardDockerEngine {
                 ..Default::default()
             }),
             None,
-            None,
+            docker_auth,
         );
 
         let mut lines = Vec::new();

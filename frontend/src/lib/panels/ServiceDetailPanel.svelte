@@ -745,14 +745,14 @@
 		const res = await api.getServiceEnvs(serviceId);
 		if (res.data) {
 			for (const env of res.data) {
-				if (env.key === 'DOCKER_REGISTRY')  editRegistryUrl  = (env as any).value ?? '';
-				if (env.key === 'DOCKER_USERNAME')  editRegistryUser = (env as any).value ?? '';
+				if (env.key === 'DOCKER_REGISTRY')  editRegistryUrl  = env.value_encrypted ?? '';
+				if (env.key === 'DOCKER_USERNAME')  editRegistryUser = env.value_encrypted ?? '';
 				if (env.key === 'DOCKER_PASSWORD') {
 					editRegistryPass = '';
 					registryPassIsSet = true;
 				}
 				if (env.key === '__VOLUME_MOUNTS__') {
-					try { editVolumeMounts = JSON.parse((env as any).value ?? '[]'); } catch { editVolumeMounts = []; }
+					try { editVolumeMounts = JSON.parse(env.value_encrypted ?? '[]'); } catch { editVolumeMounts = []; }
 				}
 			}
 		}
@@ -1061,7 +1061,7 @@
 			<button class="icon-btn" onclick={() => showEnvPanel = false}><X size={16} /></button>
 		</div>
 		<div class="env-overlay-body">
-			<EnvManagerPanel serviceId={serviceId} serviceName={service.name} />
+			<EnvManagerPanel serviceId={serviceId} projectId={projectId} serviceName={service.name} />
 		</div>
 	</div>
 {/if}
