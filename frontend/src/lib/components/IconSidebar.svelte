@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun } from '@lucide/svelte';
+	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -132,6 +132,16 @@
 
 	<!-- Bottom: toggle + avatar -->
 	<div class="bottom-slot">
+		<button
+			class="nav-icon-btn toggle-btn palette-btn"
+			onclick={() => uiStore.openCommandPalette()}
+			title="Command palette"
+			aria-label="Open command palette"
+		>
+			<Command size={16} />
+			<span class="tooltip">Command palette <span class="tooltip-kbd">⌘K</span></span>
+		</button>
+
 		<button
 			class="nav-icon-btn toggle-btn"
 			onclick={toggleTheme}
@@ -347,6 +357,28 @@
 
 	.toggle-btn { opacity: 0.6; }
 	.toggle-btn:hover { opacity: 1; }
+
+	.palette-btn {
+		opacity: 0.75;
+	}
+	.palette-btn:hover {
+		opacity: 1;
+		background: var(--sidebar-active-bg);
+		color: #60A5FA;
+	}
+
+	.tooltip-kbd {
+		display: inline-block;
+		font-size: 9px;
+		background: rgba(255,255,255,0.12);
+		border: 1px solid rgba(255,255,255,0.18);
+		border-radius: 3px;
+		padding: 0 4px;
+		margin-left: 4px;
+		font-family: var(--font-mono);
+		color: rgba(255,255,255,0.6);
+		vertical-align: middle;
+	}
 
 	/* ── Avatar ── */
 	.avatar-slot {
@@ -579,6 +611,7 @@
 		}
 
 		.toggle-btn { display: none; }
+		.palette-btn { display: none; }
 
 		.avatar-slot {
 			width: 60px;

@@ -12,11 +12,13 @@ interface PanelEntry {
 interface UIState {
 	sidebarCollapsed: boolean;
 	panelStack: PanelEntry[];
+	commandPaletteOpen: boolean;
 }
 
 const initialState: UIState = {
 	sidebarCollapsed: true,
-	panelStack: []
+	panelStack: [],
+	commandPaletteOpen: false
 };
 
 let panelIdCounter = 0;
@@ -29,6 +31,18 @@ function createUIStore() {
 
 		toggleSidebar() {
 			update((state) => ({ ...state, sidebarCollapsed: !state.sidebarCollapsed }));
+		},
+
+		openCommandPalette() {
+			update((state) => ({ ...state, commandPaletteOpen: true }));
+		},
+
+		closeCommandPalette() {
+			update((state) => ({ ...state, commandPaletteOpen: false }));
+		},
+
+		toggleCommandPalette() {
+			update((state) => ({ ...state, commandPaletteOpen: !state.commandPaletteOpen }));
 		},
 
 		/** Push a new slide panel onto the stack.

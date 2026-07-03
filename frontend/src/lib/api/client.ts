@@ -119,16 +119,15 @@ class ApiClient {
 				};
 			}
 
-			if (response.status === 401 && !_retry) {
-				const errorMsg = (data as ApiResponse<unknown>)?.error?.message ?? '';
-				if (errorMsg.includes('ExpiredSignature')) {
+			if (response.status === 401) {
+				if (!_retry) {
 					const refreshed = await this._tryRefresh();
 					if (refreshed) {
 						return this.request<T>(method, path, body, options, true);
-					} else {
-						authStore.markSessionExpired();
 					}
 				}
+				// Refresh failed or already retried — session is dead.
+				authStore.markSessionExpired();
 			}
 
 			if (response.status === 403) {
