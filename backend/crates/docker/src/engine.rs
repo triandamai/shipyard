@@ -64,6 +64,12 @@ pub trait DockerEngine: Send + Sync {
     /// Pull an image; returns the status lines emitted by the daemon.
     async fn pull_image(&self, image: &str, tag: &str) -> AppResult<Vec<String>>;
 
+    /// After pulling, return the canonical digest reference
+    /// (e.g. `docker.io/library/nginx@sha256:abc...`) so that Docker Swarm
+    /// detects an image change even when the tag name hasn't changed.
+    /// Falls back to `image:tag` if the digest cannot be resolved.
+    async fn resolve_image_digest(&self, image: &str, tag: &str) -> AppResult<String>;
+
     /// Build an image from a local directory context.
     /// `tag` is the full image reference (e.g. `shipyard/my-svc:abc1234`).
     /// `context_path` is the absolute path to the build context directory.
@@ -681,6 +687,29 @@ impl DockerEngine for BollardDockerEngine {
         }
 
         Ok(lines)
+    }
+
+    async fn resolve_image_digest(&self, image: &str, tag: &str) -> AppResult<String> {
+        let image_ref = format!("{image}:{tag}");
+        match self.client.inspect_image(&image_ref).await {
+            Ok(info) => {
+                // repo_digests entries look like "repo/name@sha256:..."
+                if let Some(digests) = info.repo_digests {
+                    if let Some(d) = digests.into_iter().find(|d| d.contains('@')) {
+                        return Ok(d);
+                    }
+                }
+                // Fall back to bare image ID as "@sha256:..."
+                if let Some(id) = info.id {
+                    return Ok(format!("{image}@{id}"));
+                }
+                Ok(image_ref)
+            }
+            Err(e) => {
+                tracing::warn!("resolve_image_digest failed for {image_ref}: {e}; using tag ref");
+                Ok(image_ref)
+            }
+        }
     }
 
     // ── Image build ───────────────────────────────────────────────────────────

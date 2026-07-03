@@ -1426,7 +1426,13 @@ impl DeploymentEngine {
                 for line in &lines {
                     self.insert_log(deployment_id, Some(step_id), "info", line).await;
                 }
-                Ok(format!("{image}:{tag}"))
+                // Resolve the pulled image to its digest so Docker Swarm sees
+                // a real change on each redeploy (tag strings like `:latest` are
+                // static and Swarm won't restart containers if the ref is unchanged).
+                let resolved = self.docker.resolve_image_digest(image, tag).await?;
+                tracing::info!("Resolved image digest: {resolved}");
+                self.insert_log(deployment_id, Some(step_id), "info", &format!("Resolved: {resolved}")).await;
+                Ok(resolved)
             }
 
             ImageSource::Git { repo_url, branch, repo_path, .. } => {
