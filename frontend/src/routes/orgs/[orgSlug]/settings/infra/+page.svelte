@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { api } from '$lib/api/client';
-	import { Cpu, MemoryStick, HardDrive, Network, RefreshCw, Activity } from '@lucide/svelte';
+	import { Cpu, MemoryStick, HardDrive, Network, RefreshCw, Activity, Radio } from '@lucide/svelte';
 
 	interface DiskInfo {
 		mount: string;
@@ -28,25 +27,53 @@
 		networks: NetInfo[];
 	}
 
-	let info    = $state<SystemInfo | null>(null);
-	let loading = $state(false);
-	let error   = $state('');
-	let intervalId: ReturnType<typeof setInterval>;
+	let info      = $state<SystemInfo | null>(null);
+	let error     = $state('');
+	let connected = $state(false);
 
-	async function load() {
-		loading = true;
+	let es: EventSource | null = null;
+
+	function openStream() {
+		if (es) {
+			es.close();
+			es = null;
+		}
+
 		error = '';
-		const res = await api.get<SystemInfo>('/admin/system');
-		if (res.data) info = res.data;
-		else error = res.error?.message ?? 'Failed to load system info';
-		loading = false;
+		connected = false;
+
+		const source = new EventSource('/api/admin/system/stream');
+
+		source.onopen = () => {
+			connected = true;
+			error = '';
+		};
+
+		source.onmessage = (ev) => {
+			try {
+				info = JSON.parse(ev.data) as SystemInfo;
+				connected = true;
+				error = '';
+			} catch {
+				// ignore malformed frame
+			}
+		};
+
+		source.onerror = () => {
+			connected = false;
+			// EventSource retries automatically; surface a warning only after
+			// the first frame has never arrived.
+			if (!info) error = 'Unable to connect to metrics stream — retrying…';
+		};
+
+		es = source;
 	}
 
 	function formatUptime(secs: number): string {
 		const d = Math.floor(secs / 86400);
 		const h = Math.floor((secs % 86400) / 3600);
 		const m = Math.floor((secs % 3600) / 60);
-		const parts = [];
+		const parts: string[] = [];
 		if (d) parts.push(`${d}d`);
 		if (h) parts.push(`${h}h`);
 		parts.push(`${m}m`);
@@ -67,17 +94,17 @@
 		return 'var(--accent)';
 	}
 
-	// System-level network interfaces to hide (not user services)
 	const HIDE_IFACES = new Set(['lo', 'docker0', 'docker_gwbridge']);
 	function visibleNets(nets: NetInfo[]): NetInfo[] {
 		return nets.filter(n => !HIDE_IFACES.has(n.iface) && !n.iface.startsWith('br-') && !n.iface.startsWith('veth'));
 	}
 
-	onMount(() => {
-		load();
-		intervalId = setInterval(load, 10_000);
+	onMount(openStream);
+
+	onDestroy(() => {
+		es?.close();
+		es = null;
 	});
-	onDestroy(() => clearInterval(intervalId));
 </script>
 
 <div class="infra-page">
@@ -89,10 +116,14 @@
 			{#if info}
 				<span class="uptime-chip">Up {formatUptime(info.uptime_secs)}</span>
 			{/if}
+			<span class="live-badge" class:live={connected}>
+				<Radio size={11} />
+				{connected ? 'Live' : 'Reconnecting…'}
+			</span>
 		</div>
-		<button class="refresh-btn" onclick={load} disabled={loading}>
-			<RefreshCw size={14} class={loading ? 'spin' : ''} />
-			Refresh
+		<button class="refresh-btn" onclick={openStream}>
+			<RefreshCw size={14} />
+			Reconnect
 		</button>
 	</div>
 
@@ -100,9 +131,9 @@
 		<div class="error-banner">{error}</div>
 	{/if}
 
-	{#if !info && loading}
-		<div class="empty-state"><div class="spinner"></div> Loading system info…</div>
-	{:else if info}
+	{#if !info}
+		<div class="empty-state"><div class="spinner"></div> Waiting for first metrics frame…</div>
+	{:else}
 
 		<!-- Top stat cards -->
 		<div class="stat-grid">
@@ -230,6 +261,29 @@
 		border-radius: 10px; font-size: 11px; color: var(--text-muted);
 	}
 
+	.live-badge {
+		display: flex; align-items: center; gap: 4px;
+		padding: 2px 8px;
+		border-radius: 10px; font-size: 11px; font-weight: 500;
+		border: 1px solid var(--border);
+		color: var(--text-muted);
+		background: var(--bg-muted);
+		transition: all 0.3s ease;
+	}
+	.live-badge.live {
+		color: #16a34a;
+		background: rgba(22, 163, 74, 0.08);
+		border-color: rgba(22, 163, 74, 0.3);
+	}
+	.live-badge.live :global(svg) {
+		animation: pulse 2s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50%       { opacity: 0.4; }
+	}
+
 	.refresh-btn {
 		display: flex; align-items: center; gap: 6px;
 		padding: 6px 12px; font-size: 12px; font-weight: 500;
@@ -237,10 +291,8 @@
 		border-radius: var(--radius); color: var(--text-secondary);
 		cursor: pointer; transition: all var(--transition-fast);
 	}
-	.refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.refresh-btn:disabled { opacity: 0.5; cursor: default; }
+	.refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-	:global(.spin) { animation: spin 0.8s linear infinite; }
 	@keyframes spin { to { transform: rotate(360deg); } }
 
 	.error-banner {

@@ -114,6 +114,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/mqtt/subscriptions", get(mqtt_subscriptions))
         .route("/admin/mqtt/topics", get(mqtt_topics))
         .route("/admin/system", get(system_info))
+        .route("/admin/system/stream", get(system_info_stream))
         .route("/admin/docker/containers", get(docker_containers))
         .route("/admin/docker/containers/prune", post(docker_prune_containers))
         .route("/admin/docker/services", get(docker_services))
@@ -773,6 +774,101 @@ async fn system_info(
     .map_err(|e| ApiAppError(AppError::Internal(format!("system info error: {e}"))))?;
 
     Ok(Json(ApiResponse::ok(info)))
+}
+
+/// GET /admin/system/stream — SSE stream of system metrics, emitted every 5 s.
+///
+/// The background task exits as soon as the client disconnects: `tx.send()` returns
+/// `Err` when the `ReceiverStream` (held by the Axum response body) is dropped,
+/// which Axum does when the TCP connection closes.
+async fn system_info_stream(
+    _auth: AuthUser,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(2);
+
+    tokio::spawn(async move {
+        loop {
+            let snapshot = tokio::task::spawn_blocking(|| {
+                use sysinfo::{Disks, Networks, System};
+
+                let mut sys = System::new_all();
+                sys.refresh_all();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                sys.refresh_cpu_all();
+                sys.refresh_memory();
+
+                let cpu_usage_pct = {
+                    let cpus = sys.cpus();
+                    if cpus.is_empty() { 0.0 }
+                    else { cpus.iter().map(|c| c.cpu_usage() as f64).sum::<f64>() / cpus.len() as f64 }
+                };
+                let mem_total = sys.total_memory();
+                let mem_used  = sys.used_memory();
+                let mem_pct   = if mem_total > 0 { mem_used as f64 / mem_total as f64 * 100.0 } else { 0.0 };
+                let swap_total = sys.total_swap();
+                let swap_used  = sys.used_swap();
+
+                let disks: Vec<DiskInfo> = Disks::new_with_refreshed_list()
+                    .iter()
+                    .map(|d| {
+                        let total = d.total_space();
+                        let avail = d.available_space();
+                        let used  = total.saturating_sub(avail);
+                        DiskInfo {
+                            mount:    d.mount_point().to_string_lossy().into_owned(),
+                            total_gb: total as f64 / 1_073_741_824.0,
+                            used_gb:  used  as f64 / 1_073_741_824.0,
+                            used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
+                        }
+                    })
+                    .collect();
+
+                let networks: Vec<NetInfo> = Networks::new_with_refreshed_list()
+                    .iter()
+                    .map(|(name, data)| NetInfo {
+                        iface:    name.clone(),
+                        rx_bytes: data.total_received(),
+                        tx_bytes: data.total_transmitted(),
+                    })
+                    .collect();
+
+                SystemInfo {
+                    cpu_usage_pct,
+                    memory_total_mb: mem_total / 1_048_576,
+                    memory_used_mb:  mem_used  / 1_048_576,
+                    memory_used_pct: mem_pct,
+                    swap_total_mb:   swap_total / 1_048_576,
+                    swap_used_mb:    swap_used  / 1_048_576,
+                    uptime_secs:     System::uptime(),
+                    disks,
+                    networks,
+                }
+            })
+            .await;
+
+            match snapshot {
+                Ok(info) => {
+                    let data = serde_json::to_string(&info).unwrap_or_default();
+                    if tx.send(Ok(Event::default().data(data))).await.is_err() {
+                        // Receiver dropped — client disconnected, stop the loop.
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("system_info_stream: spawn_blocking panicked: {e}");
+                }
+            }
+
+            // Wait before the next sample. If the channel closes during the
+            // sleep the next send will detect it and break.
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+
+        tracing::debug!("system_info_stream: client disconnected, task exiting");
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::new().interval(tokio::time::Duration::from_secs(15)))
 }
 
 // ── Docker engine routes ──────────────────────────────────────────────────────
