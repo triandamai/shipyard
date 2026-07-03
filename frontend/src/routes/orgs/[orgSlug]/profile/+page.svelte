@@ -209,6 +209,10 @@
 		overflow-y: auto;
 		box-sizing: border-box;
 	}
+
+	@media (max-width: 639px) {
+		.profile-root { padding: 16px 16px 72px; }
+	}
 	.profile-header { display: flex; flex-direction: column; gap: 3px; }
 	.profile-title { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin: 0; }
 	.profile-subtitle { font-size: 13px; color: var(--text-muted); margin: 0; }

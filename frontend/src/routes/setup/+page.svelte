@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import type { PageData } from './$types';
+
+	let { data }: { data: PageData } = $props();
 
 	type Step = 'welcome' | 'account' | 'done';
 
@@ -68,6 +71,29 @@
 	const steps = ['Welcome', 'Create Admin', 'Done'];
 </script>
 
+{#if data.alreadySetup}
+<div style="min-height: 100vh; background: var(--bg-base); display: flex; align-items: center; justify-content: center; padding: 24px;">
+	<div style="width: 100%; max-width: 480px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 24px;">
+		<div style="
+			width: 72px; height: 72px; border-radius: 50%;
+			background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25);
+			display: flex; align-items: center; justify-content: center; font-size: 32px;
+		">⚓</div>
+		<div>
+			<h1 style="font-size: 24px; font-weight: 700; margin: 0 0 10px; color: var(--text-primary);">
+				Shipyard is already set up
+			</h1>
+			<p style="font-size: 14px; line-height: 1.7; color: var(--text-muted); margin: 0;">
+				This instance has already been initialized. Setup can only be performed once.<br />
+				If you need to make changes, sign in as an owner and use the Settings page.
+			</p>
+		</div>
+		<button class="btn btn-primary" onclick={() => goto('/login')}>
+			Go to Login
+		</button>
+	</div>
+</div>
+{:else}
 <div
 	style="
 		min-height: 100vh;
@@ -440,6 +466,7 @@
 		</div>
 	</div>
 </div>
+{/if}
 
 <style>
 	@keyframes spin {

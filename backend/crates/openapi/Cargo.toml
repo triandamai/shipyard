@@ -1,0 +1,23 @@
+[package]
+name = "shipyard-openapi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+shipyard-docker  = { path = "../docker" }
+shipyard-engine  = { path = "../engine" }
+shipyard-mqtt    = { path = "../mqtt_broker" }
+
+axum      = { workspace = true }
+tokio     = { workspace = true }
+sqlx      = { workspace = true }
+serde     = { workspace = true }
+serde_json = { workspace = true }
+uuid      = { workspace = true }
+chrono    = { workspace = true }
+tracing   = { workspace = true }
+thiserror = { workspace = true }
+sha2      = { workspace = true }
+hex       = { workspace = true }
+async-trait = { workspace = true }

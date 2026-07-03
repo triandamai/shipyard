@@ -2861,6 +2861,7 @@ dependencies = [
  "shipyard-engine",
  "shipyard-git",
  "shipyard-mqtt",
+ "shipyard-openapi",
  "shipyard-traefik",
  "sqlx",
  "sysinfo",
@@ -3004,6 +3005,28 @@ dependencies = [
  "serde",
  "serde_json",
  "shipyard-common",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "shipyard-openapi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shipyard-common",
+ "shipyard-docker",
+ "shipyard-engine",
+ "shipyard-mqtt",
+ "sqlx",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

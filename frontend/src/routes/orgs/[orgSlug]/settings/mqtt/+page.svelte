@@ -176,6 +176,36 @@
 					</tbody>
 				</table>
 			</div>
+
+			<div class="mobile-cards">
+				{#each filteredClients as c (c.client_id ?? c.clientid)}
+					{@const id = c.client_id ?? c.clientid ?? '—'}
+					{@const isExp = expandedClient === id}
+					<div class="m-card">
+						<button class="m-card-header" onclick={() => expandedClient = isExp ? null : id}>
+							<span class="m-card-title mono">{id}</span>
+							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
+						</button>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Username</span><span>{c.username ?? '—'}</span></div>
+							<div class="m-row"><span class="m-label">Address</span><span class="mono">{c.remote_addr ?? c.ipaddress ?? '—'}</span></div>
+							<div class="m-row"><span class="m-label">Protocol</span><span class="proto-chip">MQTT {c.protocol ?? c.mqtt_ver ?? ''}</span></div>
+							<div class="m-row"><span class="m-label">Connected</span><span class="ts">{connectedAt(c.connected_at ?? c.created_at)}</span></div>
+							<div class="m-row"><span class="m-label">Keep-alive</span><span>{c.keepalive ?? c.keep_alive ?? '—'}s</span></div>
+						</div>
+						{#if isExp}
+							<div class="m-detail">
+								{#each Object.entries(c) as [k, v]}
+									<div class="detail-kv">
+										<span class="detail-k">{k}</span>
+										<span class="detail-v mono">{JSON.stringify(v)}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
 		{/if}
 	{/if}
 
@@ -215,6 +245,22 @@
 					</tbody>
 				</table>
 			</div>
+
+			<div class="mobile-cards">
+				{#each filteredSubs as s}
+					<div class="m-card">
+						<div class="m-card-header m-card-header--static">
+							<span class="m-card-title mono">{s.topic ?? '—'}</span>
+							<span class="qos-chip qos-{s.qos ?? 0}">QoS {s.qos ?? 0}</span>
+						</div>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Client ID</span><span class="mono">{s.client_id ?? s.clientid ?? '—'}</span></div>
+							<div class="m-row"><span class="m-label">No-local</span><span>{s.no_local ? 'yes' : 'no'}</span></div>
+							<div class="m-row"><span class="m-label">Retain-as-published</span><span>{s.retain_as_published ? 'yes' : 'no'}</span></div>
+						</div>
+					</div>
+				{/each}
+			</div>
 		{/if}
 	{/if}
 
@@ -247,6 +293,17 @@
 						{/each}
 					</tbody>
 				</table>
+			</div>
+
+			<div class="mobile-cards">
+				{#each filteredTopics as t}
+					<div class="m-card">
+						<div class="m-card-header m-card-header--static">
+							<span class="m-card-title mono">{t.topic ?? t.name ?? '—'}</span>
+							<span class="m-badge">{t.subscribers_count ?? t.subs_count ?? '—'} sub{(t.subscribers_count ?? t.subs_count ?? 0) === 1 ? '' : 's'}</span>
+						</div>
+					</div>
+				{/each}
 			</div>
 		{/if}
 	{/if}
@@ -382,4 +439,52 @@
 	.qos-0 { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
 	.qos-1 { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
 	.qos-2 { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+
+	/* ── Mobile cards ── */
+	.mobile-cards { display: none; flex-direction: column; gap: 8px; }
+
+	.m-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		overflow: hidden;
+	}
+	.m-card-header {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 12px 14px; gap: 10px;
+		width: 100%; background: none; border: none; cursor: pointer; text-align: left;
+	}
+	.m-card-header--static { cursor: default; }
+	.m-card-title {
+		font-size: 13px; font-weight: 600; color: var(--text-primary);
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+	}
+	.m-chevron { flex-shrink: 0; color: var(--text-muted); }
+	.m-badge {
+		flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--text-muted);
+		background: var(--bg-muted); border: 1px solid var(--border);
+		border-radius: 10px; padding: 1px 8px;
+	}
+	.m-rows { border-top: 1px solid var(--border); }
+	.m-row {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 8px 14px; font-size: 12px; color: var(--text-primary);
+		border-bottom: 1px solid var(--border); gap: 12px;
+	}
+	.m-row:last-child { border-bottom: none; }
+	.m-label {
+		font-size: 10px; font-weight: 600; color: var(--text-muted);
+		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+	}
+	.m-detail {
+		border-top: 1px solid var(--border);
+		background: var(--bg-base);
+		display: grid; grid-template-columns: 1fr; gap: 6px;
+		padding: 10px 14px;
+	}
+
+	@media (max-width: 639px) {
+		.table-wrap { display: none; }
+		.mobile-cards { display: flex; }
+	}
 </style>

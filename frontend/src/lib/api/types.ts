@@ -404,3 +404,62 @@ export interface VersionInfo {
 	release_url: string;
 	release_notes: string | null;
 }
+
+// Admin deployments view
+export interface AdminDeploymentRow {
+	id: string;
+	service_id: string;
+	service_name: string;
+	project_id: string;
+	project_name: string;
+	triggered_by: string;
+	source_ref: string;
+	status: DeploymentStatus;
+	created_at: string;
+	finished_at: string | null;
+}
+
+export interface AdminDeploymentStats {
+	total: number;
+	running: number;
+	queued: number;
+	failed: number;
+	success: number;
+}
+
+export interface AdminDeploymentsResponse {
+	data: AdminDeploymentRow[];
+	stats: AdminDeploymentStats;
+	page: number;
+	per_page: number;
+	total: number;
+}
+
+// API Key Management
+export type ApiKeyScope = 'read' | 'deploy' | 'write' | 'admin';
+
+export interface ApiKeyItem {
+	id: string;
+	name: string;
+	key_prefix: string;
+	scopes: ApiKeyScope[];
+	last_used_at: string | null;
+	expires_at: string | null;
+	created_at: string;
+}
+
+export interface CreatedApiKey {
+	id: string;
+	name: string;
+	key: string;
+	key_prefix: string;
+	scopes: ApiKeyScope[];
+	expires_at: string | null;
+	created_at: string;
+}
+
+export interface CreateApiKeyRequest {
+	name: string;
+	scopes: ApiKeyScope[];
+	expires_at?: string | null;
+}

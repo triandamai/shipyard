@@ -14,6 +14,7 @@ shipyard-docker = { path = "../docker" }
 shipyard-docker-worker = { path = "../docker_worker" }
 shipyard-engine = { path = "../engine" }
 shipyard-mqtt = { path = "../mqtt_broker" }
+shipyard-openapi = { path = "../openapi" }
 shipyard-traefik = { path = "../traefik" }
 shipyard-git = { path = "../git" }
 axum = { workspace = true }

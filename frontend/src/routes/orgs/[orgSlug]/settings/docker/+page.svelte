@@ -261,6 +261,47 @@
 					</tbody>
 				</table>
 			</div>
+
+			<div class="mobile-cards">
+				{#each filteredContainers as c (c.id)}
+					{@const isExp = expanded === c.id}
+					{@const name = c.names[0] ?? c.id.slice(0,12)}
+					<div class="m-card">
+						<button class="m-card-header" onclick={() => toggle(c.id)}>
+							<div class="m-card-title-row">
+								<span class="state-dot" style="background:{stateColor[c.state]??'#9ca3af'}"></span>
+								<span class="m-card-title mono">{name}</span>
+							</div>
+							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
+						</button>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Image</span><span class="mono dim">{shortImg(c.image)}</span></div>
+							<div class="m-row"><span class="m-label">Status</span><span class="dim">{c.status}</span></div>
+							{#if c.ports.length}
+								<div class="m-row"><span class="m-label">Ports</span><span class="mono dim">{c.ports.slice(0,3).join(', ')}{c.ports.length>3?` +${c.ports.length-3}`:''}</span></div>
+							{/if}
+							<div class="m-row"><span class="m-label">Created</span><span class="dim">{ago(c.created)}</span></div>
+						</div>
+						{#if isExp}
+							<div class="m-detail">
+								<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{c.id}</span></div>
+								<div class="detail-field"><span class="dk">Names</span><span class="dv">{c.names.join(', ')}</span></div>
+								<div class="detail-field"><span class="dk">Image</span><span class="dv mono">{c.image}</span></div>
+								<div class="detail-field"><span class="dk">Ports</span><span class="dv mono">{c.ports.join(', ') || '—'}</span></div>
+								{#if Object.keys(c.labels).length}
+									<div class="detail-field"><span class="dk">Labels</span>
+										<div class="label-chips" style="margin-top:4px">
+											{#each Object.entries(c.labels) as [k,v]}
+												<span class="lchip"><b>{k}</b>={v}</span>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
 		{/if}
 	{/if}
 
@@ -318,6 +359,45 @@
 					</tbody>
 				</table>
 			</div>
+
+			<div class="mobile-cards">
+				{#each filteredServices as s (s.id)}
+					{@const isExp = expanded === s.id}
+					{@const healthy = s.replicas_running >= s.replicas_desired && s.replicas_desired > 0}
+					<div class="m-card">
+						<button class="m-card-header" onclick={() => toggle(s.id)}>
+							<div class="m-card-title-row">
+								<span class="m-card-title mono">{s.name}</span>
+								<span class="replica-badge" class:healthy class:degraded={!healthy}>{s.replicas_running}/{s.replicas_desired}</span>
+							</div>
+							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
+						</button>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Image</span><span class="mono dim">{shortImg(s.image)}</span></div>
+							<div class="m-row"><span class="m-label">Mode</span><span class="mode-chip">{s.mode}</span></div>
+							{#if s.ports.length}
+								<div class="m-row"><span class="m-label">Ports</span><span class="mono dim">{s.ports.join(', ')}</span></div>
+							{/if}
+						</div>
+						{#if isExp}
+							<div class="m-detail">
+								<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{s.id}</span></div>
+								<div class="detail-field"><span class="dk">Created</span><span class="dv">{s.created_at ?? '—'}</span></div>
+								<div class="detail-field"><span class="dk">Updated</span><span class="dv">{s.updated_at ?? '—'}</span></div>
+								{#if Object.keys(s.labels).length}
+									<div class="detail-field"><span class="dk">Labels</span>
+										<div class="label-chips" style="margin-top:4px">
+											{#each Object.entries(s.labels) as [k,v]}
+												<span class="lchip"><b>{k}</b>={v}</span>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
 		{/if}
 	{/if}
 
@@ -366,6 +446,38 @@
 						{/each}
 					</tbody>
 				</table>
+			</div>
+
+			<div class="mobile-cards">
+				{#each filteredVolumes as v (v.name)}
+					{@const isExp = expanded === v.name}
+					<div class="m-card">
+						<button class="m-card-header" onclick={() => toggle(v.name)}>
+							<span class="m-card-title mono">{v.name}</span>
+							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
+						</button>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Driver</span><span class="mode-chip">{v.driver}</span></div>
+							<div class="m-row"><span class="m-label">Scope</span><span class="dim">{v.scope}</span></div>
+							<div class="m-row"><span class="m-label">Mountpoint</span><span class="mono dim truncate">{v.mountpoint}</span></div>
+						</div>
+						{#if isExp}
+							<div class="m-detail">
+								<div class="detail-field"><span class="dk">Mountpoint</span><span class="dv mono">{v.mountpoint}</span></div>
+								{#if v.created_at}<div class="detail-field"><span class="dk">Created</span><span class="dv">{v.created_at}</span></div>{/if}
+								{#if Object.keys(v.labels).length}
+									<div class="detail-field"><span class="dk">Labels</span>
+										<div class="label-chips" style="margin-top:4px">
+											{#each Object.entries(v.labels) as [k,lv]}
+												<span class="lchip"><b>{k}</b>={lv}</span>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
 			</div>
 		{/if}
 	{/if}
@@ -421,6 +533,45 @@
 						{/each}
 					</tbody>
 				</table>
+			</div>
+
+			<div class="mobile-cards">
+				{#each filteredNetworks as n (n.id)}
+					{@const isExp = expanded === n.id}
+					<div class="m-card">
+						<button class="m-card-header" onclick={() => toggle(n.id)}>
+							<div class="m-card-title-row">
+								<span class="m-card-title mono">{n.name}</span>
+								<div class="m-flags">
+									{#if n.internal}<span class="flag-chip">internal</span>{/if}
+									{#if n.attachable}<span class="flag-chip">attachable</span>{/if}
+								</div>
+							</div>
+							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
+						</button>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">Driver</span><span class="mode-chip">{n.driver}</span></div>
+							<div class="m-row"><span class="m-label">Scope</span><span class="dim">{n.scope}</span></div>
+							<div class="m-row"><span class="m-label">Subnet</span><span class="mono dim">{n.ipam_subnet ?? '—'}</span></div>
+							<div class="m-row"><span class="m-label">Containers</span><span class="dim">{n.containers}</span></div>
+						</div>
+						{#if isExp}
+							<div class="m-detail">
+								<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{n.id}</span></div>
+								<div class="detail-field"><span class="dk">Subnet</span><span class="dv mono">{n.ipam_subnet ?? '—'}</span></div>
+								{#if Object.keys(n.labels).length}
+									<div class="detail-field"><span class="dk">Labels</span>
+										<div class="label-chips" style="margin-top:4px">
+											{#each Object.entries(n.labels) as [k,v]}
+												<span class="lchip"><b>{k}</b>={v}</span>
+											{/each}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
 			</div>
 		{/if}
 	{/if}
@@ -574,5 +725,57 @@
 		background: var(--bg-muted); border: 1px solid var(--border);
 		border-radius: 4px; font-size: 11px; color: var(--text-secondary);
 		max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+
+	/* ── Mobile cards ── */
+	.mobile-cards { display: none; flex-direction: column; gap: 8px; }
+
+	.m-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		overflow: hidden;
+	}
+	.m-card-header {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 12px 14px; gap: 10px;
+		width: 100%; background: none; border: none; cursor: pointer; text-align: left;
+	}
+	.m-card-title-row {
+		display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
+	}
+	.m-card-title {
+		font-size: 13px; font-weight: 600; color: var(--text-primary);
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+	}
+	.m-chevron { flex-shrink: 0; color: var(--text-muted); }
+	.m-flags { display: flex; gap: 4px; flex-shrink: 0; }
+	.m-rows { border-top: 1px solid var(--border); }
+	.m-row {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 8px 14px; font-size: 12px; color: var(--text-primary);
+		border-bottom: 1px solid var(--border); gap: 12px;
+	}
+	.m-row:last-child { border-bottom: none; }
+	.m-row .mono { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.m-label {
+		font-size: 10px; font-weight: 600; color: var(--text-muted);
+		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+	}
+	.m-detail {
+		border-top: 1px solid var(--border);
+		background: var(--bg-base);
+		display: grid; grid-template-columns: 1fr; gap: 6px;
+		padding: 10px 14px;
+	}
+
+	@media (max-width: 639px) {
+		.card { display: none; }
+		.mobile-cards { display: flex; }
+
+		.toolbar { gap: 8px; }
+		.tabs { flex-wrap: wrap; }
+		.toolbar-right { flex-wrap: wrap; }
+		.prune-confirm-text { display: none; }
 	}
 </style>

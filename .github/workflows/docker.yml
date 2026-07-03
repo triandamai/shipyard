@@ -56,6 +56,7 @@ jobs:
         run: |
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
           echo "git_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "migrations_hash=$(find backend/crates/db/migrations -type f -name '*.sql' | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -71,6 +72,7 @@ jobs:
             GIT_SHA=${{ steps.build-meta.outputs.git_sha }}
             BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
             DOCKER_REPO=${{ secrets.DOCKERHUB_USERNAME }}/shipyard-backend
+            MIGRATIONS_HASH=${{ steps.build-meta.outputs.migrations_hash }}
 
   # ── Frontend ───────────────────────────────────────────────────────────────
   frontend:

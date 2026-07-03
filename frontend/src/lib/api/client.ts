@@ -553,6 +553,29 @@ class ApiClient {
 	async triggerUpdate(): Promise<ApiResponse<{ message: string; output: string }>> {
 		return this.post('/admin/update');
 	}
+
+	// ─── Admin Deployments ────────────────────────────────────────────
+	async listAllDeployments(params?: { status?: string; page?: number; per_page?: number }): Promise<ApiResponse<import('./types').AdminDeploymentsResponse>> {
+		const qs = new URLSearchParams();
+		if (params?.status) qs.set('status', params.status);
+		if (params?.page) qs.set('page', String(params.page));
+		if (params?.per_page) qs.set('per_page', String(params.per_page));
+		const suffix = qs.toString() ? `?${qs}` : '';
+		return this.get(`/admin/deployments${suffix}`);
+	}
+
+	// ─── API Key Management ───────────────────────────────────────────
+	async listApiKeys(): Promise<ApiResponse<import('./types').ApiKeyItem[]>> {
+		return this.get('/admin/api-keys');
+	}
+
+	async createApiKey(body: import('./types').CreateApiKeyRequest): Promise<ApiResponse<import('./types').CreatedApiKey>> {
+		return this.post('/admin/api-keys', body);
+	}
+
+	async revokeApiKey(keyId: string): Promise<ApiResponse<null>> {
+		return this.delete(`/admin/api-keys/${keyId}`);
+	}
 }
 
 export const api = new ApiClient();

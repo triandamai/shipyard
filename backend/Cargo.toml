@@ -8,6 +8,7 @@ members = [
     "crates/engine",
     "crates/git",
     "crates/mqtt_broker",
+    "crates/openapi",
     "crates/traefik",
 ]
 resolver = "2"

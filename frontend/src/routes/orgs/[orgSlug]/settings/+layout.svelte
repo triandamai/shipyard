@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { Settings2, Users, Server, Radio, Cpu, Container } from '@lucide/svelte';
+	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket } from '@lucide/svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole } from '$lib/auth/permissions';
 
@@ -26,7 +26,9 @@
 		{ label: 'Members',  href: (slug: string) => `/orgs/${slug}/settings/members`, icon: Users },
 		{ label: 'MQTT',     href: (slug: string) => `/orgs/${slug}/settings/mqtt`,    icon: Radio },
 		{ label: 'Infra',    href: (slug: string) => `/orgs/${slug}/settings/infra`,   icon: Cpu },
-		{ label: 'Docker',   href: (slug: string) => `/orgs/${slug}/settings/docker`,  icon: Container },
+		{ label: 'Docker',    href: (slug: string) => `/orgs/${slug}/settings/docker`,    icon: Container },
+		{ label: 'API Keys',     href: (slug: string) => `/orgs/${slug}/settings/api-keys`,     icon: KeyRound },
+		{ label: 'Deployments',  href: (slug: string) => `/orgs/${slug}/settings/deployments`,  icon: Rocket },
 	];
 
 	function isActive(tabHref: string) {
@@ -114,7 +116,7 @@
 
 	@media (max-width: 639px) {
 		.settings-header { padding: 16px 16px 0; }
-		.settings-content { padding: 16px 16px 24px; }
+		.settings-content { padding: 16px 16px 80px; }
 		.tab-bar { overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 		.tab-bar::-webkit-scrollbar { display: none; }
 		.tab-btn { white-space: nowrap; }

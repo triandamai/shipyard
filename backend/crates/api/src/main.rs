@@ -397,6 +397,15 @@ async fn main() {
             setup::require_initialized_middleware,
         ));
 
+    // Build the Open API sub-router (separate state, separate auth model).
+    let openapi_state = shipyard_openapi::OpenApiState {
+        db:     state.db.clone(),
+        config: Arc::clone(&state.config),
+        docker: Arc::clone(&state.docker),
+        mqtt:   Arc::clone(&state.mqtt),
+    };
+    let openapi = shipyard_openapi::routes().with_state(openapi_state);
+
     // Per-IP rate limiter shared via Extension
     let rate_limiter = middleware::rate_limit::make_rate_limiter();
 
@@ -408,6 +417,8 @@ async fn main() {
         // Lives outside /api so it bypasses the init gate and rate limiter.
         .route("/internal/mqtt/auth", post(mqtt_auth))
         .nest("/api", api)
+        // Public Open API — mounted separately so it can use its own state/auth.
+        .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
         .layer(axum::Extension(rate_limiter))
         .layer(cors)

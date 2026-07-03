@@ -120,7 +120,7 @@ async fn trigger_deploy(
     .ok()
     .flatten()
     .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
-    .unwrap_or(0); // 0 = unlimited
+    .unwrap_or(2); // default: 2 concurrent deployments
 
     if max_parallel > 0 {
         let running: (i64,) = sqlx::query_as(

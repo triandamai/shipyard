@@ -99,7 +99,7 @@
 	}
 </script>
 
-<div style="padding: 32px; overflow-y: auto; height: 100%;">
+<div class="projects-scroll">
 	<div style="max-width: 900px; margin: 0 auto;">
 
 		<!-- Header -->
@@ -412,6 +412,16 @@
 {/if}
 
 <style>
+	.projects-scroll {
+		padding: 32px;
+		overflow-y: auto;
+		height: 100%;
+	}
+
+	@media (max-width: 639px) {
+		.projects-scroll { padding: 16px 16px 72px; }
+	}
+
 	@keyframes spin {
 		to { transform: rotate(360deg); }
 	}

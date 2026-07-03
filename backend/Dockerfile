@@ -12,7 +12,11 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 
-RUN cargo build --release --bin shipyard
+# Pass a hash of migration files as a build arg so the layer cache busts
+# whenever any migration file is added or changed, even if Cargo.lock is unchanged.
+ARG MIGRATIONS_HASH=unknown
+RUN echo "migrations_hash=${MIGRATIONS_HASH}" && \
+    cargo build --release --bin shipyard
 
 # ─── Runtime ─────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime

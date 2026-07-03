@@ -200,6 +200,10 @@
 		gap: 24px;
 	}
 
+	@media (max-width: 639px) {
+		.home-page { padding: 16px 16px 72px; }
+	}
+
 	.page-header {
 		display: flex;
 		align-items: flex-start;

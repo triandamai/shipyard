@@ -1,11 +1,14 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::convert::Infallible;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -121,6 +124,9 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/volumes", get(docker_volumes))
         .route("/admin/docker/networks", get(docker_networks))
         .route("/admin/host-ip", get(get_host_ip))
+        .route("/admin/api-keys", get(list_api_keys).post(create_api_key))
+        .route("/admin/api-keys/:key_id", delete(revoke_api_key))
+        .route("/admin/deployments", get(list_all_deployments))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -994,4 +1000,352 @@ fn is_private_ip(addr: &std::net::IpAddr) -> bool {
         }
         std::net::IpAddr::V6(_) => false,
     }
+}
+
+// ── All-deployments admin view ────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeploymentListQuery {
+    pub status: Option<String>,
+    pub page:   Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminDeploymentRow {
+    pub id:           uuid::Uuid,
+    pub service_id:   uuid::Uuid,
+    pub service_name: String,
+    pub project_id:   uuid::Uuid,
+    pub project_name: String,
+    pub triggered_by: String,
+    pub source_ref:   String,
+    pub status:       String,
+    pub created_at:   DateTime<Utc>,
+    pub finished_at:  Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminDeploymentStats {
+    pub total:   i64,
+    pub running: i64,
+    pub queued:  i64,
+    pub failed:  i64,
+    pub success: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminDeploymentsResponse {
+    pub data:     Vec<AdminDeploymentRow>,
+    pub stats:    AdminDeploymentStats,
+    pub page:     i64,
+    pub per_page: i64,
+    pub total:    i64,
+}
+
+async fn list_all_deployments(
+    auth: AuthUser,
+    Query(q): Query<DeploymentListQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<AdminDeploymentsResponse>>, ApiAppError> {
+    // Only owners/admins reach this endpoint (protected by settings layout on frontend,
+    // but we also verify org membership here).
+    let org_id = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .map(|(id,)| id)
+    .ok_or_else(|| ApiAppError(AppError::Forbidden("Not a member of any org".to_string())))?;
+
+    let page     = q.page.unwrap_or(1).max(1);
+    let per_page = q.per_page.unwrap_or(50).clamp(1, 200);
+    let offset   = (page - 1) * per_page;
+
+    // Stats (always for the whole org, regardless of status filter)
+    let stats_rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT d.status::text, COUNT(*) FROM deployments d
+         JOIN services s  ON s.id = d.service_id
+         JOIN projects p  ON p.id = s.project_id
+         WHERE p.org_id = $1
+         GROUP BY d.status",
+    )
+    .bind(org_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let mut running = 0i64;
+    let mut queued  = 0i64;
+    let mut failed  = 0i64;
+    let mut success = 0i64;
+    let mut total_all = 0i64;
+    for (st, cnt) in &stats_rows {
+        total_all += cnt;
+        match st.as_str() {
+            "running"  => running  = *cnt,
+            "queued"   => queued   = *cnt,
+            "failed"   => failed   = *cnt,
+            "success"  => success  = *cnt,
+            _ => {}
+        }
+    }
+
+    // Filtered count
+    let total: i64 = if let Some(ref status_filter) = q.status {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments d
+             JOIN services s ON s.id = d.service_id
+             JOIN projects p ON p.id = s.project_id
+             WHERE p.org_id = $1 AND d.status::text = $2",
+        )
+        .bind(org_id)
+        .bind(status_filter)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        row.0
+    } else {
+        total_all
+    };
+
+    // Row query
+    let rows = if let Some(ref status_filter) = q.status {
+        sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, uuid::Uuid, String, String, String, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
+            "SELECT d.id, s.id, s.name, p.id, p.name, d.triggered_by, d.source_ref,
+                    d.status::text, d.created_at, d.finished_at
+             FROM deployments d
+             JOIN services s ON s.id = d.service_id
+             JOIN projects p ON p.id = s.project_id
+             WHERE p.org_id = $1 AND d.status::text = $2
+             ORDER BY d.created_at DESC
+             LIMIT $3 OFFSET $4",
+        )
+        .bind(org_id)
+        .bind(status_filter)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, uuid::Uuid, String, String, String, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
+            "SELECT d.id, s.id, s.name, p.id, p.name, d.triggered_by, d.source_ref,
+                    d.status::text, d.created_at, d.finished_at
+             FROM deployments d
+             JOIN services s ON s.id = d.service_id
+             JOIN projects p ON p.id = s.project_id
+             WHERE p.org_id = $1
+             ORDER BY d.created_at DESC
+             LIMIT $2 OFFSET $3",
+        )
+        .bind(org_id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    };
+
+    let data = rows
+        .into_iter()
+        .map(|(id, service_id, service_name, project_id, project_name, triggered_by, source_ref, status, created_at, finished_at)| {
+            AdminDeploymentRow { id, service_id, service_name, project_id, project_name, triggered_by, source_ref, status, created_at, finished_at }
+        })
+        .collect();
+
+    Ok(Json(ApiResponse::ok(AdminDeploymentsResponse {
+        data,
+        stats: AdminDeploymentStats { total: total_all, running, queued, failed, success },
+        page,
+        per_page,
+        total,
+    })))
+}
+
+// ── API Key Management (JWT-authenticated, for the settings UI) ───────────────
+
+#[derive(Debug, Serialize)]
+struct ApiKeyItem {
+    id: uuid::Uuid,
+    name: String,
+    key_prefix: String,
+    scopes: Vec<String>,
+    last_used_at: Option<DateTime<Utc>>,
+    expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatedApiKey {
+    id: uuid::Uuid,
+    name: String,
+    key: String,
+    key_prefix: String,
+    scopes: Vec<String>,
+    expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateApiKeyRequest {
+    name: String,
+    scopes: Vec<String>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+fn generate_api_key() -> (String, String, String) {
+    let raw = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let full_key = format!("ship_{}", raw);
+    let prefix = format!("ship_{}", &raw[..8]);
+    let hash = hex::encode(Sha256::digest(full_key.as_bytes()));
+    (full_key, prefix, hash)
+}
+
+async fn get_caller_org(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<uuid::Uuid, ApiAppError> {
+    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    row.map(|(id,)| id)
+        .ok_or_else(|| ApiAppError(AppError::Forbidden("User is not a member of any org".to_string())))
+}
+
+async fn require_owner(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<(), ApiAppError> {
+    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    is_owner
+        .map(|_| ())
+        .ok_or_else(|| ApiAppError(AppError::Forbidden("Only owners can manage API keys".to_string())))
+}
+
+async fn list_api_keys(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<ApiKeyItem>>>, ApiAppError> {
+    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+
+    let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Vec<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>)>(
+        "SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at
+         FROM api_keys
+         WHERE org_id = $1
+         ORDER BY created_at DESC",
+    )
+    .bind(org_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let keys = rows
+        .into_iter()
+        .map(|(id, name, key_prefix, scopes, last_used_at, expires_at, created_at)| ApiKeyItem {
+            id,
+            name,
+            key_prefix,
+            scopes,
+            last_used_at,
+            expires_at,
+            created_at,
+        })
+        .collect();
+
+    Ok(Json(ApiResponse::ok(keys)))
+}
+
+async fn create_api_key(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateApiKeyRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<CreatedApiKey>>), ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+
+    if body.name.trim().is_empty() {
+        return Err(ApiAppError(AppError::Validation("Key name must not be empty".to_string())));
+    }
+
+    let valid_scopes = ["read", "deploy", "write", "admin"];
+    for s in &body.scopes {
+        if !valid_scopes.contains(&s.as_str()) {
+            return Err(ApiAppError(AppError::Validation(format!(
+                "Unknown scope '{}'. Valid: {}",
+                s,
+                valid_scopes.join(", ")
+            ))));
+        }
+    }
+
+    let (full_key, prefix, hash) = generate_api_key();
+    let key_id = uuid::Uuid::new_v4();
+    let now = Utc::now();
+
+    sqlx::query(
+        "INSERT INTO api_keys (id, org_id, created_by, name, key_prefix, key_hash, scopes, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(key_id)
+    .bind(org_id)
+    .bind(auth.user_id)
+    .bind(&body.name)
+    .bind(&prefix)
+    .bind(&hash)
+    .bind(&body.scopes)
+    .bind(body.expires_at)
+    .bind(now)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    tracing::info!(key_id = %key_id, org_id = %org_id, "API key created: {}", body.name);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::ok(CreatedApiKey {
+            id: key_id,
+            name: body.name,
+            key: full_key,
+            key_prefix: prefix,
+            scopes: body.scopes,
+            expires_at: body.expires_at,
+            created_at: now,
+        })),
+    ))
+}
+
+async fn revoke_api_key(
+    auth: AuthUser,
+    Path(key_id): Path<uuid::Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+
+    let result = sqlx::query(
+        "DELETE FROM api_keys WHERE id = $1 AND org_id = $2",
+    )
+    .bind(key_id)
+    .bind(org_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiAppError(AppError::NotFound(format!("API key '{}' not found", key_id))));
+    }
+
+    tracing::info!(key_id = %key_id, org_id = %org_id, user_id = %auth.user_id, "API key revoked");
+
+    Ok(StatusCode::NO_CONTENT)
 }
