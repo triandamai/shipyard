@@ -82,6 +82,7 @@ pub struct Service {
     pub name: String,
     pub slug: String,
     #[sqlx(rename = "type")]
+    #[serde(rename = "type")]
     pub service_type: String,
     pub image: String,
     pub git_repo_url: Option<String>,

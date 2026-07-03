@@ -149,11 +149,13 @@
 	let connInfoCopied  = $state(false);
 
 	async function loadConnectionInfo() {
-		if (!service || service.type !== 'database') return;
+		if (!service) return;
+		if (service.type !== 'database' && service.type !== 'docker') return;
 		connInfoLoading = true;
 		try {
 			const res = await api.getConnectionInfo(projectId, service.id);
-			if (!res.error && res.data) connInfo = res.data;
+			// Only set if a recognized driver came back (not the generic TCP fallback)
+			if (!res.error && res.data && res.data.driver !== 'TCP') connInfo = res.data;
 		} catch { /* ignore */ } finally {
 			connInfoLoading = false;
 		}
@@ -873,7 +875,7 @@
 	async function switchTab(tab: Tab) {
 		if (activeTab === 'monitor' && tab !== 'monitor') disconnectStats();
 		activeTab = tab;
-		if (tab === 'overview' && !connInfo) void loadConnectionInfo();
+		if (tab === 'overview' && !connInfo && !connInfoLoading) void loadConnectionInfo();
 		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
 		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
@@ -1323,8 +1325,8 @@
 						{/if}
 					</div>
 
-					<!-- Database connection info card -->
-					{#if service.type === 'database'}
+					<!-- Internal connection card: shown for database type always, or docker type when conn info resolved -->
+					{#if service.type === 'database' || (service.type === 'docker' && connInfo)}
 						<div class="info-card conn-info-card">
 							<div class="info-card-header">
 								<Network size={13} />
@@ -1350,6 +1352,7 @@
 												class="conn-copy-btn"
 												title="Copy URL"
 												onclick={async () => {
+													if (!connInfo) return;
 													await navigator.clipboard.writeText(connInfo.url_template);
 													connInfoCopied = true;
 													setTimeout(() => connInfoCopied = false, 1500);
@@ -1366,7 +1369,7 @@
 								</div>
 							{:else}
 								<div class="info-card-body">
-									<span class="conn-loading">No connection info available — set an image first.</span>
+									<span class="conn-loading">No connection info — deploy a recognized database image (postgres, mysql, redis, mongo…)</span>
 								</div>
 							{/if}
 						</div>
