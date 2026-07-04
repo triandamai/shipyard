@@ -527,6 +527,10 @@ class ApiClient {
 		return this.post(`/invite/${token}/complete`, { password });
 	}
 
+	async rejectInvitation(token: string): Promise<ApiResponse<{ message: string }>> {
+		return this.post(`/invite/${token}/reject`, {});
+	}
+
 	async acceptInvitation(
 		orgId: string,
 		token: string

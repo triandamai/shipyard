@@ -2,6 +2,23 @@ import { eventBus } from '../eventBus';
 import { toastStore } from '$lib/stores/toast.store';
 import type { MqttPayload } from '$lib/api/types';
 
+// Debounce env-changed toasts per service: rapid sequential saves (e.g. registry
+// creds + volume mounts saved one-by-one) coalesce into a single notification.
+const envChangedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const ENV_DEBOUNCE_MS = 1500;
+
+function debounceEnvChanged(serviceId: string) {
+	const existing = envChangedTimers.get(serviceId);
+	if (existing) clearTimeout(existing);
+	envChangedTimers.set(
+		serviceId,
+		setTimeout(() => {
+			envChangedTimers.delete(serviceId);
+			toastStore.add({ type: 'info', title: 'Environment variables updated' });
+		}, ENV_DEBOUNCE_MS)
+	);
+}
+
 /**
  * Global MQTT → toast handler.
  * Call once at app init. Maps known event names to user-facing toast notifications.
@@ -33,7 +50,7 @@ export function initToastHandler() {
 				break;
 
 			case 'service.env.changed':
-				toastStore.add({ type: 'info', title: 'Environment variables updated' });
+				debounceEnvChanged((p.meta as any)?.service_id ?? 'unknown');
 				break;
 
 			case 'deployment.started':

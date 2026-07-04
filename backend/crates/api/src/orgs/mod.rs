@@ -190,6 +190,7 @@ pub fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/:token", get(get_invite_public))
         .route("/:token/complete", post(complete_invite))
+        .route("/:token/reject", post(reject_invite))
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -971,7 +972,7 @@ async fn accept_invitation(
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let topic = format!("orgs/{}/members", invitation.org_id);
+    let topic = format!("platform/orgs/{}/members", invitation.org_id);
     let payload = shipyard_common::types::MqttPayload::new("org.member.joined")
         .with_meta(serde_json::json!({
             "org_id": invitation.org_id,
@@ -1176,7 +1177,7 @@ async fn set_member_projects(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     // Publish MQTT so the UI can react
-    let topic = format!("orgs/{org_id}/members");
+    let topic = format!("platform/orgs/{org_id}/members");
     let payload = shipyard_common::types::MqttPayload::new("org.member.projects.updated")
         .with_meta(serde_json::json!({
             "org_id": org_id,
@@ -1356,7 +1357,7 @@ async fn complete_invite(
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let topic = format!("orgs/{}/members", invitation.org_id);
+    let topic = format!("platform/orgs/{}/members", invitation.org_id);
     let payload = shipyard_common::types::MqttPayload::new("org.member.joined")
         .with_meta(serde_json::json!({
             "org_id": invitation.org_id,
@@ -1408,4 +1409,27 @@ async fn complete_invite(
             email: user.email,
         })),
     ))
+}
+
+/// POST /invite/:token/reject — public; invitee declines the invitation.
+/// Deletes the invitation record so the admin can re-invite if needed.
+async fn reject_invite(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let result = sqlx::query(
+        "DELETE FROM invitations WHERE token = $1 AND accepted_at IS NULL",
+    )
+    .bind(&token)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiAppError(AppError::NotFound(
+            "Invitation not found or already accepted".to_string(),
+        )));
+    }
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Invitation declined" }))))
 }

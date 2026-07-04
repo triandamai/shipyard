@@ -6,6 +6,7 @@ interface OrgState {
 	activeOrg: Organization | null;
 	members: OrgMember[];
 	myMembership: OrgMember | null;
+	membershipLoaded: boolean;
 	isLoading: boolean;
 }
 
@@ -14,6 +15,7 @@ const initialState: OrgState = {
 	activeOrg: null,
 	members: [],
 	myMembership: null,
+	membershipLoaded: false,
 	isLoading: false
 };
 
@@ -28,7 +30,7 @@ function createOrgStore() {
 		},
 
 		setActiveOrg(org: Organization | null) {
-			update((state) => ({ ...state, activeOrg: org, members: [], myMembership: null }));
+			update((state) => ({ ...state, activeOrg: org, members: [], myMembership: null, membershipLoaded: false }));
 		},
 
 		setMembers(members: OrgMember[]) {
@@ -36,7 +38,7 @@ function createOrgStore() {
 		},
 
 		setMyMembership(membership: OrgMember | null) {
-			update((state) => ({ ...state, myMembership: membership }));
+			update((state) => ({ ...state, myMembership: membership, membershipLoaded: true }));
 		},
 
 		setLoading(loading: boolean) {

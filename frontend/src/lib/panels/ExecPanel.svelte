@@ -124,69 +124,75 @@
 		fitAddon = new FitAddon();
 		term.loadAddon(fitAddon);
 		term.open(el);
-		fitAddon.fit();
 
-		const { cols, rows } = term;
-		// Use the page's own host so the WebSocket goes through the SvelteKit
-		// server (server.js) which tunnels /api/* upgrades to the backend —
-		// same trust boundary as the HTTP proxy in hooks.server.ts.
-		const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-		const wsUrl = `${wsProto}//${window.location.host}/api/projects/${projectId}/services/${serviceId}/exec`
-			+ `?token=${encodeURIComponent(_pendingToken)}`
-			+ `&container_id=${encodeURIComponent(_pendingContainerId)}`
-			+ `&cmd=/bin/sh`
-			+ `&cols=${cols}&rows=${rows}`;
+		// Defer fit + WebSocket open to the next animation frame so the browser
+		// has finished layout before we read dimensions. Calling fitAddon.fit()
+		// synchronously after term.open() gives 0×0 because the element has not
+		// been painted yet, which means cols=0/rows=0 → blank canvas.
+		requestAnimationFrame(() => {
+			if (!term || !fitAddon) return; // cleaned up before frame fired
 
-		ws = new WebSocket(wsUrl);
-		ws.binaryType = 'arraybuffer';
+			fitAddon.fit();
 
-		ws.onopen = () => {
-			state = 'connected';
-			term!.focus();
-		};
+			const { cols, rows } = term;
+			const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+			const wsUrl = `${wsProto}//${window.location.host}/api/projects/${projectId}/services/${serviceId}/exec`
+				+ `?token=${encodeURIComponent(_pendingToken)}`
+				+ `&container_id=${encodeURIComponent(_pendingContainerId)}`
+				+ `&cmd=/bin/sh`
+				+ `&cols=${cols}&rows=${rows}`;
 
-		ws.onmessage = (evt) => {
-			if (evt.data instanceof ArrayBuffer) {
-				term!.write(new Uint8Array(evt.data));
-			} else {
-				try {
-					const msg = JSON.parse(evt.data as string);
-					if (msg.type === 'error') {
-						term!.writeln(`\r\n\x1b[31mError: ${msg.message}\x1b[0m`);
-					}
-				} catch {}
-			}
-		};
+			ws = new WebSocket(wsUrl);
+			ws.binaryType = 'arraybuffer';
 
-		ws.onerror = () => {
-			errorMsg = 'WebSocket connection failed.';
-			state = 'error';
-		};
+			ws.onopen = () => {
+				state = 'connected';
+				term!.focus();
+			};
 
-		ws.onclose = () => {
-			if (state === 'connected') {
-				term?.writeln('\r\n\x1b[33m[Session closed]\x1b[0m');
-			}
-		};
+			ws.onmessage = (evt) => {
+				if (evt.data instanceof ArrayBuffer) {
+					term!.write(new Uint8Array(evt.data));
+				} else {
+					try {
+						const msg = JSON.parse(evt.data as string);
+						if (msg.type === 'error') {
+							term!.writeln(`\r\n\x1b[31mError: ${msg.message}\x1b[0m`);
+						}
+					} catch {}
+				}
+			};
 
-		// Send keystrokes as binary
-		term.onData((data) => {
-			if (ws?.readyState === WebSocket.OPEN) {
-				const encoded = new TextEncoder().encode(data);
-				ws.send(encoded.buffer);
-			}
+			ws.onerror = () => {
+				errorMsg = 'WebSocket connection failed.';
+				state = 'error';
+			};
+
+			ws.onclose = () => {
+				if (state === 'connected') {
+					term?.writeln('\r\n\x1b[33m[Session closed]\x1b[0m');
+				}
+			};
+
+			// Send keystrokes as binary
+			term.onData((data) => {
+				if (ws?.readyState === WebSocket.OPEN) {
+					const encoded = new TextEncoder().encode(data);
+					ws.send(encoded.buffer);
+				}
+			});
+
+			// Send resize events
+			term.onResize(({ cols, rows }) => {
+				if (ws?.readyState === WebSocket.OPEN) {
+					ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+				}
+			});
+
+			// Refit whenever the panel is resized
+			resizeObs = new ResizeObserver(() => fitAddon?.fit());
+			resizeObs.observe(el);
 		});
-
-		// Send resize events
-		term.onResize(({ cols, rows }) => {
-			if (ws?.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-			}
-		});
-
-		// Fit on container resize
-		resizeObs = new ResizeObserver(() => fitAddon?.fit());
-		resizeObs.observe(el);
 	}
 
 	function cleanup() {

@@ -6,7 +6,7 @@
 	import { authStore } from '$lib/stores/auth.store';
 	import { setAuthCookies } from '$lib/auth/cookies';
 	import type { PublicInvite } from '$lib/api/types';
-	import { CheckCircle, AlertCircle, Loader2, Eye, EyeOff, Lock, Shield, UserCheck } from '@lucide/svelte';
+	import { CheckCircle, AlertCircle, Loader2, Eye, EyeOff, Lock, Shield, UserCheck, XCircle } from '@lucide/svelte';
 
 	let token = $derived($page.params.token ?? '');
 
@@ -26,6 +26,11 @@
 	let submitError = $state('');
 
 	let done = $state(false);
+	let declined = $state(false);
+
+	// Decline / reject invitation
+	let declining  = $state(false);
+	let declineError = $state('');
 
 	const ROLE_LABELS: Record<string, string> = {
 		owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer',
@@ -59,6 +64,20 @@
 
 		done = true;
 		setTimeout(() => goto('/'), 1500);
+	}
+
+	// ── Decline invitation ────────────────────────────────────────────────────────
+	async function handleDecline() {
+		if (declining) return;
+		declining = true;
+		declineError = '';
+		const res = await api.rejectInvitation(token);
+		if (res.error) {
+			declineError = res.error.message;
+			declining = false;
+			return;
+		}
+		declined = true;
 	}
 
 	// ── New-user complete (unauthenticated) ──────────────────────────────────────
@@ -131,6 +150,14 @@
 				<a class="btn btn-primary" href="/login">Log in</a>
 			</div>
 
+		{:else if declined}
+			<div class="state-block">
+				<XCircle size={32} class="state-icon decline-icon" />
+				<p class="state-title">Invitation declined</p>
+				<p class="state-sub">You have declined the invitation to <strong>{invite?.org_name}</strong>. The admin can send a new invite if needed.</p>
+				<a class="btn btn-primary" href="/login">Go to login</a>
+			</div>
+
 		{:else if done}
 			<div class="state-block success-block">
 				<CheckCircle size={32} class="state-icon success-icon" />
@@ -182,12 +209,28 @@
 					<button
 						class="btn btn-primary accept-btn"
 						onclick={handleAccept}
-						disabled={accepting}
+						disabled={accepting || declining}
 					>
 						{#if accepting}
 							<Loader2 size={14} class="spin" />Joining…
 						{:else}
 							<UserCheck size={14} />Accept &amp; join {invite.org_name}
+						{/if}
+					</button>
+
+					{#if declineError}
+						<div class="error-banner"><AlertCircle size={13} />{declineError}</div>
+					{/if}
+
+					<button
+						class="btn btn-decline"
+						onclick={handleDecline}
+						disabled={accepting || declining}
+					>
+						{#if declining}
+							<Loader2 size={13} class="spin" />Declining…
+						{:else}
+							<XCircle size={13} />Decline invitation
 						{/if}
 					</button>
 				</div>
@@ -237,12 +280,29 @@
 					<button
 						type="submit"
 						class="btn btn-primary submit-btn"
-						disabled={!password || !password2 || submitting}
+						disabled={!password || !password2 || submitting || declining}
 					>
 						{#if submitting}
 							<Loader2 size={14} class="spin" />Creating account…
 						{:else}
 							Create account &amp; join {invite.org_name}
+						{/if}
+					</button>
+
+					{#if declineError}
+						<div class="error-banner"><AlertCircle size={13} />{declineError}</div>
+					{/if}
+
+					<button
+						type="button"
+						class="btn btn-decline"
+						onclick={handleDecline}
+						disabled={submitting || declining}
+					>
+						{#if declining}
+							<Loader2 size={13} class="spin" />Declining…
+						{:else}
+							<XCircle size={13} />Decline invitation
 						{/if}
 					</button>
 
@@ -329,6 +389,7 @@
 	:global(.state-icon) { opacity: 0.85; }
 	:global(.error-icon)   { color: #EF4444; }
 	:global(.success-icon) { color: #10B981; }
+	:global(.decline-icon) { color: var(--text-muted); }
 
 	/* ── Invite details ── */
 	.invite-details {
@@ -456,6 +517,16 @@
 	.btn:disabled { opacity: 0.55; cursor: not-allowed; }
 	.btn-primary { background: var(--accent); color: white; }
 	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
+
+	.btn-decline {
+		display: flex; align-items: center; justify-content: center; gap: 6px;
+		padding: 8px 16px; border-radius: var(--radius-sm);
+		font-size: 12px; font-weight: 500; cursor: pointer;
+		background: transparent; border: 1px solid var(--border);
+		color: var(--text-muted); transition: all var(--transition-fast);
+	}
+	.btn-decline:hover:not(:disabled) { border-color: #EF4444; color: #EF4444; background: rgba(239,68,68,0.06); }
+	.btn-decline:disabled { opacity: 0.45; cursor: not-allowed; }
 
 	@media (max-width: 480px) {
 		.accept-card { border-radius: 0; border-left: none; border-right: none; }

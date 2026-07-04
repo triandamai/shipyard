@@ -7,15 +7,18 @@
 
 	let { children } = $props();
 
-	let orgSlug = $derived($page.params.orgSlug);
+	let orgSlug = $derived($page.params.orgSlug ?? '');
 	let currentPath = $derived($page.url.pathname);
 
-	let myRole   = $derived($orgStore.myMembership?.role ?? null);
-	let isAdmin  = $derived(isAdminRole(myRole));
+	let myRole            = $derived($orgStore.myMembership?.role ?? null);
+	let isAdmin           = $derived(isAdminRole(myRole));
+	let membershipLoaded  = $derived($orgStore.membershipLoaded);
 
-	// Redirect non-admins away from settings (members and general write ops)
+	// Redirect non-admins away from settings — wait for membership to resolve first
+	// so we don't redirect while myRole is still null (async load race).
 	$effect(() => {
-		if (myRole && !isAdmin) {
+		if (!membershipLoaded) return;
+		if (!isAdmin) {
 			goto(`/orgs/${orgSlug}`);
 		}
 	});
@@ -87,7 +90,13 @@
 		display: flex;
 		gap: 2px;
 		border-bottom: 1px solid var(--border);
+		overflow-x: auto;
+		overflow-y: hidden;
+		flex-wrap: nowrap;
+		-webkit-overflow-scrolling: touch;
+		scrollbar-width: none;
 	}
+	.tab-bar::-webkit-scrollbar { display: none; }
 
 	.tab-btn {
 		display: flex;
@@ -104,6 +113,7 @@
 		cursor: pointer;
 		margin-bottom: -1px;
 		text-decoration: none;
+		white-space: nowrap;
 		transition: color var(--transition-fast), border-color var(--transition-fast);
 	}
 	.tab-btn:hover { color: var(--text-primary); }
@@ -118,8 +128,5 @@
 	@media (max-width: 639px) {
 		.settings-header { padding: 16px 16px 0; }
 		.settings-content { padding: 16px 16px 80px; }
-		.tab-bar { overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-		.tab-bar::-webkit-scrollbar { display: none; }
-		.tab-btn { white-space: nowrap; }
 	}
 </style>

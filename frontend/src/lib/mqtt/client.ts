@@ -10,6 +10,25 @@ let retryCount = 0;
 const MAX_RETRY_DELAY_MS = 60_000;
 const STORAGE_KEY = 'shipyard_mqtt_cid';
 
+// Deduplicate messages delivered multiple times due to overlapping subscriptions
+// (wildcard + specific topic both matching the same message). Key = topic|rawPayload.
+const recentMessages = new Map<string, number>();
+const DEDUP_WINDOW_MS = 150;
+function isDuplicate(topic: string, raw: string): boolean {
+	const key = `${topic}|${raw}`;
+	const now = Date.now();
+	const last = recentMessages.get(key);
+	if (last !== undefined && now - last < DEDUP_WINDOW_MS) return true;
+	recentMessages.set(key, now);
+	// Prune stale entries to avoid unbounded growth
+	if (recentMessages.size > 200) {
+		for (const [k, t] of recentMessages) {
+			if (now - t > DEDUP_WINDOW_MS * 2) recentMessages.delete(k);
+		}
+	}
+	return false;
+}
+
 /** Return a stable client ID for this browser, persisted across page loads. */
 function getClientId(): string {
     try {
@@ -81,7 +100,9 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 
 	client.on('message', (topic: string, message: Buffer) => {
 		try {
-			const payload: MqttPayload = JSON.parse(message.toString());
+			const raw = message.toString();
+			if (isDuplicate(topic, raw)) return;
+			const payload: MqttPayload = JSON.parse(raw);
 			eventBus.emit(topic, payload);
 			options.onEvent?.(topic, payload);
 		} catch {

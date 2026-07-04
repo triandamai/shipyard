@@ -44,7 +44,9 @@
 				api.getMyMembership(found.id)
 			]);
 			if (projectsRes.data) projectStore.setProjects(projectsRes.data);
-			if (membershipRes.data) orgStore.setMyMembership(membershipRes.data);
+			// Always call setMyMembership (even on error) to mark membershipLoaded = true
+			// so permission guards in child layouts don't block indefinitely.
+			orgStore.setMyMembership(membershipRes.data ?? null);
 			projectStore.setLoading(false);
 
 			unsubscribeOrgEvents = subscribeToOrgEvents(found.id);

@@ -12,6 +12,8 @@
 	import SlidePanel from '$lib/components/SlidePanel.svelte';
 	import MemberManagePanel from '$lib/panels/MemberManagePanel.svelte';
 	import InvitePanel from '$lib/panels/InvitePanel.svelte';
+	import { eventBus } from '$lib/mqtt/eventBus';
+	import type { MqttPayload } from '$lib/api/types';
 
 	let orgId         = $derived($orgStore.activeOrg?.id ?? '');
 	let currentUserId = $derived($authStore.user?.id ?? '');
@@ -190,6 +192,17 @@
 	// Wait for orgId from layout before loading
 	$effect(() => {
 		if (orgId) loadMembers(orgId);
+	});
+
+	// Reload member list when someone accepts an invitation (MQTT push)
+	$effect(() => {
+		const id = orgId;
+		if (!id) return;
+		const handler = (_topic: string, payload: MqttPayload) => {
+			if (payload.event === 'org.member.joined') loadMembers(id);
+		};
+		eventBus.on('*', handler as any);
+		return () => eventBus.off('*', handler as any);
 	});
 </script>
 
