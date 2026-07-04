@@ -1552,6 +1552,17 @@ let showExecPanel = $state(false);
 							<span class="field-label">Slug</span>
 							<span class="field-value font-mono">{service.slug}</span>
 						</div>
+						<div class="field field-full">
+							<span class="field-label">Hostname</span>
+							<span class="field-value field-copy-row">
+								<span class="font-mono">{service.slug}</span>
+								<button
+									class="btn-copy-inline"
+									title="Copy hostname — use this to connect from other containers"
+									onclick={() => navigator.clipboard.writeText(service.slug)}
+								><Copy size={11} /></button>
+							</span>
+						</div>
 						<div class="field">
 							<span class="field-label">Status</span>
 							<span class="field-value">
@@ -1904,7 +1915,14 @@ let showExecPanel = $state(false);
 											{/if}
 										</div>
 										<div class="replica-meta">
-											<span class="font-mono">{c.docker_container_id.slice(0, 12)}</span>
+											<span class="replica-cid-row">
+												<span class="font-mono">{c.docker_container_id.slice(0, 12)}</span>
+												<button
+													class="btn-copy-inline"
+													title="Copy container ID"
+													onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(c.docker_container_id.slice(0, 12)); }}
+												><Copy size={10} /></button>
+											</span>
 											{#if c.node_id}
 												{@const node = nodeMap.get(c.node_id)}
 												<span class="meta-sep">·</span>
@@ -2758,6 +2776,27 @@ let showExecPanel = $state(false);
 		word-break: break-all;
 	}
 
+	.field-full { grid-column: 1 / -1; }
+	.field-copy-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.btn-copy-inline {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 2px 4px;
+		border: none;
+		background: transparent;
+		color: var(--text-dim);
+		cursor: pointer;
+		border-radius: 3px;
+		line-height: 1;
+		flex-shrink: 0;
+	}
+	.btn-copy-inline:hover { background: var(--bg-muted); color: var(--text-primary); }
+
 	.section-action {
 		padding: 12px 12px 0;
 	}
@@ -3066,6 +3105,11 @@ let showExecPanel = $state(false);
 		font-size: 11px;
 		color: var(--text-muted);
 		flex-wrap: wrap;
+	}
+	.replica-cid-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
 	}
 	.exit-code { font-family: var(--font-mono); font-size: 10px; }
 	.exit-nonzero { color: #EF4444; }
