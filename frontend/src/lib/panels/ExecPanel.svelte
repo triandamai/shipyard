@@ -38,14 +38,18 @@
 		return () => cleanup();
 	});
 
-	// Mount terminal once the element is available and we're in 'connecting' state.
-	// Return a cleanup so that if Svelte re-runs this effect (e.g. in dev strict
-	// mode) the previous terminal and socket are torn down before a new one starts.
+	// Mount terminal when termEl becomes available and _mountPending is set.
+	// _mountPending is intentionally non-reactive so that subsequent state changes
+	// (connecting → connected) do NOT re-run this effect and trigger cleanup(),
+	// which was previously disposing the terminal the moment the WS connected.
 	$effect(() => {
-		if (termEl && state === 'connecting') {
-			mountTerminal(termEl);
-			return () => cleanup();
-		}
+		const el = termEl; // reactive dependency: fires when the div is bound
+		if (!el || !_mountPending) return;
+		_mountPending = false; // consume the flag — prevents double-mount in dev mode
+		mountTerminal(el);
+		// No cleanup return here: onDestroy(cleanup) handles component teardown.
+		// The only time we want effect-cleanup is during dev double-invocation,
+		// but the _mountPending = false gate already prevents a second mount.
 	});
 
 	async function loadReplicas() {
@@ -73,12 +77,13 @@
 
 	let _pendingContainerId = '';
 	let _pendingToken = '';
+	// Non-reactive gate: set to true once by startExec, consumed once by the
+	// termEl effect. Non-reactive so state changes (connecting→connected) do
+	// NOT re-trigger the effect and accidentally call cleanup().
+	let _mountPending = false;
 
 	async function startExec(containerId: string) {
-		state = 'loading'; // show spinner while fetching token
-		// Fetch the short-lived exec token BEFORE switching to 'connecting' so that
-		// when the $effect sees state === 'connecting' and termEl is bound, the token
-		// is already available and mountTerminal can open the WebSocket immediately.
+		state = 'loading';
 		try {
 			const res = await fetch(
 				`/api/projects/${projectId}/services/${serviceId}/exec/token`,
@@ -90,8 +95,9 @@
 			}
 			_pendingContainerId = containerId;
 			_pendingToken = json.data.token;
-			// Only switch to 'connecting' once the token is ready — this is what
-			// triggers the $effect to call mountTerminal.
+			_mountPending = true;
+			// Switching state to 'connecting' renders the term-wrap div, which
+			// triggers the termEl binding → the effect below fires.
 			state = 'connecting';
 		} catch (e) {
 			errorMsg = String(e);
