@@ -62,18 +62,24 @@
 	}
 
 	function toRaw(rows: ServiceEnv[]): string {
-		return rows.map((e) => `${e.key}=${e.is_secret ? '***' : e.value_encrypted}`).join('\n');
+		return rows.map((e) =>
+			e.is_secret
+				? `# ${e.key}=*** (secret — reveal in list mode to edit)`
+				: `${e.key}=${e.value_encrypted}`
+		).join('\n');
 	}
 
 	function parseRaw(text: string): Array<{ key: string; value: string; is_secret: boolean }> {
 		const result: Array<{ key: string; value: string; is_secret: boolean }> = [];
 		for (const line of text.split('\n')) {
-			const trimmed = line.trim();
-			if (!trimmed || trimmed.startsWith('#')) continue;
-			const eq = trimmed.indexOf('=');
+			// Strip only \r (Windows line endings) — do not trim the line itself
+			const stripped = line.replace(/\r$/, '');
+			if (!stripped || stripped.trimStart().startsWith('#')) continue;
+			const eq = stripped.indexOf('=');
 			if (eq === -1) continue;
-			const key = trimmed.slice(0, eq).trim();
-			const value = trimmed.slice(eq + 1).trim();
+			const key = stripped.slice(0, eq).trim();
+			// Value: everything after the first `=`, no trimming so spaces/special chars are preserved
+			const value = stripped.slice(eq + 1);
 			if (!key) continue;
 			result.push({ key, value, is_secret: false });
 		}
@@ -128,10 +134,16 @@
 	async function saveRow(id: string) {
 		const edit = edits[id];
 		if (!edit || !edit.dirty) return;
+		// Unrevealed secret — value is still masked. Don't overwrite the stored
+		// secret with an empty string. Reveal first, then save.
+		if (edit.is_secret && edit.value === '***') {
+			error = 'Reveal the secret value before saving changes to this row.';
+			return;
+		}
 		saving = true;
 		const res = await api.upsertEnv(serviceId, {
 			key: edit.key,
-			value: edit.value === '***' ? '' : edit.value,
+			value: edit.value,
 			is_secret: edit.is_secret
 		});
 		if (res.error) {
@@ -256,15 +268,18 @@
 	{:else if mode === 'raw'}
 		<div class="raw-section">
 			<div class="raw-hint">
-				One variable per line: <span class="font-mono">KEY=value</span>. Lines starting with <span class="font-mono">#</span> are ignored. Saving will replace all current variables.
+				One variable per line: <span class="font-mono">KEY=value</span>. Lines starting with <span class="font-mono">#</span> are ignored. Secret variables are shown as comments and are <strong>not overwritten</strong> — reveal them in list mode to change their values.
 			</div>
 			<textarea
 				class="raw-textarea font-mono"
 				bind:value={rawText}
 				oninput={() => { rawDirty = true; }}
 				rows={20}
+				wrap="off"
 				placeholder="DATABASE_URL=postgres://...&#10;SECRET_KEY=my-secret"
 				spellcheck="false"
+				autocorrect="off"
+				autocapitalize="off"
 			></textarea>
 		</div>
 
@@ -641,6 +656,10 @@
 		resize: none;
 		outline: none;
 		transition: border-color var(--transition-fast);
+		white-space: pre;
+		overflow-x: auto;
+		overflow-y: auto;
+		box-sizing: border-box;
 	}
 
 	.raw-textarea:focus {

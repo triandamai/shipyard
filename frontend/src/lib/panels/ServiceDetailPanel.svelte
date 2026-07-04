@@ -553,22 +553,80 @@
 		}
 	}
 
-	function detectLevel(line: string): 'error' | 'warn' | 'debug' | 'info' {
-		const l = line.toLowerCase();
-		if (/\b(error|err|fatal|crit)\b/.test(l) || /level=error/.test(l)) return 'error';
-		if (/\b(warn|warning)\b/.test(l) || /level=warn/.test(l)) return 'warn';
-		if (/\b(debug|trace)\b/.test(l) || /level=debug/.test(l)) return 'debug';
-		return 'info';
+	// ── Log line parsing ──────────────────────────────────────────────────────
+
+	type LogLevel = 'error' | 'warn' | 'debug' | 'info' | 'trace';
+
+	interface ParsedLog {
+		ts: string;       // time portion only, e.g. "20:42:40.282"
+		level: LogLevel;
+		target: string;   // module/crate name if present
+		content: string;  // the actual message
 	}
 
-	function clogLineClass(line: string): string {
-		const lvl = detectLevel(line);
-		switch (lvl) {
-			case 'error': return 'clog-line clog-lvl-error';
-			case 'warn':  return 'clog-line clog-lvl-warn';
-			case 'debug': return 'clog-line clog-lvl-debug';
-			default:      return 'clog-line';
+	function stripAnsi(s: string): string {
+		// Strips ESC[ sequences and bare [ sequences (ESC char invisible in SSE stream)
+		return s.replace(/(\x1b\[|(?<!\w)\[)[0-9;]*[A-Za-z]/g, '');
+	}
+
+	const ISO_RE = /^(\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z?)\s*/;
+	const LVL_RE = /^\s*(ERROR|FATAL|CRITICAL|WARN(?:ING)?|INFO|DEBUG|TRACE)\s*/i;
+	// Rust tracing/log target: "some_crate::module " or "some_crate " followed by content
+	const TARGET_RE = /^([a-zA-Z_][a-zA-Z0-9_:]*)\s+/;
+
+	function parseLine(raw: string): ParsedLog {
+		const clean = stripAnsi(raw);
+
+		let rest = clean.trimStart();
+		let ts = '';
+
+		// First ISO timestamp (Docker --timestamps prefix)
+		let m = ISO_RE.exec(rest);
+		if (m) {
+			const ms = m[3] ? m[3].slice(0, 3) : '000';
+			ts = `${m[2]}.${ms}`;
+			rest = rest.slice(m[0].length);
 		}
+
+		// Optional second ISO timestamp (from app's own logger)
+		m = ISO_RE.exec(rest);
+		if (m) {
+			if (!ts) { const ms = m[3] ? m[3].slice(0, 3) : '000'; ts = `${m[2]}.${ms}`; }
+			rest = rest.slice(m[0].length);
+		}
+
+		// Level keyword
+		let level: LogLevel = 'info';
+		const lvlM = LVL_RE.exec(rest);
+		if (lvlM) {
+			const raw_lvl = lvlM[1].toUpperCase();
+			if (raw_lvl === 'ERROR' || raw_lvl === 'FATAL' || raw_lvl === 'CRITICAL') level = 'error';
+			else if (raw_lvl === 'WARN' || raw_lvl === 'WARNING') level = 'warn';
+			else if (raw_lvl === 'DEBUG') level = 'debug';
+			else if (raw_lvl === 'TRACE') level = 'trace';
+			else level = 'info';
+			rest = rest.slice(lvlM[0].length);
+		} else {
+			// Fallback: guess from keywords
+			const lo = clean.toLowerCase();
+			if (/\b(error|fatal|critical)\b/.test(lo)) level = 'error';
+			else if (/\bwarn(ing)?\b/.test(lo)) level = 'warn';
+			else if (/\bdebug\b/.test(lo)) level = 'debug';
+			else if (/\btrace\b/.test(lo)) level = 'trace';
+		}
+
+		// Optional rust-style target (module::path or crate_name)
+		let target = '';
+		const tgtM = TARGET_RE.exec(rest);
+		// Only treat it as a target if it looks like a module path (contains _ or ::)
+		if (tgtM && (tgtM[1].includes('_') || tgtM[1].includes('::'))) {
+			target = tgtM[1];
+			rest = rest.slice(tgtM[0].length);
+			// Strip a leading colon/space separator if present
+			rest = rest.replace(/^:\s*/, '');
+		}
+
+		return { ts, level, target, content: rest.trim() };
 	}
 
 	async function openContainerLogs(c: Container) {
@@ -1129,12 +1187,24 @@
 					</div>
 				{:else}
 					{#each containerLogs as line, i (i)}
-						<div class={clogLineClass(line)}>{line}</div>
+						{@const p = parseLine(line)}
+						<div class="clog-line clog-lvl-{p.level}">
+							{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
+							<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
+							{#if p.target}<span class="clog-target">{p.target}</span>{/if}
+							<span class="clog-msg">{p.content || line}</span>
+						</div>
 					{/each}
 					{#if clogLines.length > 0}
 						<div class="clog-stream-divider">── live ──</div>
 						{#each clogLines as line, i (i)}
-							<div class="{clogLineClass(line)} clog-live">{line}</div>
+							{@const p = parseLine(line)}
+							<div class="clog-line clog-lvl-{p.level} clog-live">
+								{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
+								<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
+								{#if p.target}<span class="clog-target">{p.target}</span>{/if}
+								<span class="clog-msg">{p.content || line}</span>
+							</div>
 						{/each}
 					{/if}
 				{/if}
@@ -2967,47 +3037,93 @@
 	.clog-lines {
 		flex: 1;
 		overflow-y: auto;
-		padding: 6px 0;
-		background: #0B1120;
+		padding: 4px 0;
+		background: #080E1A;
 		font-family: var(--font-mono);
 	}
 
 	/* Log line base */
 	.clog-line {
-		padding: 1.5px 16px;
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		padding: 2px 12px;
 		font-size: 11.5px;
-		line-height: 1.65;
-		color: #9CA3AF;
-		white-space: pre-wrap;
-		word-break: break-all;
+		line-height: 1.6;
 		border-left: 2px solid transparent;
+		min-width: 0;
 	}
 	.clog-line:hover { background: rgba(255,255,255,0.03); }
+	.clog-line.clog-live { background: rgba(255,255,255,0.012); }
 
-	/* Live lines — subtle highlight, don't override level colors */
-	.clog-line.clog-live { background: rgba(255,255,255,0.015); }
-
-	/* Level tints on raw lines */
-	.clog-lvl-error {
-		color: #FCA5A5;
-		background: rgba(239,68,68,0.05);
-		border-left-color: #7F1D1D;
+	/* Timestamp */
+	.clog-ts {
+		flex-shrink: 0;
+		color: #374151;
+		font-size: 10.5px;
+		letter-spacing: 0.01em;
+		min-width: 88px;
+		user-select: none;
 	}
+
+	/* Level badge */
+	.clog-badge {
+		flex-shrink: 0;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		width: 38px;
+		text-align: center;
+		border-radius: 3px;
+		padding: 0 3px;
+		line-height: 1.5;
+	}
+	.clog-badge-info    { color: #6EE7B7; background: rgba(110,231,183,0.08); }
+	.clog-badge-warn    { color: #FCD34D; background: rgba(252,211,77,0.10); }
+	.clog-badge-error   { color: #FCA5A5; background: rgba(252,165,165,0.12); }
+	.clog-badge-debug   { color: #60A5FA; background: rgba(96,165,250,0.08); }
+	.clog-badge-trace   { color: #6B7280; background: rgba(107,114,128,0.08); }
+
+	/* Module/target */
+	.clog-target {
+		flex-shrink: 0;
+		color: #4B5563;
+		font-size: 10.5px;
+		max-width: 180px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Message content */
+	.clog-msg {
+		flex: 1;
+		white-space: pre-wrap;
+		word-break: break-word;
+		min-width: 0;
+	}
+
+	/* Level row tints */
+	.clog-lvl-info  { border-left-color: transparent; }
+	.clog-lvl-info  .clog-msg  { color: #D1FAE5; }
+	.clog-lvl-warn  { border-left-color: #92400E; background: rgba(245,158,11,0.03); }
+	.clog-lvl-warn  .clog-msg  { color: #FDE68A; }
+	.clog-lvl-error { border-left-color: #7F1D1D; background: rgba(239,68,68,0.05); }
+	.clog-lvl-error .clog-msg  { color: #FCA5A5; }
+	.clog-lvl-debug .clog-msg  { color: #6B7280; }
+	.clog-lvl-trace .clog-msg  { color: #374151; }
 	.clog-lvl-error:hover { background: rgba(239,68,68,0.09); }
-	.clog-lvl-warn {
-		color: #FDE68A;
-		background: rgba(245,158,11,0.04);
-		border-left-color: #78350F;
-	}
-	.clog-lvl-warn:hover { background: rgba(245,158,11,0.08); }
-	.clog-lvl-debug { color: #4B5563; opacity: 0.75; }
+	.clog-lvl-warn:hover  { background: rgba(245,158,11,0.07); }
 
 	.clog-stream-divider {
-		padding: 4px 16px;
+		padding: 6px 12px;
 		font-size: 10px;
-		color: #374151;
+		color: #1F2937;
 		letter-spacing: 0.08em;
 		user-select: none;
+		border-top: 1px solid #111827;
+		border-bottom: 1px solid #111827;
+		margin: 2px 0;
 	}
 
 	/* ── Footer ── */
