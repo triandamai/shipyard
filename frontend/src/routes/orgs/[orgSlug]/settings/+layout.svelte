@@ -10,9 +10,12 @@
 	let currentPath = $derived($page.url.pathname);
 
 	let myRole           = $derived($orgStore.myMembership?.role ?? null);
+	let permissions      = $derived($orgStore.myMembership?.permissions ?? []);
 	let isAdmin          = $derived(isAdminRole(myRole));
 	let isOwner          = $derived(isOwnerRole(myRole));
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	// Allow access if admin/owner OR if the member has the explicit settings permission.
+	let canViewSettings  = $derived(isAdmin || permissions.includes('app:org:settings:read') || permissions.includes('app:org:settings:write'));
 
 	const baseTabs = [
 		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2  },
@@ -40,7 +43,7 @@
 	}
 </script>
 
-{#if membershipLoaded && !isAdmin}
+{#if membershipLoaded && !canViewSettings}
 	<div class="no-access">
 		<div class="no-access-icon">
 			<ShieldOff size={40} />
