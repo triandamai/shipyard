@@ -46,17 +46,23 @@ pub async fn send_test_email(
         return Err("SMTP is not enabled".to_string());
     }
 
-    let from: lettre::Address = format!("{} <{}>", config.from_name, config.from_address)
+    // lettre::Address accepts only a bare `user@domain` — the display-name form
+    // `"Name <user@domain>"` must be built as a Mailbox instead.
+    let from_addr: lettre::Address = config.from_address
         .parse()
         .map_err(|e: lettre::address::AddressError| e.to_string())?;
+    let from = lettre::message::Mailbox::new(
+        if config.from_name.is_empty() { None } else { Some(config.from_name.clone()) },
+        from_addr,
+    );
 
     let to_addr: lettre::Address = to
         .parse()
         .map_err(|e: lettre::address::AddressError| e.to_string())?;
 
     let email = Message::builder()
-        .from(from.into())
-        .to(to_addr.into())
+        .from(from)
+        .to(lettre::message::Mailbox::new(None, to_addr))
         .subject(subject)
         .header(ContentType::TEXT_PLAIN)
         .body(body.to_string())
@@ -92,17 +98,21 @@ pub async fn send_invitation_email(
         "You've been invited to join {org_name} on Shipyard.\n\nAccept your invitation:\n{accept_url}\n\nThis link expires in 7 days."
     );
 
-    let from: lettre::Address = format!("{} <{}>", config.from_name, config.from_address)
+    let from_addr: lettre::Address = config.from_address
         .parse()
         .map_err(|e: lettre::address::AddressError| e.to_string())?;
+    let from = lettre::message::Mailbox::new(
+        if config.from_name.is_empty() { None } else { Some(config.from_name.clone()) },
+        from_addr,
+    );
 
-    let to: lettre::Address = to_email
+    let to_addr: lettre::Address = to_email
         .parse()
         .map_err(|e: lettre::address::AddressError| e.to_string())?;
 
     let email = Message::builder()
-        .from(from.into())
-        .to(to.into())
+        .from(from)
+        .to(lettre::message::Mailbox::new(None, to_addr))
         .subject(format!("You've been invited to {org_name} on Shipyard"))
         .header(ContentType::TEXT_PLAIN)
         .body(body)

@@ -3,7 +3,6 @@
 	import { Terminal } from '@xterm/xterm';
 	import { FitAddon } from '@xterm/addon-fit';
 	import { X, Loader2, AlertCircle, Terminal as TermIcon } from '@lucide/svelte';
-	import { env } from '$env/dynamic/public';
 
 	interface Replica {
 		id: string;
@@ -32,10 +31,6 @@
 	let fitAddon: FitAddon | null = null;
 	let ws: WebSocket | null = null;
 	let resizeObs: ResizeObserver | null = null;
-
-	const BACKEND_URL = (env.PUBLIC_BACKEND_URL ?? 'http://localhost:3001')
-		.replace(/\/$/, '');
-	const WS_BASE = BACKEND_URL.replace(/^http/, 'ws');
 
 	// Load replicas on mount
 	$effect(() => {
@@ -126,7 +121,11 @@
 		fitAddon.fit();
 
 		const { cols, rows } = term;
-		const wsUrl = `${WS_BASE}/api/projects/${projectId}/services/${serviceId}/exec`
+		// Use the page's own host so the WebSocket goes through the SvelteKit
+		// server (server.js) which tunnels /api/* upgrades to the backend —
+		// same trust boundary as the HTTP proxy in hooks.server.ts.
+		const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+		const wsUrl = `${wsProto}//${window.location.host}/api/projects/${projectId}/services/${serviceId}/exec`
 			+ `?token=${encodeURIComponent(_pendingToken)}`
 			+ `&container_id=${encodeURIComponent(_pendingContainerId)}`
 			+ `&cmd=/bin/sh`

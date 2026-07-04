@@ -449,7 +449,7 @@ http:
         certResolver: letsencrypt
 
     shipyard-backend:
-      rule: "Host(\`api-${DOMAIN}\`)"
+      rule: "Host(\`api-${DOMAIN}\`) && PathPrefix(\`/openapi/v1\`)"
       entryPoints: [websecure]
       service: shipyard-backend
       tls:
