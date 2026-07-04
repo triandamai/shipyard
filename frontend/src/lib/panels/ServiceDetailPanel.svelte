@@ -490,7 +490,14 @@ let showExecPanel = $state(false);
 		]);
 
 		if (stepsRes.data) depSteps = stepsRes.data.sort((a, b) => a.order_index - b.order_index);
-		if (logsRes.data) depLogs = logsRes.data;
+		if (logsRes.data) {
+			// Merge: HTTP response is authoritative for persisted logs; preserve any
+			// MQTT-only logs that arrived during the fetch but aren't in DB yet.
+			const mqttLogs = depLogs;
+			const httpKeys = new Set(logsRes.data.map(l => `${l.message}|${l.timestamp}`));
+			const mqttOnly = mqttLogs.filter(l => !httpKeys.has(`${l.message}|${l.timestamp}`));
+			depLogs = [...logsRes.data, ...mqttOnly];
+		}
 		isLoadingLogs = false;
 
 		// If dep.status was stale and all steps are already done, finalize immediately

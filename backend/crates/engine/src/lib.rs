@@ -1648,13 +1648,16 @@ impl DeploymentEngine {
                 let lines = self.docker.pull_image(image, tag, auth.as_ref().map(|(u, p, s)| (u.as_str(), p.as_str(), s.as_str()))).await?;
                 for line in &lines {
                     self.insert_log(deployment_id, Some(step_id), "info", line).await;
+                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", line).await;
                 }
                 // Resolve the pulled image to its digest so Docker Swarm sees
                 // a real change on each redeploy (tag strings like `:latest` are
                 // static and Swarm won't restart containers if the ref is unchanged).
                 let resolved = self.docker.resolve_image_digest(image, tag).await?;
                 tracing::info!("Resolved image digest: {resolved}");
-                self.insert_log(deployment_id, Some(step_id), "info", &format!("Resolved: {resolved}")).await;
+                let resolved_msg = format!("Resolved: {resolved}");
+                self.insert_log(deployment_id, Some(step_id), "info", &resolved_msg).await;
+                self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &resolved_msg).await;
                 Ok(resolved)
             }
 
@@ -1695,6 +1698,7 @@ impl DeploymentEngine {
                 for line in &build_lines {
                     if !line.trim().is_empty() {
                         self.insert_log(deployment_id, Some(step_id), "info", line).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", line).await;
                     }
                 }
 

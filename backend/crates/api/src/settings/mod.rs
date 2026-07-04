@@ -148,6 +148,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/api-keys/:key_id", delete(revoke_api_key))
         .route("/admin/deployments", get(list_all_deployments))
         .route("/admin/smtp/test", post(test_smtp))
+        .route("/admin/db/tables", get(list_db_tables))
+        .route("/admin/db/tables/:table_name", delete(drop_db_table))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1436,4 +1438,77 @@ async fn revoke_api_key(
     tracing::info!(key_id = %key_id, org_id = %org_id, user_id = %auth.user_id, "API key revoked");
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── DB table management ───────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct DbTableInfo {
+    name: String,
+    row_count: i64,
+}
+
+/// GET /admin/db/tables — list all user tables with live row counts.
+async fn list_db_tables(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<DbTableInfo>>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+
+    let rows: Vec<(String, i64)> = sqlx::query_as::<_, (String, i64)>(
+        "SELECT t.table_name, COALESCE(s.n_live_tup, 0)::bigint
+         FROM information_schema.tables t
+         LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
+         WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+         ORDER BY t.table_name",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let tables = rows
+        .into_iter()
+        .map(|(name, row_count)| DbTableInfo { name, row_count })
+        .collect();
+
+    Ok(Json(ApiResponse::ok(tables)))
+}
+
+/// DELETE /admin/db/tables/:table_name — drop a table (CASCADE).
+async fn drop_db_table(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(table_name): Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+
+    // Validate the table actually exists to prevent any injection via the path segment.
+    let exists: Option<(String,)> = sqlx::query_as::<_, (String,)>(
+        "SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1",
+    )
+    .bind(&table_name)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if exists.is_none() {
+        return Err(ApiAppError(AppError::NotFound(format!(
+            "Table '{}' not found",
+            table_name
+        ))));
+    }
+
+    // Double any embedded double-quotes so the identifier is always valid SQL.
+    let quoted = table_name.replace('"', "\"\"");
+    sqlx::query(&format!("DROP TABLE IF EXISTS \"{quoted}\" CASCADE"))
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    tracing::warn!(user_id = %auth.user_id, table = %table_name, "Platform DB table dropped");
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "message": format!("Table '{}' dropped", table_name)
+    }))))
 }

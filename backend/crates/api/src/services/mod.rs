@@ -995,6 +995,42 @@ async fn get_connection_info(
         }
     }
 
+    // Substitute real env var values into the URL template so the user gets a
+    // ready-to-use connection string instead of literal USER/PASSWORD/DATABASE
+    // placeholders. The endpoint is authenticated so exposing credentials is fine.
+    let envs: Vec<ServiceEnv> = sqlx::query_as::<_, ServiceEnv>(
+        "SELECT id, service_id, key, value_encrypted, is_secret, created_at
+         FROM service_envs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let secret_key = &state.config.auth.secret_key;
+    // Build key → plaintext value map (decrypt everything for the connection string)
+    let env_map: std::collections::HashMap<String, String> = envs
+        .into_iter()
+        .map(|e| {
+            let v = shipyard_common::crypto::decrypt_or_passthrough(secret_key, &e.value_encrypted);
+            (e.key, v)
+        })
+        .collect();
+
+    // Each entry: (template placeholder, list of env var keys to try in order)
+    let substitutions: &[(&str, &[&str])] = &[
+        ("USER",     &["POSTGRES_USER", "MYSQL_USER", "MONGO_INITDB_ROOT_USERNAME"]),
+        ("PASSWORD", &["POSTGRES_PASSWORD", "MYSQL_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD", "REDIS_PASSWORD"]),
+        ("DATABASE", &["POSTGRES_DB", "MYSQL_DATABASE", "MONGO_INITDB_DATABASE"]),
+    ];
+    for (placeholder, keys) in substitutions {
+        if let Some(val) = keys.iter().find_map(|k| env_map.get(*k)) {
+            if !val.is_empty() {
+                info.url_template = info.url_template.replace(placeholder, val);
+            }
+        }
+    }
+
     Ok(Json(ApiResponse::ok(info)))
 }
 
