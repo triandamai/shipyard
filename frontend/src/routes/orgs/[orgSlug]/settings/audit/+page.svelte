@@ -62,9 +62,9 @@
 		loadPage(prevCursor);
 	}
 
-	$: pageNum = cursorStack.length + 1;
-	$: hasPrev = cursorStack.length > 0;
-	$: hasNext = nextCursor !== null;
+	let pageNum = $derived(cursorStack.length + 1);
+	let hasPrev = $derived(cursorStack.length > 0);
+	let hasNext = $derived(nextCursor !== null);
 </script>
 
 <div class="audit-page">

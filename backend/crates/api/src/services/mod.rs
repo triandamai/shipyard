@@ -1,9 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State, WebSocketUpgrade},
+    extract::ws::{Message, WebSocket},
     http::StatusCode,
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -12,7 +15,7 @@ use shipyard_common::types::{ApiResponse, MqttPayload};
 use shipyard_db::models::{Service, ServiceEnv};
 use shipyard_mqtt::topics;
 
-use crate::auth::AuthUser;
+use crate::auth::{decode_token, AuthUser};
 use crate::error::ApiAppError;
 use crate::middleware::rbac;
 use crate::AppState;
@@ -161,6 +164,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/projects/:project_id/services/:service_id/connection",
             get(get_connection_info),
+        )
+        .route(
+            "/projects/:project_id/services/:service_id/replicas",
+            get(list_replicas),
+        )
+        .route(
+            "/projects/:project_id/services/:service_id/exec",
+            get(exec_ws),
         )
 }
 
@@ -981,4 +992,159 @@ async fn get_connection_info(
     }
 
     Ok(Json(ApiResponse::ok(info)))
+}
+
+// ─── Replicas ─────────────────────────────────────────────────────────────────
+
+/// GET /projects/:project_id/services/:service_id/replicas
+///
+/// Returns the list of live Swarm tasks (one per replica) for the service,
+/// including the container ID needed to open an exec session.
+async fn list_replicas(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+    rbac::require_project_access(&state.db, auth.user_id, project_id).await
+        .map_err(ApiAppError)?;
+
+    let swarm_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
+    let tasks = state.docker.list_tasks(&swarm_name).await.unwrap_or_default();
+
+    let items: Vec<serde_json::Value> = tasks.into_iter().map(|t| serde_json::json!({
+        "id":           t.id,
+        "slot":         t.slot,
+        "node_id":      t.node_id,
+        "container_id": t.container_id,
+        "status":       t.status,
+        "image":        t.image,
+    })).collect();
+
+    Ok(Json(ApiResponse::ok(items)))
+}
+
+// ─── Exec WebSocket ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ExecParams {
+    /// Short-lived JWT passed as a query param (WebSocket API has no custom headers).
+    token:        String,
+    container_id: String,
+    #[serde(default = "default_cmd")]
+    cmd:          String,
+    #[serde(default = "default_cols")]
+    cols:         u16,
+    #[serde(default = "default_rows")]
+    rows:         u16,
+}
+fn default_cmd()  -> String { "/bin/sh".to_string() }
+fn default_cols() -> u16    { 80 }
+fn default_rows() -> u16    { 24 }
+
+/// GET /projects/:project_id/services/:service_id/exec  (WebSocket upgrade)
+///
+/// Bridges the WebSocket to a `docker exec` PTY in the specified container.
+///
+/// Protocol:
+///   Client → Server  binary frame = raw keystrokes (stdin)
+///   Client → Server  text frame   = JSON `{"type":"resize","cols":N,"rows":N}`
+///   Server → Client  binary frame = raw stdout/stderr bytes
+///   Server → Client  text frame   = JSON `{"type":"error","message":"..."}`
+async fn exec_ws(
+    State(state): State<AppState>,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    Query(params): Query<ExecParams>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    // Validate token before upgrading — reject invalid creds before WS handshake.
+    let claims = match decode_token(&params.token, &state.config.auth.jwt_secret) {
+        Ok(c) => c,
+        Err(_) => {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+    };
+
+    let user_id = Uuid::parse_str(&claims.sub).unwrap_or_default();
+    ws.on_upgrade(move |socket| {
+        handle_exec_socket(socket, state, project_id, service_id, params, user_id)
+    })
+}
+
+async fn handle_exec_socket(
+    socket:     WebSocket,
+    state:      AppState,
+    _project_id: Uuid,
+    service_id: Uuid,
+    params:     ExecParams,
+    user_id:    Uuid,
+) {
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    let cmd: Vec<String> = params.cmd.split_whitespace().map(String::from).collect();
+
+    let exec_handle = match state.docker.exec_container(
+        &params.container_id, cmd, params.cols, params.rows,
+    ).await {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = ws_sink.send(Message::Text(
+                serde_json::json!({"type":"error","message": e.to_string()}).to_string()
+            )).await;
+            return;
+        }
+    };
+
+    let exec_id    = exec_handle.exec_id;
+    let mut output = exec_handle.output;
+    let mut stdin  = exec_handle.stdin;
+
+    // Write audit log (fire-and-forget)
+    crate::middleware::audit::write_audit_log(
+        &state.db, Some(user_id), "exec_container", Some("service"), Some(service_id),
+        None, None,
+    ).await;
+
+    // Task 1: container stdout/stderr → WebSocket client
+    let out_task = tokio::spawn(async move {
+        while let Some(chunk) = output.next().await {
+            if chunk.is_empty() { continue; }
+            if ws_sink.send(Message::Binary(chunk.to_vec())).await.is_err() {
+                break;
+            }
+        }
+        let _ = ws_sink.close().await;
+    });
+
+    // Task 2: WebSocket client → container stdin; resize messages handled inline
+    let docker = state.docker.clone();
+    let exec_id_clone = exec_id.clone();
+    let in_task = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt as _;
+        while let Some(Ok(msg)) = ws_stream.next().await {
+            match msg {
+                Message::Binary(data) => {
+                    if stdin.write_all(&data).await.is_err() { break; }
+                }
+                Message::Text(text) => {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if v["type"] == "resize" {
+                            let cols = v["cols"].as_u64().unwrap_or(80) as u16;
+                            let rows = v["rows"].as_u64().unwrap_or(24) as u16;
+                            let _ = docker.resize_exec(&exec_id_clone, cols, rows).await;
+                        }
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        // Dropping stdin signals EOF to the container process.
+        drop(stdin);
+    });
+
+    // Drive both tasks; cancel the other when one finishes.
+    tokio::select! {
+        _ = out_task => {}
+        _ = in_task  => {}
+    }
 }

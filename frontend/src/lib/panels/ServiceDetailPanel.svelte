@@ -23,6 +23,7 @@
 	import { subscribeToService, subscribeToDeployment, subscribeToDeploymentSteps } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import EnvManagerPanel from './EnvManagerPanel.svelte';
+import ExecPanel from './ExecPanel.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
@@ -117,7 +118,8 @@
 	const CLOG_TAIL_OPTIONS = [50, 100, 200, 500, 1000] as const;
 
 	// ── Env panel ────────────────────────────────────────────────────
-	let showEnvPanel = $state(false);
+	let showEnvPanel  = $state(false);
+let showExecPanel = $state(false);
 
 	// ── Settings edit state ──────────────────────────────────────────
 	let editReplicas = $state(1);
@@ -1111,6 +1113,16 @@
 	</div>
 {/if}
 
+<!-- ─── Exec Terminal ─────────────────────────────────────────────────── -->
+{#if showExecPanel && service}
+	<ExecPanel
+		projectId={projectId}
+		serviceId={serviceId}
+		serviceName={service.name}
+		onClose={() => showExecPanel = false}
+	/>
+{/if}
+
 <!-- ─── Env Manager Overlay ───────────────────────────────────────────── -->
 {#if showEnvPanel && service}
 	<div class="env-overlay">
@@ -1298,6 +1310,12 @@
 				</div>
 			</div>
 			<div class="header-actions">
+				{#if service.status === 'running'}
+					<button class="btn btn-secondary btn-xs" onclick={() => showExecPanel = true} title="Open a shell in this container">
+						<Terminal size={12} />
+						Terminal
+					</button>
+				{/if}
 				<button class="btn btn-secondary btn-xs" onclick={() => showEnvPanel = true} title="Manage env vars">
 					<Settings size={12} />
 					Env

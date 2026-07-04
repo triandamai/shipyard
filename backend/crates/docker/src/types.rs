@@ -1,5 +1,9 @@
+use bytes::Bytes;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
+use tokio::io::AsyncWrite;
 
 /// Specification for creating/updating a swarm service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +197,13 @@ pub struct ServiceSummary {
     pub labels: HashMap<String, String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+/// A live exec session attached to a container — stdin writer + stdout/stderr stream.
+pub struct ExecHandle {
+    pub exec_id: String,
+    pub stdin: Pin<Box<dyn AsyncWrite + Send>>,
+    pub output: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
 }
 
 /// Summary of a swarm node.

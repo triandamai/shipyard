@@ -1,4 +1,5 @@
 use bollard::container::{InspectContainerOptions, LogsOptions, RestartContainerOptions, StopContainerOptions};
+use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{
     EndpointPortConfig, EndpointPortConfigProtocolEnum, EndpointPortConfigPublishModeEnum,
@@ -13,7 +14,8 @@ use bollard::network::CreateNetworkOptions;
 use bollard::service::{InspectServiceOptions, ListServicesOptions, UpdateServiceOptions};
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
-use futures::StreamExt;
+use bytes::Bytes;
+use futures::{StreamExt, TryStreamExt};
 use shipyard_common::error::{AppError, AppResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -128,6 +130,19 @@ pub trait DockerEngine: Send + Sync {
     /// Return the swarm join tokens (worker + manager) and the advertise address.
     /// Returns an error if this node is not a swarm manager.
     async fn get_join_tokens(&self) -> AppResult<SwarmJoinTokens>;
+
+    /// Open an interactive exec session in a running container with a PTY.
+    /// Returns an `ExecHandle` with a stdin writer and a stdout/stderr byte stream.
+    async fn exec_container(
+        &self,
+        container_id: &str,
+        cmd: Vec<String>,
+        cols: u16,
+        rows: u16,
+    ) -> AppResult<ExecHandle>;
+
+    /// Resize the TTY of an active exec session.
+    async fn resize_exec(&self, exec_id: &str, cols: u16, rows: u16) -> AppResult<()>;
 }
 
 // ─── Concrete implementation ──────────────────────────────────────────────────
@@ -1192,6 +1207,62 @@ impl DockerEngine for BollardDockerEngine {
 
             ServiceSummary { id, name, image, replicas_running, replicas_desired, mode, ports, labels, created_at, updated_at }
         }).collect())
+    }
+
+    async fn exec_container(
+        &self,
+        container_id: &str,
+        cmd: Vec<String>,
+        cols: u16,
+        rows: u16,
+    ) -> AppResult<ExecHandle> {
+        let exec_id = self.client
+            .create_exec(container_id, CreateExecOptions {
+                attach_stdin:  Some(true),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                tty:           Some(true),
+                cmd:           Some(cmd),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| AppError::Docker(format!("create_exec failed: {e}")))?
+            .id;
+
+        let result = self.client
+            .start_exec(&exec_id, Some(StartExecOptions { detach: false, tty: true, ..Default::default() }))
+            .await
+            .map_err(|e| AppError::Docker(format!("start_exec failed: {e}")))?;
+
+        let (stdin, output) = match result {
+            StartExecResults::Attached { input, output } => (input, output),
+            StartExecResults::Detached => {
+                return Err(AppError::Docker("exec started in detached mode".into()));
+            }
+        };
+
+        // Resize the PTY now that we have the exec ID.
+        let _ = self.client
+            .resize_exec(&exec_id, ResizeExecOptions { width: cols, height: rows })
+            .await;
+
+        let byte_stream = output
+            .map_ok(|log| Bytes::from(log.into_bytes()))
+            .map(|r| r.unwrap_or_default())
+            .boxed();
+
+        Ok(ExecHandle {
+            exec_id,
+            stdin: Box::pin(stdin),
+            output: Box::pin(byte_stream),
+        })
+    }
+
+    async fn resize_exec(&self, exec_id: &str, cols: u16, rows: u16) -> AppResult<()> {
+        self.client
+            .resize_exec(exec_id, ResizeExecOptions { width: cols, height: rows })
+            .await
+            .map_err(|e| AppError::Docker(format!("resize_exec failed: {e}")))
     }
 }
 
