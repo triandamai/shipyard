@@ -189,48 +189,39 @@ async fn load_webhook_token(state: &AppState, service_id: Uuid) -> Result<String
     ))
 }
 
-/// Load the `__GIT_BRANCH__` value from `service_envs`. Returns `None` if not set.
-async fn load_git_branch(
-    state: &AppState,
-    service_id: Uuid,
-) -> Result<Option<String>, ApiAppError> {
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT value_encrypted FROM service_envs
-         WHERE service_id = $1 AND key = '__GIT_BRANCH__'
-         LIMIT 1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    Ok(row.map(|(v,)| {
-        shipyard_common::crypto::decrypt_or_passthrough(&state.config.auth.secret_key, &v)
-    }))
-}
-
-/// Core logic: if the pushed branch matches the configured branch, trigger a
-/// deployment. Returns 200 either way (webhook receivers should not 4xx on
-/// ignored events, as that causes providers to disable the webhook).
+/// Core logic: if auto_deploy is enabled and the pushed branch matches the
+/// service's git_branch, trigger a deployment.
+/// Returns 200 in all non-error cases so providers don't disable the webhook.
 async fn handle_push(
     state: &AppState,
     service_id: Uuid,
     pushed_branch: &str,
     source_ref: &str,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    let configured_branch = load_git_branch(state, service_id).await?;
+    // Read git_branch and auto_deploy from the services table directly.
+    let row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
+        "SELECT git_branch, auto_deploy FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let trigger = match &configured_branch {
-        Some(b) => b == pushed_branch,
-        // No branch configured — treat any push as a trigger
-        None => true,
-    };
+    let (configured_branch, auto_deploy) = row.ok_or_else(|| {
+        ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))
+    })?;
 
-    if !trigger {
+    if !auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "auto-deploy disabled for this service",
+        }))));
+    }
+
+    if configured_branch != pushed_branch {
         tracing::debug!(
             service_id = %service_id,
             pushed_branch,
-            configured = ?configured_branch,
+            configured_branch,
             "webhook: branch mismatch, skipping deploy"
         );
         return Ok(Json(ApiResponse::ok(serde_json::json!({

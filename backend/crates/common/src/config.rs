@@ -14,6 +14,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub redis: RedisConfig,
     pub data_dir: String,
+    /// Public URL of the frontend app, used for invitation links and similar.
+    /// Set via SHIPYARD__APP_URL. Defaults to http://localhost:5173.
+    #[serde(default = "default_app_url")]
+    pub app_url: String,
+}
+
+fn default_app_url() -> String {
+    "http://localhost:5173".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -184,6 +192,7 @@ impl Default for AppConfig {
             },
             redis: RedisConfig { url: None },
             data_dir: "/opt/shipyard/data".to_string(),
+            app_url: default_app_url(),
         }
     }
 }
@@ -231,6 +240,7 @@ impl AppConfig {
             .set_default("git.bitbucket_client_id", "")?
             .set_default("git.bitbucket_client_secret", "")?
             .set_default("data_dir", "/opt/shipyard/data")?
+            .set_default("app_url", "http://localhost:5173")?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("SHIPYARD").separator("__"))
             .build()?;

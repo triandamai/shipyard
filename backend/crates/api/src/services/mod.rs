@@ -90,6 +90,8 @@ pub struct UpdateServiceRequest {
     pub image: Option<String>,
     pub cpu_limit: Option<f64>,
     pub memory_limit_mb: Option<i64>,
+    pub git_branch: Option<String>,
+    pub auto_deploy: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,7 +192,7 @@ async fn list_services(
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
 
     let services = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE project_id = $1
          ORDER BY created_at ASC",
@@ -248,9 +250,9 @@ async fn create_service(
     let ports = serde_json::to_value(&body.ports).unwrap_or_default();
     let replicas = body.replicas.max(1);
     let service = sqlx::query_as::<_, Service>(
-        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, $9, $10, 'stopped', $11, NULL, NULL, NULL, NOW(), NOW())
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
+        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, true, $9, $10, 'stopped', $11, NULL, NULL, NULL, NOW(), NOW())
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
     )
     .bind(service_id)
     .bind(project_id)
@@ -324,7 +326,7 @@ async fn get_service(
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
     let service = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -347,15 +349,9 @@ async fn update_service(
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
 
-    if body.name.is_none() && body.status.is_none() && body.replicas.is_none() && body.ports.is_none() && body.image.is_none() {
-        return Err(ApiAppError(AppError::BadRequest(
-            "At least one field must be provided".to_string(),
-        )));
-    }
-
     // Fetch current service first
     let current = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -366,23 +362,23 @@ async fn update_service(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
 
-    let new_name = body.name.unwrap_or(current.name);
-    let new_status = body.status.unwrap_or(current.status);
-    let new_replicas = body.replicas.unwrap_or(current.replicas).max(0);
-    let new_ports = match body.ports {
-        Some(p) => serde_json::to_value(p).unwrap_or(current.ports),
-        None => current.ports,
-    };
-    let new_image = body.image.unwrap_or(current.image);
-    let new_cpu = match body.cpu_limit { Some(v) => Some(v), None => current.cpu_limit };
-    let new_mem = match body.memory_limit_mb { Some(v) => Some(v), None => current.memory_limit_mb };
+    let new_name       = body.name.unwrap_or(current.name);
+    let new_status     = body.status.unwrap_or(current.status);
+    let new_replicas   = body.replicas.unwrap_or(current.replicas).max(0);
+    let new_ports      = body.ports.map(|p| serde_json::to_value(p).unwrap_or(current.ports.clone())).unwrap_or(current.ports);
+    let new_image      = body.image.unwrap_or(current.image);
+    let new_cpu        = body.cpu_limit.or(current.cpu_limit);
+    let new_mem        = body.memory_limit_mb.or(current.memory_limit_mb);
+    let new_git_branch = body.git_branch.unwrap_or(current.git_branch);
+    let new_auto_deploy = body.auto_deploy.unwrap_or(current.auto_deploy);
 
     let service = sqlx::query_as::<_, Service>(
         "UPDATE services
          SET name = $1, status = $2, replicas = $3, ports = $4, image = $5,
-             cpu_limit = $6, memory_limit_mb = $7, updated_at = NOW()
-         WHERE id = $8 AND project_id = $9
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
+             cpu_limit = $6, memory_limit_mb = $7, git_branch = $8, auto_deploy = $9,
+             updated_at = NOW()
+         WHERE id = $10 AND project_id = $11
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, created_at, updated_at",
     )
     .bind(&new_name)
     .bind(&new_status)
@@ -391,6 +387,8 @@ async fn update_service(
     .bind(&new_image)
     .bind(new_cpu)
     .bind(new_mem)
+    .bind(&new_git_branch)
+    .bind(new_auto_deploy)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)

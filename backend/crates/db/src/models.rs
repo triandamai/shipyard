@@ -87,6 +87,7 @@ pub struct Service {
     pub image: String,
     pub git_repo_url: Option<String>,
     pub git_branch: String,
+    pub auto_deploy: bool,
     pub directory_path: String,
     pub ports: serde_json::Value,
     pub status: String,

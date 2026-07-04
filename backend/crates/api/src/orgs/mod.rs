@@ -648,7 +648,7 @@ async fn invite_member(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     if let Some(org) = org {
-        let base_url = state.config.git.frontend_url.clone();
+        let base_url = state.config.app_url.clone();
         let smtp_cfg = crate::email::load_smtp_config(&state.db, &state.config.smtp).await;
         if let Err(e) = crate::email::send_invitation_email(
             &smtp_cfg,

@@ -1308,28 +1308,33 @@ impl DeploymentEngine {
         directory_path: &str,
         compose_file: &str,
     ) -> AppResult<()> {
-        // Collect env vars from all child services and write .env so docker
-        // compose can use them for variable substitution in the YAML.
-        let children = sqlx::query_as::<_, (String, String)>(
+        // Collect env vars from the root service itself and all child services,
+        // then write a .env file so docker compose can substitute ${VAR} in YAML.
+        // Root service vars take lowest priority; child vars (deduplicated by key) win.
+        let all_envs = sqlx::query_as::<_, (String, String)>(
             "SELECT e.key, e.value_encrypted
              FROM service_envs e
              JOIN services s ON s.id = e.service_id
-             WHERE s.service_parent_id = $1
+             WHERE (s.id = $1 OR s.service_parent_id = $1)
                AND e.key NOT LIKE '__\\_%' ESCAPE '\\'
-             ORDER BY e.key ASC",
+             ORDER BY (s.id = $1)::int ASC, e.key ASC",
         )
         .bind(service_id)
         .fetch_all(&self.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        if !children.is_empty() {
-            let env_content: String = children
+        if !all_envs.is_empty() {
+            // Deduplicate: last writer wins (child entries come after root entries due to ORDER BY).
+            let mut env_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for (k, v) in all_envs {
+                let plain = shipyard_common::crypto::decrypt_or_passthrough(&self.secret_key, &v);
+                env_map.insert(k, plain);
+            }
+            let env_content: String = env_map
                 .into_iter()
-                .map(|(k, v)| {
-                    let plain = shipyard_common::crypto::decrypt_or_passthrough(&self.secret_key, &v);
-                    format!("{k}={plain}\n")
-                })
+                .map(|(k, v)| format!("{k}={v}\n"))
                 .collect();
 
             tokio::fs::write(format!("{directory_path}/.env"), env_content)
@@ -1338,7 +1343,7 @@ impl DeploymentEngine {
                     AppError::Internal(format!("Failed to write .env file: {e}"))
                 })?;
 
-            let msg = "Wrote child service env vars to .env for variable substitution";
+            let msg = "Wrote service env vars to .env for ${VAR} substitution in compose YAML";
             self.insert_log(deployment_id, Some(step_id), "info", msg).await;
             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", msg).await;
         }
@@ -1352,26 +1357,65 @@ impl DeploymentEngine {
         self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
 
-        let output = tokio::process::Command::new("docker")
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::process::Command;
+        use tokio::sync::mpsc;
+
+        let mut child = Command::new("docker")
             .args(["compose", "-f", &effective_file, "up", "-d", "--remove-orphans"])
             .current_dir(directory_path)
-            .output()
-            .await
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| AppError::Internal(format!("Failed to spawn docker compose: {e}")))?;
 
-        // Stream stdout + stderr as deployment logs
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Read stdout and stderr concurrently — docker compose writes image pull
+        // progress to stderr, so sequential reading would block on stdout first.
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
-        for line in stdout.lines().chain(stderr.lines()) {
+        let stdout_reader = child.stdout.take().map(BufReader::new);
+        let stderr_reader = child.stderr.take().map(BufReader::new);
+
+        let tx_out = tx.clone();
+        let stdout_task = tokio::spawn(async move {
+            if let Some(reader) = stdout_reader {
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx_out.send(line);
+                }
+            }
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            if let Some(reader) = stderr_reader {
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+
+        // Forward lines to deployment logs as they arrive from either stream.
+        while let Some(line) = rx.recv().await {
             if !line.trim().is_empty() {
-                self.insert_log(deployment_id, Some(step_id), "info", line).await;
-                self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", line).await;
+                // Strip ANSI escape codes (docker compose uses them for colour output).
+                let clean: String = strip_ansi(&line);
+                if !clean.trim().is_empty() {
+                    self.insert_log(deployment_id, Some(step_id), "info", &clean).await;
+                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &clean).await;
+                }
             }
         }
 
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(-1);
+        let _ = tokio::join!(stdout_task, stderr_task);
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| AppError::Internal(format!("docker compose wait error: {e}")))?;
+
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
             return Err(AppError::Internal(format!(
                 "'docker compose up -d' exited with code {code}"
             )));
@@ -2291,6 +2335,26 @@ fn is_convenience_domain(hostname: &str) -> bool {
 }
 
 /// Map a `docker compose ps` State/Status string to a `container_status` enum value.
+/// Remove ANSI escape sequences from a string (colour codes, cursor moves, etc.).
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // ESC [ ... final-byte  (CSI sequences)
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for ch in chars.by_ref() {
+                    if ch.is_ascii_alphabetic() { break; }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn compose_state_to_container_status(state: &str) -> &'static str {
     let lower = state.to_lowercase();
     if lower.contains("running") {

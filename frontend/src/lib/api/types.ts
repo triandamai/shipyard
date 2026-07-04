@@ -166,6 +166,7 @@ export interface Service {
 	image: string;
 	git_repo_url: string | null;
 	git_branch: string;
+	auto_deploy: boolean;
 	directory_path: string;
 	ports: string[];
 	status: string;

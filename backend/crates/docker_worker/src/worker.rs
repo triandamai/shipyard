@@ -299,22 +299,31 @@ impl DockerEventWorker {
             .and_then(|a| a.attributes.as_ref())
             .map(|attrs| serde_json::to_value(attrs).unwrap_or_default());
 
-        sqlx::query(
-            r#"
-            INSERT INTO docker_events (event_type, action, actor_id, actor_attributes, raw)
-            VALUES ($1, $2, $3, $4, $5)
-            "#,
-        )
-        .bind(&event_type)
-        .bind(&action)
-        .bind(&actor_id)
-        .bind(&actor_attributes)
-        .bind(&raw)
-        .execute(&self.db)
-        .await
-        .ok(); // best-effort audit log — never fail a real event handler for this
+        // Only persist events that carry meaningful state changes.
+        // exec_* are health-check probes that fire every few seconds — skip them.
+        let is_exec_noise = action.starts_with("exec_");
+        if !is_exec_noise {
+            sqlx::query(
+                r#"
+                INSERT INTO docker_events (event_type, action, actor_id, actor_attributes, raw)
+                VALUES ($1, $2, $3, $4, $5)
+                "#,
+            )
+            .bind(&event_type)
+            .bind(&action)
+            .bind(&actor_id)
+            .bind(&actor_attributes)
+            .bind(&raw)
+            .execute(&self.db)
+            .await
+            .ok();
+        }
 
-        tracing::debug!(event_type = %event_type, action = %action, actor_id = %actor_id, "Docker event");
+        if is_exec_noise {
+            tracing::trace!(event_type = %event_type, action = %action, actor_id = %actor_id, "Docker event");
+        } else {
+            tracing::debug!(event_type = %event_type, action = %action, actor_id = %actor_id, "Docker event");
+        }
 
         // Route to the appropriate handler.
         let actor = event.actor.as_ref();
@@ -496,10 +505,9 @@ impl DockerEventWorker {
                 .ok();
             }
             other => {
-                tracing::debug!(
-                    container_id = %container_id,
-                    "Ignoring container action: {other}"
-                );
+                if !other.starts_with("exec_") {
+                    tracing::debug!(container_id = %container_id, "Ignoring container action: {other}");
+                }
                 return Ok(());
             }
         }

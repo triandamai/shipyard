@@ -278,7 +278,14 @@ class ApiClient {
 	async updateService(
 		projectId: string,
 		serviceId: string,
-		data: Partial<{ name: string; replicas: number; ports: string[]; image: string }>
+		data: Partial<{
+			name: string;
+			replicas: number;
+			ports: string[];
+			image: string;
+			git_branch: string;
+			auto_deploy: boolean;
+		}>
 	): Promise<ApiResponse<Service>> {
 		return this.put(`/projects/${projectId}/services/${serviceId}`, data);
 	}

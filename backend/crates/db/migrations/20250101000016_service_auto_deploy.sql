@@ -1,0 +1,2 @@
+ALTER TABLE services
+    ADD COLUMN IF NOT EXISTS auto_deploy BOOLEAN NOT NULL DEFAULT true;

@@ -56,7 +56,7 @@ import ExecPanel from './ExecPanel.svelte';
 	let canDelete = $derived(can(myRole, myPerms, 'service:delete'));
 
 	// ── Tabs ─────────────────────────────────────────────────────────
-	type Tab = 'overview' | 'deploy' | 'logs' | 'replicas' | 'domains' | 'settings' | 'monitor';
+	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings' | 'monitor';
 	let activeTab = $state<Tab>('overview');
 
 	// ── Core state ───────────────────────────────────────────────────
@@ -93,6 +93,20 @@ import ExecPanel from './ExecPanel.svelte';
 	let expandedSteps = $state<Set<string>>(new Set());
 	let isLive = $state(false);
 	let depMqttCleanup: (() => void) | null = null;
+	let logListEl = $state<HTMLDivElement | null>(null);
+
+	function scrollLogsToBottom() {
+		if (!logListEl) return;
+		requestAnimationFrame(() => {
+			if (logListEl) logListEl.scrollTop = logListEl.scrollHeight;
+		});
+	}
+
+	$effect(() => {
+		// Re-run whenever depLogs grows; scroll the log list to the bottom.
+		depLogs.length;
+		scrollLogsToBottom();
+	});
 
 	// ── Domains ──────────────────────────────────────────────────────
 	let domains = $state<Domain[]>([]);
@@ -163,13 +177,20 @@ let showExecPanel = $state(false);
 		}
 	}
 
-	// ── Webhook ───────────────────────────────────────────────────────
-	let webhookToken     = $state('');
-	let webhookProvider  = $state<'github' | 'gitlab' | 'gitea'>('github');
-	let isLoadingWebhook = $state(false);
-	let webhookCopied    = $state(false);
+	// ── Webhook / Git deploy config ───────────────────────────────────
+	let webhookToken      = $state('');
+	let webhookProvider   = $state<'github' | 'gitlab' | 'gitea'>('github');
+	let isLoadingWebhook  = $state(false);
+	let webhookCopied     = $state(false);
 	let isRotatingWebhook = $state(false);
-	let rotateConfirm    = $state(false);
+	let rotateConfirm     = $state(false);
+
+	// Git deploy config — local editable copies
+	let gitAutoDeploy   = $state(true);
+	let gitBranch       = $state('main');
+	let gitSaving       = $state(false);
+	let gitSaveOk       = $state(false);
+	let gitSaveError    = $state('');
 
 	// ── MQTT cleanup ─────────────────────────────────────────────────
 	let unsubscribeService: (() => void) | null = null;
@@ -442,6 +463,11 @@ let showExecPanel = $state(false);
 				depSteps = depSteps.map(s =>
 					s.id === meta.step_id ? { ...s, status: meta.status } : s
 				);
+				// Auto-expand the step when it starts running so logs are visible.
+				if (meta.status === 'running') {
+					expandedSteps = new Set([...expandedSteps, meta.step_id as string]);
+					scrollLogsToBottom();
+				}
 				if (allStepsTerminal(depSteps)) finalizeDepMqtt();
 
 			} else if (topic.endsWith('/log')) {
@@ -499,6 +525,13 @@ let showExecPanel = $state(false);
 			depLogs = [...logsRes.data, ...mqttOnly];
 		}
 		isLoadingLogs = false;
+
+		// Auto-expand the running step (or the last step for finished deployments).
+		const runningStep = depSteps.find(s => s.status === 'running');
+		const lastStep = depSteps[depSteps.length - 1];
+		const autoExpand = runningStep ?? lastStep;
+		if (autoExpand) expandedSteps = new Set([autoExpand.id]);
+		scrollLogsToBottom();
 
 		// If dep.status was stale and all steps are already done, finalize immediately
 		if (isActive && allStepsTerminal(depSteps)) finalizeDepMqtt();
@@ -932,6 +965,30 @@ let showExecPanel = $state(false);
 		setTimeout(() => { webhookCopied = false; }, 2000);
 	}
 
+	function initGitConfig() {
+		if (!service) return;
+		gitAutoDeploy = service.auto_deploy;
+		gitBranch     = service.git_branch ?? 'main';
+	}
+
+	async function saveGitConfig() {
+		gitSaving = true;
+		gitSaveOk = false;
+		gitSaveError = '';
+		const res = await api.updateService(projectId, serviceId, {
+			git_branch: gitBranch.trim() || 'main',
+			auto_deploy: gitAutoDeploy,
+		});
+		if (res.error) {
+			gitSaveError = res.error.message;
+		} else {
+			if (res.data) service = res.data;
+			gitSaveOk = true;
+			setTimeout(() => { gitSaveOk = false; }, 2500);
+		}
+		gitSaving = false;
+	}
+
 	function addPort() { editPorts = [...editPorts, '']; }
 	function removePort(i: number) { editPorts = editPorts.filter((_, idx) => idx !== i); }
 	function updatePort(i: number, val: string) {
@@ -946,6 +1003,7 @@ let showExecPanel = $state(false);
 		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
 		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
+		if (tab === 'git') { initGitConfig(); void loadWebhookToken(); }
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'settings') {
@@ -1023,7 +1081,7 @@ let showExecPanel = $state(false);
 		serviceStore.setActiveService(null);
 	});
 
-	const tabs: { id: Tab; label: string }[] = [
+	const baseTabs: { id: Tab; label: string }[] = [
 		{ id: 'overview',  label: 'Overview'  },
 		{ id: 'deploy',    label: 'Deploy'    },
 		{ id: 'logs',      label: 'Logs'      },
@@ -1032,6 +1090,20 @@ let showExecPanel = $state(false);
 		{ id: 'monitor',   label: 'Monitor'   },
 		{ id: 'settings',  label: 'Settings'  },
 	];
+	let tabs = $derived(
+		service?.type === 'git'
+			? [
+				{ id: 'overview' as Tab, label: 'Overview' },
+				{ id: 'deploy'   as Tab, label: 'Deploy'   },
+				{ id: 'logs'     as Tab, label: 'Logs'     },
+				{ id: 'git'      as Tab, label: 'Git'      },
+				{ id: 'replicas' as Tab, label: 'Replicas' },
+				{ id: 'domains'  as Tab, label: 'Domains'  },
+				{ id: 'monitor'  as Tab, label: 'Monitor'  },
+				{ id: 'settings' as Tab, label: 'Settings' },
+			]
+			: baseTabs
+	);
 </script>
 
 <!-- ─── Deployment Log Viewer Overlay ────────────────────────────────── -->
@@ -1052,7 +1124,7 @@ let showExecPanel = $state(false);
 		{#if isLoadingLogs}
 			<div class="log-loading"><div class="spinner-sm"></div> Loading…</div>
 		{:else}
-			<div class="accordion-list">
+			<div class="accordion-list" bind:this={logListEl}>
 				{#each depSteps as step (step.id)}
 					{@const logs = stepLogsMap[step.id] ?? []}
 					{@const expanded = expandedSteps.has(step.id)}
@@ -1682,6 +1754,133 @@ let showExecPanel = $state(false);
 							{/each}
 						</ul>
 					{/if}
+				</div>
+
+			<!-- ── Git deploy config ── -->
+			{:else if activeTab === 'git'}
+				<div class="git-config-section">
+
+					<!-- Auto-deploy toggle -->
+					<div class="git-card">
+						<div class="git-card-header">
+							<div class="git-card-title">Deploy on push</div>
+							<label class="toggle-switch">
+								<input type="checkbox" bind:checked={gitAutoDeploy} />
+								<span class="toggle-track"></span>
+							</label>
+						</div>
+						<p class="git-card-desc">
+							Automatically trigger a deployment whenever a push is detected on the
+							configured branch. The webhook URL below must be registered with your
+							Git provider.
+						</p>
+
+						<!-- Branch input -->
+						<div class="git-field">
+							<label class="git-label" for="git-branch-input">Branch to watch</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">⎇</span>
+								<input
+									id="git-branch-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={gitBranch}
+									placeholder="main"
+									disabled={!gitAutoDeploy}
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
+						</div>
+
+						{#if gitSaveError}
+							<p class="git-error">{gitSaveError}</p>
+						{/if}
+
+						<div class="git-save-row">
+							<button
+								class="btn btn-primary btn-sm"
+								onclick={saveGitConfig}
+								disabled={gitSaving}
+							>
+								{#if gitSaving}
+									<span class="spinner-xs"></span>Saving…
+								{:else if gitSaveOk}
+									Saved
+								{:else}
+									Save
+								{/if}
+							</button>
+						</div>
+					</div>
+
+					<!-- Webhook URL -->
+					<div class="git-card">
+						<div class="git-card-header">
+							<div class="git-card-title">Webhook URL</div>
+							<div class="webhook-provider-tabs">
+								{#each (['github', 'gitlab', 'gitea'] as const) as p}
+									<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
+										{p.charAt(0).toUpperCase() + p.slice(1)}
+									</button>
+								{/each}
+							</div>
+						</div>
+						<p class="git-card-desc">
+							Add this URL as a webhook in your Git provider with the <strong>push</strong> event.
+							No secret header is required — the token in the URL authenticates the request.
+						</p>
+
+						{#if isLoadingWebhook}
+							<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
+						{:else}
+							<div class="webhook-url-row">
+								<input
+									class="webhook-url-input"
+									readonly
+									value={webhookToken
+										? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+										: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
+								/>
+								<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
+									{#if webhookCopied}
+										<CheckCircle2 size={13} />Copied
+									{:else}
+										<Copy size={13} />Copy
+									{/if}
+								</button>
+							</div>
+
+							<div class="webhook-actions">
+								{#if rotateConfirm}
+									<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
+									<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+										{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
+									</button>
+									<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
+								{:else}
+									<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
+										<RefreshCw size={11} />Rotate URL
+									</button>
+								{/if}
+							</div>
+						{/if}
+					</div>
+
+					<!-- Repo info (read-only) -->
+					{#if service?.git_repo_url}
+						<div class="git-card">
+							<div class="git-card-title">Repository</div>
+							<div class="git-repo-info">
+								<span class="git-repo-label">URL</span>
+								<a class="git-repo-url" href={service.git_repo_url} target="_blank" rel="noreferrer">
+									{service.git_repo_url}
+								</a>
+							</div>
+						</div>
+					{/if}
+
 				</div>
 
 			<!-- ── Replicas ── -->
@@ -3801,4 +4000,155 @@ let showExecPanel = $state(false);
 			grid-template-columns: 1fr;
 		}
 	}
+
+	/* ── Git tab ─────────────────────────────────────────────────── */
+	.git-config-section {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		padding: 16px;
+	}
+
+	.git-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.git-card-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.git-card-title {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+
+	.git-card-desc {
+		font-size: 12px;
+		color: var(--text-muted);
+		margin: 0;
+		line-height: 1.5;
+	}
+
+	.git-field { display: flex; flex-direction: column; gap: 6px; }
+
+	.git-label {
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--text-muted);
+	}
+
+	.git-branch-row {
+		display: flex;
+		align-items: center;
+		gap: 0;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		overflow: hidden;
+		background: var(--bg-base);
+	}
+
+	.git-branch-icon {
+		padding: 0 10px;
+		font-size: 14px;
+		color: var(--text-muted);
+		background: var(--bg-elevated);
+		border-right: 1px solid var(--border);
+		height: 32px;
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+	}
+
+	.git-branch-input {
+		flex: 1;
+		padding: 0 10px;
+		height: 32px;
+		font-size: 13px;
+		font-family: var(--font-mono, monospace);
+		background: transparent;
+		border: none;
+		outline: none;
+		color: var(--text-primary);
+	}
+	.git-branch-input:disabled { color: var(--text-muted); cursor: not-allowed; }
+
+	.git-hint {
+		font-size: 11px;
+		color: var(--text-muted);
+		margin: 0;
+	}
+
+	.git-error {
+		font-size: 12px;
+		color: #dc2626;
+		margin: 0;
+	}
+
+	.git-save-row {
+		display: flex;
+		justify-content: flex-end;
+	}
+
+	.git-repo-info {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-size: 12px;
+	}
+
+	.git-repo-label {
+		color: var(--text-muted);
+		font-weight: 500;
+		flex-shrink: 0;
+	}
+
+	.git-repo-url {
+		color: var(--accent);
+		text-decoration: none;
+		word-break: break-all;
+	}
+	.git-repo-url:hover { text-decoration: underline; }
+
+	/* Toggle switch */
+	.toggle-switch {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+
+	.toggle-track {
+		width: 36px;
+		height: 20px;
+		background: var(--border);
+		border-radius: 10px;
+		transition: background 0.2s;
+		position: relative;
+	}
+	.toggle-track::after {
+		content: '';
+		position: absolute;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: #fff;
+		top: 3px;
+		left: 3px;
+		transition: transform 0.2s;
+		box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+	}
+	.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+	.toggle-switch input:checked + .toggle-track::after { transform: translateX(16px); }
 </style>
