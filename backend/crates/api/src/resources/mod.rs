@@ -300,7 +300,7 @@ async fn create_domain(
         ))));
     }
 
-    let domain_id = Uuid::new_v4();
+    let domain_id = Uuid::now_v7();
     // Router name is hostname-derived (unique per domain) so multiple domains on
     // the same service never collide in the Traefik YAML file.
     let traefik_router_name = hostname_to_router_name(&body.hostname);
@@ -533,7 +533,7 @@ async fn create_volume(
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          RETURNING id, project_id, service_id, name, mount_path, driver, size_mb, created_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(service_id)
     .bind(&body.name)
@@ -715,7 +715,7 @@ async fn create_project_volume(
          VALUES ($1, $2, NULL, $3, $4, $5, $6, NOW())
          RETURNING id, project_id, service_id, name, mount_path, driver, size_mb, created_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(&body.name)
     .bind(&body.mount_path)
@@ -869,7 +869,7 @@ async fn create_network(
          VALUES ($1, $2, $3, $4, $5, $6, NOW())
          RETURNING id, project_id, name, driver, subnet, docker_network_id, created_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(project_id)
     .bind(&body.name)
     .bind(&driver)

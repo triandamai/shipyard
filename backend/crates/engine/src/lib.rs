@@ -185,7 +185,7 @@ impl DeploymentEngine {
                 "INSERT INTO deployment_steps (id, deployment_id, name, status, order_index, started_at)
                  VALUES ($1, $2, $3, 'pending', $4, NULL)",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(deployment_id)
             .bind(name)
             .bind(order_index)
@@ -464,7 +464,7 @@ impl DeploymentEngine {
                 "INSERT INTO deployment_steps (id, deployment_id, name, status, order_index, started_at)
                  VALUES ($1, $2, $3, 'pending', $4, NULL)",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(deployment_id)
             .bind(name)
             .bind(order_index)
@@ -780,7 +780,7 @@ impl DeploymentEngine {
             "INSERT INTO deployment_logs (id, deployment_id, step_id, level, message, timestamp)
              VALUES ($1, $2, $3, $4::log_level, $5, NOW())",
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(deployment_id)
         .bind(step_id)
         .bind(level)
@@ -857,7 +857,7 @@ impl DeploymentEngine {
                 "INSERT INTO deployment_steps (id, deployment_id, name, status, order_index, started_at)
                  VALUES ($1, $2, $3, 'pending', $4, NULL)",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(deployment_id)
             .bind(name)
             .bind(order_index)
@@ -906,7 +906,7 @@ impl DeploymentEngine {
                 "INSERT INTO deployment_steps (id, deployment_id, name, status, order_index, started_at)
                  VALUES ($1, $2, $3, 'pending', $4, NULL)",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(deployment_id)
             .bind(name)
             .bind(order_index)
@@ -1128,7 +1128,7 @@ impl DeploymentEngine {
                 updated += 1;
                 id
             } else {
-                let id = Uuid::new_v4();
+                let id = Uuid::now_v7();
                 let child_dir = format!("{directory_path}/{id}/{slug}");
                 let replicas = svc_val
                     .get("replicas")
@@ -1168,7 +1168,7 @@ impl DeploymentEngine {
                      ON CONFLICT (service_id, key)
                      DO UPDATE SET value_encrypted = EXCLUDED.value_encrypted",
                 )
-                .bind(Uuid::new_v4())
+                .bind(Uuid::now_v7())
                 .bind(child_id)
                 .bind(key)
                 .bind(value)
@@ -1503,7 +1503,7 @@ impl DeploymentEngine {
                        image      = EXCLUDED.image,
                        updated_at = NOW()",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(child_svc_id)
             .bind(container_id)
             .bind(db_status)
@@ -1769,7 +1769,7 @@ impl DeploymentEngine {
                             "INSERT INTO deployment_logs (id, deployment_id, step_id, level, message, timestamp)
                              VALUES ($1, $2, $3, 'info'::log_level, $4, NOW())",
                         )
-                        .bind(uuid::Uuid::new_v4())
+                        .bind(uuid::Uuid::now_v7())
                         .bind(deployment_id_cp)
                         .bind(step_id_cp)
                         .bind(&msg)

@@ -128,7 +128,7 @@ async fn import_compose(
 
     // ── 1. Create root (docker_compose) service ───────────────────────────────
 
-    let root_id = Uuid::new_v4();
+    let root_id = Uuid::now_v7();
     let root_dir = format!("{project_dir}/{root_id}/{}", body.root_slug);
 
     // Write compose file to disk now so the deploy engine can find it later.
@@ -193,7 +193,7 @@ async fn import_compose(
                  VALUES ($1, $2, $3, $4, '', NOW())
                  ON CONFLICT (project_id, name) DO NOTHING",
             )
-            .bind(Uuid::new_v4())
+            .bind(Uuid::now_v7())
             .bind(project_id)
             .bind(name)
             .bind(&driver)
@@ -241,7 +241,7 @@ async fn import_compose(
                 .map(|c| if c.is_alphanumeric() { c } else { '-' })
                 .collect();
 
-            let child_id = Uuid::new_v4();
+            let child_id = Uuid::now_v7();
             let child_dir = format!("{project_dir}/{child_id}/{slug}");
 
             sqlx::query(
@@ -293,7 +293,7 @@ async fn import_compose(
                      VALUES ($1, $2, $3, $4, FALSE, NOW())
                      ON CONFLICT (service_id, key) DO UPDATE SET value_encrypted = EXCLUDED.value_encrypted",
                 )
-                .bind(Uuid::new_v4())
+                .bind(Uuid::now_v7())
                 .bind(child_id)
                 .bind(key)
                 .bind(value)

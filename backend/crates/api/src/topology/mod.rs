@@ -323,7 +323,7 @@ async fn get_topology(
     // service ↔ network edges
     for sn in &service_networks {
         stable_edges.push(TopologyEdge {
-            id: format!("e_{}", Uuid::new_v4()),
+            id: format!("e_{}", Uuid::now_v7()),
             source: format!("svc_{}", sn.service_id),
             target: format!("net_{}", sn.network_id),
             edge_type: "network".to_string(),
@@ -333,7 +333,7 @@ async fn get_topology(
     // service ↔ volume edges
     for vs in &volume_services {
         stable_edges.push(TopologyEdge {
-            id: format!("e_{}", Uuid::new_v4()),
+            id: format!("e_{}", Uuid::now_v7()),
             source: format!("svc_{}", vs.service_id),
             target: format!("vol_{}", vs.id),
             edge_type: "volume".to_string(),
@@ -343,7 +343,7 @@ async fn get_topology(
     // domain → service edges
     for dom in &domains {
         stable_edges.push(TopologyEdge {
-            id: format!("e_{}", Uuid::new_v4()),
+            id: format!("e_{}", Uuid::now_v7()),
             source: format!("dom_{}", dom.id),
             target: format!("svc_{}", dom.service_id),
             edge_type: "domain".to_string(),
@@ -374,7 +374,7 @@ async fn get_topology(
             "INSERT INTO topology_edges (id, project_id, source_node_id, target_node_id, edge_type, created_at)
              VALUES ($1, $2, $3, $4, $5, NOW())",
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(project_id)
         .bind(&edge.source)
         .bind(&edge.target)

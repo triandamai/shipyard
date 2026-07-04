@@ -136,7 +136,7 @@ async fn trigger_deploy(
 
         if running.0 >= max_parallel {
             // Insert as queued; the scheduler will start it when a slot opens.
-            let deployment_id = Uuid::new_v4();
+            let deployment_id = Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
                  VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
@@ -159,7 +159,7 @@ async fn trigger_deploy(
 
     // Pre-insert the deployment row so the ID is available immediately —
     // no sleep/retry/oneshot race. Pass the same ID into the engine.
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
@@ -520,7 +520,7 @@ async fn redeploy_service(
     let source_ref = "manual".to_string();
     let triggered_by = auth_user.email.clone();
 
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
@@ -588,7 +588,7 @@ async fn rollback_deployment(
     let triggered_by = format!("rollback by {}", auth_user.email);
     let source_ref = format!("rollback:{target_deployment_id}");
 
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",

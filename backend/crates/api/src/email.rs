@@ -36,6 +36,45 @@ pub async fn load_smtp_config(db: &sqlx::PgPool, fallback: &SmtpConfig) -> SmtpC
     }
 }
 
+pub async fn send_test_email(
+    config: &SmtpConfig,
+    to: &str,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    if !config.enabled {
+        return Err("SMTP is not enabled".to_string());
+    }
+
+    let from: lettre::Address = format!("{} <{}>", config.from_name, config.from_address)
+        .parse()
+        .map_err(|e: lettre::address::AddressError| e.to_string())?;
+
+    let to_addr: lettre::Address = to
+        .parse()
+        .map_err(|e: lettre::address::AddressError| e.to_string())?;
+
+    let email = Message::builder()
+        .from(from.into())
+        .to(to_addr.into())
+        .subject(subject)
+        .header(ContentType::TEXT_PLAIN)
+        .body(body.to_string())
+        .map_err(|e| e.to_string())?;
+
+    let creds = Credentials::new(config.username.clone(), config.password.clone());
+
+    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
+        .map_err(|e| e.to_string())?
+        .port(config.port)
+        .credentials(creds)
+        .build();
+
+    mailer.send(email).await.map_err(|e| e.to_string())?;
+    tracing::info!("Test email sent to {to}");
+    Ok(())
+}
+
 pub async fn send_invitation_email(
     config: &SmtpConfig,
     to_email: &str,

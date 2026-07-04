@@ -269,8 +269,8 @@ async fn init(
         .to_string();
 
     // Generate IDs up front
-    let admin_user_id = Uuid::new_v4();
-    let org_id = Uuid::new_v4();
+    let admin_user_id = Uuid::now_v7();
+    let org_id = Uuid::now_v7();
 
     // Use the provided slug if non-empty; otherwise derive one from the org name.
     let org_slug: String = match body.org_slug.as_deref().filter(|s| !s.is_empty()) {
@@ -323,7 +323,7 @@ async fn init(
         "INSERT INTO org_members (id, org_id, user_id, role, created_at)
          VALUES ($1, $2, $3, 'owner'::member_role, NOW())",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(org_id)
     .bind(admin_user_id)
     .execute(&mut *tx)

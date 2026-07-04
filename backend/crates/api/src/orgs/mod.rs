@@ -327,7 +327,7 @@ async fn apply_project_assignments(
                 SET permissions = EXCLUDED.permissions
             "#,
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(assignment.project_id)
         .bind(org_id)
         .bind(user_id)
@@ -386,7 +386,7 @@ async fn create_org(
         return Err(ApiAppError(AppError::Conflict(format!("Slug '{}' is already taken", body.slug))));
     }
 
-    let org_id = Uuid::new_v4();
+    let org_id = Uuid::now_v7();
     let mut tx = state.db.begin().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
@@ -406,7 +406,7 @@ async fn create_org(
         "INSERT INTO org_members (id, org_id, user_id, role, created_at)
          VALUES ($1, $2, $3, 'owner'::member_role, NOW())",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(org_id)
     .bind(auth.user_id)
     .execute(&mut *tx)
@@ -614,7 +614,7 @@ async fn invite_member(
     let project_assignments_json = serde_json::to_value(&body.project_assignments)
         .unwrap_or(serde_json::json!([]));
 
-    let token = Uuid::new_v4().to_string();
+    let token = Uuid::now_v7().to_string();
     let expires_at = Utc::now() + chrono::Duration::days(7);
 
     let invitation: Invitation = sqlx::query_as::<_, Invitation>(
@@ -626,7 +626,7 @@ async fn invite_member(
                   expires_at, accepted_at, created_at, project_assignments
         "#,
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(org_id)
     .bind(&body.email)
     .bind(&body.role)
@@ -811,7 +811,7 @@ async fn set_member_permissions(
             ON CONFLICT (org_id, user_id, permission) DO NOTHING
             "#,
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(org_id)
         .bind(target_user_id)
         .bind(permission)
@@ -935,7 +935,7 @@ async fn accept_invitation(
         ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
         "#,
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(invitation.org_id)
     .bind(auth.user_id)
     .bind(&invitation.role)
@@ -951,7 +951,7 @@ async fn accept_invitation(
             ON CONFLICT (org_id, user_id, permission) DO NOTHING
             "#,
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(invitation.org_id)
         .bind(auth.user_id)
         .bind(permission)
@@ -988,35 +988,68 @@ async fn accept_invitation(
     }))))
 }
 
-/// GET /orgs/:org_id/audit-logs
+/// GET /orgs/:org_id/audit-logs?cursor=<iso_datetime>&limit=<n>
 async fn list_audit_logs(
     auth: AuthUser,
     State(state): State<AppState>,
     Path(org_id): Path<Uuid>,
-    Query(pagination): Query<PaginationParams>,
-) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+    Query(params): Query<AuditCursorParams>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_admin(&state.db, org_id, auth.user_id).await?;
 
-    let per_page = (pagination.per_page as i64).min(200);
-    let offset = ((pagination.page.saturating_sub(1)) as i64) * per_page;
+    let limit = (params.limit.unwrap_or(50) as i64).clamp(1, 200);
+    // Fetch one extra row to detect whether a next page exists.
+    let fetch = limit + 1;
 
-    let rows: Vec<shipyard_db::models::AuditLog> = sqlx::query_as::<_, shipyard_db::models::AuditLog>(
-        r#"SELECT al.id, al.user_id, al.action, al.resource_type, al.resource_id,
-                  al.ip_address, al.metadata, al.created_at
-           FROM audit_logs al
-           WHERE (al.resource_type = 'org' AND al.resource_id = $1)
-              OR al.user_id IN (SELECT user_id FROM org_members WHERE org_id = $1)
-           ORDER BY al.created_at DESC
-           LIMIT $2 OFFSET $3"#,
-    )
-    .bind(org_id)
-    .bind(per_page)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await
+    let rows: Vec<shipyard_db::models::AuditLog> = match &params.cursor {
+        Some(cursor) => {
+            let ts = cursor.parse::<chrono::DateTime<Utc>>().map_err(|_| {
+                ApiAppError(AppError::BadRequest("Invalid cursor value".to_string()))
+            })?;
+            sqlx::query_as::<_, shipyard_db::models::AuditLog>(
+                r#"SELECT al.id, al.user_id, al.action, al.resource_type, al.resource_id,
+                          al.ip_address, al.metadata, al.created_at
+                   FROM audit_logs al
+                   WHERE ((al.resource_type = 'org' AND al.resource_id = $1)
+                      OR al.user_id IN (SELECT user_id FROM org_members WHERE org_id = $1))
+                     AND al.created_at < $2
+                   ORDER BY al.created_at DESC
+                   LIMIT $3"#,
+            )
+            .bind(org_id)
+            .bind(ts)
+            .bind(fetch)
+            .fetch_all(&state.db)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, shipyard_db::models::AuditLog>(
+                r#"SELECT al.id, al.user_id, al.action, al.resource_type, al.resource_id,
+                          al.ip_address, al.metadata, al.created_at
+                   FROM audit_logs al
+                   WHERE (al.resource_type = 'org' AND al.resource_id = $1)
+                      OR al.user_id IN (SELECT user_id FROM org_members WHERE org_id = $1)
+                   ORDER BY al.created_at DESC
+                   LIMIT $2"#,
+            )
+            .bind(org_id)
+            .bind(fetch)
+            .fetch_all(&state.db)
+            .await
+        }
+    }
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let entries: Vec<serde_json::Value> = rows
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.created_at.to_rfc3339())
+    } else {
+        None
+    };
+
+    let items: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|r| serde_json::json!({
             "id": r.id,
@@ -1030,7 +1063,16 @@ async fn list_audit_logs(
         }))
         .collect();
 
-    Ok(Json(ApiResponse::ok(entries)))
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "items": items,
+        "next_cursor": next_cursor,
+    }))))
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditCursorParams {
+    cursor: Option<String>,
+    limit:  Option<u32>,
 }
 
 // ─── Member project assignment handlers ──────────────────────────────────────
@@ -1119,7 +1161,7 @@ async fn set_member_projects(
             VALUES ($1, $2, $3, $4, $5, $6, NOW())
             "#,
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(assignment.project_id)
         .bind(org_id)
         .bind(target_user_id)
@@ -1260,7 +1302,7 @@ async fn complete_invite(
          VALUES ($1, $2, $3, NOW(), NOW())
          RETURNING id, email, password_hash, created_at, updated_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(&invitation.email)
     .bind(&password_hash)
     .fetch_one(&mut *tx)
@@ -1275,7 +1317,7 @@ async fn complete_invite(
         ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
         "#,
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(invitation.org_id)
     .bind(user.id)
     .bind(&invitation.role)
@@ -1292,7 +1334,7 @@ async fn complete_invite(
             ON CONFLICT (org_id, user_id, permission) DO NOTHING
             "#,
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(invitation.org_id)
         .bind(user.id)
         .bind(permission)

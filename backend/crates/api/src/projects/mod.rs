@@ -130,7 +130,7 @@ async fn create_project(
         ))));
     }
 
-    let project_id = Uuid::new_v4();
+    let project_id = Uuid::now_v7();
     let directory_path = format!("{}/{}/{}", state.config.data_dir, org_id, project_id);
 
     let project = sqlx::query_as::<_, Project>(

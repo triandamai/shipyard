@@ -181,7 +181,7 @@ async fn register(
          VALUES ($1, $2, $3, NOW(), NOW())
          RETURNING id, email, password_hash, created_at, updated_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(&body.email)
     .bind(&password_hash)
     .fetch_one(&state.db)

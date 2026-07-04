@@ -5,8 +5,9 @@
 	import { page } from '$app/stores';
 	import {
 		Globe, GitBranch, Save, Check, AlertCircle, Key, Loader2,
-		RefreshCw, Terminal, Zap, PackageOpen, Mail, Eye, EyeOff
+		RefreshCw, Terminal, Zap, PackageOpen, Mail, Eye, EyeOff, Send
 	} from '@lucide/svelte';
+	import SlidePanel from '$lib/components/SlidePanel.svelte';
 
 	interface PlatformSettings {
 		main_domain?: string;
@@ -30,25 +31,24 @@
 
 	let showSmtpPassword = $state(false);
 
+	let smtpTestPanelOpen = $state(false);
+	let smtpTestTo      = $state('');
+	let smtpTestSubject = $state('Shipyard SMTP Test');
+	let smtpTestBody    = $state('This is a test email sent from Shipyard to verify your SMTP configuration.');
+	let smtpTesting     = $state(false);
+	let smtpTestResult  = $state<{ ok: boolean; msg: string } | null>(null);
+
 	async function testSmtp() {
 		smtpTesting = true;
 		smtpTestResult = null;
-		// Save first, then test by sending to the logged-in user's email
-		await api.put('/settings', {
-			smtp_enabled: settings.smtp_enabled,
-			smtp_host: settings.smtp_host,
-			smtp_port: settings.smtp_port,
-			smtp_username: settings.smtp_username,
-			smtp_password: settings.smtp_password,
-			smtp_from_address: settings.smtp_from_address,
-			smtp_from_name: settings.smtp_from_name,
+		const res = await api.post<{ message: string }>('/admin/smtp/test', {
+			to: smtpTestTo,
+			subject: smtpTestSubject,
+			body: smtpTestBody,
 		});
-		const res = await api.post<{ message: string }>('/admin/smtp/test', {});
 		smtpTestResult = res.error ? { ok: false, msg: res.error.message } : { ok: true, msg: res.data?.message ?? 'Test email sent' };
 		smtpTesting = false;
 	}
-	let smtpTesting = $state(false);
-	let smtpTestResult = $state<{ ok: boolean; msg: string } | null>(null);
 
 	// ── Version info ────────────────────────────────────────────────────────────
 	interface VersionInfo {
@@ -403,14 +403,9 @@
 					</div>
 				</div>
 				<div class="smtp-test-bar">
-					<button type="button" class="smtp-test-btn" disabled={smtpTesting} onclick={testSmtp}>
-						{#if smtpTesting}<Loader2 size={12} class="spin" />Sending…{:else}<Mail size={12} />Send test email{/if}
+					<button type="button" class="smtp-test-btn" onclick={() => { smtpTestPanelOpen = true; smtpTestResult = null; }}>
+						<Mail size={12} />Send test email
 					</button>
-					{#if smtpTestResult}
-						<span class="smtp-test-result" class:ok={smtpTestResult.ok} class:fail={!smtpTestResult.ok}>
-							{smtpTestResult.ok ? '✓' : '✗'} {smtpTestResult.msg}
-						</span>
-					{/if}
 				</div>
 			{/if}
 		</section>
@@ -428,6 +423,45 @@
 			</button>
 		</div>
 	</form>
+
+{#if smtpTestPanelOpen}
+	<div class="panel-backdrop" onclick={() => (smtpTestPanelOpen = false)} role="none"></div>
+	<SlidePanel title="Send Test Email" onClose={() => (smtpTestPanelOpen = false)}>
+		<div class="smtp-panel-body">
+			<div class="smtp-panel-fields">
+				<div class="field">
+					<label class="field-label" for="test-to">To</label>
+					<input id="test-to" class="field-input" type="email" bind:value={smtpTestTo} placeholder="you@example.com" />
+				</div>
+				<div class="field">
+					<label class="field-label" for="test-subject">Subject</label>
+					<input id="test-subject" class="field-input" type="text" bind:value={smtpTestSubject} />
+				</div>
+				<div class="field">
+					<label class="field-label" for="test-body">Body</label>
+					<textarea id="test-body" class="field-input smtp-panel-textarea" bind:value={smtpTestBody} rows={5}></textarea>
+				</div>
+			</div>
+
+			{#if smtpTestResult}
+				<div class="smtp-panel-result" class:ok={smtpTestResult.ok} class:fail={!smtpTestResult.ok}>
+					{smtpTestResult.ok ? '✓' : '✗'} {smtpTestResult.msg}
+				</div>
+			{/if}
+
+			<div class="smtp-panel-actions">
+				<button class="btn btn-secondary" onclick={() => (smtpTestPanelOpen = false)}>Cancel</button>
+				<button
+					class="btn btn-primary"
+					disabled={smtpTesting || !smtpTestTo}
+					onclick={testSmtp}
+				>
+					{#if smtpTesting}<Loader2 size={13} class="spin" />Sending…{:else}<Send size={13} />Send{/if}
+				</button>
+			</div>
+		</div>
+	</SlidePanel>
+{/if}
 
 	<!-- Platform Update -->
 	<section class="settings-section update-section">
@@ -663,6 +697,15 @@
 	.smtp-test-result { font-size: 12px; font-weight: 500; }
 	.smtp-test-result.ok   { color: #10B981; }
 	.smtp-test-result.fail { color: #EF4444; }
+
+	.panel-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 59; }
+	.smtp-panel-body { display: flex; flex-direction: column; gap: 16px; padding: 16px; height: 100%; }
+	.smtp-panel-fields { display: flex; flex-direction: column; gap: 14px; }
+	.smtp-panel-textarea { resize: vertical; min-height: 100px; font-family: var(--font-sans); line-height: 1.5; }
+	.smtp-panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+	.smtp-panel-result { font-size: 12px; font-weight: 500; padding: 8px 12px; border-radius: var(--radius-sm); }
+	.smtp-panel-result.ok   { background: rgba(16,185,129,0.1); color: #10B981; border: 1px solid rgba(16,185,129,0.25); }
+	.smtp-panel-result.fail { background: rgba(239,68,68,0.08); color: #EF4444;  border: 1px solid rgba(239,68,68,0.25); }
 
 	/* ── Platform Update ── */
 	.update-section { margin-top: 8px; }

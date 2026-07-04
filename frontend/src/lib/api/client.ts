@@ -488,8 +488,11 @@ class ApiClient {
 	}
 
 	// ─── Invitations ──────────────────────────────────────────────────
-	async getAuditLogs(orgId: string, page = 1, perPage = 50): Promise<ApiResponse<AuditLogEntry[]>> {
-		return this.get(`/orgs/${orgId}/audit-logs?page=${page}&per_page=${perPage}`);
+	async getAuditLogs(orgId: string, cursor?: string, limit = 50): Promise<ApiResponse<{ items: AuditLogEntry[]; next_cursor: string | null }>> {
+		const qs = cursor
+			? `?cursor=${encodeURIComponent(cursor)}&limit=${limit}`
+			: `?limit=${limit}`;
+		return this.get(`/orgs/${orgId}/audit-logs${qs}`);
 	}
 
 	async getInvitations(orgId: string): Promise<ApiResponse<Invitation[]>> {

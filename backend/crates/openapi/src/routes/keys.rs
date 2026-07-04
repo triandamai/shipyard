@@ -119,7 +119,7 @@ async fn create_key(
     }
 
     let (full_key, prefix, hash) = generate_key();
-    let key_id = Uuid::new_v4();
+    let key_id = Uuid::now_v7();
     let now = Utc::now();
 
     sqlx::query(

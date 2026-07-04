@@ -95,7 +95,7 @@ async fn initiate_oauth(
     let cutoff = Instant::now() - std::time::Duration::from_secs(600);
     state.oauth_states.retain(|_, (_, _, created)| *created > cutoff);
 
-    let oauth_state = Uuid::new_v4().to_string();
+    let oauth_state = Uuid::now_v7().to_string();
     state.oauth_states.insert(oauth_state.clone(), (provider.clone(), query.org_id.clone(), Instant::now()));
 
     let api_base = &state.config.git.api_base_url;

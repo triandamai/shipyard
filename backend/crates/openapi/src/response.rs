@@ -12,7 +12,7 @@ impl<T: Serialize> OkResponse<T> {
     pub fn new(data: T) -> Self {
         Self {
             data,
-            request_id: Uuid::new_v4().to_string(),
+            request_id: Uuid::now_v7().to_string(),
         }
     }
 }
@@ -37,7 +37,7 @@ impl<T: Serialize> PageResponse<T> {
         Self {
             data,
             meta: PageMeta { total, page, per_page },
-            request_id: Uuid::new_v4().to_string(),
+            request_id: Uuid::now_v7().to_string(),
         }
     }
 }

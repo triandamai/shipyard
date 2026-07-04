@@ -137,8 +137,8 @@ pub fn generate_key() -> (String, String, String) {
     // Two UUIDs give 244 bits of randomness — sufficient for a random token.
     let body = format!(
         "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
+        Uuid::now_v7().simple(),
+        Uuid::now_v7().simple()
     );
     let full_key = format!("ship_{}", body);
     let prefix = body[..8].to_string();

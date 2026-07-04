@@ -1250,10 +1250,11 @@ struct CreateApiKeyRequest {
 
 /// POST /admin/smtp/test
 ///
-/// Saves current SMTP settings and sends a test email to the requesting user.
+/// Sends a test email with custom to/subject/body fields.
 async fn test_smtp(
-    auth: AuthUser,
+    _auth: AuthUser,
     State(state): State<AppState>,
+    Json(body): Json<SendTestEmailRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     let smtp_cfg = crate::email::load_smtp_config(&state.db, &state.config.smtp).await;
 
@@ -1263,25 +1264,24 @@ async fn test_smtp(
         )));
     }
 
-    let base_url = state.config.git.frontend_url.clone();
-    let test_token = "test-email-verify";
-    crate::email::send_invitation_email(
-        &smtp_cfg,
-        &auth.email,
-        "Shipyard (test)",
-        test_token,
-        &base_url,
-    )
-    .await
-    .map_err(|e| ApiAppError(AppError::Internal(format!("SMTP test failed: {e}"))))?;
+    crate::email::send_test_email(&smtp_cfg, &body.to, &body.subject, &body.body)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("SMTP test failed: {e}"))))?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "message": format!("Test email sent to {}", auth.email)
+        "message": format!("Test email sent to {}", body.to)
     }))))
 }
 
+#[derive(Debug, Deserialize)]
+struct SendTestEmailRequest {
+    to: String,
+    subject: String,
+    body: String,
+}
+
 fn generate_api_key() -> (String, String, String) {
-    let raw = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let raw = format!("{}{}", uuid::Uuid::now_v7().simple(), uuid::Uuid::now_v7().simple());
     let full_key = format!("ship_{}", raw);
     let prefix = format!("ship_{}", &raw[..8]);
     let hash = hex::encode(Sha256::digest(full_key.as_bytes()));
@@ -1372,7 +1372,7 @@ async fn create_api_key(
     }
 
     let (full_key, prefix, hash) = generate_api_key();
-    let key_id = uuid::Uuid::new_v4();
+    let key_id = uuid::Uuid::now_v7();
     let now = Utc::now();
 
     sqlx::query(

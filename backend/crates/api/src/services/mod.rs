@@ -223,7 +223,7 @@ async fn create_service(
         ))));
     }
 
-    let service_id = Uuid::new_v4();
+    let service_id = Uuid::now_v7();
     let directory_path = format!(
         "{}/{}/{}/{}",
         state.config.data_dir, project_id, service_id, body.slug
@@ -268,7 +268,7 @@ async fn create_service(
     })?;
 
     // Auto-generate a webhook token so the URL is ready immediately.
-    let webhook_token = Uuid::new_v4().to_string().replace('-', "");
+    let webhook_token = Uuid::now_v7().to_string().replace('-', "");
     upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &webhook_token).await.ok();
 
     crate::middleware::audit::write_audit_log(
@@ -628,7 +628,7 @@ async fn bulk_update_env(
              VALUES ($1, $2, $3, $4, $5, NOW())
              RETURNING id, service_id, key, value_encrypted, is_secret, created_at",
         )
-        .bind(Uuid::new_v4())
+        .bind(Uuid::now_v7())
         .bind(service_id)
         .bind(&item.key)
         .bind(&encrypted)
@@ -685,7 +685,7 @@ async fn add_env(
                is_secret = EXCLUDED.is_secret
          RETURNING id, service_id, key, value_encrypted, is_secret, created_at",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(service_id)
     .bind(&body.key)
     .bind(&encrypted)
@@ -820,7 +820,7 @@ async fn upsert_webhook_token(
          ON CONFLICT (service_id, key) DO UPDATE
            SET value_encrypted = EXCLUDED.value_encrypted",
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(service_id)
     .bind(&encrypted)
     .execute(db)
@@ -886,7 +886,7 @@ async fn rotate_webhook(
     ).await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
-    let token = Uuid::new_v4().to_string().replace('-', "");
+    let token = Uuid::now_v7().to_string().replace('-', "");
     upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &token).await?;
 
     tracing::info!(service_id = %service_id, "webhook token rotated");

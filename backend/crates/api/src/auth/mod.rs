@@ -71,7 +71,7 @@ pub fn create_refresh_token(
         .map_err(|e| AppError::Internal(e.to_string()))?
         .as_secs();
 
-    let jti = Uuid::new_v4().to_string();
+    let jti = Uuid::now_v7().to_string();
 
     let claims = Claims {
         sub: user_id.to_string(),

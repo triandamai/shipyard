@@ -248,7 +248,7 @@ async fn handle_push(
 
     let source_ref = source_ref.to_string();
 
-    let deployment_id = uuid::Uuid::new_v4();
+    let deployment_id = uuid::Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",

@@ -124,7 +124,7 @@ impl DockerEventWorker {
                     }
                 };
 
-                let container_uuid = Uuid::new_v4();
+                let container_uuid = Uuid::now_v7();
                 let replica_index = task.slot.map(|s| s as i32);
                 let image = &task.image;
                 let status = map_swarm_task_status(&task.status);
@@ -410,7 +410,7 @@ impl DockerEventWorker {
                         updated_at = NOW()
                     "#,
                 )
-                .bind(Uuid::new_v4())
+                .bind(Uuid::now_v7())
                 .bind(service_id)
                 .bind(container_id)
                 .bind(task_id.as_deref())
@@ -437,7 +437,7 @@ impl DockerEventWorker {
                         updated_at = NOW()
                     "#,
                 )
-                .bind(Uuid::new_v4())
+                .bind(Uuid::now_v7())
                 .bind(service_id)
                 .bind(container_id)
                 .bind(task_id.as_deref())

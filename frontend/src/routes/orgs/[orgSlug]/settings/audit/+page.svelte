@@ -1,17 +1,18 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { ShieldCheck, RefreshCw, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { AuditLogEntry } from '$lib/api/types';
 
+	const LIMIT = 50;
+
 	let orgId = $derived($orgStore.activeOrg?.id ?? '');
-	let logs = $state<AuditLogEntry[]>([]);
-	let loading = $state(true);
-	let error = $state('');
-	let page = $state(1);
-	const PER_PAGE = 50;
-	let hasMore = $state(false);
+	let logs       = $state<AuditLogEntry[]>([]);
+	let loading    = $state(true);
+	let error      = $state('');
+	let nextCursor = $state<string | null>(null);
+	// Stack of cursors for previous pages — entry i is the cursor used to load page i+1
+	let cursorStack = $state<string[]>([]);
 
 	function formatTime(iso: string) {
 		try {
@@ -22,9 +23,7 @@
 		} catch { return iso; }
 	}
 
-	function actionLabel(action: string) {
-		return action.replace(/_/g, ' ');
-	}
+	function actionLabel(action: string) { return action.replace(/_/g, ' '); }
 
 	function actionColor(action: string): string {
 		if (action.includes('delete') || action.includes('revoke') || action.includes('remove')) return 'danger';
@@ -33,21 +32,39 @@
 		return 'neutral';
 	}
 
-	async function load() {
+	async function loadPage(cursor?: string) {
 		if (!orgId) return;
 		loading = true;
 		error = '';
-		const res = await api.getAuditLogs(orgId, page, PER_PAGE);
+		const res = await api.getAuditLogs(orgId, cursor, LIMIT);
 		if (res.error) { error = res.error.message; loading = false; return; }
-		logs = res.data ?? [];
-		hasMore = logs.length === PER_PAGE;
-		loading = false;
+		logs       = res.data?.items ?? [];
+		nextCursor = res.data?.next_cursor ?? null;
+		loading    = false;
 	}
 
-	$effect(() => { if (orgId) load(); });
+	$effect(() => { if (orgId) { cursorStack = []; loadPage(); } });
 
-	function prev() { if (page > 1) { page--; load(); } }
-	function next() { if (hasMore) { page++; load(); } }
+	function refresh() { cursorStack = []; loadPage(); }
+
+	function next() {
+		if (!nextCursor) return;
+		cursorStack = [...cursorStack, nextCursor];
+		loadPage(nextCursor);
+	}
+
+	function prev() {
+		if (cursorStack.length === 0) return;
+		const stack = [...cursorStack];
+		stack.pop(); // remove the cursor we used for the current page
+		const prevCursor = stack[stack.length - 1]; // cursor for the page before current
+		cursorStack = stack;
+		loadPage(prevCursor);
+	}
+
+	$: pageNum = cursorStack.length + 1;
+	$: hasPrev = cursorStack.length > 0;
+	$: hasNext = nextCursor !== null;
 </script>
 
 <div class="audit-page">
@@ -56,7 +73,7 @@
 			<ShieldCheck size={16} />
 			<h2 class="audit-title">Audit Log</h2>
 		</div>
-		<button class="refresh-btn" onclick={load} disabled={loading}>
+		<button class="refresh-btn" onclick={refresh} disabled={loading}>
 			<RefreshCw size={12} class={loading ? 'spin' : ''} />Refresh
 		</button>
 	</div>
@@ -107,11 +124,11 @@
 		</div>
 
 		<div class="pagination">
-			<button class="page-btn" onclick={prev} disabled={page === 1}>
+			<button class="page-btn" onclick={prev} disabled={!hasPrev || loading}>
 				<ChevronLeft size={13} />Prev
 			</button>
-			<span class="page-info">Page {page}</span>
-			<button class="page-btn" onclick={next} disabled={!hasMore}>
+			<span class="page-info">Page {pageNum}</span>
+			<button class="page-btn" onclick={next} disabled={!hasNext || loading}>
 				Next<ChevronRight size={13} />
 			</button>
 		</div>

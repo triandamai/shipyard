@@ -163,7 +163,7 @@ async fn trigger_deploy(
     let triggered_by = auth.email.clone();
     let source_ref_log = source_ref.clone();
 
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
@@ -328,7 +328,7 @@ async fn redeploy_service(
     let source_ref = "manual".to_string();
     let triggered_by = auth.email.clone();
 
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
@@ -408,7 +408,7 @@ async fn upsert_env(
            SET value_encrypted = EXCLUDED.value_encrypted, is_secret = EXCLUDED.is_secret
          RETURNING id, service_id, key, value_encrypted, is_secret, created_at",
     )
-    .bind(Uuid::new_v4()).bind(service_id).bind(&body.key).bind(&encrypted).bind(body.is_secret)
+    .bind(Uuid::now_v7()).bind(service_id).bind(&body.key).bind(&encrypted).bind(body.is_secret)
     .fetch_one(&state.db).await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     publish_env_changed(&state, service_id).await;
@@ -452,7 +452,7 @@ async fn apply_bulk(
                SET value_encrypted = EXCLUDED.value_encrypted, is_secret = EXCLUDED.is_secret
              RETURNING id, service_id, key, value_encrypted, is_secret, created_at",
         )
-        .bind(Uuid::new_v4()).bind(service_id).bind(&item.key).bind(&encrypted).bind(item.is_secret)
+        .bind(Uuid::now_v7()).bind(service_id).bind(&item.key).bind(&encrypted).bind(item.is_secret)
         .fetch_one(&state.db).await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
         results.push(EnvVarResponse::from_env(env, &sk));

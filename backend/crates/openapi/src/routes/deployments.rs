@@ -100,7 +100,7 @@ async fn trigger_deploy(
         .map_err(|e| OpenApiError::Database(e.to_string()))?;
 
         if running.0 >= max_parallel {
-            let deployment_id = Uuid::new_v4();
+            let deployment_id = Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
                  VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
@@ -123,7 +123,7 @@ async fn trigger_deploy(
         }
     }
 
-    let deployment_id = Uuid::new_v4();
+    let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
          VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",

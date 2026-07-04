@@ -15,7 +15,7 @@ pub async fn write_audit_log(
                (id, user_id, action, resource_type, resource_id, ip_address, metadata, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())"#,
     )
-    .bind(Uuid::new_v4())
+    .bind(Uuid::now_v7())
     .bind(user_id)
     .bind(action)
     .bind(resource_type)
