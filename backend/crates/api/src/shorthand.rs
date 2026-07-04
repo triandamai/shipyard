@@ -294,11 +294,53 @@ async fn stop_service(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
-    let svc_name = docker_service_name(&state, service_id);
-    state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
-    sqlx::query("UPDATE services SET status = 'stopped', replicas = 0, updated_at = NOW() WHERE id = $1")
-        .bind(service_id).execute(&state.db).await
+
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT type::text, COALESCE(directory_path, '') FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (svc_type, directory_path) = row.ok_or_else(|| {
+        ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))
+    })?;
+
+    if svc_type == "docker_compose" {
+        compose_stop(&directory_path, service_id).await;
+        // Also stop child Swarm services (best-effort; they may not exist)
+        let children: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT id FROM services WHERE service_parent_id = $1",
+        )
+        .bind(service_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        for (child_id,) in children {
+            let name = docker_service_name(&state, child_id);
+            let _ = state.docker.scale_service(&name, 0).await;
+        }
+        sqlx::query(
+            "UPDATE services SET status = 'stopped', replicas = 0, updated_at = NOW()
+             WHERE id = $1 OR service_parent_id = $1",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    } else {
+        let svc_name = docker_service_name(&state, service_id);
+        state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
+        sqlx::query(
+            "UPDATE services SET status = 'stopped', replicas = 0, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service stopped", "replicas": 0 }))))
 }
 
@@ -308,14 +350,107 @@ async fn restart_service(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
-    let svc_name = docker_service_name(&state, service_id);
-    state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    state.docker.scale_service(&svc_name, 1).await.map_err(ApiAppError)?;
-    sqlx::query("UPDATE services SET status = 'running', replicas = 1, updated_at = NOW() WHERE id = $1")
-        .bind(service_id).execute(&state.db).await
+
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT type::text, COALESCE(directory_path, '') FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (svc_type, directory_path) = row.ok_or_else(|| {
+        ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))
+    })?;
+
+    if svc_type == "docker_compose" {
+        compose_stop(&directory_path, service_id).await;
+        compose_start(&directory_path, service_id).await;
+        sqlx::query(
+            "UPDATE services SET status = 'running', updated_at = NOW()
+             WHERE id = $1 OR service_parent_id = $1",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted", "replicas": 1 }))))
+        Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted" }))))
+    } else {
+        let svc_name = docker_service_name(&state, service_id);
+        state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        state.docker.scale_service(&svc_name, 1).await.map_err(ApiAppError)?;
+        sqlx::query(
+            "UPDATE services SET status = 'running', replicas = 1, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted", "replicas": 1 }))))
+    }
+}
+
+/// Run `docker compose stop` for a compose-type service (best-effort).
+async fn compose_stop(directory_path: &str, service_id: Uuid) {
+    let candidates = [
+        format!("{directory_path}/docker-compose.yml"),
+        format!("{directory_path}/docker-compose.yaml"),
+        format!("{directory_path}/.shipyard-compose.yml"),
+        format!("{directory_path}/compose.yml"),
+        format!("{directory_path}/compose.yaml"),
+    ];
+    let compose_file = candidates.iter().find(|p| std::path::Path::new(p).exists());
+    if let Some(cf) = compose_file {
+        match tokio::process::Command::new("docker")
+            .args(["compose", "-f", cf, "stop"])
+            .current_dir(directory_path)
+            .output()
+            .await
+        {
+            Ok(out) if out.status.success() => {
+                tracing::info!(%service_id, "docker compose stop succeeded");
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                tracing::warn!(%service_id, "docker compose stop: {stderr}");
+            }
+            Err(e) => tracing::warn!(%service_id, "docker compose stop spawn failed: {e}"),
+        }
+    } else {
+        tracing::warn!(%service_id, directory_path, "compose file not found for stop");
+    }
+}
+
+/// Run `docker compose start` for a compose-type service (best-effort).
+async fn compose_start(directory_path: &str, service_id: Uuid) {
+    let candidates = [
+        format!("{directory_path}/docker-compose.yml"),
+        format!("{directory_path}/docker-compose.yaml"),
+        format!("{directory_path}/.shipyard-compose.yml"),
+        format!("{directory_path}/compose.yml"),
+        format!("{directory_path}/compose.yaml"),
+    ];
+    let compose_file = candidates.iter().find(|p| std::path::Path::new(p).exists());
+    if let Some(cf) = compose_file {
+        match tokio::process::Command::new("docker")
+            .args(["compose", "-f", cf, "start"])
+            .current_dir(directory_path)
+            .output()
+            .await
+        {
+            Ok(out) if out.status.success() => {
+                tracing::info!(%service_id, "docker compose start succeeded");
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                tracing::warn!(%service_id, "docker compose start: {stderr}");
+            }
+            Err(e) => tracing::warn!(%service_id, "docker compose start spawn failed: {e}"),
+        }
+    } else {
+        tracing::warn!(%service_id, directory_path, "compose file not found for start");
+    }
 }
 
 async fn redeploy_service(

@@ -126,13 +126,33 @@ async fn import_compose(
     let mut service_ids = Vec::new();
     let mut networks_created = 0usize;
 
-    // ── 1. Create root (docker_compose) service ───────────────────────────────
+    // ── 1. Create (or update) root (docker_compose) service ──────────────────
+    // Use a candidate ID; ON CONFLICT returns the actual row ID so re-imports
+    // reuse the existing service record instead of failing.
+    let candidate_root_id = Uuid::now_v7();
+    let candidate_root_dir = format!("{project_dir}/{candidate_root_id}/{}", body.root_slug);
 
-    let root_id = Uuid::now_v7();
-    let root_dir = format!("{project_dir}/{root_id}/{}", body.root_slug);
+    let (root_id, root_dir): (Uuid, String) = sqlx::query_as(
+        r#"INSERT INTO services
+               (id, project_id, name, slug, type, image, directory_path, ports,
+                status, replicas, service_parent_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'docker_compose'::service_type, '', $5, '[]'::jsonb,
+                   'stopped', 0, NULL, NOW(), NOW())
+           ON CONFLICT (project_id, slug) DO UPDATE
+               SET name = EXCLUDED.name, directory_path = EXCLUDED.directory_path,
+                   updated_at = NOW()
+           RETURNING id, directory_path"#,
+    )
+    .bind(candidate_root_id)
+    .bind(project_id)
+    .bind(body.root_name.trim())
+    .bind(body.root_slug.trim())
+    .bind(&candidate_root_dir)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // Write compose file to disk now so the deploy engine can find it later.
-    // We do this before the transaction so a disk error doesn't leave orphaned DB rows.
+    // Write compose file to disk (overwrites on re-import).
     tokio::fs::create_dir_all(&root_dir).await.map_err(|e| {
         ApiAppError(AppError::Internal(format!(
             "Failed to create stack directory '{root_dir}': {e}"
@@ -145,32 +165,6 @@ async fn import_compose(
                 "Failed to write docker-compose.yml: {e}"
             )))
         })?;
-
-    sqlx::query(
-        r#"INSERT INTO services
-               (id, project_id, name, slug, type, image, directory_path, ports,
-                status, replicas, service_parent_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'docker_compose'::service_type, '', $5, '[]'::jsonb,
-                   'stopped', 0, NULL, NOW(), NOW())"#,
-    )
-    .bind(root_id)
-    .bind(project_id)
-    .bind(body.root_name.trim())
-    .bind(body.root_slug.trim())
-    .bind(&root_dir)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("unique") || msg.contains("duplicate") {
-            ApiAppError(AppError::Conflict(format!(
-                "A service with slug '{}' already exists in this project",
-                body.root_slug
-            )))
-        } else {
-            ApiAppError(AppError::Database(msg))
-        }
-    })?;
 
     // ── 2. Import networks ────────────────────────────────────────────────────
 
@@ -241,25 +235,33 @@ async fn import_compose(
                 .map(|c| if c.is_alphanumeric() { c } else { '-' })
                 .collect();
 
-            let child_id = Uuid::now_v7();
-            let child_dir = format!("{project_dir}/{child_id}/{slug}");
+            let candidate_child_id = Uuid::now_v7();
+            let candidate_child_dir = format!("{project_dir}/{candidate_child_id}/{slug}");
 
-            sqlx::query(
+            // ON CONFLICT: update image/replicas and return actual id so env
+            // vars are always linked to the real (possibly pre-existing) row.
+            let (child_id,): (Uuid,) = sqlx::query_as(
                 r#"INSERT INTO services
                        (id, project_id, name, slug, type, image, directory_path, ports,
                         status, replicas, service_parent_id, created_at, updated_at)
                    VALUES ($1, $2, $3, $4, 'docker'::service_type, $5, $6, '[]'::jsonb,
-                           'stopped', $7, $8, NOW(), NOW())"#,
+                           'stopped', $7, $8, NOW(), NOW())
+                   ON CONFLICT (project_id, slug) DO UPDATE
+                       SET image = EXCLUDED.image,
+                           replicas = EXCLUDED.replicas,
+                           service_parent_id = EXCLUDED.service_parent_id,
+                           updated_at = NOW()
+                   RETURNING id"#,
             )
-            .bind(child_id)
+            .bind(candidate_child_id)
             .bind(project_id)
             .bind(name)
             .bind(&slug)
             .bind(&image)
-            .bind(&child_dir)
+            .bind(&candidate_child_dir)
             .bind(replicas)
-            .bind(root_id)             // ← links child to root
-            .execute(&mut *tx)
+            .bind(root_id)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| {
                 ApiAppError(AppError::Database(format!(
