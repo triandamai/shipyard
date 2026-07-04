@@ -1909,7 +1909,42 @@ impl DeploymentEngine {
             return Ok(labels);
         }
 
+        // Query the service's ports so we can set an explicit Traefik backend port.
+        // Without this label Traefik auto-detects the port after each restart, which
+        // is unreliable when the container image has no EXPOSE or has multiple ports —
+        // the root cause of the 521 after a Shipyard update.
+        let ports_json: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT ports FROM services WHERE id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .flatten();
+
+        let backend_port: Option<u16> = ports_json
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .and_then(|s| Self::parse_port_spec(s))
+            .map(|ps| ps.target);
+
+        // Stable named service that all routers for this Shipyard service share.
+        // Using a prefix of the service UUID keeps it unique and Traefik-label-safe.
+        let svc_name = format!("svc{}", &service_id.simple().to_string()[..8]);
+
         labels.insert("traefik.enable".to_string(), "true".to_string());
+
+        if let Some(port) = backend_port {
+            labels.insert(
+                format!("traefik.http.services.{svc_name}.loadbalancer.server.port"),
+                port.to_string(),
+            );
+            tracing::info!("Traefik backend port explicitly set to {port} (service {svc_name})");
+        } else {
+            tracing::warn!("No port configured for service {service_id} — Traefik will auto-detect (may be unreliable)");
+        }
 
         for (hostname, tls_enabled) in &rows {
             // Derive a unique router name from the hostname so that two different
@@ -1917,19 +1952,11 @@ impl DeploymentEngine {
             let rn = hostname_to_router_name(hostname);
             let convenience = is_convenience_domain(hostname);
 
-            // HTTP router (always present — Traefik can redirect it to HTTPS)
-            labels.insert(
-                format!("traefik.http.routers.{rn}.rule"),
-                format!("Host(`{hostname}`)"),
-            );
-            labels.insert(
-                format!("traefik.http.routers.{rn}.entrypoints"),
-                "web".to_string(),
-            );
-
             if convenience {
                 // Convenience domains (nip.io / traefik.me): HTTPS with self-signed cert.
-                // Do NOT attach a certresolver — that would burn a Let's Encrypt slot.
+                // The `web` entrypoint has a global HTTP→HTTPS redirect, so a service
+                // router on `web` is redundant and gives Traefik extra ambiguous backend
+                // auto-detection to do — skip it entirely for nip.io domains.
                 let tls_rn = format!("{rn}-tls");
                 labels.insert(
                     format!("traefik.http.routers.{tls_rn}.rule"),
@@ -1943,25 +1970,50 @@ impl DeploymentEngine {
                     format!("traefik.http.routers.{tls_rn}.tls"),
                     "true".to_string(),
                 );
-            } else if *tls_enabled {
-                // Real domain with TLS: use Let's Encrypt.
-                let tls_rn = format!("{rn}-tls");
                 labels.insert(
-                    format!("traefik.http.routers.{tls_rn}.rule"),
+                    format!("traefik.http.routers.{tls_rn}.service"),
+                    svc_name.clone(),
+                );
+            } else {
+                // HTTP router (the global entrypoint redirect forwards HTTP → HTTPS
+                // when TLS is active, so we don't need an explicit redirect middleware).
+                labels.insert(
+                    format!("traefik.http.routers.{rn}.rule"),
                     format!("Host(`{hostname}`)"),
                 );
                 labels.insert(
-                    format!("traefik.http.routers.{tls_rn}.entrypoints"),
-                    "websecure".to_string(),
+                    format!("traefik.http.routers.{rn}.entrypoints"),
+                    "web".to_string(),
                 );
                 labels.insert(
-                    format!("traefik.http.routers.{tls_rn}.tls"),
-                    "true".to_string(),
+                    format!("traefik.http.routers.{rn}.service"),
+                    svc_name.clone(),
                 );
-                labels.insert(
-                    format!("traefik.http.routers.{tls_rn}.tls.certresolver"),
-                    "letsencrypt".to_string(),
-                );
+
+                if *tls_enabled {
+                    // Real domain with TLS: use Let's Encrypt.
+                    let tls_rn = format!("{rn}-tls");
+                    labels.insert(
+                        format!("traefik.http.routers.{tls_rn}.rule"),
+                        format!("Host(`{hostname}`)"),
+                    );
+                    labels.insert(
+                        format!("traefik.http.routers.{tls_rn}.entrypoints"),
+                        "websecure".to_string(),
+                    );
+                    labels.insert(
+                        format!("traefik.http.routers.{tls_rn}.tls"),
+                        "true".to_string(),
+                    );
+                    labels.insert(
+                        format!("traefik.http.routers.{tls_rn}.tls.certresolver"),
+                        "letsencrypt".to_string(),
+                    );
+                    labels.insert(
+                        format!("traefik.http.routers.{tls_rn}.service"),
+                        svc_name.clone(),
+                    );
+                }
             }
         }
 
