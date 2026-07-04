@@ -38,10 +38,13 @@
 		return () => cleanup();
 	});
 
-	// Mount terminal once the element is available and we're in 'connecting' state
+	// Mount terminal once the element is available and we're in 'connecting' state.
+	// Return a cleanup so that if Svelte re-runs this effect (e.g. in dev strict
+	// mode) the previous terminal and socket are torn down before a new one starts.
 	$effect(() => {
 		if (termEl && state === 'connecting') {
 			mountTerminal(termEl);
+			return () => cleanup();
 		}
 	});
 
@@ -72,10 +75,10 @@
 	let _pendingToken = '';
 
 	async function startExec(containerId: string) {
-		state = 'connecting';
-		// Fetch a short-lived exec token via the proxy (uses the session cookie).
-		// This avoids needing the JS access token which may not be in the store
-		// after a page refresh (auth is maintained via an httponly cookie).
+		state = 'loading'; // show spinner while fetching token
+		// Fetch the short-lived exec token BEFORE switching to 'connecting' so that
+		// when the $effect sees state === 'connecting' and termEl is bound, the token
+		// is already available and mountTerminal can open the WebSocket immediately.
 		try {
 			const res = await fetch(
 				`/api/projects/${projectId}/services/${serviceId}/exec/token`,
@@ -87,6 +90,9 @@
 			}
 			_pendingContainerId = containerId;
 			_pendingToken = json.data.token;
+			// Only switch to 'connecting' once the token is ready — this is what
+			// triggers the $effect to call mountTerminal.
+			state = 'connecting';
 		} catch (e) {
 			errorMsg = String(e);
 			state = 'error';
@@ -248,8 +254,6 @@
 </div>
 
 <style>
-	@import '@xterm/xterm/css/xterm.css';
-
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 	@keyframes spin { to { transform: rotate(360deg); } }
 

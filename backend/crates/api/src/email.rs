@@ -5,6 +5,32 @@ use lettre::{
 };
 use shipyard_common::config::SmtpConfig;
 
+/// Build an async SMTP transport respecting the configured security mode.
+///
+/// security = "tls"      → implicit TLS (SMTPS), standard port 465
+/// security = "none"     → plain SMTP, no TLS (port 25 / local relay)
+/// security = "starttls" → STARTTLS (default), standard port 587
+fn build_mailer(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
+    let creds = Credentials::new(config.username.clone(), config.password.clone());
+    let mailer = match config.security.to_lowercase().as_str() {
+        "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
+            .map_err(|e| e.to_string())?
+            .port(config.port)
+            .credentials(creds)
+            .build(),
+        "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
+            .port(config.port)
+            .credentials(creds)
+            .build(),
+        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
+            .map_err(|e| e.to_string())?
+            .port(config.port)
+            .credentials(creds)
+            .build(),
+    };
+    Ok(mailer)
+}
+
 /// Load SMTP config from `system_config` DB table, falling back to the
 /// static app config (env vars / config file).
 pub async fn load_smtp_config(db: &sqlx::PgPool, fallback: &SmtpConfig) -> SmtpConfig {
@@ -33,6 +59,7 @@ pub async fn load_smtp_config(db: &sqlx::PgPool, fallback: &SmtpConfig) -> SmtpC
         password:     map.get("smtp_password").cloned().unwrap_or_else(|| fallback.password.clone()),
         from_address: map.get("smtp_from_address").cloned().unwrap_or_else(|| fallback.from_address.clone()),
         from_name:    map.get("smtp_from_name").cloned().unwrap_or_else(|| fallback.from_name.clone()),
+        security:     map.get("smtp_security").cloned().unwrap_or_else(|| fallback.security.clone()),
     }
 }
 
@@ -68,15 +95,8 @@ pub async fn send_test_email(
         .body(body.to_string())
         .map_err(|e| e.to_string())?;
 
-    let creds = Credentials::new(config.username.clone(), config.password.clone());
-
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-        .map_err(|e| e.to_string())?
-        .port(config.port)
-        .credentials(creds)
-        .build();
-
-    mailer.send(email).await.map_err(|e| e.to_string())?;
+    build_mailer(config)?
+        .send(email).await.map_err(|e| e.to_string())?;
     tracing::info!("Test email sent to {to}");
     Ok(())
 }
@@ -118,15 +138,8 @@ pub async fn send_invitation_email(
         .body(body)
         .map_err(|e| e.to_string())?;
 
-    let creds = Credentials::new(config.username.clone(), config.password.clone());
-
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-        .map_err(|e| e.to_string())?
-        .port(config.port)
-        .credentials(creds)
-        .build();
-
-    mailer.send(email).await.map_err(|e| e.to_string())?;
+    build_mailer(config)?
+        .send(email).await.map_err(|e| e.to_string())?;
     tracing::info!("Invitation email sent to {to_email}");
     Ok(())
 }

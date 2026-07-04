@@ -102,6 +102,8 @@ pub struct SmtpConfig {
     pub password: String,
     pub from_address: String,
     pub from_name: String,
+    /// TLS mode: "starttls" (port 587), "tls" (implicit TLS, port 465), "none" (no TLS)
+    pub security: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -163,6 +165,7 @@ impl Default for AppConfig {
                 password: String::new(),
                 from_address: "noreply@example.com".to_string(),
                 from_name: "Shipyard".to_string(),
+                security: "starttls".to_string(),
             },
             tls: TlsConfig {
                 enabled: false,
@@ -215,6 +218,7 @@ impl AppConfig {
             .set_default("smtp.password", "")?
             .set_default("smtp.from_address", "noreply@example.com")?
             .set_default("smtp.from_name", "Shipyard")?
+            .set_default("smtp.security", "starttls")?
             .set_default("tls.enabled", false)?
             .set_default("tls.cert_path", "/etc/shipyard/tls/cert.pem")?
             .set_default("tls.key_path", "/etc/shipyard/tls/key.pem")?

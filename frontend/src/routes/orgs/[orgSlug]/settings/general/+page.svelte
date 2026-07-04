@@ -27,6 +27,7 @@
 		smtp_password?: string;
 		smtp_from_address?: string;
 		smtp_from_name?: string;
+		smtp_security?: string;
 	}
 
 	let showSmtpPassword = $state(false);
@@ -372,6 +373,14 @@
 					<div class="field">
 						<label class="field-label" for="smtp-port">Port</label>
 						<input id="smtp-port" class="field-input font-mono" type="number" bind:value={settings.smtp_port} placeholder="587" min="1" max="65535" />
+					</div>
+					<div class="field">
+						<label class="field-label" for="smtp-security">Security</label>
+						<select id="smtp-security" class="field-input" bind:value={settings.smtp_security}>
+							<option value="starttls">STARTTLS (port 587)</option>
+							<option value="tls">Implicit TLS (port 465)</option>
+							<option value="none">None (port 25)</option>
+						</select>
 					</div>
 					<div class="field">
 						<label class="field-label" for="smtp-user">Username</label>

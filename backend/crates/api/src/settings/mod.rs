@@ -42,6 +42,7 @@ const SETTINGS_KEYS: &[&str] = &[
     "smtp_password",
     "smtp_from_address",
     "smtp_from_name",
+    "smtp_security",
 ];
 
 const TRAEFIK_CONTAINER: &str = "shipyard-traefik";
@@ -68,6 +69,8 @@ pub struct PlatformSettings {
     pub smtp_password: Option<String>,
     pub smtp_from_address: Option<String>,
     pub smtp_from_name: Option<String>,
+    /// "starttls" | "tls" | "none"
+    pub smtp_security: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +187,7 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
         smtp_password:     map.remove("smtp_password"),
         smtp_from_address: map.remove("smtp_from_address").or_else(|| Some(state.config.smtp.from_address.clone()).filter(|s| !s.is_empty())),
         smtp_from_name:    map.remove("smtp_from_name").or_else(|| Some(state.config.smtp.from_name.clone()).filter(|s| !s.is_empty())),
+        smtp_security:     map.remove("smtp_security").or_else(|| Some(state.config.smtp.security.clone())),
     })
 }
 
