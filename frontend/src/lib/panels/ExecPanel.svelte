@@ -4,7 +4,6 @@
 	import { FitAddon } from '@xterm/addon-fit';
 	import { X, Loader2, AlertCircle, Terminal as TermIcon } from '@lucide/svelte';
 	import { env } from '$env/dynamic/public';
-	import { authStore } from '$lib/stores/auth.store';
 
 	interface Replica {
 		id: string;
@@ -74,16 +73,30 @@
 		}
 	}
 
-	function startExec(containerId: string) {
-		state = 'connecting';
-		const token = $authStore.token ?? '';
-		// termEl effect will call mountTerminal once the div renders
-		_pendingContainerId = containerId;
-		_pendingToken = token;
-	}
-
 	let _pendingContainerId = '';
 	let _pendingToken = '';
+
+	async function startExec(containerId: string) {
+		state = 'connecting';
+		// Fetch a short-lived exec token via the proxy (uses the session cookie).
+		// This avoids needing the JS access token which may not be in the store
+		// after a page refresh (auth is maintained via an httponly cookie).
+		try {
+			const res = await fetch(
+				`/api/projects/${projectId}/services/${serviceId}/exec/token`,
+				{ method: 'POST' }
+			);
+			const json = await res.json();
+			if (!res.ok || !json.data?.token) {
+				throw new Error(json.error?.message ?? 'Failed to get exec token');
+			}
+			_pendingContainerId = containerId;
+			_pendingToken = json.data.token;
+		} catch (e) {
+			errorMsg = String(e);
+			state = 'error';
+		}
+	}
 
 	function mountTerminal(el: HTMLDivElement) {
 		term = new Terminal({

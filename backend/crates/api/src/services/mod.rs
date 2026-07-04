@@ -170,6 +170,10 @@ pub fn routes() -> Router<AppState> {
             get(list_replicas),
         )
         .route(
+            "/projects/:project_id/services/:service_id/exec/token",
+            post(exec_token),
+        )
+        .route(
             "/projects/:project_id/services/:service_id/exec",
             get(exec_ws),
         )
@@ -992,6 +996,32 @@ async fn get_connection_info(
     }
 
     Ok(Json(ApiResponse::ok(info)))
+}
+
+// ─── Exec token ───────────────────────────────────────────────────────────────
+
+/// POST /projects/:project_id/services/:service_id/exec/token
+///
+/// Issues a short-lived JWT (5 min) for use as the `?token=` query param on
+/// the WebSocket exec endpoint. Calling this through the normal /api proxy lets
+/// the browser use its httponly session cookie, so the JS client doesn't need
+/// to carry its own copy of the long-lived access token.
+async fn exec_token(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((project_id, _service_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    check_project_access(&state.db, auth.user_id, project_id).await?;
+
+    let token = crate::auth::create_access_token(
+        auth.user_id,
+        &auth.email,
+        &state.config.auth.jwt_secret,
+        300, // 5 minutes
+    )
+    .map_err(|e| ApiAppError(e))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "token": token }))))
 }
 
 // ─── Replicas ─────────────────────────────────────────────────────────────────
