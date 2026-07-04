@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { SvelteFlow, Controls, Background, MiniMap, type NodeTypes, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { Plus, ChevronDown, RefreshCw } from '@lucide/svelte';
+	import { Plus, ChevronDown, RefreshCw, Settings2 } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 
 	import { page } from '$app/state';
 	import { api } from '$lib/api/client';
@@ -316,6 +317,15 @@
 	>
 		<Plus size={13} />
 		Add Resource
+	</button>
+
+	<button
+		class="appbar-action"
+		onclick={() => goto(`/orgs/${orgSlug}/projects/${projectSlug}/settings`)}
+		title="Project settings"
+		aria-label="Project settings"
+	>
+		<Settings2 size={14} />
 	</button>
 </div>
 

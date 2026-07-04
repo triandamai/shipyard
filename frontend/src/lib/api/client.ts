@@ -235,6 +235,14 @@ class ApiClient {
 		return this.post(`/orgs/${orgId}/projects`, { name, slug });
 	}
 
+	async getProject(orgId: string, projectId: string): Promise<ApiResponse<Project>> {
+		return this.get(`/orgs/${orgId}/projects/${projectId}`);
+	}
+
+	async deleteProject(orgId: string, projectId: string): Promise<ApiResponse<{ message: string }>> {
+		return this.delete(`/orgs/${orgId}/projects/${projectId}`);
+	}
+
 	async patchNodePositions(
 		orgId: string,
 		projectId: string,

@@ -245,6 +245,10 @@ async fn patch_node_positions(
 }
 
 /// DELETE /orgs/:org_id/projects/:project_id
+///
+/// Tears down all Docker Swarm services and Traefik configs for every service
+/// in the project before deleting the project row (which cascades to services,
+/// networks, volumes, domains, deployments, etc.).
 async fn delete_project(
     auth_user: AuthUser,
     Path((org_id, project_id)): Path<(Uuid, Uuid)>,
@@ -252,22 +256,70 @@ async fn delete_project(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_org_member(&state.db, auth_user.user_id, org_id).await?;
 
-    let rows_affected = sqlx::query(
-        "DELETE FROM projects WHERE id = $1 AND org_id = $2",
+    // Verify project exists and belongs to org.
+    let exists: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM projects WHERE id = $1 AND org_id = $2",
     )
     .bind(project_id)
     .bind(org_id)
-    .execute(&state.db)
+    .fetch_optional(&state.db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .rows_affected();
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if rows_affected == 0 {
+    if exists.is_none() {
         return Err(ApiAppError(AppError::NotFound(format!(
             "Project '{}' not found",
             project_id
         ))));
     }
+
+    // Collect every service (id + slug) so we can tear down Docker + Traefik.
+    let services: Vec<(Uuid, String)> = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, slug FROM services WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (svc_id, svc_slug) in &services {
+        // Remove Docker Swarm service (best-effort).
+        let docker_name = format!("{}-{}", state.config.docker.label_prefix, svc_id);
+        if let Err(e) = state.docker.remove_service(&docker_name).await {
+            tracing::debug!(project_id = %project_id, service_id = %svc_id, "swarm remove: {e}");
+        }
+
+        // Remove Traefik dynamic config (best-effort).
+        if let Some(dir) = state.config.traefik.dynamic_config_dir.as_deref() {
+            let path = std::path::Path::new(dir).join(format!("{svc_slug}.yml"));
+            let _ = tokio::fs::remove_file(&path).await;
+        }
+    }
+
+    tracing::info!(
+        project_id = %project_id,
+        services_cleaned = services.len(),
+        "Project Docker cleanup complete — deleting DB rows"
+    );
+
+    // Delete the project; FK CASCADE removes services, networks, volumes,
+    // domains, deployments, deployment_logs, deployment_steps, service_envs, etc.
+    sqlx::query("DELETE FROM projects WHERE id = $1 AND org_id = $2")
+        .bind(project_id)
+        .bind(org_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        Some(auth_user.user_id),
+        "delete_project",
+        Some("project"),
+        Some(project_id),
+        None,
+        Some(serde_json::json!({ "org_id": org_id, "services_removed": services.len() })),
+    ).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Project deleted successfully"
