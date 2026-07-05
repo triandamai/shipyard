@@ -4,7 +4,7 @@
 		Play, Square, RefreshCw, Trash2, AlertTriangle,
 		GitBranch, Box, FileCode, Terminal, Settings, X,
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
-		Eye, Copy, Globe, Plus, Shield, ShieldOff, FileText,
+		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
 		CheckCircle2, AlertCircle, Loader2, Network, HardDrive
 	} from '@lucide/svelte';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
@@ -159,19 +159,19 @@ let showExecPanel = $state(false);
 	let isDeleting = $state(false);
 	let deleteError = $state('');
 
-	// ── Connection info (database services) ──────────────────────────
+	// ── Connection info ───────────────────────────────────────────────
 	let connInfo        = $state<ConnectionInfo | null>(null);
 	let connInfoLoading = $state(false);
 	let connInfoCopied  = $state(false);
+	let connHostRevealed = $state(false);
+	let connUrlRevealed  = $state(false);
 
 	async function loadConnectionInfo() {
 		if (!service) return;
-		if (service.type !== 'database' && service.type !== 'docker') return;
 		connInfoLoading = true;
 		try {
 			const res = await api.getConnectionInfo(projectId, service.id);
-			// Only set if a recognized driver came back (not the generic TCP fallback)
-			if (!res.error && res.data && res.data.driver !== 'TCP') connInfo = res.data;
+			if (!res.error && res.data) connInfo = res.data;
 		} catch { /* ignore */ } finally {
 			connInfoLoading = false;
 		}
@@ -1492,55 +1492,72 @@ let showExecPanel = $state(false);
 						{/if}
 					</div>
 
-					<!-- Internal connection card: shown for database type always, or docker type when conn info resolved -->
-					{#if service.type === 'database' || (service.type === 'docker' && connInfo)}
-						<div class="info-card conn-info-card">
-							<div class="info-card-header">
-								<Network size={13} />
-								<span>Internal Connection</span>
-							</div>
-							{#if connInfoLoading}
-								<div class="info-card-body"><span class="conn-loading">Loading…</span></div>
-							{:else if connInfo}
-								<div class="info-card-body">
+					<!-- Internal connection card — shown for all service types -->
+					<div class="info-card conn-info-card">
+						<div class="info-card-header">
+							<Network size={13} />
+							<span>Internal Connection</span>
+						</div>
+						{#if connInfoLoading}
+							<div class="info-card-body"><span class="conn-loading">Loading…</span></div>
+						{:else}
+							<div class="info-card-body">
+								{#if connInfo && connInfo.driver !== 'TCP'}
 									<div class="conn-row">
 										<span class="conn-label">Driver</span>
 										<span class="conn-driver-badge">{connInfo.driver}</span>
 									</div>
-									<div class="conn-row">
-										<span class="conn-label">Host</span>
-										<code class="conn-val">{connInfo.host}:{connInfo.port}</code>
+								{/if}
+
+								<!-- Host : Port -->
+								<div class="conn-row">
+									<span class="conn-label">Host</span>
+									<div class="conn-secret-row">
+										<code class="conn-val" class:conn-masked={!connHostRevealed}>
+											{#if connInfo}
+												{connInfo.host}:{connInfo.port}
+											{:else}
+												{service.slug}
+											{/if}
+										</code>
+										<button class="conn-icon-btn" title={connHostRevealed ? 'Hide' : 'Reveal'}
+											onclick={() => connHostRevealed = !connHostRevealed}>
+											{#if connHostRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
+										</button>
+										<button class="conn-icon-btn" title="Copy"
+											onclick={() => navigator.clipboard.writeText(connInfo ? `${connInfo.host}:${connInfo.port}` : service!.slug)}>
+											<Copy size={12} />
+										</button>
 									</div>
+								</div>
+
+								<!-- URL template (only when connInfo available) -->
+								{#if connInfo}
 									<div class="conn-url-block">
-										<span class="conn-label">URL template</span>
-										<div class="conn-url-row">
-											<code class="conn-url">{connInfo.url_template}</code>
-											<button
-												class="conn-copy-btn"
-												title="Copy URL"
+										<span class="conn-label">URL</span>
+										<div class="conn-secret-row" style="margin-top:4px">
+											<code class="conn-url" class:conn-masked={!connUrlRevealed}>
+												{connInfo.url_template}
+											</code>
+											<button class="conn-icon-btn" title={connUrlRevealed ? 'Hide' : 'Reveal'}
+												onclick={() => connUrlRevealed = !connUrlRevealed}>
+												{#if connUrlRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
+											</button>
+											<button class="conn-icon-btn" title="Copy"
 												onclick={async () => {
 													if (!connInfo) return;
 													await navigator.clipboard.writeText(connInfo.url_template);
 													connInfoCopied = true;
 													setTimeout(() => connInfoCopied = false, 1500);
-												}}
-											>
-												{#if connInfoCopied}
-													<CheckCircle2 size={13} />
-												{:else}
-													<Copy size={13} />
-												{/if}
+												}}>
+												{#if connInfoCopied}<CheckCircle2 size={12} />{:else}<Copy size={12} />{/if}
 											</button>
 										</div>
 									</div>
-								</div>
-							{:else}
-								<div class="info-card-body">
-									<span class="conn-loading">No connection info — deploy a recognized database image (postgres, mysql, redis, mongo…)</span>
-								</div>
-							{/if}
-						</div>
-					{/if}
+								{/if}
+							</div>
+						{/if}
+					</div>
 
 					<!-- Metadata grid -->
 					<div class="overview-grid">
@@ -2730,6 +2747,35 @@ let showExecPanel = $state(false);
 		word-break: break-all;
 		flex: 1;
 	}
+	.conn-secret-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex: 1;
+		min-width: 0;
+	}
+	.conn-masked {
+		filter: blur(5px);
+		user-select: none;
+		pointer-events: none;
+		transition: filter 0.2s;
+	}
+	.conn-icon-btn {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: none;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: border-color 0.15s, color 0.15s;
+	}
+	.conn-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+	/* legacy alias kept for any remaining usages */
 	.conn-copy-btn {
 		flex-shrink: 0;
 		display: flex;

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { SvelteFlow, Controls, Background, MiniMap, type NodeTypes, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { Plus, ChevronDown, RefreshCw, Settings2 } from '@lucide/svelte';
+	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 
 	import { page } from '$app/state';
@@ -13,6 +13,7 @@
 	import { subscribeToTopology } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Topology, MqttPayload } from '$lib/api/types';
+	import { isAdminRole, can } from '$lib/auth/permissions';
 
 	import ServiceNode from '$lib/flows/ServiceNode.svelte';
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
@@ -33,6 +34,23 @@
 	let orgId = $derived($orgStore.activeOrg?.id ?? '');
 	let projectId = $derived(
 		$projectStore.projects.find((p) => p.slug === projectSlug)?.id ?? ''
+	);
+
+	// ── Permission gates ───────────────────────────────────────────────────────
+	let myRole       = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms      = $derived($orgStore.myMembership?.permissions ?? []);
+	let memberLoaded = $derived($orgStore.membershipLoaded ?? false);
+
+	// Admins/owners always have full access.
+	// Regular members need explicit project permissions.
+	let canViewProject = $derived(
+		isAdminRole(myRole) ||
+		can(myRole, myPerms, 'project:read') ||
+		can(myRole, myPerms, 'project:write')
+	);
+	let canEditProject = $derived(
+		isAdminRole(myRole) ||
+		can(myRole, myPerms, 'project:write')
 	);
 
 	let isLoading = $state(true);
@@ -136,7 +154,7 @@
 	let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function handleNodeDragStop(_: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }) {
-		if (!orgId || !projectId) return;
+		if (!orgId || !projectId || !canEditProject) return;
 		if (_saveTimer) clearTimeout(_saveTimer);
 		_saveTimer = setTimeout(async () => {
 			const positions: Record<string, { x: number; y: number }> = {};
@@ -305,32 +323,47 @@
 		<RefreshCw size={14} />
 	</button>
 
-	<div class="appbar-divider"></div>
+	{#if canEditProject}
+		<div class="appbar-divider"></div>
 
-	<button
-		class="appbar-add-btn"
-		onclick={() => uiStore.pushPanel({
-			component: AddResourcePanel,
-			props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
-			title: 'Add Resource'
-		})}
-	>
-		<Plus size={13} />
-		Add Resource
-	</button>
+		<button
+			class="appbar-add-btn"
+			onclick={() => uiStore.pushPanel({
+				component: AddResourcePanel,
+				props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
+				title: 'Add Resource'
+			})}
+		>
+			<Plus size={13} />
+			Add Resource
+		</button>
 
-	<button
-		class="appbar-action"
-		onclick={() => goto(`/orgs/${orgSlug}/projects/${projectSlug}/settings`)}
-		title="Project settings"
-		aria-label="Project settings"
-	>
-		<Settings2 size={14} />
-	</button>
+		<button
+			class="appbar-action"
+			onclick={() => goto(`/orgs/${orgSlug}/projects/${projectSlug}/settings`)}
+			title="Project settings"
+			aria-label="Project settings"
+		>
+			<Settings2 size={14} />
+		</button>
+	{/if}
 </div>
 
 <div class="canvas-wrapper">
-	{#if isLoading}
+	{#if memberLoaded && !canViewProject}
+		<!-- Access denied — user has no project permissions -->
+		<div class="access-denied">
+			<ShieldOff size={36} class="access-denied-icon" />
+			<h2 class="access-denied-title">Access Restricted</h2>
+			<p class="access-denied-desc">
+				You don't have permission to view this project.<br />
+				Contact your organization admin to request access.
+			</p>
+			<button class="btn btn-secondary btn-sm" onclick={() => goto(`/orgs/${orgSlug}`)}>
+				Back to overview
+			</button>
+		</div>
+	{:else if isLoading}
 		<div class="canvas-loading">
 			<div class="spinner"></div>
 			<span>Loading topology…</span>
@@ -351,6 +384,9 @@
 			bind:edges
 			{nodeTypes}
 			fitView
+			nodesDraggable={canEditProject}
+			nodesConnectable={canEditProject}
+			elementsSelectable={canEditProject}
 			onnodeclick={handleNodeClick}
 			onnodedragstop={handleNodeDragStop}
 		>
@@ -361,6 +397,9 @@
 			/>
 		</SvelteFlow>
 
+		{#if !canEditProject && canViewProject}
+			<div class="view-only-badge">View only</div>
+		{/if}
 	{/if}
 </div>
 
@@ -370,6 +409,52 @@
 		height: 100vh;
 		position: relative;
 		background: var(--bg-base);
+	}
+
+	/* ── Access denied ──────────────────────────────────────────────── */
+	.access-denied {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		background: var(--bg-base);
+		color: var(--text-primary);
+		text-align: center;
+		padding: 32px;
+	}
+	:global(.access-denied-icon) { color: var(--text-dim); }
+	.access-denied-title {
+		font-size: 18px;
+		font-weight: 600;
+		margin: 0;
+	}
+	.access-denied-desc {
+		font-size: 13px;
+		color: var(--text-muted);
+		line-height: 1.6;
+		margin: 0;
+	}
+
+	/* ── View-only badge ────────────────────────────────────────────── */
+	.view-only-badge {
+		position: absolute;
+		bottom: 16px;
+		left: 50%;
+		transform: translateX(-50%);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 20px;
+		padding: 4px 12px;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		pointer-events: none;
+		z-index: 10;
 	}
 
 	/* Override @xyflow background to match design tokens */

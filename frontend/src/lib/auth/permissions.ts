@@ -21,6 +21,9 @@ export function can(
 	role: MemberRole | null | undefined,
 	permissions: string[],
 	action:
+		| 'project:read'
+		| 'project:write'
+		| 'project:delete'
 		| 'service:delete'
 		| 'service:deploy'
 		| 'service:write'
@@ -36,15 +39,18 @@ export function can(
 	if (role === 'owner' || role === 'admin') return true;
 
 	const permMap: Record<string, string> = {
+		'project:read':   'app:project:read',
+		'project:write':  'app:project:write',
+		'project:delete': 'app:project:delete',
 		'service:delete': 'app:project:service:delete',
 		'service:deploy': 'app:project:service:deploy',
-		'service:write': 'app:project:service:write',
-		'env:write': 'app:project:service:write',
-		'domain:write': 'app:project:domain:write',
-		'volume:write': 'app:project:volume:write',
-		'network:write': 'app:project:network:write',
-		'member:manage': 'app:org:members:manage',
-		'member:invite': 'app:org:members:invite',
+		'service:write':  'app:project:service:write',
+		'env:write':      'app:project:service:write',
+		'domain:write':   'app:project:domain:write',
+		'volume:write':   'app:project:volume:write',
+		'network:write':  'app:project:network:write',
+		'member:manage':  'app:org:members:manage',
+		'member:invite':  'app:org:members:invite',
 		'settings:write': 'app:org:settings:write'
 	};
 
