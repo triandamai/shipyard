@@ -1341,6 +1341,18 @@ impl DockerEngine for BollardDockerEngine {
         use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions};
         use bollard::models::HostConfig;
 
+        // Pull docker:cli so the image is available even on a fresh server.
+        let mut pull_stream = self.client.create_image(
+            Some(CreateImageOptions { from_image: "docker", tag: "cli", ..Default::default() }),
+            None,
+            None,
+        );
+        while let Some(item) = pull_stream.next().await {
+            if let Err(e) = item {
+                return Err(AppError::Docker(format!("pull docker:cli failed: {e}")));
+            }
+        }
+
         // Remove any leftover updater from a previous run (best-effort).
         let _ = self.client
             .remove_container(
