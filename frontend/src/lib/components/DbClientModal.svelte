@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Database, Play, Loader2, AlertTriangle, Info, ChevronDown } from '@lucide/svelte';
+	import { X, Database, Play, Loader2, AlertTriangle, Info, ChevronDown, RefreshCw } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import type { DbEngine, DbMeta, DbQueryResult } from '$lib/api/types';
 
@@ -33,6 +33,12 @@
 	let result       = $state<DbQueryResult | null>(null);
 	let queryError   = $state('');
 
+	// ── Schema browser ────────────────────────────────────────────────────────
+	let browserItems   = $state<string[]>([]);
+	let browserLoading = $state(false);
+	let browserError   = $state('');
+	let selectedItem   = $state<string | null>(null);
+
 	const ENGINE_OPTIONS: { value: DbEngine; label: string; defaultPort: number }[] = [
 		{ value: 'postgres', label: 'PostgreSQL', defaultPort: 5432 },
 		{ value: 'mysql',    label: 'MySQL',      defaultPort: 3306 },
@@ -58,6 +64,7 @@
 	const dbFieldLabel  = $derived(isRedis ? 'DB Index (0–15)' : 'Database');
 	const queryLabel    = $derived(isRedis ? 'Redis Command' : isMongo ? 'Query (JSON)' : 'SQL Query');
 	const queryHint     = $derived(isRedis ? 'Enter to run' : isMongo ? 'Ctrl+Enter to run' : 'Ctrl+Enter to run');
+	const browserLabel  = $derived(isMongo ? 'Collections' : isRedis ? 'Keys' : 'Tables');
 
 	// True when the auto-detected host is a Docker-internal name (not an IP).
 	// In dev the backend runs on the host so Docker DNS won't resolve — the user
@@ -112,6 +119,7 @@
 		if (res.error) { connectError = res.error.message; return; }
 		connected = true;
 		sql = ENGINE_PLACEHOLDER[engine];
+		loadBrowser();
 	}
 
 	async function runQuery() {
@@ -148,10 +156,53 @@
 	}
 
 	function disconnect() {
-		connected    = false;
-		result       = null;
-		queryError   = '';
-		connectError = '';
+		connected      = false;
+		result         = null;
+		queryError     = '';
+		connectError   = '';
+		browserItems   = [];
+		browserError   = '';
+		browserLoading = false;
+		selectedItem   = null;
+	}
+
+	async function loadBrowser() {
+		browserLoading = true;
+		browserError   = '';
+		browserItems   = [];
+		selectedItem   = null;
+
+		const listSql =
+			engine === 'postgres'
+				? "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+				: engine === 'mysql' || engine === 'mariadb'
+					? 'SHOW TABLES'
+					: engine === 'mongodb'
+						? JSON.stringify({ '$listCollections': true })
+						: 'KEYS *';
+
+		const res = await api.runDbQuery(serviceId, {
+			engine, host: host.trim(), port, database: database.trim(),
+			username: username.trim(), password, sql: listSql,
+		});
+		browserLoading = false;
+		if (res.error) { browserError = res.error.message; return; }
+		browserItems = (res.data?.rows ?? [])
+			.map(row => String(row[0] ?? ''))
+			.filter(Boolean)
+			.slice(0, 300);
+	}
+
+	function fillQuery(name: string) {
+		selectedItem = name;
+		if (isSqlEngine) {
+			const quoted = engine === 'postgres' ? `"${name}"` : `\`${name}\``;
+			sql = `SELECT * FROM ${quoted} LIMIT 100;`;
+		} else if (isMongo) {
+			sql = `{\n  "collection": "${name}",\n  "filter": {},\n  "sort": { "_id": -1 },\n  "limit": 100\n}`;
+		} else {
+			sql = `GET ${name}`;
+		}
 	}
 
 	// ── Close confirmation ────────────────────────────────────────────────────
@@ -313,89 +364,132 @@
 					</div>
 				</section>
 			{:else}
-				<!-- Connected — show query editor -->
+				<!-- Connected — show schema browser + query editor -->
 				<div class="editor-section">
-					<!-- Connection status bar -->
+					<!-- Connection status bar (full width) -->
 					<div class="conn-bar">
 						<span class="conn-detail">
 							<span class="engine-badge {engine}">{engine}</span>
 							<code>{host}:{port}</code>
 							<span class="sep">·</span>
 							<code>{database}</code>
-							<span class="sep">·</span>
-							<span>{username}</span>
+							{#if username}
+								<span class="sep">·</span>
+								<span>{username}</span>
+							{/if}
 						</span>
 						<button class="btn-link" onclick={disconnect}>Disconnect</button>
 					</div>
 
-					<!-- Query editor (SQL / Redis command / MongoDB JSON) -->
-					<div class="editor-wrap">
-						<div class="editor-label">{queryLabel}</div>
-						<textarea
-							class="sql-editor"
-							class:redis-editor={isRedis}
-							bind:value={sql}
-							onkeydown={handleKeydown}
-							placeholder={ENGINE_PLACEHOLDER[engine]}
-							spellcheck="false"
-							autocomplete="off"
-						></textarea>
-						<div class="editor-actions">
-							<span class="editor-hint">{queryHint}</span>
-							<button class="btn btn-primary btn-sm" onclick={runQuery} disabled={running || !sql.trim()}>
-								{#if running}
-									<Loader2 size={12} class="spin" />
-									Running…
-								{:else}
-									<Play size={12} />
-									Run
-								{/if}
-							</button>
-						</div>
-					</div>
-
-					<!-- Results -->
-					{#if queryError}
-						<div class="error-banner">
-							<AlertTriangle size={13} />
-							<pre class="error-pre">{queryError}</pre>
-						</div>
-					{:else if result}
-						<div class="results-section">
-							<div class="results-meta">
-								<span>{result.row_count} row{result.row_count !== 1 ? 's' : ''}</span>
-								{#if result.truncated}
-									<span class="truncated-badge">Limited to 1 000 rows</span>
-								{/if}
-								<span class="exec-time">{result.execution_time_ms}ms</span>
+					<!-- Two-column: schema sidebar + editor/results -->
+					<div class="browser-layout">
+						<!-- Schema browser sidebar -->
+						<div class="browser-sidebar">
+							<div class="browser-header">
+								<span>{browserLabel}</span>
+								<button class="browser-refresh" onclick={loadBrowser} title="Refresh" aria-label="Refresh {browserLabel}">
+									<RefreshCw size={11} />
+								</button>
 							</div>
-
-							{#if result.columns.length === 0}
-								<div class="empty-result">Query executed successfully — no rows returned.</div>
+							{#if browserLoading}
+								<div class="browser-state">
+									<Loader2 size={14} class="spin" />
+								</div>
+							{:else if browserError}
+								<div class="browser-state browser-err" title={browserError}>
+									<AlertTriangle size={13} />
+									<span>Failed to load</span>
+								</div>
+							{:else if browserItems.length === 0}
+								<div class="browser-state">
+									<span>No {browserLabel.toLowerCase()}</span>
+								</div>
 							{:else}
-								<div class="table-scroll">
-									<table class="results-table">
-										<thead>
-											<tr>
-												{#each result.columns as col}
-													<th>{col}</th>
-												{/each}
-											</tr>
-										</thead>
-										<tbody>
-											{#each result.rows as row}
-												<tr>
-													{#each row as cell}
-														<td class:null-cell={isCellNull(cell)}>{formatCell(cell)}</td>
-													{/each}
-												</tr>
-											{/each}
-										</tbody>
-									</table>
+								<div class="browser-list">
+									{#each browserItems as item}
+										<button
+											class="browser-item"
+											class:active={selectedItem === item}
+											onclick={() => fillQuery(item)}
+											title={item}
+										>{item}</button>
+									{/each}
 								</div>
 							{/if}
 						</div>
-					{/if}
+
+						<!-- Right: editor + results -->
+						<div class="browser-main">
+							<!-- Query editor -->
+							<div class="editor-wrap">
+								<div class="editor-label">{queryLabel}</div>
+								<textarea
+									class="sql-editor"
+									class:redis-editor={isRedis}
+									bind:value={sql}
+									onkeydown={handleKeydown}
+									placeholder={ENGINE_PLACEHOLDER[engine]}
+									spellcheck="false"
+									autocomplete="off"
+								></textarea>
+								<div class="editor-actions">
+									<span class="editor-hint">{queryHint}</span>
+									<button class="btn btn-primary btn-sm" onclick={runQuery} disabled={running || !sql.trim()}>
+										{#if running}
+											<Loader2 size={12} class="spin" />
+											Running…
+										{:else}
+											<Play size={12} />
+											Run
+										{/if}
+									</button>
+								</div>
+							</div>
+
+							<!-- Results -->
+							{#if queryError}
+								<div class="error-banner">
+									<AlertTriangle size={13} />
+									<pre class="error-pre">{queryError}</pre>
+								</div>
+							{:else if result}
+								<div class="results-section">
+									<div class="results-meta">
+										<span>{result.row_count} row{result.row_count !== 1 ? 's' : ''}</span>
+										{#if result.truncated}
+											<span class="truncated-badge">Limited to 1 000 rows</span>
+										{/if}
+										<span class="exec-time">{result.execution_time_ms}ms</span>
+									</div>
+
+									{#if result.columns.length === 0}
+										<div class="empty-result">Query executed successfully — no rows returned.</div>
+									{:else}
+										<div class="table-scroll">
+											<table class="results-table">
+												<thead>
+													<tr>
+														{#each result.columns as col}
+															<th>{col}</th>
+														{/each}
+													</tr>
+												</thead>
+												<tbody>
+													{#each result.rows as row}
+														<tr>
+															{#each row as cell}
+																<td class:null-cell={isCellNull(cell)}>{formatCell(cell)}</td>
+															{/each}
+														</tr>
+													{/each}
+												</tbody>
+											</table>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -476,7 +570,9 @@
 
 	.modal-body {
 		flex: 1;
-		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
 	}
 
 	/* Loading / error */
@@ -494,10 +590,12 @@
 
 	/* Connection form */
 	.conn-section {
+		flex: 1;
 		padding: 20px;
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
+		overflow-y: auto;
 	}
 
 	.warn-notice {
@@ -615,9 +713,11 @@
 
 	/* Connected editor section */
 	.editor-section {
+		flex: 1;
 		display: flex;
 		flex-direction: column;
-		gap: 0;
+		overflow: hidden;
+		min-height: 0;
 	}
 
 	.conn-bar {
@@ -709,6 +809,7 @@
 		flex-direction: column;
 		flex: 1;
 		overflow: hidden;
+		min-height: 0;
 	}
 
 	.results-meta {
@@ -741,7 +842,8 @@
 
 	.table-scroll {
 		overflow: auto;
-		max-height: 320px;
+		flex: 1;
+		min-height: 0;
 	}
 
 	.results-table {
@@ -779,6 +881,101 @@
 	.results-table tr:hover td { background: var(--bg-elevated, #f9fafb); }
 
 	.null-cell { color: var(--text-dim, var(--text-muted)) !important; font-style: italic; }
+
+	/* ── Schema browser ── */
+	.browser-layout {
+		flex: 1;
+		display: flex;
+		overflow: hidden;
+		min-height: 0;
+	}
+
+	.browser-sidebar {
+		width: 180px;
+		flex-shrink: 0;
+		border-right: 1px solid var(--border);
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		background: var(--bg-muted);
+	}
+
+	.browser-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 7px 12px;
+		border-bottom: 1px solid var(--border);
+		font-size: 10px;
+		font-weight: 700;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		flex-shrink: 0;
+	}
+
+	.browser-refresh {
+		display: flex;
+		align-items: center;
+		background: none;
+		border: none;
+		color: var(--text-dim, var(--text-muted));
+		cursor: pointer;
+		padding: 3px;
+		border-radius: 3px;
+		transition: background 0.1s, color 0.1s;
+	}
+	.browser-refresh:hover { background: var(--border); color: var(--text-primary); }
+
+	.browser-state {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		flex: 1;
+		padding: 16px;
+		color: var(--text-muted);
+		font-size: 11px;
+		text-align: center;
+	}
+	.browser-state.browser-err { color: #dc2626; }
+
+	.browser-list {
+		flex: 1;
+		overflow-y: auto;
+		padding: 4px 0;
+	}
+
+	.browser-item {
+		display: block;
+		width: 100%;
+		padding: 5px 12px;
+		font-size: 12px;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-primary);
+		background: transparent;
+		border: none;
+		text-align: left;
+		cursor: pointer;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		transition: background 0.08s;
+	}
+	.browser-item:hover { background: var(--bg-elevated, #f0f4f8); }
+	.browser-item.active {
+		background: rgba(99, 102, 241, 0.1);
+		color: var(--accent, #6366f1);
+	}
+
+	.browser-main {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		min-width: 0;
+	}
 
 	@media (max-width: 639px) {
 		.form-grid { grid-template-columns: 1fr; }

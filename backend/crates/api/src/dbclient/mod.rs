@@ -519,6 +519,26 @@ async fn run_mongodb_query(
         });
     }
 
+    // List collections for the schema browser
+    if query.get("$listCollections").is_some() {
+        let start = Instant::now();
+        let names = timeout(Duration::from_secs(10), db.list_collection_names())
+            .await
+            .map_err(|_| "List collections timed out")??;
+        let elapsed = start.elapsed().as_millis();
+        let row_count = names.len();
+        let rows = names.into_iter()
+            .map(|n| vec![serde_json::Value::String(n)])
+            .collect();
+        return Ok(DbQueryResponse {
+            columns: vec!["collection".into()],
+            rows,
+            row_count,
+            truncated: false,
+            execution_time_ms: elapsed,
+        });
+    }
+
     let collection_name = query["collection"]
         .as_str()
         .ok_or("Query must include a \"collection\" field")?;

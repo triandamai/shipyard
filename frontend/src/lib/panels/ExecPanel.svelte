@@ -211,9 +211,21 @@
 	}
 
 	onDestroy(cleanup);
+
+	// ── Close confirmation ────────────────────────────────────────────────────────
+	let showCloseConfirm = $state(false);
+
+	function requestClose() {
+		showCloseConfirm = true;
+	}
+
+	function confirmClose() {
+		showCloseConfirm = false;
+		onClose();
+	}
 </script>
 
-<div class="exec-backdrop" onclick={onClose} role="none"></div>
+<div class="exec-backdrop" onclick={requestClose} role="none"></div>
 
 <div class="exec-panel" role="dialog" aria-label="Terminal — {serviceName}">
 	<div class="exec-header">
@@ -221,10 +233,24 @@
 			<TermIcon size={14} />
 			<span>Terminal — <strong>{serviceName}</strong></span>
 		</div>
-		<button class="close-btn" onclick={onClose} aria-label="Close terminal">
+		<button class="close-btn" onclick={requestClose} aria-label="Close terminal">
 			<X size={15} />
 		</button>
 	</div>
+
+	{#if showCloseConfirm}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCloseConfirm = false; }} onkeydown={() => {}}>
+			<div class="confirm-card">
+				<p class="confirm-title">Close terminal?</p>
+				<p class="confirm-sub">The active terminal session will be terminated.</p>
+				<div class="confirm-actions">
+					<button class="btn btn-cancel" onclick={() => showCloseConfirm = false}>Cancel</button>
+					<button class="btn btn-close-panel" onclick={confirmClose}>Close</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	<div class="exec-body">
 		{#if state === 'loading'}
@@ -288,6 +314,7 @@
 		flex-direction: column;
 		z-index: 71;
 		box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+		isolation: isolate;
 	}
 
 	.exec-header {
@@ -395,4 +422,70 @@
 	}
 
 	.btn-sm { font-size: 12px; padding: 5px 12px; }
+
+	/* ── Close confirmation overlay ── */
+	.confirm-overlay {
+		position: absolute;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.65);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 10;
+	}
+
+	.confirm-card {
+		background: #161b22;
+		border: 1px solid #30363d;
+		border-radius: 10px;
+		padding: 24px 28px;
+		width: min(340px, calc(100% - 40px));
+		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+	}
+
+	.confirm-title {
+		margin: 0 0 8px;
+		font-size: 15px;
+		font-weight: 600;
+		color: #e6edf3;
+	}
+
+	.confirm-sub {
+		margin: 0 0 20px;
+		font-size: 13px;
+		color: #8b949e;
+		line-height: 1.5;
+	}
+
+	.confirm-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		padding: 7px 14px;
+		border-radius: 6px;
+		font-size: 13px;
+		font-weight: 500;
+		cursor: pointer;
+		border: 1px solid transparent;
+		transition: all 0.12s;
+	}
+
+	.btn-cancel {
+		background: transparent;
+		border-color: #30363d;
+		color: #8b949e;
+	}
+	.btn-cancel:hover { background: #21262d; color: #e6edf3; }
+
+	.btn-close-panel {
+		background: #da3633;
+		border-color: #da3633;
+		color: #fff;
+	}
+	.btn-close-panel:hover { background: #b91c1c; border-color: #b91c1c; }
 </style>
