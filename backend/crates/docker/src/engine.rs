@@ -148,6 +148,21 @@ pub trait DockerEngine: Send + Sync {
 
     /// Resize the TTY of an active exec session.
     async fn resize_exec(&self, exec_id: &str, cols: u16, rows: u16) -> AppResult<()>;
+
+    /// Pull an image, streaming each status line to `tx` as it arrives.
+    /// Used by the self-update flow so progress appears in real time.
+    async fn pull_image_stream(
+        &self,
+        image: &str,
+        tag: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> AppResult<()>;
+
+    /// Spawn a detached `docker:cli` container that runs
+    /// `docker compose up -d --remove-orphans` after a short delay.
+    /// Used by the self-update flow to restart services without killing
+    /// the process being replaced.
+    async fn spawn_compose_restart(&self, compose_dir: &str) -> AppResult<()>;
 }
 
 // ─── Concrete implementation ──────────────────────────────────────────────────
@@ -1286,6 +1301,89 @@ impl DockerEngine for BollardDockerEngine {
             .resize_exec(exec_id, ResizeExecOptions { width: cols, height: rows })
             .await
             .map_err(|e| AppError::Docker(format!("resize_exec failed: {e}")))
+    }
+
+    async fn pull_image_stream(
+        &self,
+        image: &str,
+        tag: &str,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> AppResult<()> {
+        let mut stream = self.client.create_image(
+            Some(CreateImageOptions { from_image: image, tag, ..Default::default() }),
+            None,
+            None,
+        );
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(info) => {
+                    if let Some(status) = info.status {
+                        let mut line = status;
+                        if let Some(progress) = info.progress {
+                            line.push(' ');
+                            line.push_str(&progress);
+                        }
+                        // If the receiver is gone (client disconnected) we can stop early.
+                        if tx.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(AppError::Docker(format!("pull_image_stream failed: {e}")));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn spawn_compose_restart(&self, compose_dir: &str) -> AppResult<()> {
+        use bollard::container::{Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions};
+        use bollard::models::HostConfig;
+
+        // Remove any leftover updater from a previous run (best-effort).
+        let _ = self.client
+            .remove_container(
+                "shipyard-updater",
+                Some(RemoveContainerOptions { force: true, ..Default::default() }),
+            )
+            .await;
+
+        let cmd = vec![
+            "sh",
+            "-c",
+            "sleep 5 && docker compose up -d --remove-orphans",
+        ];
+
+        let config = Config {
+            image: Some("docker:cli"),
+            cmd: Some(cmd),
+            working_dir: Some(compose_dir),
+            host_config: Some(HostConfig {
+                binds: Some(vec![
+                    "/var/run/docker.sock:/var/run/docker.sock".to_string(),
+                    format!("{compose_dir}:{compose_dir}"),
+                ]),
+                auto_remove: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        self.client
+            .create_container(
+                Some(CreateContainerOptions { name: "shipyard-updater", platform: None }),
+                config,
+            )
+            .await
+            .map_err(|e| AppError::Docker(format!("create updater container: {e}")))?;
+
+        self.client
+            .start_container("shipyard-updater", None::<StartContainerOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("start updater container: {e}")))?;
+
+        Ok(())
     }
 }
 

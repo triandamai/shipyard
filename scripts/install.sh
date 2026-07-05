@@ -615,37 +615,27 @@ cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
 # Shipyard self-update script — run by the backend when a user triggers an update.
 #
-# Problem: this script runs INSIDE the shipyard-backend container. Calling
-# "docker compose up -d" from here would cause Docker to stop this very
-# container mid-execution, killing the script before all services restart,
-# AND "docker restart" reuses the old image so the new pull never takes effect.
-#
-# Solution: spawn a lightweight detached container (using the current backend
-# image, which has docker + compose installed) that runs "docker compose up -d"
-# independently. Because that container is NOT part of the compose stack,
-# Docker will not kill it when shipyard-backend is replaced. It exits on its
-# own after the restart completes.
+# This script runs inside the shipyard-backend container (Docker socket is mounted).
+# Calling "docker compose up -d" directly would stop this container mid-execution.
+# Instead, we spawn a detached docker:cli container that runs the restart after we exit.
+# docker:cli is a tiny (~10 MB) official image that has docker + compose — unlike the
+# backend image which is just a compiled Rust binary with no shell or docker CLI.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
-
-echo "[shipyard] Reading current image tags from .env..."
-source .env 2>/dev/null || true
 
 echo "[shipyard] Pulling latest images..."
 docker compose pull
 
 echo "[shipyard] Spawning detached updater to apply new images..."
-# Remove any leftover updater from a previous run, then spawn a new one.
 docker rm -f shipyard-updater 2>/dev/null || true
-BACKEND_IMG=$(docker inspect shipyard-backend --format '{{.Config.Image}}')
 docker run --rm -d \
     --name shipyard-updater \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${INSTALL_DIR}:${INSTALL_DIR}" \
     -w "${INSTALL_DIR}" \
-    "$BACKEND_IMG" \
-    bash -c 'sleep 5 && docker compose up -d --remove-orphans'
+    docker:cli \
+    sh -c 'sleep 5 && docker compose up -d --remove-orphans'
 
 echo "[shipyard] Images pulled. All services will restart with new images in ~5 seconds."
 UPDATE

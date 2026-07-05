@@ -570,6 +570,36 @@ volumes:
 COMPOSE
 success "docker-compose.yml written"
 
+# ── update.sh ─────────────────────────────────────────────────────────────────
+info "Writing ${INSTALL_DIR}/update.sh..."
+cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
+#!/usr/bin/env bash
+# Shipyard self-update script — triggered from the web dashboard.
+# Runs inside the shipyard-backend container (Docker socket is mounted).
+# Uses docker:cli (tiny official image with docker + compose) to restart services
+# in a detached container so the restart doesn't kill this running script.
+set -euo pipefail
+INSTALL_DIR="/opt/shipyard"
+cd "${INSTALL_DIR}"
+
+echo "[shipyard] Pulling latest images..."
+docker compose pull
+
+echo "[shipyard] Spawning detached updater to apply new images..."
+docker rm -f shipyard-updater 2>/dev/null || true
+docker run --rm -d \
+    --name shipyard-updater \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "${INSTALL_DIR}:${INSTALL_DIR}" \
+    -w "${INSTALL_DIR}" \
+    docker:cli \
+    sh -c 'sleep 5 && docker compose up -d --remove-orphans'
+
+echo "[shipyard] Images pulled. All services will restart with new images in ~5 seconds."
+UPDATE
+chmod +x "${INSTALL_DIR}/update.sh"
+success "update.sh written"
+
 # ── Docker network ────────────────────────────────────────────────────────────
 step "Docker network"
 if docker network inspect platform_proxy >/dev/null 2>&1; then

@@ -621,161 +621,186 @@ async fn check_hub_update(repo: &str, current_sha: &str) -> (bool, Option<String
 
 // ── Self-update ───────────────────────────────────────────────────────────────
 
-fn resolve_update_command() -> Option<(&'static str, Vec<&'static str>)> {
-    if std::path::Path::new("/opt/shipyard/update.sh").exists() {
-        Some(("bash", vec!["/opt/shipyard/update.sh"]))
-    } else if std::path::Path::new("/opt/shipyard/docker-compose.yml").exists() {
-        Some(("docker", vec!["compose", "-f", "/opt/shipyard/docker-compose.yml", "pull"]))
-    } else {
-        None
+const COMPOSE_DIR: &str = "/opt/shipyard";
+
+/// Resolve images to pull from `BACKEND_IMAGE` / `FRONTEND_IMAGE` env vars.
+/// Each var contains `image:tag` (e.g. `triandamai827/shipyard-backend:latest`).
+/// Returns a list of `(image, tag)` pairs; skips any that aren't set or are empty.
+fn images_to_pull() -> Vec<(String, String)> {
+    ["BACKEND_IMAGE", "FRONTEND_IMAGE"]
+        .iter()
+        .filter_map(|var| {
+            let val = std::env::var(var).ok().filter(|s| !s.is_empty())?;
+            if let Some(pos) = val.rfind(':') {
+                Some((val[..pos].to_string(), val[pos + 1..].to_string()))
+            } else {
+                Some((val, "latest".to_string()))
+            }
+        })
+        .collect()
+}
+
+/// Core update logic shared by the streaming and one-shot handlers.
+/// Pulls all platform images via the Docker API (no docker CLI required),
+/// then spawns a detached `docker:cli` container to run `docker compose up -d`.
+async fn run_platform_update(
+    state: &AppState,
+    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+) -> bool {
+    let images = images_to_pull();
+    if images.is_empty() {
+        let _ = tx.send(Ok(Event::default().event("error").data(
+            "No images configured — BACKEND_IMAGE or FRONTEND_IMAGE env vars are not set."
+        ))).await;
+        return false;
+    }
+
+    for (image, tag) in &images {
+        let msg = format!("[shipyard] Pulling {image}:{tag}…");
+        if tx.send(Ok(Event::default().data(msg))).await.is_err() { return false; }
+
+        let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(256);
+        let pull_fut = state.docker.pull_image_stream(image, tag, line_tx);
+
+        let tx_fwd = tx.clone();
+        let forward = tokio::spawn(async move {
+            while let Some(line) = line_rx.recv().await {
+                if tx_fwd.send(Ok(Event::default().data(line))).await.is_err() { break; }
+            }
+        });
+
+        let pull_result = pull_fut.await;
+        let _ = forward.await;
+
+        match pull_result {
+            Ok(_) => {
+                let ok_msg = format!("[shipyard] ✓ {image}:{tag} up to date");
+                if tx.send(Ok(Event::default().data(ok_msg))).await.is_err() { return false; }
+            }
+            Err(e) => {
+                let _ = tx.send(Ok(Event::default().event("error").data(
+                    format!("Failed to pull {image}:{tag}: {e}")
+                ))).await;
+                return false;
+            }
+        }
+    }
+
+    if tx.send(Ok(Event::default().data(
+        "[shipyard] All images pulled. Spawning detached updater to restart services…"
+    ))).await.is_err() {
+        return false;
+    }
+
+    match state.docker.spawn_compose_restart(COMPOSE_DIR).await {
+        Ok(_) => {
+            let _ = tx.send(Ok(Event::default().event("done").data(
+                "Update complete. Services will restart in ~5 seconds."
+            ))).await;
+            *version_cache().lock().await = None;
+            true
+        }
+        Err(e) => {
+            let _ = tx.send(Ok(Event::default().event("error").data(
+                format!("Failed to start updater container: {e}")
+            ))).await;
+            false
+        }
     }
 }
 
-/// POST /admin/update — blocking one-shot update (kept for backwards compat).
+/// POST /admin/update — one-shot update (kept for backwards compat).
 async fn trigger_update(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM (
-             SELECT 1 FROM org_members
-             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
-             UNION ALL
-             SELECT 1 FROM org_member_permissions
-             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
-         ) t LIMIT 1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    require_update_perm(&state, &auth).await?;
+    tracing::info!(user_id = %auth.user_id, "Platform update triggered (one-shot)");
 
-    if allowed.is_none() {
-        return Err(ApiAppError(AppError::Forbidden(
-            "Only admins or members with the system:update permission can trigger updates".to_string()
+    let images = images_to_pull();
+    if images.is_empty() {
+        return Err(ApiAppError(AppError::Internal(
+            "No images configured — BACKEND_IMAGE or FRONTEND_IMAGE env vars are not set.".to_string(),
         )));
     }
 
-    let (program, args) = resolve_update_command().ok_or_else(|| {
-        ApiAppError(AppError::Internal(
-            "No update script or compose file found at /opt/shipyard".to_string()
-        ))
-    })?;
+    let mut output: Vec<String> = Vec::new();
 
-    tracing::info!(user_id = %auth.user_id, "Platform update triggered (blocking)");
-
-    let out = tokio::process::Command::new(program)
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to run update: {e}"))))?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-    if !out.status.success() {
-        return Err(ApiAppError(AppError::Internal(format!("Update failed:\n{stderr}"))));
+    for (image, tag) in &images {
+        output.push(format!("[shipyard] Pulling {image}:{tag}…"));
+        match state.docker.pull_image(image, tag, None).await {
+            Ok(lines) => {
+                output.extend(lines);
+                output.push(format!("[shipyard] ✓ {image}:{tag} up to date"));
+            }
+            Err(e) => {
+                return Err(ApiAppError(AppError::Internal(format!(
+                    "Failed to pull {image}:{tag}: {e}"
+                ))));
+            }
+        }
     }
+
+    output.push("[shipyard] Spawning detached updater to restart services…".to_string());
+
+    state
+        .docker
+        .spawn_compose_restart(COMPOSE_DIR)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to start updater: {e}"))))?;
 
     *version_cache().lock().await = None;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "message": "Update complete.",
-        "output": stdout,
+        "message": "Update complete. Services will restart in ~5 seconds.",
+        "output": output.join("\n"),
     }))))
 }
 
 /// GET /admin/update/stream — SSE stream of update progress.
 ///
-/// Streams stdout + stderr of update.sh line-by-line as `data:` events.
-/// Sends an `event: done` or `event: error` event when finished.
-/// The SSE connection will drop when services restart — the frontend should
-/// handle this as an expected "services restarting" disconnect.
+/// Pulls platform images via the Docker API and streams progress line-by-line.
+/// Sends `event: done` or `event: error` when finished, then spawns a detached
+/// container to run `docker compose up -d` so the restart happens after this
+/// process exits.
 async fn update_stream(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, ApiAppError> {
-    let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM (
-             SELECT 1 FROM org_members
-             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
-             UNION ALL
-             SELECT 1 FROM org_member_permissions
-             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
-         ) t LIMIT 1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    if allowed.is_none() {
-        return Err(ApiAppError(AppError::Forbidden(
-            "Only admins or members with the system:update permission can trigger updates".to_string()
-        )));
-    }
-
-    let (program, args) = resolve_update_command().ok_or_else(|| {
-        ApiAppError(AppError::Internal(
-            "No update script or compose file found at /opt/shipyard".to_string()
-        ))
-    })?;
+    require_update_perm(&state, &auth).await?;
 
     tracing::info!(user_id = %auth.user_id, "Platform update stream started");
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
 
     tokio::spawn(async move {
-        let mut child = match tokio::process::Command::new(program)
-            .args(&args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tx.send(Ok(
-                    Event::default().event("error").data(format!("Failed to start update: {e}"))
-                )).await;
-                return;
-            }
-        };
-
-        let stdout = child.stdout.take().expect("stdout piped");
-        let stderr = child.stderr.take().expect("stderr piped");
-        let tx_out = tx.clone();
-        let tx_err = tx.clone();
-
-        let h_out = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if tx_out.send(Ok(Event::default().data(line))).await.is_err() { break; }
-            }
-        });
-
-        let h_err = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if tx_err.send(Ok(Event::default().data(line))).await.is_err() { break; }
-            }
-        });
-
-        let _ = tokio::join!(h_out, h_err);
-
-        let status = child.wait().await;
-        let ok = status.map(|s| s.success()).unwrap_or(false);
-
-        *version_cache().lock().await = None;
-
-        let final_event = if ok {
-            Event::default().event("done").data("Update complete. Services are restarting…")
-        } else {
-            Event::default().event("error").data("Update script exited with an error.")
-        };
-        let _ = tx.send(Ok(final_event)).await;
+        run_platform_update(&state, &tx).await;
     });
 
     Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
+}
+
+async fn require_update_perm(state: &AppState, auth: &AuthUser) -> Result<(), ApiAppError> {
+    let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM (
+             SELECT 1 FROM org_members
+             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
+             UNION ALL
+             SELECT 1 FROM org_member_permissions
+             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
+         ) t LIMIT 1",
+    )
+    .bind(auth.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if allowed.is_none() {
+        return Err(ApiAppError(AppError::Forbidden(
+            "Only admins or members with the system:update permission can trigger updates".to_string()
+        )));
+    }
+    Ok(())
 }
 
 // ── MQTT proxy ───────────────────────────────────────────────────────────────
