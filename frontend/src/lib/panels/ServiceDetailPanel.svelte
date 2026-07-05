@@ -5,8 +5,9 @@
 		GitBranch, Box, FileCode, Terminal, Settings, X,
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
-		CheckCircle2, AlertCircle, Loader2, Network, HardDrive
+		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database
 	} from '@lucide/svelte';
+	import DbClientModal from '$lib/components/DbClientModal.svelte';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
 	import NetworkPickerPanel from './resources/NetworkPickerPanel.svelte';
 	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
@@ -132,8 +133,9 @@ import ExecPanel from './ExecPanel.svelte';
 	const CLOG_TAIL_OPTIONS = [50, 100, 200, 500, 1000] as const;
 
 	// ── Env panel ────────────────────────────────────────────────────
-	let showEnvPanel  = $state(false);
-let showExecPanel = $state(false);
+	let showEnvPanel    = $state(false);
+let showExecPanel   = $state(false);
+let showDbClient    = $state(false);
 
 	// ── Settings edit state ──────────────────────────────────────────
 	let editReplicas = $state(1);
@@ -1192,6 +1194,16 @@ let showExecPanel = $state(false);
 	</div>
 {/if}
 
+<!-- ─── DB Client Modal ───────────────────────────────────────────────── -->
+{#if showDbClient && service}
+	<div use:portal>
+		<DbClientModal
+			serviceId={serviceId}
+			onClose={() => showDbClient = false}
+		/>
+	</div>
+{/if}
+
 <!-- ─── Exec Terminal ─────────────────────────────────────────────────── -->
 {#if showExecPanel && service}
 	<ExecPanel
@@ -1395,6 +1407,10 @@ let showExecPanel = $state(false);
 						Terminal
 					</button>
 				{/if}
+				<button class="btn btn-secondary btn-xs" onclick={() => showDbClient = true} title="Open database client">
+					<Database size={12} />
+					DB Client
+				</button>
 				<button class="btn btn-secondary btn-xs" onclick={() => showEnvPanel = true} title="Manage env vars">
 					<Settings size={12} />
 					Env

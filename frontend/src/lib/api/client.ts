@@ -623,6 +623,16 @@ class ApiClient {
 	async revokeApiKey(orgId: string, keyId: string): Promise<ApiResponse<null>> {
 		return this.delete(`/admin/api-keys/${keyId}?org_id=${orgId}`);
 	}
+
+	// ─── DB Client ──────────────────────────────────────────────────────────────
+
+	async getDbMeta(serviceId: string): Promise<ApiResponse<import('./types').DbMeta>> {
+		return this.get(`/services/${serviceId}/db/meta`);
+	}
+
+	async runDbQuery(serviceId: string, body: import('./types').DbQueryRequest): Promise<ApiResponse<import('./types').DbQueryResult>> {
+		return this.post(`/services/${serviceId}/db/query`, body);
+	}
 }
 
 export const api = new ApiClient();

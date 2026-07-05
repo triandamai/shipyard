@@ -542,3 +542,32 @@ export interface SwarmJoinTokens {
 	manager: string;
 	addr: string;
 }
+
+// ─── DB Client ─────────────────────────────────────────────────────────────────
+
+export type DbEngine = 'postgres' | 'mysql' | 'mariadb';
+
+export interface DbMeta {
+	engine: DbEngine | null;
+	host: string | null;
+	port: number | null;
+	detected: boolean;
+}
+
+export interface DbQueryRequest {
+	engine: DbEngine;
+	host: string;
+	port: number;
+	database: string;
+	username: string;
+	password: string;
+	sql: string;
+}
+
+export interface DbQueryResult {
+	columns: string[];
+	rows: (string | number | boolean | null)[][];
+	row_count: number;
+	truncated: boolean;
+	execution_time_ms: number;
+}

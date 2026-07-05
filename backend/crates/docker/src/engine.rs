@@ -97,6 +97,11 @@ pub trait DockerEngine: Send + Sync {
     /// Inspect a container and return key details.
     async fn inspect_container(&self, container_id: &str) -> AppResult<ContainerDetail>;
 
+    /// Return the first available internal IP address of a container
+    /// (from its Docker network attachments). Returns `None` if the container
+    /// has no network or hasn't been assigned an IP yet.
+    async fn get_container_ip(&self, container_id: &str) -> AppResult<Option<String>>;
+
     /// Stop a running container (SIGTERM, then SIGKILL after timeout_secs).
     async fn stop_container(&self, container_id: &str, timeout_secs: i64) -> AppResult<()>;
 
@@ -929,6 +934,24 @@ impl DockerEngine for BollardDockerEngine {
             env,
             labels,
         })
+    }
+
+    async fn get_container_ip(&self, container_id: &str) -> AppResult<Option<String>> {
+        let resp = self
+            .client
+            .inspect_container(container_id, Some(InspectContainerOptions { size: false }))
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_container failed: {e}")))?;
+
+        let ip = resp
+            .network_settings
+            .and_then(|ns| ns.networks)
+            .and_then(|nets| {
+                nets.into_values()
+                    .find_map(|net| net.ip_address.filter(|s| !s.is_empty()))
+            });
+
+        Ok(ip)
     }
 
     async fn stop_container(&self, container_id: &str, timeout_secs: i64) -> AppResult<()> {

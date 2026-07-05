@@ -44,6 +44,7 @@ mod templates;
 mod webhooks;
 mod settings;
 mod shorthand;
+mod dbclient;
 
 /// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
 /// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.

@@ -31,6 +31,7 @@ tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"]
 # Database
 sqlx = { version = "0.8", features = [
     "postgres",
+    "mysql",
     "runtime-tokio",
     "uuid",
     "chrono",
