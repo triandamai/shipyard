@@ -622,20 +622,49 @@ async fn check_hub_update(repo: &str, current_sha: &str) -> (bool, Option<String
 // ── Self-update ───────────────────────────────────────────────────────────────
 
 const COMPOSE_DIR: &str = "/opt/shipyard";
+const DOTENV_PATH: &str = "/opt/shipyard/.env";
 
-/// Resolve images to pull from `BACKEND_IMAGE` / `FRONTEND_IMAGE` env vars.
-/// Each var contains `image:tag` (e.g. `triandamai827/shipyard-backend:latest`).
-/// Returns a list of `(image, tag)` pairs; skips any that aren't set or are empty.
+/// Parse an `image:tag` string into `(image, tag)`.
+fn parse_image_ref(val: &str) -> Option<(String, String)> {
+    let val = val.trim();
+    if val.is_empty() { return None; }
+    // rfind so we split on the last colon (handles registry:port/image:tag)
+    if let Some(pos) = val.rfind(':') {
+        Some((val[..pos].to_string(), val[pos + 1..].to_string()))
+    } else {
+        Some((val.to_string(), "latest".to_string()))
+    }
+}
+
+/// Resolve images to pull.
+///
+/// Tries two sources in order:
+/// 1. Process env vars `BACKEND_IMAGE` / `FRONTEND_IMAGE` (set when the compose
+///    service definition includes `env_file: .env`).
+/// 2. Reads `/opt/shipyard/.env` directly — the file is always mounted and is the
+///    authoritative source regardless of how env vars are forwarded.
 fn images_to_pull() -> Vec<(String, String)> {
-    ["BACKEND_IMAGE", "FRONTEND_IMAGE"]
+    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE"];
+
+    // 1. Process env vars
+    let from_env: Vec<(String, String)> = KEYS
         .iter()
-        .filter_map(|var| {
-            let val = std::env::var(var).ok().filter(|s| !s.is_empty())?;
-            if let Some(pos) = val.rfind(':') {
-                Some((val[..pos].to_string(), val[pos + 1..].to_string()))
-            } else {
-                Some((val, "latest".to_string()))
-            }
+        .filter_map(|k| parse_image_ref(&std::env::var(k).unwrap_or_default()))
+        .collect();
+    if !from_env.is_empty() {
+        return from_env;
+    }
+
+    // 2. Fall back to reading the .env file directly
+    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
+    KEYS.iter()
+        .filter_map(|key| {
+            let prefix = format!("{key}=");
+            let val = content
+                .lines()
+                .find(|l| l.starts_with(prefix.as_str()))?
+                .strip_prefix(prefix.as_str())?;
+            parse_image_ref(val)
         })
         .collect()
 }
@@ -784,10 +813,10 @@ async fn require_update_perm(state: &AppState, auth: &AuthUser) -> Result<(), Ap
     let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
         "SELECT TRUE FROM (
              SELECT 1 FROM org_members
-             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
+             WHERE user_id = $1 AND role IN ('owner', 'admin')
              UNION ALL
              SELECT 1 FROM org_member_permissions
-             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
+             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update'
          ) t LIMIT 1",
     )
     .bind(auth.user_id)
