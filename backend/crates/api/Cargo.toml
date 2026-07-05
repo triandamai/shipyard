@@ -45,4 +45,5 @@ lettre = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = { workspace = true }
 redis = { workspace = true }
+mongodb = { workspace = true }
 sysinfo = "0.32"

@@ -18,6 +18,7 @@
 			items: [
 				{ id: 'manage-org',     label: 'Manage Organization' },
 				{ id: 'members',        label: 'Members & Roles' },
+				{ id: 'permissions',    label: 'Permissions Reference' },
 			],
 		},
 		{
@@ -262,7 +263,140 @@
 			</div>
 
 			<h3>Fine-grained permissions</h3>
-			<p>Each member can have additional permissions granted beyond their base role. Click the member's name → <strong>Edit permissions</strong> to grant or revoke individual capabilities such as <code>deploy</code>, <code>manage_env</code>, or <code>manage_domains</code>.</p>
+			<p>
+				Owners and Admins bypass all permission checks automatically.
+				For Members and Viewers, you can grant individual org-level permissions (e.g. <code>settings:write</code>, <code>keys:read</code>)
+				and project-level access tiers (<em>View / Deploy / Manage</em>).
+				Click a member → <strong>Org Permissions</strong> or <strong>Project Access</strong> to edit.
+			</p>
+			<p>See the full reference in <button class="inline-link" onclick={() => scrollTo('permissions')}>Permissions Reference →</button></p>
+		</section>
+
+		<!-- ── Permissions Reference ──────────────────────────────── -->
+		<section id="permissions">
+			<h2>Permissions Reference</h2>
+			<p>
+				Shipyard uses a two-layer permission model.
+				<strong>Org-level</strong> permissions control access to platform-wide features.
+				<strong>Project-level</strong> tiers control what a member can do within a specific project.
+			</p>
+			<p>
+				Permission strings follow the pattern <code>shipyard:&lt;org_id&gt;:&lt;resource&gt;:&lt;action&gt;</code> for org-level
+				and <code>shipyard:&lt;org_id&gt;:&lt;project_id&gt;:&lt;resource&gt;:&lt;action&gt;</code> for project-level.
+				Owners and Admins bypass all checks; these only apply to Members and Viewers.
+			</p>
+
+			<h3>Org-level permissions</h3>
+			<p>These are granted directly to a member within the organization and are independent of any project.</p>
+
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr><th>Permission string</th><th>Label</th><th>What it allows</th></tr>
+					</thead>
+					<tbody>
+						<tr><td><code>settings:read</code></td><td>View settings</td><td>Read org settings and Traefik config</td></tr>
+						<tr><td><code>settings:write</code></td><td>Edit settings</td><td>Modify org settings, SMTP, OAuth, and domain config</td></tr>
+						<tr><td><code>members:read</code></td><td>View members</td><td>See the member list and their roles</td></tr>
+						<tr><td><code>members:invite</code></td><td>Invite members</td><td>Send invitations to new members</td></tr>
+						<tr><td><code>members:manage</code></td><td>Manage members</td><td>Change roles, set permissions, and remove members</td></tr>
+						<tr><td><code>projects:read</code></td><td>View all projects</td><td>Access any project in the organization</td></tr>
+						<tr><td><code>projects:write</code></td><td>Manage projects</td><td>Create and delete projects</td></tr>
+						<tr><td><code>infra:read</code></td><td>View infrastructure</td><td>View system metrics, swarm nodes, and join tokens</td></tr>
+						<tr><td><code>infra:write</code></td><td>Manage infrastructure</td><td>Add/remove swarm nodes and modify cluster config</td></tr>
+						<tr><td><code>docker:read</code></td><td>View Docker</td><td>Browse containers, services, volumes, and networks</td></tr>
+						<tr><td><code>docker:write</code></td><td>Manage Docker</td><td>Prune containers and perform destructive Docker operations</td></tr>
+						<tr><td><code>deployments:read</code></td><td>View deployments</td><td>View deployment history and status across all projects</td></tr>
+						<tr><td><code>deployments:write</code></td><td>Manage deployments</td><td>Configure deployment parallelism and settings</td></tr>
+						<tr><td><code>smtp:read</code></td><td>View SMTP config</td><td>View outgoing email configuration</td></tr>
+						<tr><td><code>smtp:write</code></td><td>Manage SMTP config</td><td>Edit and test SMTP / email settings</td></tr>
+						<tr><td><code>audit:read</code></td><td>View audit logs</td><td>Read organization activity history</td></tr>
+						<tr><td><code>keys:read</code></td><td>View API keys</td><td>List API keys in the organization</td></tr>
+						<tr><td><code>keys:write</code></td><td>Manage API keys</td><td>Create and revoke API keys</td></tr>
+						<tr><td><code>system:update</code></td><td>Update Shipyard</td><td>Trigger platform updates and view update logs</td></tr>
+					</tbody>
+				</table>
+			</div>
+
+			<div class="callout callout-info">
+				Full string stored in the database: <code>shipyard:&lt;org_id&gt;:settings:read</code>.
+				The UI works with the suffix only (<code>settings:read</code>) and prepends the org ID at save time.
+			</div>
+
+			<h3>Project-level permission tiers</h3>
+			<p>
+				When assigning a member to a project you choose a tier — <em>View</em>, <em>Deploy</em>, or <em>Manage</em>.
+				Each tier is additive: <em>Deploy</em> includes everything in <em>View</em>, and <em>Manage</em> includes everything in <em>Deploy</em>.
+			</p>
+
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr><th>Tier</th><th>What it allows</th><th>Permission strings granted</th></tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><span class="badge badge-viewer">View</span></td>
+							<td>Read-only access to services and deployments</td>
+							<td>
+								<code>project:view</code><br/>
+								<code>service:view</code>
+							</td>
+						</tr>
+						<tr>
+							<td><span class="badge badge-member">Deploy</span></td>
+							<td>Trigger deployments, restarts, and rebuilds</td>
+							<td>
+								<em>(View permissions, plus:)</em><br/>
+								<code>service:deploy</code>
+							</td>
+						</tr>
+						<tr>
+							<td><span class="badge badge-admin">Manage</span></td>
+							<td>Create, edit, delete services; manage envs, domains, volumes, networks; access DB client</td>
+							<td>
+								<em>(Deploy permissions, plus:)</em><br/>
+								<code>project:manage</code> · <code>service:write</code> · <code>service:delete</code><br/>
+								<code>env:read</code> · <code>env:write</code> · <code>domain:write</code><br/>
+								<code>volume:write</code> · <code>network:write</code>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+
+			<div class="callout callout-info">
+				Full string format: <code>shipyard:&lt;org_id&gt;:&lt;project_id&gt;:service:write</code>.
+				These are stored as an array in <code>project_members.permissions</code> and checked by each backend endpoint.
+			</div>
+
+			<h3>Which tier is needed for each feature</h3>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr><th>Feature</th><th>Minimum tier / permission</th></tr>
+					</thead>
+					<tbody>
+						<tr><td>View services, logs, topology</td><td><span class="badge badge-viewer">View</span></td></tr>
+						<tr><td>View deployment history</td><td><span class="badge badge-viewer">View</span></td></tr>
+						<tr><td>Trigger deploy / redeploy</td><td><span class="badge badge-member">Deploy</span></td></tr>
+						<tr><td>Restart / stop / start service</td><td><span class="badge badge-member">Deploy</span></td></tr>
+						<tr><td>Create or edit a service</td><td><span class="badge badge-admin">Manage</span></td></tr>
+						<tr><td>Delete a service</td><td><span class="badge badge-admin">Manage</span></td></tr>
+						<tr><td>Add / edit environment variables</td><td><span class="badge badge-admin">Manage</span></td></tr>
+						<tr><td>Add / edit domains</td><td><span class="badge badge-admin">Manage</span></td></tr>
+						<tr><td>Manage volumes & networks</td><td><span class="badge badge-admin">Manage</span></td></tr>
+						<tr><td>Open DB Client</td><td><span class="badge badge-admin">Manage</span> (<code>service:write</code>)</td></tr>
+						<tr><td>View org settings</td><td>Org: <code>settings:read</code></td></tr>
+						<tr><td>Edit org settings / SMTP / OAuth</td><td>Org: <code>settings:write</code></td></tr>
+						<tr><td>View infrastructure metrics</td><td>Org: <code>infra:read</code></td></tr>
+						<tr><td>Invite new members</td><td>Org: <code>members:invite</code></td></tr>
+						<tr><td>Change member roles / permissions</td><td>Org: <code>members:manage</code></td></tr>
+						<tr><td>View / create API keys</td><td>Org: <code>keys:read</code> / <code>keys:write</code></td></tr>
+						<tr><td>Trigger Shipyard platform update</td><td>Org: <code>system:update</code></td></tr>
+					</tbody>
+				</table>
+			</div>
 		</section>
 
 		<!-- ── Projects & Services ─────────────────────────────────────── -->
@@ -994,6 +1128,14 @@ docker compose up -d</pre>
 	}
 	.kbd-group { display: flex; align-items: center; gap: 6px; margin: 10px 0; }
 	.kbd-sep { font-size: 12px; color: rgba(255,255,255,0.3); }
+
+	/* ── Inline link button ─────────────────────────────────────────── */
+	.inline-link {
+		background: none; border: none; padding: 0;
+		color: #60a5fa; font-size: inherit; font-family: inherit;
+		cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+	}
+	.inline-link:hover { color: #93c5fd; }
 
 	/* ── Responsive ──────────────────────────────────────────────── */
 	@media (max-width: 900px) {

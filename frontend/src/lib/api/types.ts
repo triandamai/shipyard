@@ -208,6 +208,82 @@ export function parseOrgPermissionSuffix(orgId: string, fullPerm: string): strin
 	return fullPerm.startsWith(prefix) ? fullPerm.slice(prefix.length) : null;
 }
 
+/**
+ * Project permission tiers used in the UI.
+ * - view   → read-only access to services and deployments
+ * - deploy → can trigger deploys, restarts, rebuilds
+ * - manage → full CRUD: create/edit/delete services, envs, domains, volumes, networks
+ */
+export const PROJECT_PERM_OPTIONS: { id: ProjectPermTier; label: string; desc: string }[] = [
+	{ id: 'view',   label: 'View',   desc: 'Read-only access to services and deployments' },
+	{ id: 'deploy', label: 'Deploy', desc: 'Trigger deployments and restarts' },
+	{ id: 'manage', label: 'Manage', desc: 'Create, edit, and delete services' },
+];
+
+export type ProjectPermTier = 'view' | 'deploy' | 'manage';
+
+/**
+ * Expand UI shorthand tiers to the full set of `shipyard:` permission strings
+ * stored in `project_members.permissions`. Each tier is additive.
+ *
+ * Permissions mapped to backend checks:
+ *   view   → project:view, service:view (org membership suffices for reads, but stored for clarity)
+ *   deploy → + service:deploy
+ *   manage → + project:manage, service:write, service:delete,
+ *              env:read, env:write, domain:write, volume:write, network:write
+ */
+export function expandProjectPermissions(
+	orgId: string,
+	projectId: string,
+	tiers: Set<ProjectPermTier> | string[],
+): string[] {
+	const set = new Set(tiers);
+	const base = `shipyard:${orgId}:${projectId}:`;
+	const out: string[] = [];
+
+	const hasView   = set.has('view')   || set.has('deploy') || set.has('manage');
+	const hasDeploy = set.has('deploy') || set.has('manage');
+	const hasManage = set.has('manage');
+
+	if (hasView) {
+		out.push(base + 'project:view', base + 'service:view');
+	}
+	if (hasDeploy) {
+		out.push(base + 'service:deploy');
+	}
+	if (hasManage) {
+		out.push(
+			base + 'project:manage',
+			base + 'service:write',
+			base + 'service:delete',
+			base + 'env:read',
+			base + 'env:write',
+			base + 'domain:write',
+			base + 'volume:write',
+			base + 'network:write',
+		);
+	}
+
+	return [...new Set(out)].sort();
+}
+
+/**
+ * Reverse-map a stored permissions array back to the highest UI tier.
+ * Returns an empty Set if no recognized tier is present.
+ */
+export function collapseProjectPermissions(
+	orgId: string,
+	projectId: string,
+	fullPerms: string[],
+): Set<ProjectPermTier> {
+	const base = `shipyard:${orgId}:${projectId}:`;
+	const has = (suffix: string) => fullPerms.includes(base + suffix);
+	if (has('project:manage')) return new Set<ProjectPermTier>(['manage']);
+	if (has('service:deploy')) return new Set<ProjectPermTier>(['deploy']);
+	if (has('project:view'))   return new Set<ProjectPermTier>(['view']);
+	return new Set<ProjectPermTier>();
+}
+
 export interface Project {
 	id: string;
 	org_id: string;
@@ -545,12 +621,13 @@ export interface SwarmJoinTokens {
 
 // ─── DB Client ─────────────────────────────────────────────────────────────────
 
-export type DbEngine = 'postgres' | 'mysql' | 'mariadb';
+export type DbEngine = 'postgres' | 'mysql' | 'mariadb' | 'redis' | 'mongodb';
 
 export interface DbMeta {
 	engine: DbEngine | null;
 	host: string | null;
 	port: number | null;
+	username: string | null;
 	detected: boolean;
 }
 

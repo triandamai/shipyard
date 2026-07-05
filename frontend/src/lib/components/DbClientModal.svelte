@@ -37,13 +37,27 @@
 		{ value: 'postgres', label: 'PostgreSQL', defaultPort: 5432 },
 		{ value: 'mysql',    label: 'MySQL',      defaultPort: 3306 },
 		{ value: 'mariadb',  label: 'MariaDB',    defaultPort: 3306 },
+		{ value: 'redis',    label: 'Redis',      defaultPort: 6379 },
+		{ value: 'mongodb',  label: 'MongoDB',    defaultPort: 27017 },
 	];
 
 	const ENGINE_PLACEHOLDER: Record<DbEngine, string> = {
 		postgres: 'SELECT * FROM users LIMIT 10;',
 		mysql:    'SELECT * FROM users LIMIT 10;',
 		mariadb:  'SELECT * FROM users LIMIT 10;',
+		redis:    'KEYS *',
+		mongodb:  '{\n  "collection": "users",\n  "filter": {},\n  "sort": { "_id": -1 },\n  "limit": 100\n}',
 	};
+
+	// Which engines use the SQL-style form (database + username required)
+	const isSqlEngine = $derived(engine === 'postgres' || engine === 'mysql' || engine === 'mariadb');
+	const isRedis    = $derived(engine === 'redis');
+	const isMongo    = $derived(engine === 'mongodb');
+
+	// Label overrides per engine
+	const dbFieldLabel  = $derived(isRedis ? 'DB Index (0–15)' : 'Database');
+	const queryLabel    = $derived(isRedis ? 'Redis Command' : isMongo ? 'Query (JSON)' : 'SQL Query');
+	const queryHint     = $derived(isRedis ? 'Enter to run' : isMongo ? 'Ctrl+Enter to run' : 'Ctrl+Enter to run');
 
 	// True when the auto-detected host is a Docker-internal name (not an IP).
 	// In dev the backend runs on the host so Docker DNS won't resolve — the user
@@ -61,9 +75,10 @@
 		}
 		meta = res.data;
 		if (meta) {
-			if (meta.engine) engine = meta.engine;
-			if (meta.host)   host   = meta.host;
-			if (meta.port)   port   = meta.port;
+			if (meta.engine)   engine   = meta.engine;
+			if (meta.host)     host     = meta.host;
+			if (meta.port)     port     = meta.port;
+			if (meta.username) username = meta.username;
 		}
 	});
 
@@ -73,23 +88,28 @@
 	}
 
 	async function connect() {
-		if (!host.trim() || !database.trim() || !username.trim()) {
-			connectError = 'Host, database, and username are required.';
-			return;
-		}
+		if (!host.trim()) { connectError = 'Host is required.'; return; }
+		if (isSqlEngine && !database.trim()) { connectError = 'Database name is required.'; return; }
+		if (isSqlEngine && !username.trim()) { connectError = 'Username is required.'; return; }
+		if (isMongo && !database.trim())     { connectError = 'Database name is required.'; return; }
+
 		connecting   = true;
 		connectError = '';
-		// Test with a trivial query
-		const testSql = engine === 'postgres' ? 'SELECT 1' : 'SELECT 1';
+
+		const testSql =
+			isRedis ? 'PING' :
+			isMongo ? JSON.stringify({ $ping: true }) :
+			'SELECT 1';
+
 		const res = await api.runDbQuery(serviceId, {
-			engine, host: host.trim(), port, database: database.trim(),
-			username: username.trim(), password, sql: testSql,
+			engine, host: host.trim(), port,
+			database: database.trim(),
+			username: username.trim(),
+			password,
+			sql: testSql,
 		});
 		connecting = false;
-		if (res.error) {
-			connectError = res.error.message;
-			return;
-		}
+		if (res.error) { connectError = res.error.message; return; }
 		connected = true;
 		sql = ENGINE_PLACEHOLDER[engine];
 	}
@@ -114,7 +134,14 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
-		if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+		// Redis: Enter runs (it's a single-line command)
+		if (isRedis && e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			runQuery();
+			return;
+		}
+		// SQL / MongoDB: Ctrl+Enter or Cmd+Enter runs
+		if (!isRedis && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
 			e.preventDefault();
 			runQuery();
 		}
@@ -211,6 +238,7 @@
 					{/if}
 
 					<div class="form-grid">
+						<!-- Engine selector -->
 						<div class="field">
 							<label for="db-engine">Engine</label>
 							<div class="select-wrap">
@@ -223,9 +251,10 @@
 							</div>
 						</div>
 
+						<!-- Host + Port (all engines) -->
 						<div class="field field-wide">
 							<label for="db-host">Host</label>
-							<input id="db-host" type="text" bind:value={host} placeholder="172.17.0.2" spellcheck="false" />
+							<input id="db-host" type="text" bind:value={host} placeholder="platform-uuid" spellcheck="false" />
 						</div>
 
 						<div class="field field-narrow">
@@ -233,18 +262,33 @@
 							<input id="db-port" type="number" bind:value={port} min="1" max="65535" />
 						</div>
 
-						<div class="field field-wide">
-							<label for="db-database">Database</label>
-							<input id="db-database" type="text" bind:value={database} placeholder="mydb" spellcheck="false" />
-						</div>
+						<!-- Database / DB index (hide for Redis when not needed, relabel) -->
+						{#if !isRedis || true}
+							<div class="field {isSqlEngine || isMongo ? 'field-wide' : ''}">
+								<label for="db-database">{dbFieldLabel}</label>
+								<input
+									id="db-database"
+									type="text"
+									bind:value={database}
+									placeholder={isRedis ? '0' : 'mydb'}
+									spellcheck="false"
+								/>
+							</div>
+						{/if}
 
-						<div class="field">
-							<label for="db-user">Username</label>
-							<input id="db-user" type="text" bind:value={username} placeholder="postgres" autocomplete="off" spellcheck="false" />
-						</div>
+						<!-- Username — hidden for Redis (no username concept in basic Redis) -->
+						{#if !isRedis}
+							<div class="field">
+								<label for="db-user">Username</label>
+								<input id="db-user" type="text" bind:value={username}
+									placeholder={isMongo ? 'admin' : 'postgres'}
+									autocomplete="off" spellcheck="false" />
+							</div>
+						{/if}
 
+						<!-- Password (all engines) -->
 						<div class="field">
-							<label for="db-pass">Password</label>
+							<label for="db-pass">Password{isRedis ? ' (optional)' : ''}</label>
 							<input id="db-pass" type="password" bind:value={password} autocomplete="new-password" />
 						</div>
 					</div>
@@ -284,10 +328,12 @@
 						<button class="btn-link" onclick={disconnect}>Disconnect</button>
 					</div>
 
-					<!-- SQL editor -->
+					<!-- Query editor (SQL / Redis command / MongoDB JSON) -->
 					<div class="editor-wrap">
+						<div class="editor-label">{queryLabel}</div>
 						<textarea
 							class="sql-editor"
+							class:redis-editor={isRedis}
 							bind:value={sql}
 							onkeydown={handleKeydown}
 							placeholder={ENGINE_PLACEHOLDER[engine]}
@@ -295,7 +341,7 @@
 							autocomplete="off"
 						></textarea>
 						<div class="editor-actions">
-							<span class="editor-hint">Ctrl+Enter to run</span>
+							<span class="editor-hint">{queryHint}</span>
 							<button class="btn btn-primary btn-sm" onclick={runQuery} disabled={running || !sql.trim()}>
 								{#if running}
 									<Loader2 size={12} class="spin" />
@@ -605,12 +651,23 @@
 	.engine-badge.postgres { background: #dbeafe; color: #1d4ed8; }
 	.engine-badge.mysql    { background: #fef9c3; color: #a16207; }
 	.engine-badge.mariadb  { background: #fce7f3; color: #9d174d; }
+	.engine-badge.redis    { background: #fee2e2; color: #b91c1c; }
+	.engine-badge.mongodb  { background: #dcfce7; color: #15803d; }
 
 	.editor-wrap {
 		display: flex;
 		flex-direction: column;
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
+	}
+
+	.editor-label {
+		padding: 6px 18px 0;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
 	.sql-editor {
@@ -637,6 +694,14 @@
 		background: var(--bg-muted);
 	}
 	.editor-hint { font-size: 11px; color: var(--text-dim, var(--text-muted)); }
+
+	/* Redis command: single-line style */
+	.redis-editor {
+		min-height: 44px;
+		max-height: 44px;
+		resize: none;
+		font-size: 14px;
+	}
 
 	/* Results */
 	.results-section {

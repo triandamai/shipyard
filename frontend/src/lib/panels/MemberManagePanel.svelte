@@ -1,17 +1,11 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { PERMISSION_GROUPS, buildOrgPermission, parseOrgPermissionSuffix } from '$lib/api/types';
-	import type { OrgMember, MemberRole, Project, MemberProjectAssignment } from '$lib/api/types';
+	import { PERMISSION_GROUPS, PROJECT_PERM_OPTIONS, buildOrgPermission, parseOrgPermissionSuffix, expandProjectPermissions, collapseProjectPermissions } from '$lib/api/types';
+	import type { OrgMember, MemberRole, Project, MemberProjectAssignment, ProjectPermTier } from '$lib/api/types';
 	import {
 		Check, Loader2, AlertCircle, Lock, Folder, FolderOpen,
 		X, Plus, Trash2, Crown, Eye, ChevronDown
 	} from '@lucide/svelte';
-
-	const PROJECT_PERM_OPTIONS = [
-		{ id: 'view',   label: 'View',   desc: 'Read-only access to services and deployments' },
-		{ id: 'deploy', label: 'Deploy', desc: 'Trigger deployments and restarts' },
-		{ id: 'manage', label: 'Manage', desc: 'Create, edit, and delete services' },
-	];
 
 	const ROLES: { value: MemberRole; label: string }[] = [
 		{ value: 'owner',  label: 'Owner' },
@@ -112,18 +106,7 @@
 	);
 
 	// Pending edits (mirror of projectAssignments for in-panel editing)
-	let pendingAssignments = $state<{ project_id: string; project_name: string; project_slug: string; permissions: Set<string> }[]>([]);
-
-	/** Convert full shipyard: permission strings back to shorthand for the UI chips. */
-	function toShorthandSet(projectId: string, fullPerms: string[]): Set<string> {
-		const base = `shipyard:${orgId}:${projectId}:`;
-		const has = (suffix: string) => fullPerms.includes(base + suffix);
-		const out = new Set<string>();
-		if (has('project:manage')) { out.add('manage'); return out; }
-		if (has('service:deploy')) { out.add('deploy'); return out; }
-		if (has('project:view'))   { out.add('view');   return out; }
-		return out;
-	}
+	let pendingAssignments = $state<{ project_id: string; project_name: string; project_slug: string; permissions: Set<ProjectPermTier> }[]>([]);
 
 	async function loadProjectAssignments() {
 		loadingProjects = true;
@@ -135,7 +118,7 @@
 				project_id:   a.project_id,
 				project_name: a.project_name,
 				project_slug: a.project_slug,
-				permissions:  toShorthandSet(a.project_id, a.permissions),
+				permissions:  collapseProjectPermissions(orgId, a.project_id, a.permissions),
 			}));
 		} else {
 			projectsError = res.error?.message ?? 'Failed to load project assignments';
@@ -150,7 +133,7 @@
 				project_id:   project.id,
 				project_name: project.name,
 				project_slug: project.slug,
-				permissions:  new Set(['view']),
+				permissions:  new Set<ProjectPermTier>(['view']),
 			},
 		];
 	}
@@ -159,7 +142,7 @@
 		pendingAssignments = pendingAssignments.filter(a => a.project_id !== projectId);
 	}
 
-	function toggleProjectPerm(projectId: string, permId: string) {
+	function toggleProjectPerm(projectId: string, permId: ProjectPermTier) {
 		pendingAssignments = pendingAssignments.map(a => {
 			if (a.project_id !== projectId) return a;
 			const next = new Set(a.permissions);
@@ -168,36 +151,13 @@
 		});
 	}
 
-	/**
-	 * Expand UI shorthand (view/deploy/manage) to full shipyard: permission strings.
-	 * The backend also expands, but sending expanded strings is more explicit and
-	 * ensures the returned permissions array is always in the canonical format.
-	 */
-	function expandProjectPerms(projectId: string, shorthand: Set<string>): string[] {
-		const base = `shipyard:${orgId}:${projectId}:`;
-		const out: string[] = [];
-		const hasView   = shorthand.has('view') || shorthand.has('deploy') || shorthand.has('manage');
-		const hasDeploy = shorthand.has('deploy') || shorthand.has('manage');
-		const hasManage = shorthand.has('manage');
-		if (hasView)   { out.push(base + 'project:view', base + 'service:view'); }
-		if (hasDeploy) { out.push(base + 'service:deploy'); }
-		if (hasManage) {
-			out.push(
-				base + 'project:manage', base + 'service:write',
-				base + 'service:delete', base + 'env:read', base + 'env:write',
-				base + 'domain:write',   base + 'volume:write', base + 'network:write'
-			);
-		}
-		return [...new Set(out)].sort();
-	}
-
 	async function saveProjectAssignments() {
 		savingProjects = true;
 		projectsSaved  = false;
 		projectsError  = '';
 		const assignments = pendingAssignments.map(a => ({
 			project_id:  a.project_id,
-			permissions: expandProjectPerms(a.project_id, a.permissions),
+			permissions: expandProjectPermissions(orgId, a.project_id, a.permissions),
 		}));
 		const res = await api.setMemberProjects(orgId, member.user_id, assignments);
 		if (res.error) {
@@ -208,7 +168,7 @@
 				project_id:   a.project_id,
 				project_name: a.project_name,
 				project_slug: a.project_slug,
-				permissions:  toShorthandSet(a.project_id, a.permissions),
+				permissions:  collapseProjectPermissions(orgId, a.project_id, a.permissions),
 			}));
 			projectsSaved = true;
 			setTimeout(() => (projectsSaved = false), 2500);

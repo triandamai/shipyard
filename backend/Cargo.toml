@@ -97,6 +97,9 @@ urlencoding = "2"
 # Redis
 redis = { version = "0.26", features = ["tokio-comp", "connection-manager"] }
 
+# MongoDB
+mongodb = "3"
+
 # Misc
 async-trait = "0.1"
 futures = "0.3"

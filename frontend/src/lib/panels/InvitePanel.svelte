@@ -1,17 +1,11 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { PERMISSION_GROUPS, buildOrgPermission } from '$lib/api/types';
-	import type { MemberRole, Project, ProjectAssignment } from '$lib/api/types';
+	import { PERMISSION_GROUPS, PROJECT_PERM_OPTIONS, buildOrgPermission, expandProjectPermissions } from '$lib/api/types';
+	import type { MemberRole, Project, ProjectAssignment, ProjectPermTier } from '$lib/api/types';
 	import {
 		Mail, ChevronDown, Check, Lock, Folder, FolderOpen,
 		Search, X, Loader2, AlertCircle, UserPlus, ChevronRight
 	} from '@lucide/svelte';
-
-	const PROJECT_PERM_OPTIONS = [
-		{ id: 'view',   label: 'View',   desc: 'Read-only access to services and deployments' },
-		{ id: 'deploy', label: 'Deploy', desc: 'Trigger deployments and restarts' },
-		{ id: 'manage', label: 'Manage', desc: 'Create, edit, and delete services' },
-	];
 
 	const ROLES: { value: MemberRole; label: string; desc: string }[] = [
 		{ value: 'owner',  label: 'Owner',  desc: 'Full control, can manage billing and delete org' },
@@ -38,7 +32,7 @@
 	// Project assignment
 	let projectSearch     = $state('');
 	let selectedProjects  = $state<Set<string>>(new Set());
-	let projectPerms      = $state<Record<string, Set<string>>>({});
+	let projectPerms      = $state<Record<string, Set<ProjectPermTier>>>({});
 	let expandedProjects  = $state<Set<string>>(new Set());
 
 	// Submit
@@ -78,7 +72,7 @@
 		} else {
 			sel.add(projectId);
 			exp.add(projectId);
-			projectPerms = { ...projectPerms, [projectId]: new Set(['view']) };
+			projectPerms = { ...projectPerms, [projectId]: new Set<ProjectPermTier>(['view']) };
 		}
 		selectedProjects = sel;
 		expandedProjects = exp;
@@ -90,8 +84,8 @@
 		expandedProjects = next;
 	}
 
-	function toggleProjectPerm(projectId: string, permId: string) {
-		const current = projectPerms[projectId] ?? new Set<string>();
+	function toggleProjectPerm(projectId: string, permId: ProjectPermTier) {
+		const current = projectPerms[projectId] ?? new Set<ProjectPermTier>();
 		const next = new Set(current);
 		next.has(permId) ? next.delete(permId) : next.add(permId);
 		projectPerms = { ...projectPerms, [projectId]: next };
@@ -100,7 +94,7 @@
 	function buildAssignments(): ProjectAssignment[] {
 		return [...selectedProjects].map(pid => ({
 			project_id: pid,
-			permissions: [...(projectPerms[pid] ?? [])],
+			permissions: expandProjectPermissions(orgId, pid, projectPerms[pid] ?? new Set()),
 		}));
 	}
 
