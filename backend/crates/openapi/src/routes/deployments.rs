@@ -144,6 +144,8 @@ async fn trigger_deploy(
         state.config.traefik.network.clone(),
         state.config.auth.secret_key.clone(),
         state.config.docker.port_proxy,
+        state.config.data_dir.clone(),
+        state.config.static_server.retention_versions,
     );
 
     let source_ref = body.source_ref.clone();

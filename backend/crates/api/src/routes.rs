@@ -21,6 +21,7 @@ use crate::webhooks;
 use crate::settings;
 use crate::shorthand;
 use crate::dbclient;
+use crate::static_site;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -70,6 +71,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(shorthand::routes())
         // DB client — /services/:service_id/db/meta, /db/query
         .merge(dbclient::routes())
+        // Static site — /services/:service_id/static/config, /static/upload
+        .merge(static_site::routes())
 }
 
 async fn api_status() -> Json<ApiResponse<serde_json::Value>> {

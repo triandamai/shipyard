@@ -1,15 +1,6 @@
 //! Core Deployment Engine
-//!
-//! Orchestrates the deployment pipeline for Shipyard services:
-//!
-//! Step 0 — Validate config
-//! Step 1 — Pull image
-//! Step 2 — Apply env vars
-//! Step 3 — Configure volumes
-//! Step 4 — Configure networks
-//! Step 5 — Configure domains (Traefik labels)
-//! Step 6 — Create/update swarm service
-//! Step 7 — Mark deployment success/failed
+
+pub mod static_site;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,6 +57,11 @@ pub struct DeploymentEngine {
     /// Swarm's native EndpointSpec. Set to true on macOS Docker Desktop;
     /// false on Linux where Swarm host-mode ports bind directly.
     pub port_proxy: bool,
+    /// Absolute path to the data directory (e.g. /opt/shipyard/data).
+    /// Static site files are stored at `{data_dir}/static/<service_id>/`.
+    pub data_dir: String,
+    /// How many past deploy versions to keep per static site.
+    pub static_retention: usize,
 }
 
 impl DeploymentEngine {
@@ -77,6 +73,8 @@ impl DeploymentEngine {
         traefik_network: String,
         secret_key: String,
         port_proxy: bool,
+        data_dir: String,
+        static_retention: usize,
     ) -> Self {
         Self {
             docker,
@@ -86,6 +84,8 @@ impl DeploymentEngine {
             traefik_network,
             secret_key,
             port_proxy,
+            data_dir,
+            static_retention,
         }
     }
 
@@ -253,6 +253,660 @@ impl DeploymentEngine {
         Ok(())
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Static site deploy pipeline
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const STATIC_UPLOAD_STEPS: [(i32, &'static str); 6] = [
+        (0, "extract_archive"),
+        (1, "parse_shipyard_config"),
+        (2, "publish_files"),
+        (3, "write_nginx_conf"),
+        (4, "go_live"),
+        (5, "finalize"),
+    ];
+
+    const STATIC_GIT_STEPS: [(i32, &'static str); 7] = [
+        (0, "clone_or_pull"),
+        (1, "build_site"),
+        (2, "parse_shipyard_config"),
+        (3, "publish_files"),
+        (4, "write_nginx_conf"),
+        (5, "go_live"),
+        (6, "finalize"),
+    ];
+
+    async fn run_static_steps(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        _triggered_by: &str,
+        source_ref: &str,
+    ) -> AppResult<()> {
+        // source_ref == "upload" means the artifact path is in deployment metadata;
+        // any other value is treated as git-based.
+        if source_ref == "upload" {
+            self.run_static_upload_steps(org_id, project_id, service_id, deployment_id).await
+        } else {
+            self.run_static_git_steps(org_id, project_id, service_id, deployment_id).await
+        }
+    }
+
+    /// Upload pipeline: archive already on disk, just extract → publish → nginx.
+    async fn run_static_upload_steps(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+    ) -> AppResult<()> {
+        // Steps were pre-inserted by the upload API endpoint.
+        // Resolve artifact path from the MQTT meta we stored in deployment row.
+        let artifact_path: String = sqlx::query_scalar(
+            "SELECT source_ref FROM deployments WHERE id = $1",
+        )
+        .bind(deployment_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .unwrap_or_default();
+
+        // Artifact is stored at: {sites_dir}/uploads/{service_id}/{deployment_id}.zip
+        let sites_base = format!("{}/static", self.data_dir);
+        let extract_dir = format!("{sites_base}/{service_id}/extracts/{deployment_id}");
+        let version_dir = format!("{sites_base}/{service_id}/{deployment_id}");
+        let public_dir  = format!("{version_dir}/public");
+        let current_link = format!("{sites_base}/{service_id}/current");
+        let conf_dir    = format!("{sites_base}/conf.d");
+        let uploads_dir = format!("{sites_base}/uploads/{service_id}");
+        let artifact = format!("{uploads_dir}/{deployment_id}.zip");
+
+        // Ensure the nginx container exists and is running before we write configs or serve files.
+        self.ensure_static_nginx(&sites_base).await?;
+
+        // Step 0: extract_archive + validate static output
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 0).await?;
+        let extract_dir_clone = extract_dir.clone();
+        let r = self.static_step_extract(&artifact, &extract_dir, deployment_id, step_id).await
+            .and_then(|_| {
+                // Validate the extracted content is a proper static site
+                crate::static_site::validate_static_output(std::path::Path::new(&extract_dir_clone))
+            });
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 1: parse shipyard.json from extracted root (optional — defaults if absent)
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 1).await?;
+        let deploy_config_result = tokio::task::spawn_blocking({
+            let d = extract_dir.clone();
+            move || crate::static_site::parse_shipyard_config(std::path::Path::new(&d))
+        }).await.map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))?;
+        let deploy_config = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, deploy_config_result).await? {
+            Some(c) => c,
+            None => return Err(AppError::Internal("parse_shipyard_config returned nothing".into())),
+        };
+
+        // Step 2: publish_files (copy extract_dir → version_dir/public, atomic swap)
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
+        let r = self.static_step_publish(&extract_dir, &public_dir, deployment_id, step_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 3: write_nginx_conf
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
+        let r = self.static_step_write_nginx_conf(
+            service_id, &public_dir, &conf_dir, &deploy_config, deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 4: go_live — atomic symlink swap
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
+        let r = self.static_step_go_live(
+            &current_link, &version_dir,
+            format!("{sites_base}/{service_id}"), self.static_retention,
+            deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 5: finalize
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
+        let r = self.static_step_finalize(service_id, &deploy_config, deployment_id, step_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Clean up the artifact zip after successful deploy
+        let _ = tokio::fs::remove_file(&artifact).await;
+
+        Ok(())
+    }
+
+    /// Git pipeline: clone/pull → build → publish → nginx.
+    async fn run_static_git_steps(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+    ) -> AppResult<()> {
+        // Insert steps — upload path pre-inserts them; git path does it here.
+        for (order_index, name) in &Self::STATIC_GIT_STEPS {
+            sqlx::query(
+                "INSERT INTO deployment_steps
+                    (id, deployment_id, name, status, order_index, started_at)
+                 VALUES ($1, $2, $3, 'pending', $4, NULL)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::now_v7())
+            .bind(deployment_id)
+            .bind(name)
+            .bind(order_index)
+            .execute(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        // Load static config for this service (stored defaults)
+        let cfg = sqlx::query_as::<_, (String, String, String, String, String, String)>(
+            "SELECT source, build_command, output_dir, node_version, install_command, framework
+             FROM static_site_configs WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (_, stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd, _) =
+            cfg.unwrap_or_else(|| (
+                "git".into(), "bun run build".into(), "dist".into(),
+                "1".into(), "bun install".into(), "custom".into(),
+            ));
+
+        let sites_base    = format!("{}/static", self.data_dir);
+        let repo_path     = format!("{sites_base}/{service_id}/repo");
+        let version_dir   = format!("{sites_base}/{service_id}/{deployment_id}");
+        let public_dir    = format!("{version_dir}/public");
+        let current_link  = format!("{sites_base}/{service_id}/current");
+        let conf_dir      = format!("{sites_base}/conf.d");
+
+        // Ensure the nginx container exists and is running before we write configs or serve files.
+        self.ensure_static_nginx(&sites_base).await?;
+
+        // Load git config from service row
+        let git_row = sqlx::query_as::<_, (Option<String>, String, String)>(
+            "SELECT git_repo_url, git_branch, directory_path FROM services WHERE id = $1",
+        )
+        .bind(service_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (git_repo_url, git_branch, _) = git_row;
+        let repo_url = git_repo_url.filter(|u| !u.is_empty()).ok_or_else(|| {
+            AppError::BadRequest("Static site has no git_repo_url configured".into())
+        })?;
+
+        // Step 0: clone_or_pull
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 0).await?;
+        let r = self.step_clone_or_pull(
+            org_id, project_id, service_id, deployment_id, step_id,
+            &repo_url, &git_branch, &repo_path,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Determine build config — priority: shipyard.json > auto-detect > stored DB config.
+        let (build_command, output_dir, node_version, install_command) = {
+            let p = repo_path.clone();
+            let (shipyard_cfg, detected) = tokio::task::spawn_blocking(move || {
+                let dir = std::path::Path::new(&p);
+                let cfg = crate::static_site::parse_shipyard_config(dir)?;
+                let detected = if cfg.build.is_none() {
+                    crate::static_site::detect_build_config(dir)
+                } else {
+                    None
+                };
+                Ok::<_, shipyard_common::error::AppError>((cfg, detected))
+            }).await.map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))??;
+
+            if let Some(ov) = &shipyard_cfg.build {
+                self.insert_log(deployment_id, None, "info",
+                    "Found shipyard.json — using its build overrides").await;
+                let cmd = ov.command.as_deref().unwrap_or(&stored_build_cmd).to_string();
+                let out = ov.output.as_deref().unwrap_or(&stored_output_dir).to_string();
+                let nv  = ov.node_version.as_deref().unwrap_or(&stored_node_ver).to_string();
+                let ic  = ov.install_command.as_deref().unwrap_or(&stored_install_cmd).to_string();
+                (cmd, out, nv, ic)
+            } else if let Some(det) = detected {
+                self.insert_log(deployment_id, None, "info",
+                    &format!("Auto-detected framework: {} — using defaults (build: '{}', output: '{}')",
+                        det.framework, det.build_command, det.output_dir)).await;
+                (det.build_command.to_string(), det.output_dir.to_string(),
+                 det.node_version.to_string(), det.install_command.to_string())
+            } else {
+                self.insert_log(deployment_id, None, "info",
+                    "No shipyard.json or recognised framework — using stored build config").await;
+                (stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd)
+            }
+        };
+
+        // Step 1: build_site — spawn ephemeral Docker container
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 1).await?;
+        let built_output_path = {
+            let build_result = self.static_step_build(
+                &repo_path, &output_dir, &install_command, &build_command,
+                &node_version, deployment_id, step_id, org_id, project_id, service_id,
+            ).await;
+            // Validate the output is a static site (not SSR/server)
+            let validated = build_result.and_then(|p| {
+                crate::static_site::validate_static_output(std::path::Path::new(&p))
+                    .map(|_| p)
+            });
+            match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, validated).await? {
+                Some(p) => p,
+                None => return Err(AppError::Internal("build_site returned nothing".into())),
+            }
+        };
+
+        // Step 2: parse shipyard.json from repo root for runtime config (spa, headers, etc.)
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
+        let deploy_config_result = tokio::task::spawn_blocking({
+            let d = repo_path.clone();
+            move || crate::static_site::parse_shipyard_config(std::path::Path::new(&d))
+        }).await.map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))?;
+        let deploy_config = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, deploy_config_result).await? {
+            Some(c) => c,
+            None => return Err(AppError::Internal("parse_shipyard_config returned nothing".into())),
+        };
+
+        // Step 3: publish_files
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
+        let r = self.static_step_publish(&built_output_path, &public_dir, deployment_id, step_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 4: write_nginx_conf
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
+        let r = self.static_step_write_nginx_conf(
+            service_id, &public_dir, &conf_dir, &deploy_config, deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 5: go_live
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
+        let r = self.static_step_go_live(
+            &current_link, &version_dir,
+            format!("{sites_base}/{service_id}"), self.static_retention,
+            deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 6: finalize
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 6).await?;
+        let r = self.static_step_finalize(service_id, &deploy_config, deployment_id, step_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        Ok(())
+    }
+
+    // ── Static step helpers ───────────────────────────────────────────────────
+
+    async fn static_step_extract(
+        &self,
+        artifact: &str,
+        extract_dir: &str,
+        deployment_id: Uuid,
+        step_id: Uuid,
+    ) -> AppResult<()> {
+        let artifact = artifact.to_string();
+        let extract_dir = extract_dir.to_string();
+        let msg = format!("Extracting archive to {extract_dir}");
+        self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
+
+        tokio::task::spawn_blocking(move || {
+            crate::static_site::extract_zip(
+                std::path::Path::new(&artifact),
+                std::path::Path::new(&extract_dir),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))??;
+
+        self.insert_log(deployment_id, Some(step_id), "info", "Archive extracted successfully").await;
+        Ok(())
+    }
+
+    async fn static_step_publish(
+        &self,
+        src: &str,
+        dst: &str,
+        deployment_id: Uuid,
+        step_id: Uuid,
+    ) -> AppResult<()> {
+        let src = src.to_string();
+        let dst = dst.to_string();
+        let msg = format!("Publishing files to {dst}");
+        self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
+
+        let bytes = tokio::task::spawn_blocking(move || {
+            crate::static_site::copy_dir_all(
+                std::path::Path::new(&src),
+                std::path::Path::new(&dst),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))??;
+
+        self.insert_log(
+            deployment_id, Some(step_id), "info",
+            &format!("Published {} bytes", bytes),
+        ).await;
+        Ok(())
+    }
+
+    /// Ensures the `shipyard-nginx-static` container exists and is running.
+    ///
+    /// First call (fresh install): pulls nginx:alpine and creates the container with
+    /// the data dir bind-mounted at the same host path so nginx conf `root` directives
+    /// match without translation.
+    ///
+    /// Subsequent calls: if the container exists and is running this is a no-op;
+    /// if it's stopped it is started again.
+    async fn ensure_static_nginx(&self, sites_base: &str) -> AppResult<()> {
+        const CONTAINER: &str = "shipyard-nginx-static";
+
+        // Ensure conf.d dir exists so the bind mount succeeds even before first deploy.
+        let conf_dir = format!("{sites_base}/conf.d");
+        tokio::fs::create_dir_all(&conf_dir).await
+            .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
+
+        // Check if container exists: `docker inspect --format {{.State.Running}} <name>`
+        let inspect = tokio::process::Command::new("docker")
+            .args(["inspect", "--format", "{{.State.Running}}", CONTAINER])
+            .output().await;
+
+        match inspect {
+            Ok(o) if o.status.success() => {
+                let running = String::from_utf8_lossy(&o.stdout).trim() == "true";
+                if !running {
+                    // Container exists but is stopped — start it.
+                    let start = tokio::process::Command::new("docker")
+                        .args(["start", CONTAINER])
+                        .output().await
+                        .map_err(|e| AppError::Internal(format!("docker start nginx: {e}")))?;
+                    if !start.status.success() {
+                        let err = String::from_utf8_lossy(&start.stderr);
+                        return Err(AppError::Internal(format!("docker start nginx failed: {err}")));
+                    }
+                }
+                Ok(())
+            }
+            _ => {
+                // Container does not exist — create and start it.
+                // We mount the entire sites_base at the same path inside the container so that
+                // nginx `root` directives written by the engine (host paths) work as-is.
+                // conf.d is also mounted to the nginx default include path.
+                let status = tokio::process::Command::new("docker")
+                    .args([
+                        "run", "-d",
+                        "--name",    CONTAINER,
+                        "--restart", "unless-stopped",
+                        "--network", &self.traefik_network,
+                        // Sites bind: host path → same path in container (no path translation needed)
+                        "-v", &format!("{sites_base}:{sites_base}:ro"),
+                        // conf.d bind: nginx reads *.conf from /etc/nginx/conf.d by default
+                        "-v", &format!("{conf_dir}:/etc/nginx/conf.d:ro"),
+                        "nginx:alpine",
+                    ])
+                    .status().await
+                    .map_err(|e| AppError::Internal(format!("docker run nginx: {e}")))?;
+
+                if !status.success() {
+                    return Err(AppError::Internal(
+                        "Failed to create shipyard-nginx-static container".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn static_step_write_nginx_conf(
+        &self,
+        service_id: Uuid,
+        serve_root: &str,
+        conf_dir: &str,
+        deploy_config: &crate::static_site::DeployConfig,
+        deployment_id: Uuid,
+        step_id: Uuid,
+    ) -> AppResult<()> {
+        // Fetch domains for this service
+        let domains: Vec<String> = sqlx::query_scalar::<_, String>(
+            "SELECT hostname FROM domains WHERE service_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(service_id)
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let conf = crate::static_site::render_nginx_site_conf(
+            &service_id.to_string(),
+            &domains,
+            serve_root,
+            deploy_config,
+        );
+
+        tokio::fs::create_dir_all(conf_dir).await
+            .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
+
+        let conf_path = format!("{conf_dir}/{service_id}.conf");
+        tokio::fs::write(&conf_path, &conf).await
+            .map_err(|e| AppError::Internal(format!("Cannot write nginx conf: {e}")))?;
+
+        self.insert_log(
+            deployment_id, Some(step_id), "info",
+            &format!("Wrote nginx config to {conf_path} ({} domain(s))", domains.len()),
+        ).await;
+
+        // Reload nginx inside the managed container so the new server block takes effect.
+        // Falls back gracefully if Docker isn't available in the current environment.
+        let reload = tokio::process::Command::new("docker")
+            .args(["exec", "shipyard-nginx-static", "nginx", "-s", "reload"])
+            .output().await;
+        match reload {
+            Ok(o) if o.status.success() => {
+                self.insert_log(deployment_id, Some(step_id), "info", "nginx reloaded").await;
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                self.insert_log(
+                    deployment_id, Some(step_id), "warn",
+                    &format!("nginx reload returned non-zero (config written, may need manual reload): {stderr}"),
+                ).await;
+            }
+            Err(e) => {
+                self.insert_log(
+                    deployment_id, Some(step_id), "warn",
+                    &format!("nginx reload skipped (docker not in PATH): {e}"),
+                ).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn static_step_go_live(
+        &self,
+        current_link: &str,
+        version_dir: &str,
+        versions_root: String,
+        retention: usize,
+        deployment_id: Uuid,
+        step_id: Uuid,
+    ) -> AppResult<()> {
+        let current = current_link.to_string();
+        let version = version_dir.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            crate::static_site::atomic_swap_symlink(
+                std::path::Path::new(&current),
+                std::path::Path::new(&version),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))??;
+
+        self.insert_log(deployment_id, Some(step_id), "info", "Symlink swapped — site is live").await;
+
+        // Prune old versions (non-fatal)
+        let versions_root_clone = versions_root;
+        let pruned = tokio::task::spawn_blocking(move || {
+            crate::static_site::prune_old_versions(
+                std::path::Path::new(&versions_root_clone),
+                retention,
+            )
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or(0);
+
+        if pruned > 0 {
+            self.insert_log(
+                deployment_id, Some(step_id), "info",
+                &format!("Pruned {pruned} old version(s)"),
+            ).await;
+        }
+
+        Ok(())
+    }
+
+    async fn static_step_finalize(
+        &self,
+        service_id: Uuid,
+        deploy_config: &crate::static_site::DeployConfig,
+        _deployment_id: Uuid,
+        _step_id: Uuid,
+    ) -> AppResult<()> {
+        // Persist the runtime deploy_config into static_site_configs for future reference.
+        let config_json = serde_json::to_value(deploy_config)
+            .unwrap_or(serde_json::Value::Null);
+        sqlx::query(
+            "UPDATE static_site_configs
+             SET deploy_config = $1, updated_at = NOW()
+             WHERE service_id = $2",
+        )
+        .bind(config_json)
+        .bind(service_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        sqlx::query(
+            "UPDATE services SET status = 'running', updated_at = NOW() WHERE id = $1",
+        )
+        .bind(service_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Build a static site inside an ephemeral Docker container.
+    /// Returns the path to the built output directory inside `repo_path`.
+    #[allow(clippy::too_many_arguments)]
+    async fn static_step_build(
+        &self,
+        repo_path: &str,
+        output_dir: &str,
+        install_command: &str,
+        build_command: &str,
+        node_version: &str,
+        deployment_id: Uuid,
+        step_id: Uuid,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+    ) -> AppResult<String> {
+        // Use the official Bun image — Bun installs packages without needing Python/node-gyp,
+        // which avoids native-addon compilation errors common with npm on Alpine.
+        // node_version is kept in the DB for documentation but doesn't affect the image tag.
+        let image = "oven/bun:1-alpine";
+        let container_name = format!("shipyard-build-{deployment_id}");
+        let repo_abs = std::fs::canonicalize(repo_path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| repo_path.to_string());
+
+        let run_script = format!(
+            "set -ex && cd /src && {install_command} && {build_command}"
+        );
+
+        let msg = format!("Building with {image} (bun): {install_command} && {build_command}");
+        self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
+        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
+
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::process::Command;
+        use tokio::sync::mpsc;
+
+        let mut child = Command::new("docker")
+            .args([
+                "run", "--rm", "--name", &container_name,
+                "-v", &format!("{repo_abs}:/src"),
+                &image,
+                "sh", "-c", &run_script,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| AppError::Internal(format!("Failed to spawn build container: {e}")))?;
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let stdout_reader = child.stdout.take().map(BufReader::new);
+        let stderr_reader = child.stderr.take().map(BufReader::new);
+
+        let tx_out = tx.clone();
+        let stdout_task = tokio::spawn(async move {
+            if let Some(reader) = stdout_reader {
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx_out.send(line);
+                }
+            }
+        });
+        let stderr_task = tokio::spawn(async move {
+            if let Some(reader) = stderr_reader {
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+
+        while let Some(line) = rx.recv().await {
+            let clean = strip_ansi(&line);
+            if !clean.trim().is_empty() {
+                self.insert_log(deployment_id, Some(step_id), "info", &clean).await;
+                self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &clean).await;
+            }
+        }
+        let _ = tokio::join!(stdout_task, stderr_task);
+
+        let status = child.wait().await
+            .map_err(|e| AppError::Internal(format!("Build container wait error: {e}")))?;
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
+            return Err(AppError::Internal(format!("Build container exited with code {code}")));
+        }
+
+        let built_dir = format!("{repo_path}/{output_dir}");
+        if !std::path::Path::new(&built_dir).exists() {
+            return Err(AppError::Internal(format!(
+                "Build completed but output_dir '{output_dir}' was not created (check build_command)"
+            )));
+        }
+
+        self.insert_log(deployment_id, Some(step_id), "info", &format!("Build succeeded → {built_dir}")).await;
+        Ok(built_dir)
+    }
+
     /// Run deployment steps 2–7 with a pre-resolved image reference.
     /// Used by rollback (steps 0+1 already skipped).
     async fn run_steps_from_image(
@@ -378,6 +1032,12 @@ impl DeploymentEngine {
         let result = if svc_type == "docker_compose" {
             self.run_compose_steps(org_id, project_id, service_id, deployment_id)
                 .await
+        } else if svc_type == "static" {
+            self.run_static_steps(
+                org_id, project_id, service_id, deployment_id,
+                triggered_by, source_ref,
+            )
+            .await
         } else {
             self.run_steps(
                 org_id,

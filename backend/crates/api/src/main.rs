@@ -45,6 +45,7 @@ mod webhooks;
 mod settings;
 mod shorthand;
 mod dbclient;
+mod static_site;
 
 /// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
 /// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.
@@ -380,6 +381,8 @@ async fn main() {
                         sched_config.traefik.network.clone(),
                         sched_config.auth.secret_key.clone(),
                         sched_config.docker.port_proxy,
+                        sched_config.data_dir.clone(),
+                        sched_config.static_server.retention_versions,
                     );
                     tokio::spawn(async move {
                         if let Err(e) = engine.deploy_queued(dep_id, svc_id, &triggered_by, &source_ref).await {

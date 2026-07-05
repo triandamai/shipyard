@@ -1,0 +1,8 @@
+{
+  "build": {
+    "command": "bunx nuxi generate",
+    "output": ".output/public",
+    "install_command": "bun install"
+  },
+  "spa": true
+}

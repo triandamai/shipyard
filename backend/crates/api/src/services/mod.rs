@@ -509,8 +509,48 @@ async fn delete_service(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
         tracing::info!(%service_id, "compose stack children + orphan networks deleted");
+    } else if svc_type == "static" {
+        // Static site: remove served files + nginx conf, then reload nginx.
+        // Domains and service_networks are handled by ON DELETE CASCADE in the DB.
+        let sites_base = state.config.static_server.sites_dir
+            .as_deref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{}/static", state.config.data_dir));
+
+        // Remove versioned site directory (all deploy versions + current symlink)
+        let site_dir = format!("{sites_base}/{service_id}");
+        match tokio::fs::remove_dir_all(&site_dir).await {
+            Ok(()) => tracing::info!(%service_id, "Removed static site dir: {site_dir}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(%service_id, "Could not remove static site dir: {e}"),
+        }
+
+        // Remove nginx site conf
+        let conf_path = format!("{sites_base}/conf.d/{service_id}.conf");
+        match tokio::fs::remove_file(&conf_path).await {
+            Ok(()) => tracing::info!(%service_id, "Removed nginx conf: {conf_path}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(%service_id, "Could not remove nginx conf: {e}"),
+        }
+
+        // Reload nginx so the server block is gone (best-effort)
+        match tokio::process::Command::new("nginx")
+            .args(["-s", "reload"])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => {
+                tracing::info!(%service_id, "nginx reloaded after static site removal");
+            }
+            Ok(o) => tracing::warn!(
+                %service_id,
+                "nginx reload returned non-zero after static delete: {}",
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => tracing::debug!(%service_id, "nginx reload skipped (not in PATH): {e}"),
+        }
     } else {
-        // Non-compose: remove Swarm service
+        // Non-compose, non-static: remove Docker Swarm service
         let docker_svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
         match state.docker.remove_service(&docker_svc_name).await {
             Ok(()) => tracing::info!(%service_id, "Docker swarm service removed"),

@@ -21,10 +21,11 @@
 	import { uiStore } from '$lib/stores/ui.store';
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, permProject } from '$lib/auth/permissions';
-	import { subscribeToService, subscribeToDeployment, subscribeToDeploymentSteps } from '$lib/mqtt/subscriptions';
+	import { subscribeToService, subscribeToDeployment } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import EnvManagerPanel from './EnvManagerPanel.svelte';
-import ExecPanel from './ExecPanel.svelte';
+	import ExecPanel from './ExecPanel.svelte';
+	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
@@ -86,28 +87,6 @@ import ExecPanel from './ExecPanel.svelte';
 	let isRollingBack = $state<string | null>(null); // deployment id being rolled back
 	let serviceError = $state<string | null>(null);
 
-	// ── Deployment log viewer ────────────────────────────────────────
-	let selectedDeployment = $state<Deployment | null>(null);
-	let depLogs = $state<DeploymentLog[]>([]);
-	let depSteps = $state<DeploymentStep[]>([]);
-	let isLoadingLogs = $state(false);
-	let expandedSteps = $state<Set<string>>(new Set());
-	let isLive = $state(false);
-	let depMqttCleanup: (() => void) | null = null;
-	let logListEl = $state<HTMLDivElement | null>(null);
-
-	function scrollLogsToBottom() {
-		if (!logListEl) return;
-		requestAnimationFrame(() => {
-			if (logListEl) logListEl.scrollTop = logListEl.scrollHeight;
-		});
-	}
-
-	$effect(() => {
-		// Re-run whenever depLogs grows; scroll the log list to the bottom.
-		depLogs.length;
-		scrollLogsToBottom();
-	});
 
 	// ── Domains ──────────────────────────────────────────────────────
 	let domains = $state<Domain[]>([]);
@@ -313,16 +292,12 @@ let showDbClient    = $state(false);
 	let latestDeployment = $derived(deployments[0] ?? null);
 	let deleteSlugValid = $derived(deleteSlugInput === (service?.slug ?? ''));
 	let runningContainers = $derived(containers.filter(c => c.status === 'running'));
-
-	let stepLogsMap = $derived(
-		depLogs.reduce((acc: Record<string, DeploymentLog[]>, log) => {
-			const key = log.step_id || '__global__';
-			if (!acc[key]) acc[key] = [];
-			acc[key].push(log);
-			return acc;
-		}, {})
+	// True when a deployment pipeline is actively running — disables deploy/redeploy/restart.
+	let isDeploymentRunning = $derived(
+		latestDeployment?.status === 'running' ||
+		latestDeployment?.status === 'queued'  ||
+		latestDeployment?.status === 'pending'
 	);
-	let globalLogs = $derived(stepLogsMap['__global__'] ?? []);
 
 	// ── Status helpers ───────────────────────────────────────────────
 	function statusClass(status: string) {
@@ -418,134 +393,13 @@ let showDbClient    = $state(false);
 		}
 	}
 
-	function stepDuration(step: DeploymentStep): string {
-		if (!step.started_at || !step.finished_at) return '';
-		const ms = new Date(step.finished_at).getTime() - new Date(step.started_at).getTime();
-		return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-	}
-
-	function toggleStep(stepId: string) {
-		const next = new Set(expandedSteps);
-		if (next.has(stepId)) next.delete(stepId);
-		else next.add(stepId);
-		expandedSteps = next;
-	}
-
-	const STEP_TERMINAL = new Set(['success', 'failed', 'skipped']);
-
-	function allStepsTerminal(steps: DeploymentStep[]) {
-		return steps.length > 0 && steps.every(s => STEP_TERMINAL.has(s.status));
-	}
-
-	function finalizeDepMqtt() {
-		depMqttCleanup?.();
-		depMqttCleanup = null;
-		if (selectedDeployment) {
-			const anyFailed = depSteps.some(s => s.status === 'failed');
-			const finalStatus: Deployment['status'] = anyFailed ? 'failed' : 'success';
-			const depId = selectedDeployment.id;
-			selectedDeployment = { ...selectedDeployment, status: finalStatus };
-			deployments = deployments.map(d => d.id === depId ? { ...d, status: finalStatus } : d);
-		}
-	}
-
-	function startDepMqtt(dep: Deployment) {
-		// Subscribe to MQTT topics for this deployment's steps
-		const unsubMqtt = subscribeToDeploymentSteps(orgId, projectId, serviceId, dep.id);
-		const stepsPrefix = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/deployments/${dep.id}/steps/`;
-
-		const handler = (_type: string, evt: unknown) => {
-			const topic = _type as string;
-			const payload = evt as MqttPayload;
-			if (!topic.startsWith(stepsPrefix)) return;
-
-			if (topic.endsWith('/status')) {
-				const meta = payload.meta as any;
-				if (!meta?.step_id || !meta?.status) return;
-				depSteps = depSteps.map(s =>
-					s.id === meta.step_id ? { ...s, status: meta.status } : s
-				);
-				// Auto-expand the step when it starts running so logs are visible.
-				if (meta.status === 'running') {
-					expandedSteps = new Set([...expandedSteps, meta.step_id as string]);
-					scrollLogsToBottom();
-				}
-				if (allStepsTerminal(depSteps)) finalizeDepMqtt();
-
-			} else if (topic.endsWith('/log')) {
-				const meta = payload.meta as any;
-				if (!payload.message) return;
-				depLogs = [...depLogs, {
-					id: crypto.randomUUID(),
-					deployment_id: dep.id,
-					step_id: (meta?.step_id as string) ?? '',
-					level: payload.level ?? 'info',
-					message: payload.message,
-					timestamp: payload.timestamp,
-				}];
-			}
-		};
-
-		eventBus.on('*', handler as any);
-		isLive = true;
-
-		depMqttCleanup = () => {
-			eventBus.off('*', handler as any);
-			unsubMqtt();
-			isLive = false;
-		};
-	}
-
-	async function openDeploymentLogs(dep: Deployment) {
-		// Clean up any prior MQTT subscription
-		depMqttCleanup?.();
-		depMqttCleanup = null;
-
-		selectedDeployment = dep;
-		isLoadingLogs = true;
-		depLogs = [];
-		depSteps = [];
-		expandedSteps = new Set();
-
-		// Subscribe to MQTT FIRST (before HTTP fetch) so no events are missed
-		const isActive = dep.status === 'running' || dep.status === 'pending' || dep.status === 'queued';
-		if (isActive) startDepMqtt(dep);
-
-		// ONE-TIME HTTP fetch for initial state (step names + existing logs)
-		const [stepsRes, logsRes] = await Promise.all([
-			api.get<DeploymentStep[]>(`/deployments/${dep.id}/steps`),
-			api.get<DeploymentLog[]>(`/deployments/${dep.id}/logs`)
-		]);
-
-		if (stepsRes.data) depSteps = stepsRes.data.sort((a, b) => a.order_index - b.order_index);
-		if (logsRes.data) {
-			// Merge: HTTP response is authoritative for persisted logs; preserve any
-			// MQTT-only logs that arrived during the fetch but aren't in DB yet.
-			const mqttLogs = depLogs;
-			const httpKeys = new Set(logsRes.data.map(l => `${l.message}|${l.timestamp}`));
-			const mqttOnly = mqttLogs.filter(l => !httpKeys.has(`${l.message}|${l.timestamp}`));
-			depLogs = [...logsRes.data, ...mqttOnly];
-		}
-		isLoadingLogs = false;
-
-		// Auto-expand the running step (or the last step for finished deployments).
-		const runningStep = depSteps.find(s => s.status === 'running');
-		const lastStep = depSteps[depSteps.length - 1];
-		const autoExpand = runningStep ?? lastStep;
-		if (autoExpand) expandedSteps = new Set([autoExpand.id]);
-		scrollLogsToBottom();
-
-		// If dep.status was stale and all steps are already done, finalize immediately
-		if (isActive && allStepsTerminal(depSteps)) finalizeDepMqtt();
-	}
-
-	function closeDepLogs() {
-		depMqttCleanup?.();
-		depMqttCleanup = null;
-		selectedDeployment = null;
-		depLogs = [];
-		depSteps = [];
-		expandedSteps = new Set();
+	function openDeploymentLogs(dep: Deployment) {
+		uiStore.pushPanel({
+			component: DeploymentLogsPanel,
+			title: `Deployment ${dep.id.slice(0, 8)}`,
+			key: `dep-logs-${dep.id}`,
+			props: { orgId, projectId, serviceId, deployment: dep },
+		});
 	}
 
 	async function loadDomains() {
@@ -1082,7 +936,6 @@ let showDbClient    = $state(false);
 	onDestroy(() => {
 		unsubscribeService?.();
 		unsubscribeDeployment?.();
-		depMqttCleanup?.();
 		clogSource?.close();
 		disconnectStats();
 		if (serviceStatusTopic) eventBus.off(serviceStatusTopic, handleServiceStatus);
@@ -1114,92 +967,6 @@ let showDbClient    = $state(false);
 			: baseTabs
 	);
 </script>
-
-<!-- ─── Deployment Log Viewer Overlay ────────────────────────────────── -->
-{#if selectedDeployment}
-	<div class="log-overlay">
-		<div class="log-overlay-header">
-			<div class="log-overlay-title">
-				<div class="log-dep-status status-dot {deployStatusClass(selectedDeployment.status)}"></div>
-				<span>Deployment logs</span>
-				<span class="log-dep-time">{formatTime(selectedDeployment.created_at)}</span>
-				{#if isLive}
-					<span class="live-badge">LIVE</span>
-				{/if}
-			</div>
-			<button class="icon-btn" onclick={closeDepLogs}><X size={16} /></button>
-		</div>
-
-		{#if isLoadingLogs}
-			<div class="log-loading"><div class="spinner-sm"></div> Loading…</div>
-		{:else}
-			<div class="accordion-list" bind:this={logListEl}>
-				{#each depSteps as step (step.id)}
-					{@const logs = stepLogsMap[step.id] ?? []}
-					{@const expanded = expandedSteps.has(step.id)}
-					{@const dur = stepDuration(step)}
-					<div class="accordion-item" class:acc-expanded={expanded}>
-						<button class="accordion-header" onclick={() => toggleStep(step.id)}>
-							<span class="acc-icon acc-{step.status}">{stepStatusIcon(step.status)}</span>
-							<span class="acc-name">{step.name.replace(/_/g, ' ')}</span>
-							<span class="acc-count">{logs.length}</span>
-							{#if dur}
-								<span class="acc-dur">{dur}</span>
-							{/if}
-							<span class="acc-chevron" class:rotated={expanded}>
-								<ChevronRight size={13} />
-							</span>
-						</button>
-						{#if expanded}
-							<div class="acc-logs">
-								{#if logs.length === 0}
-									<div class="acc-empty">No output for this step.</div>
-								{:else}
-									{#each logs as log (log.id)}
-										<div class="log-entry {logLevelClass(log.level)}">
-											<span class="log-ts">{log.timestamp.slice(11, 19)}</span>
-											<span class="log-lvl">{log.level.toUpperCase()}</span>
-											<span class="log-msg">{log.message}</span>
-										</div>
-									{/each}
-								{/if}
-							</div>
-						{/if}
-					</div>
-				{/each}
-
-				{#if globalLogs.length > 0}
-					{@const expanded = expandedSteps.has('__global__')}
-					<div class="accordion-item" class:acc-expanded={expanded}>
-						<button class="accordion-header" onclick={() => toggleStep('__global__')}>
-							<span class="acc-icon acc-pending">○</span>
-							<span class="acc-name">General</span>
-							<span class="acc-count">{globalLogs.length}</span>
-							<span class="acc-chevron" class:rotated={expanded}>
-								<ChevronRight size={13} />
-							</span>
-						</button>
-						{#if expanded}
-							<div class="acc-logs">
-								{#each globalLogs as log (log.id)}
-									<div class="log-entry {logLevelClass(log.level)}">
-										<span class="log-ts">{log.timestamp.slice(11, 19)}</span>
-										<span class="log-lvl">{log.level.toUpperCase()}</span>
-										<span class="log-msg">{log.message}</span>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</div>
-				{/if}
-
-				{#if depSteps.length === 0 && globalLogs.length === 0}
-					<div class="empty-logs-msg">No log entries recorded for this deployment.</div>
-				{/if}
-			</div>
-		{/if}
-	</div>
-{/if}
 
 <!-- ─── DB Client Modal ───────────────────────────────────────────────── -->
 {#if showDbClient && service}
@@ -1510,12 +1277,8 @@ let showDbClient    = $state(false);
 								<span>Static Site</span>
 							</div>
 							<div class="info-card-body">
-								<div class="info-row">
-									<span class="info-key">Serves via</span>
-									<code class="info-val">{service.image || 'nginx:alpine'}</code>
-								</div>
 								<div class="info-hint">
-									Mount files at <code>/usr/share/nginx/html</code> via a volume to serve static assets.
+									Served by the shared Shipyard nginx server. Click <strong>Open panel</strong> from the topology canvas to configure build settings, upload files, or trigger a deploy.
 								</div>
 							</div>
 						{:else}
@@ -1676,17 +1439,17 @@ let showDbClient    = $state(false);
 			{:else if activeTab === 'deploy'}
 				<div class="deploy-section">
 					<div class="deploy-trigger-row">
-						<button class="btn btn-primary" disabled={isDeploying || isRestarting || !canDeploy} onclick={triggerDeploy} title={canDeploy ? '' : 'Insufficient permissions'}>
-							{#if isDeploying}
-								<div class="btn-spinner"></div>Deploying…
+						<button class="btn btn-primary" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerDeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? '' : 'Insufficient permissions'}>
+							{#if isDeploying || isDeploymentRunning}
+								<div class="btn-spinner"></div>{isDeploymentRunning && !isDeploying ? 'Running…' : 'Deploying…'}
 							{:else}
 								<Play size={14} />Deploy
 							{/if}
 						</button>
-						<button class="btn btn-secondary" disabled={isDeploying || isRestarting || !canDeploy} onclick={triggerRedeploy} title={canDeploy ? 'Redeploy last successful build' : 'Insufficient permissions'}>
+						<button class="btn btn-secondary" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerRedeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Redeploy last successful build' : 'Insufficient permissions'}>
 							<RefreshCw size={14} />Redeploy
 						</button>
-						<button class="btn btn-secondary" disabled={isRestarting || isDeploying || !canDeploy} onclick={triggerRestart} title={canDeploy ? 'Restart containers without rebuilding' : 'Insufficient permissions'}>
+						<button class="btn btn-secondary" disabled={isRestarting || isDeploying || isDeploymentRunning || !canDeploy} onclick={triggerRestart} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Restart containers without rebuilding' : 'Insufficient permissions'}>
 							{#if isRestarting}
 								<Loader2 size={14} class="spin" />Restarting…
 							{:else}

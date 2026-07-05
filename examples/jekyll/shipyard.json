@@ -1,0 +1,7 @@
+{
+  "build": {
+    "command": "bundle exec jekyll build",
+    "output": "_site",
+    "install_command": "bundle install"
+  }
+}

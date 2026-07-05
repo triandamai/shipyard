@@ -25,6 +25,7 @@ import type {
 	TraefikDynamicResponse,
 	ImportComposeResponse,
 	AuditLogEntry,
+	StaticSiteConfig,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -165,6 +166,28 @@ class ApiClient {
 
 	async delete<T>(path: string): Promise<ApiResponse<T>> {
 		return this.request<T>('DELETE', path);
+	}
+
+	async postForm<T>(path: string, form: FormData): Promise<ApiResponse<T>> {
+		const headers: Record<string, string> = {};
+		if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+		try {
+			const response = await fetch(`${this.baseUrl}${path}`, {
+				method: 'POST',
+				headers,
+				body: form,
+				credentials: 'same-origin',
+			});
+			const text = await response.text();
+			if (!text) return { data: null as T, error: null };
+			try {
+				return JSON.parse(text) as ApiResponse<T>;
+			} catch {
+				return { data: null, error: { code: 'PARSE_ERROR', message: `Non-JSON: ${text.slice(0, 120)}` } };
+			}
+		} catch (error) {
+			return { data: null, error: { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : 'Network error' } };
+		}
 	}
 
 	// ─── Auth ────────────────────────────────────────────────────────
@@ -328,6 +351,22 @@ class ApiClient {
 
 	async restartService(serviceId: string): Promise<ApiResponse<unknown>> {
 		return this.post(`/services/${serviceId}/restart`);
+	}
+
+	// ─── Static Sites ────��────────────────────────────────────────────
+	async getStaticConfig(serviceId: string): Promise<ApiResponse<StaticSiteConfig>> {
+		return this.get(`/services/${serviceId}/static/config`);
+	}
+
+	async updateStaticConfig(serviceId: string, body: Partial<StaticSiteConfig>): Promise<ApiResponse<StaticSiteConfig>> {
+		return this.put(`/services/${serviceId}/static/config`, body);
+	}
+
+	async uploadStaticSite(serviceId: string, file: File, message?: string): Promise<ApiResponse<{ deployment_id: string }>> {
+		const form = new FormData();
+		form.append('artifact', file);
+		if (message) form.append('message', message);
+		return this.postForm(`/services/${serviceId}/static/upload`, form);
 	}
 
 	// ─── Env Vars ────────────────────────────────────────────────────

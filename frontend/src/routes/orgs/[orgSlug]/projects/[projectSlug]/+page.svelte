@@ -20,11 +20,13 @@
 	import VolumeNode from '$lib/flows/VolumeNode.svelte';
 	import DomainNode from '$lib/flows/DomainNode.svelte';
 	import ContainerNode from '$lib/flows/ContainerNode.svelte';
+	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
 	import ContainerDetailPanel from '$lib/panels/ContainerDetailPanel.svelte';
 	import DomainDetailPanel from '$lib/panels/DomainDetailPanel.svelte';
+	import StaticSiteDetailPanel from '$lib/panels/StaticSiteDetailPanel.svelte';
 	import AddResourcePanel from '$lib/panels/AddResourcePanel.svelte';
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
@@ -64,11 +66,12 @@
 	});
 
 	const nodeTypes: NodeTypes = {
-		service:   ServiceNode as any,
-		network:   NetworkNode as any,
-		volume:    VolumeNode as any,
-		domain:    DomainNode as any,
-		container: ContainerNode as any,
+		service:     ServiceNode as any,
+		network:     NetworkNode as any,
+		volume:      VolumeNode as any,
+		domain:      DomainNode as any,
+		container:   ContainerNode as any,
+		static_site: StaticSiteNode as any,
 	};
 
 	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
@@ -139,6 +142,20 @@
 				component: ContainerDetailPanel,
 				props: { containerId, serviceId: svcId },
 				title: `Replica #${node.data?.replica_index ?? ''}`
+			});
+		} else if (node.type === 'static_site') {
+			const serviceId = node.id.replace(/^svc_/, '');
+			uiStore.pushPanel({
+				key: `static_site:${serviceId}`,
+				component: StaticSiteDetailPanel,
+				props: {
+					serviceId,
+					projectId,
+					orgId,
+					onDeployed: () => syncTopology(orgId, projectId),
+					onDeleted:  () => syncTopology(orgId, projectId),
+				},
+				title: (node.data?.name as string) || 'Static Site'
 			});
 		}
 	}

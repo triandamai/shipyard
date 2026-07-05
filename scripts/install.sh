@@ -212,6 +212,8 @@ if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
         info "Stopping running services..."
         cd "${INSTALL_DIR}" && docker compose down || true
         cd - >/dev/null
+        # Remove the nginx-static container so it gets recreated with fresh mounts.
+        docker rm -f shipyard-nginx-static 2>/dev/null || true
         # Remove app data volumes but preserve traefik_certs (contains ACME/TLS cert).
         # Deleting traefik_certs triggers a fresh LE cert request and burns the rate limit.
         for vol in postgres_data redis_data rmqtt_data; do
@@ -273,6 +275,9 @@ success "Secrets ready"
 # ── Directories ───────────────────────────────────────────────────────────────
 step "Creating directories"
 mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/certs" "${INSTALL_DIR}/traefik/dynamic"
+# Static site directories — nginx conf.d must exist before the container starts
+# so the bind mount succeeds even before any static site is deployed.
+mkdir -p "${INSTALL_DIR}/data/static/conf.d" "${INSTALL_DIR}/data/static/uploads"
 chmod 700 "${INSTALL_DIR}"
 success "Directories ready at ${INSTALL_DIR}"
 
@@ -438,6 +443,16 @@ api:
 TRAEFIK
 
 # ── Traefik dynamic config ────────────────────────────────────────────────────
+# Build TLS block for static site router — omit when running HTTP-only.
+if [[ "${PROTOCOL}" == "https" ]]; then
+    STATIC_SITE_TLS="      tls:
+        certResolver: letsencrypt"
+    STATIC_SITE_ENTRYPOINTS="[websecure]"
+else
+    STATIC_SITE_TLS=""
+    STATIC_SITE_ENTRYPOINTS="[web]"
+fi
+
 cat > "${INSTALL_DIR}/traefik/dynamic/shipyard.yml" <<DYNAMIC
 http:
   routers:
@@ -464,6 +479,16 @@ http:
       tls:
         certResolver: letsencrypt
 
+    # Catch-all for static sites — any domain not matched above is forwarded to
+    # the nginx-static container which handles server_name routing per-site.
+    # Priority 1 ensures this never wins over explicit Shipyard app routes.
+    static-sites:
+      rule: "HostRegexp(\`.+\`)"
+      priority: 1
+      entryPoints: ${STATIC_SITE_ENTRYPOINTS}
+      service: nginx-static
+${STATIC_SITE_TLS}
+
   services:
     shipyard-frontend:
       loadBalancer:
@@ -479,6 +504,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://shipyard-mqtt:8083"
+
+    nginx-static:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-nginx-static:80"
 
   middlewares:
     shipyard-mqtt-strip:
@@ -594,6 +624,22 @@ services:
     networks:
       - platform_proxy
 
+  # Serves all static sites deployed through Shipyard.
+  # The engine automatically starts this container on first static deploy, but
+  # defining it here ensures it is present immediately after install.
+  nginx-static:
+    image: nginx:alpine
+    container_name: shipyard-nginx-static
+    restart: unless-stopped
+    volumes:
+      # Bind the sites dir at the same host path so nginx `root` directives
+      # written by the engine (absolute host paths) resolve correctly in the container.
+      - ${INSTALL_DIR}/data/static:${INSTALL_DIR}/data/static:ro
+      # conf.d at the standard nginx include path — engine writes *.conf files here.
+      - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - platform_proxy
+
 networks:
   internal:
     name: shipyard_internal
@@ -684,4 +730,7 @@ echo -e "    ${BOLD}docker compose ps${RESET}"
 echo -e "    ${BOLD}docker compose restart backend${RESET}"
 echo ""
 echo -e "  ${YELLOW}First run:${RESET} visit ${PROTOCOL}://${DOMAIN}/setup to create your admin account."
+echo ""
+echo -e "  ${BLUE}Static sites:${RESET} the nginx-static container is running and ready."
+echo -e "    Deploy a static site and add a custom domain — Traefik will route it automatically."
 echo ""

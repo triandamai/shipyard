@@ -1,0 +1,16 @@
+---
+layout: default
+title: Shipyard — Jekyll Example
+---
+
+<main>
+  <h1>Shipyard — Jekyll Example</h1>
+  <p>A minimal static site deployed via Shipyard.</p>
+  <button id="btn">Clicked 0 times</button>
+</main>
+
+<script>
+  let n = 0;
+  const btn = document.getElementById('btn');
+  btn.addEventListener('click', () => { btn.textContent = `Clicked ${++n} times`; });
+</script>

@@ -198,6 +198,9 @@ else
     success "Docker Swarm is already active"
 fi
 
+# Keep only 1 old (shutdown) task per slot so redeploys don't accumulate orphans.
+docker swarm update --task-history-limit 1 &>/dev/null || true
+
 success "Docker stack OK"
 
 # ── Already installed? ────────────────────────────────────────────────────────
@@ -206,9 +209,16 @@ if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
     REINSTALL=""
     read_input "Re-install / overwrite? (Warning: This will delete all persistent data/volumes) [y/N] " REINSTALL "n"
     if [[ "${REINSTALL}" == "y" || "${REINSTALL}" == "Y" ]]; then
-        info "Stopping running services and removing persistent volumes..."
-        cd "${INSTALL_DIR}" && docker compose down -v || true
+        info "Stopping running services..."
+        cd "${INSTALL_DIR}" && docker compose down || true
         cd - >/dev/null
+        # Remove the nginx-static container so it gets recreated with fresh mounts.
+        docker rm -f shipyard-nginx-static 2>/dev/null || true
+        # Remove app data volumes but preserve traefik_certs (contains ACME/TLS cert).
+        # Deleting traefik_certs triggers a fresh LE cert request and burns the rate limit.
+        for vol in postgres_data redis_data rmqtt_data; do
+            docker volume rm "shipyard_${vol}" 2>/dev/null || true
+        done
     else
         info "Aborted."
         exit 0
@@ -246,22 +256,28 @@ step "Generating secrets"
 JWT_SECRET="$(openssl rand -hex 32)"
 SECRET_KEY="$(openssl rand -hex 32)"
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+MQTT_PASSWORD="$(openssl rand -hex 24)"
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info "Preserving existing secrets from ${INSTALL_DIR}/.env..."
     EXISTING_JWT_SECRET=$(grep -E "^SHIPYARD__AUTH__JWT_SECRET=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_SECRET_KEY=$(grep -E "^SHIPYARD__AUTH__SECRET_KEY=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_POSTGRES_PASSWORD=$(grep -E "^POSTGRES_PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
-    
+    EXISTING_MQTT_PASSWORD=$(grep -E "^SHIPYARD__MQTT__PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+
     JWT_SECRET="${EXISTING_JWT_SECRET:-$JWT_SECRET}"
     SECRET_KEY="${EXISTING_SECRET_KEY:-$SECRET_KEY}"
     POSTGRES_PASSWORD="${EXISTING_POSTGRES_PASSWORD:-$POSTGRES_PASSWORD}"
+    MQTT_PASSWORD="${EXISTING_MQTT_PASSWORD:-$MQTT_PASSWORD}"
 fi
 success "Secrets ready"
 
 # ── Directories ───────────────────────────────────────────────────────────────
 step "Creating directories"
 mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/certs" "${INSTALL_DIR}/traefik/dynamic"
+# Static site directories — nginx conf.d must exist before the container starts
+# so the bind mount succeeds even before any static site is deployed.
+mkdir -p "${INSTALL_DIR}/data/static/conf.d" "${INSTALL_DIR}/data/static/uploads"
 chmod 700 "${INSTALL_DIR}"
 success "Directories ready at ${INSTALL_DIR}"
 
@@ -289,6 +305,8 @@ SHIPYARD__DATABASE__MAX_CONNECTIONS=10
 SHIPYARD__MQTT__HOST=shipyard-mqtt
 SHIPYARD__MQTT__PORT=1883
 SHIPYARD__MQTT__CLIENT_ID=shipyard-api
+SHIPYARD__MQTT__USERNAME=shipyard-api
+SHIPYARD__MQTT__PASSWORD=${MQTT_PASSWORD}
 
 # Auth
 SHIPYARD__AUTH__JWT_SECRET=${JWT_SECRET}
@@ -321,7 +339,7 @@ success ".env written"
 
 # ── rmqtt.toml ────────────────────────────────────────────────────────────────
 info "Writing ${INSTALL_DIR}/rmqtt.toml..."
-cat > "${INSTALL_DIR}/rmqtt.toml" <<'RMQTT'
+cat > "${INSTALL_DIR}/rmqtt.toml" <<RMQTT
 [log]
 level = "warn"
 
@@ -346,6 +364,7 @@ default_startups = [
     "rmqtt-sys-topic",
     "rmqtt-message-storage",
     "rmqtt-session-storage",
+    "rmqtt-auth-http",
     "rmqtt-acl",
     "rmqtt-counter",
     "rmqtt-http-api"
@@ -355,14 +374,38 @@ default_startups = [
 enable = false
 
 [plugins.rmqtt-auth-http]
-enable = false
+enable = true
+
+[plugins.rmqtt-http-api]
+addr = "0.0.0.0:6060"
 
 [mqtt]
 max_packet_size = "10mb"
 max_inflight = 16
 session_expiry_interval = "2h"
-allow_anonymous = true
+allow_anonymous = false
 RMQTT
+
+# ── rmqtt-auth-http plugin config ─────────────────────────────────────────────
+# This file is loaded by the rmqtt-auth-http plugin from its plugins dir.
+# The [plugins.rmqtt-auth-http] section in rmqtt.toml only enables/disables it;
+# the URL and rules must live here.
+info "Writing ${INSTALL_DIR}/rmqtt-auth-http.toml..."
+cat > "${INSTALL_DIR}/rmqtt-auth-http.toml" <<'AUTHHTTP'
+http_timeout = "5s"
+http_connections = 50
+http_keepalive_timeout = "60s"
+concurrency_limit = 10
+
+[[rules]]
+uri = "http://shipyard-backend:3001/internal/mqtt/auth"
+method = "post"
+params.clientid = "${clientid}"
+params.username = "${username}"
+params.password = "${password}"
+params.ipaddr = "${ipaddr}"
+AUTHHTTP
+success "rmqtt-auth-http.toml written"
 
 # ── Traefik static config ─────────────────────────────────────────────────────
 info "Writing Traefik config..."
@@ -400,6 +443,16 @@ api:
 TRAEFIK
 
 # ── Traefik dynamic config ────────────────────────────────────────────────────
+# Build TLS block for static site router — omit when running HTTP-only.
+if [[ "${PROTOCOL}" == "https" ]]; then
+    STATIC_SITE_TLS="      tls:
+        certResolver: letsencrypt"
+    STATIC_SITE_ENTRYPOINTS="[websecure]"
+else
+    STATIC_SITE_TLS=""
+    STATIC_SITE_ENTRYPOINTS="[web]"
+fi
+
 cat > "${INSTALL_DIR}/traefik/dynamic/shipyard.yml" <<DYNAMIC
 http:
   routers:
@@ -411,7 +464,7 @@ http:
         certResolver: letsencrypt
 
     shipyard-backend:
-      rule: "Host(\`api-${DOMAIN}\`)"
+      rule: "Host(\`api-${DOMAIN}\`) && PathPrefix(\`/openapi/v1\`)"
       entryPoints: [websecure]
       service: shipyard-backend
       tls:
@@ -425,6 +478,16 @@ http:
         - shipyard-mqtt-strip
       tls:
         certResolver: letsencrypt
+
+    # Catch-all for static sites — any domain not matched above is forwarded to
+    # the nginx-static container which handles server_name routing per-site.
+    # Priority 1 ensures this never wins over explicit Shipyard app routes.
+    static-sites:
+      rule: "HostRegexp(\`.+\`)"
+      priority: 1
+      entryPoints: ${STATIC_SITE_ENTRYPOINTS}
+      service: nginx-static
+${STATIC_SITE_TLS}
 
   services:
     shipyard-frontend:
@@ -441,6 +504,11 @@ http:
       loadBalancer:
         servers:
           - url: "http://shipyard-mqtt:8083"
+
+    nginx-static:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-nginx-static:80"
 
   middlewares:
     shipyard-mqtt-strip:
@@ -492,11 +560,12 @@ services:
     image: rmqtt/rmqtt:latest
     container_name: shipyard-mqtt
     restart: unless-stopped
-    ports:
-      - "1883:1883"
-      - "8083:8083"
+    # Ports are NOT published to the host — the broker is only reachable from
+    # inside Docker (backend via internal network, browsers via Traefik /mqtt).
+    # This prevents public internet scanners from reaching port 1883.
     volumes:
       - ${INSTALL_DIR}/rmqtt.toml:/app/rmqtt/rmqtt.toml:ro
+      - ${INSTALL_DIR}/rmqtt-auth-http.toml:/app/rmqtt/rmqtt-plugins/rmqtt-auth-http.toml:ro
       - rmqtt_data:/app/data
     networks:
       - internal
@@ -508,7 +577,7 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ${INSTALL_DIR}/data:/opt/shipyard/data
+      - ${INSTALL_DIR}:/opt/shipyard
       - ${INSTALL_DIR}/traefik/dynamic:/etc/traefik/dynamic
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -555,6 +624,22 @@ services:
     networks:
       - platform_proxy
 
+  # Serves all static sites deployed through Shipyard.
+  # The engine automatically starts this container on first static deploy, but
+  # defining it here ensures it is present immediately after install.
+  nginx-static:
+    image: nginx:alpine
+    container_name: shipyard-nginx-static
+    restart: unless-stopped
+    volumes:
+      # Bind the sites dir at the same host path so nginx `root` directives
+      # written by the engine (absolute host paths) resolve correctly in the container.
+      - ${INSTALL_DIR}/data/static:${INSTALL_DIR}/data/static:ro
+      # conf.d at the standard nginx include path — engine writes *.conf files here.
+      - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - platform_proxy
+
 networks:
   internal:
     name: shipyard_internal
@@ -574,10 +659,13 @@ success "docker-compose.yml written"
 info "Writing ${INSTALL_DIR}/update.sh..."
 cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
-# Shipyard self-update script — triggered from the web dashboard.
-# Runs inside the shipyard-backend container (Docker socket is mounted).
-# Uses docker:cli (tiny official image with docker + compose) to restart services
-# in a detached container so the restart doesn't kill this running script.
+# Shipyard self-update script — run by the backend when a user triggers an update.
+#
+# This script runs inside the shipyard-backend container (Docker socket is mounted).
+# Calling "docker compose up -d" directly would stop this container mid-execution.
+# Instead, we spawn a detached docker:cli container that runs the restart after we exit.
+# docker:cli is a tiny (~10 MB) official image that has docker + compose — unlike the
+# backend image which is just a compiled Rust binary with no shell or docker CLI.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
@@ -642,4 +730,7 @@ echo -e "    ${BOLD}docker compose ps${RESET}"
 echo -e "    ${BOLD}docker compose restart backend${RESET}"
 echo ""
 echo -e "  ${YELLOW}First run:${RESET} visit ${PROTOCOL}://${DOMAIN}/setup to create your admin account."
+echo ""
+echo -e "  ${BLUE}Static sites:${RESET} the nginx-static container is running and ready."
+echo -e "    Deploy a static site and add a custom domain — Traefik will route it automatically."
 echo ""

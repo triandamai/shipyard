@@ -1,0 +1,7 @@
+{
+  "build": {
+    "command": "hugo",
+    "output": "public",
+    "install_command": ""
+  }
+}

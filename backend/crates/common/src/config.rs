@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub git: GitOAuthConfig,
     #[serde(default)]
     pub redis: RedisConfig,
+    #[serde(default)]
+    pub static_server: StaticServerConfig,
     pub data_dir: String,
     /// Public URL of the frontend app, used for invitation links and similar.
     /// Set via SHIPYARD__APP_URL. Defaults to http://localhost:5173.
@@ -128,6 +130,37 @@ pub struct RedisConfig {
     pub url: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaticServerConfig {
+    /// Swarm service / container name for the shared nginx server.
+    #[serde(default = "default_static_service_name")]
+    pub service_name: String,
+    /// Absolute host path where per-site dirs are stored.
+    /// Defaults to {data_dir}/static — resolved at runtime.
+    pub sites_dir: Option<String>,
+    /// Max upload size in MB for direct-upload deployments.
+    #[serde(default = "default_max_upload_mb")]
+    pub max_upload_mb: u64,
+    /// Number of past deployment versions to retain per site for rollback.
+    #[serde(default = "default_retention_versions")]
+    pub retention_versions: usize,
+}
+
+fn default_static_service_name() -> String { "shipyard-static".to_string() }
+fn default_max_upload_mb() -> u64 { 256 }
+fn default_retention_versions() -> usize { 5 }
+
+impl Default for StaticServerConfig {
+    fn default() -> Self {
+        Self {
+            service_name: default_static_service_name(),
+            sites_dir: None,
+            max_upload_mb: default_max_upload_mb(),
+            retention_versions: default_retention_versions(),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -191,6 +224,7 @@ impl Default for AppConfig {
                 bitbucket_client_secret: String::new(),
             },
             redis: RedisConfig { url: None },
+            static_server: StaticServerConfig::default(),
             data_dir: "/opt/shipyard/data".to_string(),
             app_url: default_app_url(),
         }

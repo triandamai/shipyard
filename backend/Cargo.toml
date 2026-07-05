@@ -24,7 +24,7 @@ repository = "https://github.com/shipyard/shipyard"
 tokio = { version = "1", features = ["full"] }
 
 # Web framework
-axum = { version = "0.7", features = ["macros", "ws"] }
+axum = { version = "0.7", features = ["macros", "ws", "multipart"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
 
@@ -104,3 +104,5 @@ mongodb = "3"
 async-trait = "0.1"
 futures = "0.3"
 bytes = "1"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -1,0 +1,8 @@
+{
+  "build": {
+    "command": "bun run build",
+    "output": "out",
+    "install_command": "bun install"
+  },
+  "spa": true
+}

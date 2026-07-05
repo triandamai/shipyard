@@ -648,3 +648,15 @@ export interface DbQueryResult {
 	truncated: boolean;
 	execution_time_ms: number;
 }
+
+// Static site hosting
+export interface StaticSiteConfig {
+	service_id:      string;
+	source:          'git' | 'upload';
+	build_command:   string;
+	output_dir:      string;
+	node_version:    string;
+	install_command: string;
+	framework:       string;
+	deploy_config:   Record<string, unknown> | null;
+}

@@ -69,6 +69,23 @@ services:
     networks:
       - platform_proxy
 
+  # ─── Static site nginx ───────────────────────────────────────
+  # Serves all static sites deployed via Shipyard.
+  # The engine creates this container automatically on first static deploy,
+  # but defining it here ensures it is present for local dev before any deploy.
+  nginx-static:
+    image: nginx:alpine
+    container_name: shipyard-nginx-static
+    restart: unless-stopped
+    volumes:
+      # Bind the sites dir at the same host path so nginx conf `root` directives
+      # written by the engine (host absolute paths) resolve correctly inside the container.
+      - /opt/shipyard/data/static:/opt/shipyard/data/static:ro
+      # Also expose conf.d at the standard nginx include path.
+      - /opt/shipyard/data/static/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - platform_proxy
+
 networks:
   platform_proxy:
     name: platform_proxy
