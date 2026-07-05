@@ -127,6 +127,18 @@
 		connectError = '';
 	}
 
+	// ── Close confirmation ────────────────────────────────────────────────────
+	let showCloseConfirm = $state(false);
+
+	function requestClose() {
+		showCloseConfirm = true;
+	}
+
+	function confirmClose() {
+		showCloseConfirm = false;
+		onClose();
+	}
+
 	function formatCell(val: unknown): string {
 		if (val === null || val === undefined) return 'NULL';
 		if (typeof val === 'object') return JSON.stringify(val);
@@ -139,7 +151,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="backdrop" onclick={onClose} onkeydown={() => {}}></div>
+<div class="backdrop" onclick={requestClose} onkeydown={() => {}}></div>
 
 <div class="modal" role="dialog" aria-modal="true" aria-label="Database Client">
 	<!-- Header -->
@@ -151,8 +163,22 @@
 				<span class="conn-badge connected">Connected</span>
 			{/if}
 		</div>
-		<button class="icon-btn" onclick={onClose} aria-label="Close"><X size={15} /></button>
+		<button class="icon-btn" onclick={requestClose} aria-label="Close"><X size={15} /></button>
 	</div>
+
+	{#if showCloseConfirm}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCloseConfirm = false; }} onkeydown={() => {}}>
+			<div class="confirm-card">
+				<p class="confirm-title">Close database client?</p>
+				<p class="confirm-sub">Your connection and any unsaved query results will be lost.</p>
+				<div class="confirm-actions">
+					<button class="btn btn-ghost" onclick={() => showCloseConfirm = false}>Cancel</button>
+					<button class="btn btn-danger" onclick={confirmClose}>Close</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	{#if metaLoading}
 		<div class="state-center">
@@ -356,6 +382,7 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		isolation: isolate;
 	}
 
 	.modal-header {
@@ -692,4 +719,59 @@
 		.form-grid { grid-template-columns: 1fr; }
 		.field-wide, .field-narrow { grid-column: span 1; }
 	}
+
+	/* ── Close confirmation overlay ── */
+	.confirm-overlay {
+		position: absolute;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.45);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 10;
+		border-radius: 10px;
+	}
+
+	.confirm-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		padding: 24px 28px;
+		width: min(340px, calc(100% - 40px));
+		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+	}
+
+	.confirm-title {
+		margin: 0 0 8px;
+		font-size: 15px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+
+	.confirm-sub {
+		margin: 0 0 20px;
+		font-size: 13px;
+		color: var(--text-muted);
+		line-height: 1.5;
+	}
+
+	.confirm-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
+	.btn-ghost {
+		background: transparent;
+		border-color: var(--border);
+		color: var(--text-secondary, var(--text-muted));
+	}
+	.btn-ghost:hover { background: var(--bg-muted); }
+
+	.btn-danger {
+		background: #dc2626;
+		border-color: #dc2626;
+		color: #fff;
+	}
+	.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
 </style>

@@ -691,7 +691,14 @@ let showDbClient    = $state(false);
 		isLoadingContainerLogs = false;
 	}
 
+	let showLogCloseConfirm = $state(false);
+
+	function requestCloseContainerLogs() {
+		showLogCloseConfirm = true;
+	}
+
 	function closeContainerLogs() {
+		showLogCloseConfirm = false;
 		clogSource?.close();
 		clogSource = null;
 		clogStatus = 'idle';
@@ -1229,7 +1236,7 @@ let showDbClient    = $state(false);
 
 <!-- ─── Container Logs Overlay (portalled, 2/3 screen) ───────────────── -->
 {#if containerLogsTarget}
-	<div use:portal class="clog-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) closeContainerLogs(); }}>
+	<div use:portal class="clog-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) requestCloseContainerLogs(); }}>
 	<div class="clog-panel">
 		<div class="log-overlay-header">
 			<div class="log-overlay-title">
@@ -1277,8 +1284,22 @@ let showDbClient    = $state(false);
 					</button>
 				{/if}
 			</div>
-			<button class="icon-btn" onclick={closeContainerLogs}><X size={16} /></button>
+			<button class="icon-btn" onclick={requestCloseContainerLogs}><X size={16} /></button>
 		</div>
+
+		{#if showLogCloseConfirm}
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="clog-confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showLogCloseConfirm = false; }} onkeydown={() => {}}>
+				<div class="clog-confirm-card">
+					<p class="clog-confirm-title">Close log panel?</p>
+					<p class="clog-confirm-sub">The live stream will be disconnected and all log output will be cleared.</p>
+					<div class="clog-confirm-actions">
+						<button class="clog-confirm-btn clog-confirm-cancel" onclick={() => showLogCloseConfirm = false}>Cancel</button>
+						<button class="clog-confirm-btn clog-confirm-close" onclick={closeContainerLogs}>Close</button>
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		{#if isLoadingContainerLogs}
 			<div class="log-loading"><div class="spinner-sm"></div> Loading…</div>
@@ -3305,7 +3326,76 @@ let showDbClient    = $state(false);
 		flex-direction: column;
 		z-index: 801;
 		box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+		isolation: isolate;
 	}
+
+	:global(.clog-confirm-overlay) {
+		position: absolute;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 10;
+	}
+
+	:global(.clog-confirm-card) {
+		background: #1E293B;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 10px;
+		padding: 24px 28px;
+		width: min(340px, calc(100% - 40px));
+		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+	}
+
+	:global(.clog-confirm-title) {
+		margin: 0 0 8px;
+		font-size: 15px;
+		font-weight: 600;
+		color: #F1F5F9;
+		font-family: var(--font-sans);
+	}
+
+	:global(.clog-confirm-sub) {
+		margin: 0 0 20px;
+		font-size: 13px;
+		color: #94A3B8;
+		line-height: 1.5;
+		font-family: var(--font-sans);
+	}
+
+	:global(.clog-confirm-actions) {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
+	:global(.clog-confirm-btn) {
+		display: inline-flex;
+		align-items: center;
+		padding: 7px 16px;
+		border-radius: 6px;
+		font-size: 13px;
+		font-weight: 500;
+		font-family: var(--font-sans);
+		cursor: pointer;
+		border: 1px solid transparent;
+		transition: all 0.12s;
+	}
+
+	:global(.clog-confirm-cancel) {
+		background: transparent;
+		border-color: rgba(255, 255, 255, 0.12);
+		color: #94A3B8;
+	}
+	:global(.clog-confirm-cancel:hover) { background: rgba(255, 255, 255, 0.06); color: #F1F5F9; }
+
+	:global(.clog-confirm-close) {
+		background: #dc2626;
+		border-color: #dc2626;
+		color: #fff;
+	}
+	:global(.clog-confirm-close:hover) { background: #b91c1c; border-color: #b91c1c; }
 
 	:global(.clog-panel) .log-overlay-header {
 		background: #0F172A;
