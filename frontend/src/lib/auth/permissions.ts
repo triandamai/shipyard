@@ -56,3 +56,35 @@ export function can(
 
 	return permissions.includes(permMap[action] ?? '');
 }
+
+/**
+ * True if the user can view a specific project.
+ * Accepts org-level project:read/write OR a project-scoped permission (orgs:<id>:view/deploy/manage).
+ */
+export function hasProjectAccess(
+	role: MemberRole | null | undefined,
+	permissions: string[],
+	projectId: string
+): boolean {
+	if (!role) return false;
+	if (role === 'owner' || role === 'admin') return true;
+	if (permissions.includes('app:project:read') || permissions.includes('app:project:write')) return true;
+	if (!projectId) return false;
+	return permissions.some(p => p.startsWith(`orgs:${projectId}:`));
+}
+
+/**
+ * True if the user can edit (write/manage) a specific project.
+ * Accepts org-level project:write OR a project-scoped manage permission (orgs:<id>:manage).
+ */
+export function hasProjectEditAccess(
+	role: MemberRole | null | undefined,
+	permissions: string[],
+	projectId: string
+): boolean {
+	if (!role) return false;
+	if (role === 'owner' || role === 'admin') return true;
+	if (permissions.includes('app:project:write')) return true;
+	if (!projectId) return false;
+	return permissions.includes(`orgs:${projectId}:manage`);
+}

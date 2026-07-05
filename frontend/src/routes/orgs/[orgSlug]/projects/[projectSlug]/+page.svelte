@@ -13,7 +13,7 @@
 	import { subscribeToTopology } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Topology, MqttPayload } from '$lib/api/types';
-	import { isAdminRole, can } from '$lib/auth/permissions';
+	import { isAdminRole, can, hasProjectAccess, hasProjectEditAccess } from '$lib/auth/permissions';
 
 	import ServiceNode from '$lib/flows/ServiceNode.svelte';
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
@@ -42,16 +42,10 @@
 	let memberLoaded = $derived($orgStore.membershipLoaded ?? false);
 
 	// Admins/owners always have full access.
-	// Regular members need explicit project permissions.
-	let canViewProject = $derived(
-		isAdminRole(myRole) ||
-		can(myRole, myPerms, 'project:read') ||
-		can(myRole, myPerms, 'project:write')
-	);
-	let canEditProject = $derived(
-		isAdminRole(myRole) ||
-		can(myRole, myPerms, 'project:write')
-	);
+	// Regular members need either an org-level project permission or a
+	// project-scoped permission (orgs:<projectId>:view/deploy/manage).
+	let canViewProject = $derived(hasProjectAccess(myRole, myPerms, projectId));
+	let canEditProject = $derived(hasProjectEditAccess(myRole, myPerms, projectId));
 
 	let isLoading = $state(true);
 	let error = $state<string | null>(null);

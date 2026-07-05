@@ -506,15 +506,23 @@ async fn get_my_membership(
         r#"
         SELECT m.id, m.org_id, m.user_id, u.email, m.role::text AS role, m.created_at,
                COALESCE(
-                   ARRAY_AGG(p.permission ORDER BY p.permission)
-                   FILTER (WHERE p.permission IS NOT NULL),
+                   (SELECT ARRAY_AGG(perm ORDER BY perm)
+                    FROM (
+                        SELECT p.permission AS perm
+                        FROM org_member_permissions p
+                        WHERE p.org_id = m.org_id AND p.user_id = m.user_id
+                        UNION ALL
+                        SELECT 'orgs:' || pm.project_id::text || ':' || proj_perm AS perm
+                        FROM project_members pm,
+                             LATERAL UNNEST(pm.permissions) AS proj_perm
+                        WHERE pm.org_id = m.org_id AND pm.user_id = m.user_id
+                    ) combined_perms
+                   ),
                    ARRAY[]::text[]
                ) AS permissions
         FROM org_members m
         JOIN users u ON u.id = m.user_id
-        LEFT JOIN org_member_permissions p ON p.org_id = m.org_id AND p.user_id = m.user_id
         WHERE m.org_id = $1 AND m.user_id = $2
-        GROUP BY m.id, m.org_id, m.user_id, u.email, m.role, m.created_at
         "#,
     )
     .bind(org_id)
