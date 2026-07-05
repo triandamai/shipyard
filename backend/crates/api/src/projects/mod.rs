@@ -313,7 +313,7 @@ async fn delete_project(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth_user.user_id),
+        &auth_user,
         "delete_project",
         Some("project"),
         Some(project_id),

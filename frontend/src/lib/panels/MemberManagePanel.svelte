@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { PERMISSION_GROUPS } from '$lib/api/types';
+	import { PERMISSION_GROUPS, buildOrgPermission, parseOrgPermissionSuffix } from '$lib/api/types';
 	import type { OrgMember, MemberRole, Project, MemberProjectAssignment } from '$lib/api/types';
 	import {
 		Check, Loader2, AlertCircle, Lock, Folder, FolderOpen,
@@ -60,7 +60,18 @@
 	}
 
 	// ── Org Permissions ───────────────────────────────────────────────
-	let orgPerms     = $state<Set<string>>(new Set(member.permissions));
+	// The panel works with suffix ids (e.g. "settings:read") for display.
+	// Full shipyard:<orgId>: strings are built only when saving.
+	function toSuffixSet(fullPerms: string[]): Set<string> {
+		const out = new Set<string>();
+		for (const p of fullPerms) {
+			const suffix = parseOrgPermissionSuffix(orgId, p);
+			if (suffix) out.add(suffix);
+		}
+		return out;
+	}
+
+	let orgPerms     = $state<Set<string>>(toSuffixSet(member.permissions));
 	let savingPerms  = $state(false);
 	let permsError   = $state('');
 	let permsSaved   = $state(false);
@@ -75,12 +86,14 @@
 		savingPerms = true;
 		permsError  = '';
 		permsSaved  = false;
-		const res = await api.setMemberPermissions(orgId, member.user_id, [...orgPerms]);
+		// Build full shipyard: strings from suffix ids
+		const fullPerms = [...orgPerms].map(suffix => buildOrgPermission(orgId, suffix));
+		const res = await api.setMemberPermissions(orgId, member.user_id, fullPerms);
 		if (res.error) {
 			permsError = res.error.message;
 		} else {
 			permsSaved = true;
-			onPermissionsChanged?.(member.user_id, [...orgPerms]);
+			onPermissionsChanged?.(member.user_id, fullPerms);
 			setTimeout(() => (permsSaved = false), 2500);
 		}
 		savingPerms = false;
@@ -101,6 +114,17 @@
 	// Pending edits (mirror of projectAssignments for in-panel editing)
 	let pendingAssignments = $state<{ project_id: string; project_name: string; project_slug: string; permissions: Set<string> }[]>([]);
 
+	/** Convert full shipyard: permission strings back to shorthand for the UI chips. */
+	function toShorthandSet(projectId: string, fullPerms: string[]): Set<string> {
+		const base = `shipyard:${orgId}:${projectId}:`;
+		const has = (suffix: string) => fullPerms.includes(base + suffix);
+		const out = new Set<string>();
+		if (has('project:manage')) { out.add('manage'); return out; }
+		if (has('service:deploy')) { out.add('deploy'); return out; }
+		if (has('project:view'))   { out.add('view');   return out; }
+		return out;
+	}
+
 	async function loadProjectAssignments() {
 		loadingProjects = true;
 		projectsError   = '';
@@ -111,7 +135,7 @@
 				project_id:   a.project_id,
 				project_name: a.project_name,
 				project_slug: a.project_slug,
-				permissions:  new Set(a.permissions),
+				permissions:  toShorthandSet(a.project_id, a.permissions),
 			}));
 		} else {
 			projectsError = res.error?.message ?? 'Failed to load project assignments';
@@ -144,13 +168,36 @@
 		});
 	}
 
+	/**
+	 * Expand UI shorthand (view/deploy/manage) to full shipyard: permission strings.
+	 * The backend also expands, but sending expanded strings is more explicit and
+	 * ensures the returned permissions array is always in the canonical format.
+	 */
+	function expandProjectPerms(projectId: string, shorthand: Set<string>): string[] {
+		const base = `shipyard:${orgId}:${projectId}:`;
+		const out: string[] = [];
+		const hasView   = shorthand.has('view') || shorthand.has('deploy') || shorthand.has('manage');
+		const hasDeploy = shorthand.has('deploy') || shorthand.has('manage');
+		const hasManage = shorthand.has('manage');
+		if (hasView)   { out.push(base + 'project:view', base + 'service:view'); }
+		if (hasDeploy) { out.push(base + 'service:deploy'); }
+		if (hasManage) {
+			out.push(
+				base + 'project:manage', base + 'service:write',
+				base + 'service:delete', base + 'env:read', base + 'env:write',
+				base + 'domain:write',   base + 'volume:write', base + 'network:write'
+			);
+		}
+		return [...new Set(out)].sort();
+	}
+
 	async function saveProjectAssignments() {
 		savingProjects = true;
 		projectsSaved  = false;
 		projectsError  = '';
 		const assignments = pendingAssignments.map(a => ({
 			project_id:  a.project_id,
-			permissions: [...a.permissions],
+			permissions: expandProjectPerms(a.project_id, a.permissions),
 		}));
 		const res = await api.setMemberProjects(orgId, member.user_id, assignments);
 		if (res.error) {
@@ -161,7 +208,7 @@
 				project_id:   a.project_id,
 				project_name: a.project_name,
 				project_slug: a.project_slug,
-				permissions:  new Set(a.permissions),
+				permissions:  toShorthandSet(a.project_id, a.permissions),
 			}));
 			projectsSaved = true;
 			setTimeout(() => (projectsSaved = false), 2500);

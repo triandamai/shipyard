@@ -2,7 +2,16 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { Cpu, MemoryStick, HardDrive, Network, RefreshCw, Activity, Radio, Server, Copy, Check, Link } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import type { SwarmNode, SwarmJoinTokens } from '$lib/api/types';
+
+	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole   = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canInfraRead = $derived(can(myRole, myPerms, perm(orgId, 'infra', 'read')));
 
 	interface DiskInfo {
 		mount: string;
@@ -114,7 +123,7 @@
 		nodesLoading = true;
 		nodesError = '';
 		try {
-			const res = await api.getSwarmNodes();
+			const res = await api.getSwarmNodes(orgId);
 			if (res.error) nodesError = res.error.message;
 			else nodes = res.data ?? [];
 		} catch (e) {
@@ -128,7 +137,7 @@
 		joinTokensLoading = true;
 		joinTokensError = '';
 		try {
-			const res = await api.getSwarmJoinTokens();
+			const res = await api.getSwarmJoinTokens(orgId);
 			if (res.error) joinTokensError = res.error.message;
 			else joinTokens = res.data ?? null;
 		} catch (e) {
@@ -148,8 +157,10 @@
 
 	onMount(() => {
 		openStream();
-		loadNodes();
-		loadJoinTokens();
+		if (canInfraRead) {
+			loadNodes();
+			loadJoinTokens();
+		}
 	});
 
 	onDestroy(() => {
@@ -170,6 +181,14 @@
 	}
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canInfraRead}
+	message="You need the 'View infrastructure' permission to access this page."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if canInfraRead}
 <div class="infra-page">
 
 	<div class="page-toolbar">
@@ -437,6 +456,7 @@
 		{/if}
 	</div>
 </div>
+{/if}
 
 <style>
 	.infra-page { display: flex; flex-direction: column; gap: 20px; }

@@ -7,8 +7,8 @@
 	import { projectStore } from '$lib/stores/project.store';
 	import {
 		ArrowLeft, Settings2, Calendar, FolderOpen,
-		Trash2, AlertTriangle, Loader2, X, RefreshCw,
-		Layers, Network, HardDrive, Globe
+		Trash2, AlertTriangle, Loader2, X,
+		Layers, Network, HardDrive, Globe, ChevronDown, ChevronRight
 	} from '@lucide/svelte';
 	import type { Project, Service } from '$lib/api/types';
 
@@ -35,27 +35,36 @@
 	let deleteError  = $state('');
 	let showConfirm  = $state(false);
 
+	// Expandable service rows
+	let expandedServices = $state(new Set<string>());
+
+	function toggleService(id: string) {
+		const next = new Set(expandedServices);
+		if (next.has(id)) next.delete(id); else next.add(id);
+		expandedServices = next;
+	}
+
 	onMount(async () => {
 		if (!orgId || !projectId) { loadError = 'Project not found.'; loading = false; return; }
 
-		const [projRes, svcRes, netRes, volRes] = await Promise.all([
+		const [projRes, svcRes, netRes] = await Promise.all([
 			api.getProject(orgId, projectId),
 			api.getServices(projectId),
 			api.getNetworks(projectId),
-			api.get<{ id: string }[]>(`/projects/${projectId}/volumes`),
 		]);
 
 		if (projRes.error) { loadError = projRes.error.message; loading = false; return; }
 		project  = projRes.data ?? null;
 		services = svcRes.data ?? [];
 		networkCount = (netRes.data ?? []).length;
-		volumeCount  = (volRes.data ?? []).length;
 
-		// Domains live per-service; sum across all services
-		const domCounts = await Promise.all(
-			services.map(s => api.getDomains(s.id))
-		);
-		domainCount = domCounts.reduce((sum, r) => sum + (r.data?.length ?? 0), 0);
+		// Volumes and domains are per-service; sum across all
+		const [volResults, domResults] = await Promise.all([
+			Promise.all(services.map(s => api.getVolumes(s.id))),
+			Promise.all(services.map(s => api.getDomains(s.id))),
+		]);
+		volumeCount = volResults.reduce((sum, r) => sum + (r.data?.length ?? 0), 0);
+		domainCount = domResults.reduce((sum, r) => sum + (r.data?.length ?? 0), 0);
 
 		loading = false;
 	});
@@ -76,7 +85,6 @@
 			deleting = false;
 			return;
 		}
-		// Remove from store and navigate away
 		projectStore.setProjects(
 			$projectStore.projects.filter(p => p.id !== projectId)
 		);
@@ -84,6 +92,7 @@
 	}
 </script>
 
+<div class="settings-scroll">
 <div class="settings-page">
 	<!-- Header -->
 	<div class="page-header">
@@ -167,13 +176,61 @@
 					<span class="resource-label">Domain{domainCount !== 1 ? 's' : ''}</span>
 				</div>
 			</div>
+
 			{#if services.length > 0}
 				<div class="service-list">
 					{#each services as svc}
-						<div class="service-row">
-							<span class="service-name">{svc.name}</span>
-							<span class="service-type">{svc.type}</span>
-							<span class="service-status" class:running={svc.status === 'running'}>{svc.status}</span>
+						{@const expanded = expandedServices.has(svc.id)}
+						<div class="service-item" class:expanded>
+							<button class="service-header" onclick={() => toggleService(svc.id)}>
+								<span class="chevron-wrap">
+									{#if expanded}
+										<ChevronDown size={12} />
+									{:else}
+										<ChevronRight size={12} />
+									{/if}
+								</span>
+								<span class="service-name">{svc.name}</span>
+								<span class="service-type">{svc.type}</span>
+								<span class="service-status" class:running={svc.status === 'running'}>{svc.status}</span>
+							</button>
+
+							{#if expanded}
+								<div class="service-details">
+									{#if svc.image}
+										<div class="detail-row">
+											<span class="detail-key">Image</span>
+											<code class="detail-val">{svc.image}</code>
+										</div>
+									{/if}
+									{#if svc.git_repo_url}
+										<div class="detail-row">
+											<span class="detail-key">Repository</span>
+											<code class="detail-val">{svc.git_repo_url}</code>
+										</div>
+										<div class="detail-row">
+											<span class="detail-key">Branch</span>
+											<code class="detail-val">{svc.git_branch || 'main'}</code>
+										</div>
+									{/if}
+									{#if svc.ports?.length > 0}
+										<div class="detail-row">
+											<span class="detail-key">Ports</span>
+											<span class="detail-val">{svc.ports.join(', ')}</span>
+										</div>
+									{/if}
+									{#if svc.directory_path}
+										<div class="detail-row">
+											<span class="detail-key">Directory</span>
+											<code class="detail-val">{svc.directory_path}</code>
+										</div>
+									{/if}
+									<div class="detail-row">
+										<span class="detail-key">Service ID</span>
+										<code class="detail-val dim">{svc.id}</code>
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -198,6 +255,7 @@
 			</div>
 		</section>
 	{/if}
+</div>
 </div>
 
 <!-- Delete confirmation modal -->
@@ -270,6 +328,12 @@
 <style>
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 	@keyframes spin { to { transform: rotate(360deg); } }
+
+	/* Scroll container — fills main-content (overflow: hidden) and scrolls internally */
+	.settings-scroll {
+		height: 100%;
+		overflow-y: auto;
+	}
 
 	.settings-page {
 		max-width: 720px;
@@ -416,16 +480,36 @@
 		overflow: hidden;
 	}
 
-	.service-row {
-		display: grid;
-		grid-template-columns: 1fr auto auto;
-		align-items: center;
-		gap: 12px;
-		padding: 9px 14px;
-		font-size: 13px;
+	.service-item {
 		border-bottom: 1px solid var(--border);
 	}
-	.service-row:last-child { border-bottom: none; }
+	.service-item:last-child { border-bottom: none; }
+
+	.service-header {
+		width: 100%;
+		display: grid;
+		grid-template-columns: 20px 1fr auto auto;
+		align-items: center;
+		gap: 10px;
+		padding: 9px 14px;
+		font-size: 13px;
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		text-align: left;
+		transition: background 0.12s;
+		font-family: var(--font-sans);
+	}
+	.service-header:hover { background: var(--bg-elevated); }
+	.service-item.expanded > .service-header { background: var(--bg-elevated); }
+
+	.chevron-wrap {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: var(--text-dim, var(--text-muted));
+		flex-shrink: 0;
+	}
 
 	.service-name { color: var(--text-primary); font-weight: 500; }
 	.service-type { color: var(--text-muted); font-size: 11px; text-transform: capitalize; }
@@ -441,6 +525,37 @@
 		background: #dcfce7;
 		color: #15803d;
 	}
+
+	/* Expanded detail panel */
+	.service-details {
+		border-top: 1px solid var(--border);
+		background: var(--bg-base);
+		padding: 10px 14px 10px 44px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.detail-row {
+		display: grid;
+		grid-template-columns: 100px 1fr;
+		gap: 12px;
+		align-items: baseline;
+		font-size: 12px;
+	}
+
+	.detail-key {
+		color: var(--text-dim, var(--text-muted));
+		font-weight: 500;
+		flex-shrink: 0;
+	}
+
+	.detail-val {
+		color: var(--text-secondary, var(--text-primary));
+		font-family: var(--font-mono, monospace);
+		word-break: break-all;
+	}
+	.detail-val.dim { color: var(--text-dim, var(--text-muted)); font-size: 11px; }
 
 	/* Danger zone */
 	.danger-card { border-color: #fecaca; }
@@ -611,5 +726,6 @@
 		.resource-grid { grid-template-columns: repeat(2, 1fr); }
 		.danger-row { flex-direction: column; }
 		.info-row { grid-template-columns: 120px 1fr; }
+		.detail-row { grid-template-columns: 80px 1fr; }
 	}
 </style>

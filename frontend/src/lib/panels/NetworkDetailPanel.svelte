@@ -3,7 +3,7 @@
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
-	import { can } from '$lib/auth/permissions';
+	import { can, permProject } from '$lib/auth/permissions';
 	import { Network, Trash2, AlertTriangle, Copy, Check } from '@lucide/svelte';
 
 	interface Props {
@@ -14,7 +14,8 @@
 
 	let { networkId, projectId, onDeleted }: Props = $props();
 
-	let canNetworkWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], 'network:write'));
+	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let canNetworkWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], permProject(orgId, projectId, 'network', 'write')));
 
 	interface NetworkDetail {
 		id: string;

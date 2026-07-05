@@ -157,7 +157,7 @@ async fn trigger_deploy(
     State(state): State<AppState>,
     body: Option<Json<DeployBody>>,
 ) -> Result<(StatusCode, Json<ApiResponse<Deployment>>), ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
     let source_ref = body.map(|b| b.0.source_ref).unwrap_or_else(default_ref);
     let triggered_by = auth.email.clone();
@@ -193,7 +193,7 @@ async fn trigger_deploy(
     });
 
     crate::middleware::audit::write_audit_log(
-        &state.db, Some(auth.user_id), "trigger_deployment",
+        &state.db, &auth, "trigger_deployment",
         Some("deployment"), Some(deployment_id), None,
         Some(serde_json::json!({ "service_id": service_id, "source_ref": source_ref_log })),
     ).await;
@@ -293,7 +293,7 @@ async fn stop_service(
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT type::text, COALESCE(directory_path, '') FROM services WHERE id = $1",
@@ -349,7 +349,7 @@ async fn restart_service(
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT type::text, COALESCE(directory_path, '') FROM services WHERE id = $1",
@@ -458,7 +458,7 @@ async fn redeploy_service(
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<ApiResponse<Deployment>>), ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:deploy").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
     let source_ref = "manual".to_string();
     let triggered_by = auth.email.clone();
@@ -530,7 +530,7 @@ async fn upsert_env(
     State(state): State<AppState>,
     Json(body): Json<EnvVarRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<EnvVarResponse>>), ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:write").await.map_err(ApiAppError)?;
     if body.key.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("key is required".to_string())));
     }
@@ -556,7 +556,7 @@ async fn bulk_env_put(
     State(state): State<AppState>,
     Json(items): Json<Vec<EnvVarRequest>>,
 ) -> Result<Json<ApiResponse<Vec<EnvVarResponse>>>, ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:write").await.map_err(ApiAppError)?;
     apply_bulk(&state, service_id, items).await
 }
 
@@ -566,7 +566,7 @@ async fn bulk_env_post(
     State(state): State<AppState>,
     Json(body): Json<BulkEnvBody>,
 ) -> Result<Json<ApiResponse<Vec<EnvVarResponse>>>, ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:write").await.map_err(ApiAppError)?;
     apply_bulk(&state, service_id, body.envs).await
 }
 
@@ -601,7 +601,7 @@ async fn delete_env(
     Path((service_id, env_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth.user_id, service_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth.user_id, service_id, "service:write").await.map_err(ApiAppError)?;
     let n = sqlx::query("DELETE FROM service_envs WHERE id = $1 AND service_id = $2")
         .bind(env_id).bind(service_id)
         .execute(&state.db).await

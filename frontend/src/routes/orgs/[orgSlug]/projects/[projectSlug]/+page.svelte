@@ -13,7 +13,7 @@
 	import { subscribeToTopology } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Topology, MqttPayload } from '$lib/api/types';
-	import { isAdminRole, can, hasProjectAccess, hasProjectEditAccess } from '$lib/auth/permissions';
+	import { isAdminRole, hasProjectAccess, hasProjectEditAccess } from '$lib/auth/permissions';
 
 	import ServiceNode from '$lib/flows/ServiceNode.svelte';
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
@@ -42,10 +42,10 @@
 	let memberLoaded = $derived($orgStore.membershipLoaded ?? false);
 
 	// Admins/owners always have full access.
-	// Regular members need either an org-level project permission or a
-	// project-scoped permission (orgs:<projectId>:view/deploy/manage).
-	let canViewProject = $derived(hasProjectAccess(myRole, myPerms, projectId));
-	let canEditProject = $derived(hasProjectEditAccess(myRole, myPerms, projectId));
+	// Regular members need either an org-level projects:read permission or a
+	// project-scoped shipyard:<orgId>:<projectId>:* permission.
+	let canViewProject = $derived(hasProjectAccess(myRole, myPerms, orgId, projectId));
+	let canEditProject = $derived(hasProjectEditAccess(myRole, myPerms, orgId, projectId));
 
 	let isLoading = $state(true);
 	let error = $state<string | null>(null);
@@ -97,6 +97,7 @@
 				props: {
 					domainId,
 					serviceId: svcId,
+					projectId,
 					onDeleted: () => {
 						uiStore.popPanel();
 						syncTopology(orgId, projectId);

@@ -342,7 +342,7 @@ async fn import_compose(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth.user_id),
+        &auth,
         "import_compose",
         Some("service"),
         Some(root_id),

@@ -2,6 +2,8 @@
 	import { api } from '$lib/api/client';
 	import { authStore } from '$lib/stores/auth.store';
 	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import {
 		UserPlus, Shield, Trash2, Crown, Eye, ChevronDown,
 		Loader2, AlertCircle, Check, X, Clock, SlidersHorizontal,
@@ -18,14 +20,28 @@
 	let orgId         = $derived($orgStore.activeOrg?.id ?? '');
 	let currentUserId = $derived($authStore.user?.id ?? '');
 
+	// Permission check using the already-loaded membership from the org layout.
+	let myMembership    = $derived($orgStore.myMembership);
+	let membershipRole  = $derived(myMembership?.role ?? null);
+	let membershipPerms = $derived(myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	// read, invite, or manage all imply the user can see the member list.
+	let canViewMembers = $derived(
+		can(membershipRole, membershipPerms, perm(orgId, 'members', 'read')) ||
+		can(membershipRole, membershipPerms, perm(orgId, 'members', 'invite')) ||
+		can(membershipRole, membershipPerms, perm(orgId, 'members', 'manage'))
+	);
+
 	// ── Members ───────────────────────────────────────────────────────
 	let members        = $state<OrgMember[]>([]);
 	let loadingMembers = $state(true);
 	let membersError   = $state('');
 
-	let myRole    = $derived(members.find(m => m.user_id === currentUserId)?.role ?? 'viewer');
+	let myRole    = $derived(members.find(m => m.user_id === currentUserId)?.role ?? membershipRole ?? 'viewer');
 	let canManage = $derived(myRole === 'owner' || myRole === 'admin');
 	let isOwner   = $derived(myRole === 'owner');
+	// Invite button is visible for admins/owners AND members with explicit members:invite perm.
+	let canInvite = $derived(can(membershipRole, membershipPerms, perm(orgId, 'members', 'invite')));
 
 	// ── Projects (for project-assignment picker) ──────────────────────
 	let projects        = $state<Project[]>([]);
@@ -108,7 +124,7 @@
 			members = res.data;
 			const myMember = res.data.find(m => m.user_id === currentUserId);
 			const role = myMember?.role ?? 'viewer';
-			if (role === 'owner' || role === 'admin') {
+			if (role === 'owner' || role === 'admin' || canInvite) {
 				loadInvitations(id);
 				loadProjects(id);
 			}
@@ -189,9 +205,10 @@
 		members = members.map(m => m.user_id === userId ? { ...m, permissions: perms } : m);
 	}
 
-	// Wait for orgId from layout before loading
+	// Wait for membership to be loaded and confirmed before fetching the list.
 	$effect(() => {
-		if (orgId) loadMembers(orgId);
+		if (orgId && membershipLoaded && canViewMembers) loadMembers(orgId);
+		else if (membershipLoaded && !canViewMembers) loadingMembers = false;
 	});
 
 	// Reload member list when someone accepts an invitation (MQTT push)
@@ -206,24 +223,30 @@
 	});
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canViewMembers}
+	message="You need the 'View members' permission to see this page."
+	onDismiss={() => history.back()}
+/>
+
 <div class="members-page">
 
 	<!-- ── Invite button ───────────────────────────────────────────── -->
-	{#if canManage}
-		<div class="invite-bar">
-			<div class="invite-bar-text">
-				<h2 class="invite-bar-title">Members</h2>
-				<p class="invite-bar-desc">Manage who has access to this organization.</p>
-			</div>
+	<div class="invite-bar">
+		<div class="invite-bar-text">
+			<h2 class="invite-bar-title">Members</h2>
+			<p class="invite-bar-desc">Manage who has access to this organization.</p>
+		</div>
+		{#if canInvite}
 			<button class="btn-invite-open" onclick={() => (showInvitePanel = true)}>
 				<UserPlus size={14} />
 				Invite Member
 			</button>
-		</div>
-	{/if}
+		{/if}
+	</div>
 
 	<!-- ── Pending Invitations ─────────────────────────────────────── -->
-	{#if canManage}
+	{#if canInvite}
 		<section class="settings-section">
 			<div class="section-header">
 				<div class="section-icon"><Clock size={16} /></div>
@@ -436,6 +459,7 @@
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 
 	.members-page { display: flex; flex-direction: column; gap: 20px; }
+
 
 	/* ── Invite bar ── */
 	.invite-bar {

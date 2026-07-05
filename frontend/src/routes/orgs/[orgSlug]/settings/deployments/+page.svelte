@@ -8,6 +8,17 @@
 	} from '@lucide/svelte';
 	import api from '$lib/api/client';
 	import type { AdminDeploymentsResponse, AdminDeploymentRow, AdminDeploymentStats } from '$lib/api/types';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+
+	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole   = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canDeploymentsRead  = $derived(can(myRole, myPerms, perm(orgId, 'deployments', 'read')));
+	let canDeploymentsWrite = $derived(can(myRole, myPerms, perm(orgId, 'deployments', 'write')));
+	let canDeploymentsAny   = $derived(canDeploymentsRead || canDeploymentsWrite);
 
 	// ─── State ────────────────────────────────────────────────────────────────
 	let response   = $state<AdminDeploymentsResponse | null>(null);
@@ -34,7 +45,7 @@
 		else refreshing = true;
 		error = '';
 		try {
-			const res = await api.listAllDeployments({
+			const res = await api.listAllDeployments(orgId, {
 				status:   statusFilter || undefined,
 				page:     currentPage,
 				per_page: PER_PAGE,
@@ -51,15 +62,17 @@
 
 	// ─── Load parallelism setting ──────────────────────────────────────────────
 	async function loadParallelism() {
-		const res = await api.get<{ max_parallel_deployments?: number }>('/settings');
+		if (!orgId) return;
+		const res = await api.get<{ max_parallel_deployments?: number }>(`/settings/deployments?org_id=${orgId}`);
 		if (res.data) maxParallel = res.data.max_parallel_deployments ?? 0;
 	}
 
 	async function saveParallelism() {
+		if (!canDeploymentsWrite || !orgId) return;
 		savingParallel = true;
 		parallelError = '';
 		try {
-			const res = await api.put('/settings', { max_parallel_deployments: maxParallel ?? 0 });
+			const res = await api.put(`/settings/deployments?org_id=${orgId}`, { max_parallel_deployments: maxParallel ?? 0 });
 			if (res.error) parallelError = res.error.message;
 			else { savedParallel = true; setTimeout(() => (savedParallel = false), 3000); }
 		} finally {
@@ -68,8 +81,10 @@
 	}
 
 	onMount(() => {
-		load();
-		loadParallelism();
+		if (canDeploymentsAny) {
+			load();
+			loadParallelism();
+		}
 	});
 
 	// Auto-refresh every 10s when there are running/queued deployments
@@ -133,6 +148,14 @@
 	let totalPages = $derived(Math.ceil((response?.total ?? 0) / PER_PAGE));
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canDeploymentsAny}
+	message="You need the 'View deployments' permission to access this page."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if canDeploymentsAny}
 <div class="page">
 	<!-- ── Header ── -->
 	<div class="page-header">
@@ -282,6 +305,7 @@
 		{/if}
 	{/if}
 </div>
+{/if}
 
 <style>
 	.page { display: flex; flex-direction: column; gap: 16px; }

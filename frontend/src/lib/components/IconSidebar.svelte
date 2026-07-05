@@ -9,7 +9,7 @@
 	import { toastStore } from '$lib/stores/toast.store';
 	import { api } from '$lib/api/client';
 	import { clearAuthCookies } from '$lib/auth/cookies';
-	import { isAdminRole } from '$lib/auth/permissions';
+	import { can, perm } from '$lib/auth/permissions';
 
 	interface Props {
 		orgSlug: string;
@@ -41,10 +41,12 @@
 	let menuOpen = $state(false);
 
 	let userEmail  = $derived($authStore.user?.email ?? '');
-	let myRole     = $derived($orgStore.myMembership?.role ?? '');
-	let initials   = $derived(userEmail ? userEmail.slice(0, 1).toUpperCase() : 'U');
-	let canUpdate  = $derived(isAdminRole(myRole) || myRole === 'owner');
-	let hasUpdate  = $derived($versionStore.info?.update_available ?? false);
+	let myRole    = $derived($orgStore.myMembership?.role ?? '');
+	let myPerms   = $derived($orgStore.myMembership?.permissions ?? []);
+	let orgId     = $derived($orgStore.activeOrg?.id ?? '');
+	let initials  = $derived(userEmail ? userEmail.slice(0, 1).toUpperCase() : 'U');
+	let canUpdate = $derived(can(myRole as import('$lib/api/types').MemberRole, myPerms, perm(orgId, 'system', 'update')));
+	let hasUpdate = $derived($versionStore.info?.update_available ?? false);
 	let updating   = $derived($versionStore.updating);
 
 	const ROLE_LABELS: Record<string, string> = {

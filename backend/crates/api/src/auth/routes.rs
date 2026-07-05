@@ -258,9 +258,10 @@ async fn login(
         state.config.auth.refresh_token_expiry,
     ).await;
 
-    crate::middleware::audit::write_audit_log(
+    crate::middleware::audit::write_audit_log_user(
         &state.db,
-        Some(user.id),
+        user.id,
+        &user.email,
         "login",
         Some("user"),
         Some(user.id),

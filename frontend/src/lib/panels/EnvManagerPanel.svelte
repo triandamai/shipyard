@@ -3,7 +3,7 @@
 	import { Eye, EyeOff, Plus, Trash2, Save, Code } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
-	import { can } from '$lib/auth/permissions';
+	import { can, permProject } from '$lib/auth/permissions';
 	import type { ServiceEnv } from '$lib/api/types';
 
 	interface Props {
@@ -14,7 +14,8 @@
 
 	let { serviceId, projectId, serviceName = 'Service' }: Props = $props();
 
-	let canEnvWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], 'env:write'));
+	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let canEnvWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], permProject(orgId, projectId, 'env', 'write')));
 
 	// ── State ────────────────────────────────────────────────────────
 	type Mode = 'list' | 'raw';

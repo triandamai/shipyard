@@ -205,47 +205,74 @@ fn validate_role(role: &str) -> Result<(), ApiAppError> {
     }
 }
 
+/// Validate org-level permission strings.
+/// Accepts the new `shipyard:<org_id>:<resource>:<action>` format.
 fn validate_permissions(perms: &[String]) -> Result<(), ApiAppError> {
-    const VALID_PERMISSIONS: &[&str] = &[
-        "app:org:settings:read",
-        "app:org:settings:write",
-        "app:org:members:read",
-        "app:org:members:invite",
-        "app:org:members:manage",
-        "app:project:read",
-        "app:project:write",
-        "app:project:delete",
-        "app:project:service:read",
-        "app:project:service:write",
-        "app:project:service:deploy",
-        "app:project:service:delete",
-        "app:project:volume:read",
-        "app:project:volume:write",
-        "app:project:network:read",
-        "app:project:network:write",
-        "app:project:domain:read",
-        "app:project:domain:write",
-    ];
     for p in perms {
-        if !VALID_PERMISSIONS.contains(&p.as_str()) {
-            return Err(ApiAppError(AppError::Validation(format!(
-                "Unknown permission: '{}'",
-                p
-            ))));
-        }
+        crate::middleware::rbac::validate_permission_string(p)
+            .map_err(ApiAppError)?;
     }
     Ok(())
 }
 
-fn validate_project_permissions(perms: &[String]) -> Result<(), ApiAppError> {
-    const VALID: &[&str] = &["view", "deploy", "manage"];
-    for p in perms {
-        if !VALID.contains(&p.as_str()) {
-            return Err(ApiAppError(AppError::Validation(format!(
-                "Unknown project permission '{}'. Valid values: view, deploy, manage",
-                p
-            ))));
+/// Expand project permission shorthand (view/deploy/manage) into the full
+/// `shipyard:<org_id>:<project_id>:<resource>:<action>` strings stored in DB.
+///
+/// The frontend sends shorthand for UX simplicity; expansion happens here so
+/// the DB always stores canonical permission strings.
+pub fn expand_project_permissions(
+    org_id: Uuid,
+    project_id: Uuid,
+    shorthand: &[String],
+) -> Vec<String> {
+    let base = format!("shipyard:{org_id}:{project_id}:");
+    let mut out: Vec<String> = Vec::new();
+
+    // view is implied by deploy and manage, so always include it
+    let has_view   = shorthand.iter().any(|s| s == "view" || s == "deploy" || s == "manage");
+    let has_deploy = shorthand.iter().any(|s| s == "deploy" || s == "manage");
+    let has_manage = shorthand.iter().any(|s| s == "manage");
+
+    if has_view {
+        out.push(format!("{base}project:view"));
+        out.push(format!("{base}service:view"));
+    }
+    if has_deploy {
+        out.push(format!("{base}service:deploy"));
+    }
+    if has_manage {
+        out.push(format!("{base}project:manage"));
+        out.push(format!("{base}service:write"));
+        out.push(format!("{base}service:delete"));
+        out.push(format!("{base}env:read"));
+        out.push(format!("{base}env:write"));
+        out.push(format!("{base}domain:write"));
+        out.push(format!("{base}volume:write"));
+        out.push(format!("{base}network:write"));
+    }
+
+    // Also pass through any already-expanded shipyard: strings unchanged
+    for p in shorthand {
+        if p.starts_with("shipyard:") && !out.contains(p) {
+            out.push(p.clone());
         }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Validate project permission assignments — accepts either shorthand
+/// (view/deploy/manage) or already-expanded shipyard: strings.
+fn validate_project_permissions(perms: &[String]) -> Result<(), ApiAppError> {
+    for p in perms {
+        if p == "view" || p == "deploy" || p == "manage" {
+            continue; // shorthand — valid
+        }
+        // Full shipyard: string — validate structurally
+        crate::middleware::rbac::validate_permission_string(p)
+            .map_err(ApiAppError)?;
     }
     Ok(())
 }
@@ -320,6 +347,7 @@ async fn apply_project_assignments(
     };
 
     for assignment in assignments {
+        let expanded = expand_project_permissions(org_id, assignment.project_id, &assignment.permissions);
         sqlx::query(
             r#"
             INSERT INTO project_members (id, project_id, org_id, user_id, permissions, invited_by, created_at)
@@ -332,7 +360,7 @@ async fn apply_project_assignments(
         .bind(assignment.project_id)
         .bind(org_id)
         .bind(user_id)
-        .bind(&assignment.permissions)
+        .bind(&expanded)
         .bind(invited_by)
         .execute(&mut **tx)
         .await
@@ -512,7 +540,7 @@ async fn get_my_membership(
                         FROM org_member_permissions p
                         WHERE p.org_id = m.org_id AND p.user_id = m.user_id
                         UNION ALL
-                        SELECT 'orgs:' || pm.project_id::text || ':' || proj_perm AS perm
+                        SELECT proj_perm AS perm
                         FROM project_members pm,
                              LATERAL UNNEST(pm.permissions) AS proj_perm
                         WHERE pm.org_id = m.org_id AND pm.user_id = m.user_id
@@ -549,7 +577,13 @@ async fn list_members(
     Path(org_id): Path<Uuid>,
     Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<Vec<MemberResponse>>>, ApiAppError> {
-    require_member(&state.db, org_id, auth.user_id).await?;
+    // members:read, members:invite, and members:manage all grant list access.
+    let can_read   = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:members:read")).await.is_ok();
+    let can_invite = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:members:invite")).await.is_ok();
+    let can_manage = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:members:manage")).await.is_ok();
+    if !can_read && !can_invite && !can_manage {
+        return Err(ApiAppError(AppError::Forbidden(format!("User '{}' cannot list members of org '{}'", auth.user_id, org_id))));
+    }
 
     let per_page = pagination.per_page as i64;
     let offset = ((pagination.page.saturating_sub(1)) as i64) * per_page;
@@ -673,7 +707,7 @@ async fn invite_member(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth.user_id),
+        &auth,
         "invite_member",
         Some("org"),
         Some(org_id),
@@ -835,7 +869,7 @@ async fn set_member_permissions(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth.user_id),
+        &auth,
         "set_member_permissions",
         Some("org"),
         Some(org_id),
@@ -1004,7 +1038,10 @@ async fn list_audit_logs(
     Path(org_id): Path<Uuid>,
     Query(params): Query<AuditCursorParams>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_admin(&state.db, org_id, auth.user_id).await?;
+    let perm = format!("shipyard:{org_id}:audit:read");
+    crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)?;
 
     let limit = (params.limit.unwrap_or(50) as i64).clamp(1, 200);
     // Fetch one extra row to detect whether a next page exists.
@@ -1162,8 +1199,9 @@ async fn set_member_projects(
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // Insert new assignments
+    // Insert new assignments — expand shorthand to full shipyard: strings
     for assignment in &body.assignments {
+        let expanded = expand_project_permissions(org_id, assignment.project_id, &assignment.permissions);
         sqlx::query(
             r#"
             INSERT INTO project_members (id, project_id, org_id, user_id, permissions, invited_by, created_at)
@@ -1174,7 +1212,7 @@ async fn set_member_projects(
         .bind(assignment.project_id)
         .bind(org_id)
         .bind(target_user_id)
-        .bind(&assignment.permissions)
+        .bind(&expanded)
         .bind(auth.user_id)
         .execute(&mut *tx)
         .await

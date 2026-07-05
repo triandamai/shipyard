@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
-	import { PERMISSION_GROUPS } from '$lib/api/types';
+	import { PERMISSION_GROUPS, buildOrgPermission } from '$lib/api/types';
 	import type { MemberRole, Project, ProjectAssignment } from '$lib/api/types';
 	import {
 		Mail, ChevronDown, Check, Lock, Folder, FolderOpen,
@@ -115,7 +115,7 @@
 			orgId,
 			email.trim(),
 			role,
-			[...permissions],
+			[...permissions].map(suffix => buildOrgPermission(orgId, suffix)),
 			buildAssignments()
 		);
 

@@ -3,18 +3,20 @@
 	import { Globe, Trash2, AlertTriangle, Check, X, RefreshCw, ExternalLink, Shield, ShieldOff } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
-	import { can } from '$lib/auth/permissions';
+	import { can, permProject } from '$lib/auth/permissions';
 	import type { Domain, DnsCheckResult } from '$lib/api/types';
 
 	interface Props {
-		domainId:  string;
-		serviceId: string;
+		domainId:   string;
+		serviceId:  string;
+		projectId:  string;
 		onDeleted?: () => void;
 	}
 
-	let { domainId, serviceId, onDeleted }: Props = $props();
+	let { domainId, serviceId, projectId, onDeleted }: Props = $props();
 
-	let canDomainWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], 'domain:write'));
+	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let canDomainWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], permProject(orgId, projectId, 'domain', 'write')));
 
 	let domain      = $state<Domain | null>(null);
 	let loading     = $state(true);

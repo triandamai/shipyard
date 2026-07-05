@@ -12,79 +12,90 @@ export function isOwnerRole(role: MemberRole | null | undefined): boolean {
 	return role === 'owner';
 }
 
+// ── Permission string builders ────────────────────────────────────────────────
+
+/** Build an org-level permission string: `shipyard:<orgId>:<resource>:<action>` */
+export const perm = (orgId: string, resource: string, action: string): string =>
+	`shipyard:${orgId}:${resource}:${action}`;
+
+/** Build a project-level permission string: `shipyard:<orgId>:<projectId>:<resource>:<action>` */
+export const permProject = (orgId: string, projectId: string, resource: string, action: string): string =>
+	`shipyard:${orgId}:${projectId}:${resource}:${action}`;
+
+// ── Generic permission check ──────────────────────────────────────────────────
+
 /**
- * Gate for a specific action.
- * Owners and admins pass everything.
- * Members/viewers need an explicit permission string.
+ * Gate for a specific exact permission string.
+ * Owners and admins bypass all checks.
+ * Members/viewers need the string explicitly in their permissions list.
  */
 export function can(
 	role: MemberRole | null | undefined,
 	permissions: string[],
-	action:
-		| 'project:read'
-		| 'project:write'
-		| 'project:delete'
-		| 'service:delete'
-		| 'service:deploy'
-		| 'service:write'
-		| 'env:write'
-		| 'domain:write'
-		| 'volume:write'
-		| 'network:write'
-		| 'member:manage'
-		| 'member:invite'
-		| 'settings:write'
+	permission: string
 ): boolean {
 	if (!role) return false;
 	if (role === 'owner' || role === 'admin') return true;
-
-	const permMap: Record<string, string> = {
-		'project:read':   'app:project:read',
-		'project:write':  'app:project:write',
-		'project:delete': 'app:project:delete',
-		'service:delete': 'app:project:service:delete',
-		'service:deploy': 'app:project:service:deploy',
-		'service:write':  'app:project:service:write',
-		'env:write':      'app:project:service:write',
-		'domain:write':   'app:project:domain:write',
-		'volume:write':   'app:project:volume:write',
-		'network:write':  'app:project:network:write',
-		'member:manage':  'app:org:members:manage',
-		'member:invite':  'app:org:members:invite',
-		'settings:write': 'app:org:settings:write'
-	};
-
-	return permissions.includes(permMap[action] ?? '');
+	return permissions.includes(permission);
 }
 
+// ── Project-scoped helpers ────────────────────────────────────────────────────
+
 /**
- * True if the user can view a specific project.
- * Accepts org-level project:read/write OR a project-scoped permission (orgs:<id>:view/deploy/manage).
+ * True if the user can VIEW a specific project.
+ * Accepts:
+ *   - admin/owner role (bypass)
+ *   - org-level `shipyard:<orgId>:projects:read` or `projects:write`
+ *   - any project-scoped `shipyard:<orgId>:<projectId>:*` permission
  */
 export function hasProjectAccess(
 	role: MemberRole | null | undefined,
 	permissions: string[],
+	orgId: string,
 	projectId: string
 ): boolean {
 	if (!role) return false;
 	if (role === 'owner' || role === 'admin') return true;
-	if (permissions.includes('app:project:read') || permissions.includes('app:project:write')) return true;
+	if (
+		permissions.includes(perm(orgId, 'projects', 'read')) ||
+		permissions.includes(perm(orgId, 'projects', 'write'))
+	) return true;
 	if (!projectId) return false;
-	return permissions.some(p => p.startsWith(`orgs:${projectId}:`));
+	const prefix = `shipyard:${orgId}:${projectId}:`;
+	return permissions.some(p => p.startsWith(prefix));
 }
 
 /**
- * True if the user can edit (write/manage) a specific project.
- * Accepts org-level project:write OR a project-scoped manage permission (orgs:<id>:manage).
+ * True if the user can EDIT (write/manage) a specific project.
+ * Accepts:
+ *   - admin/owner role (bypass)
+ *   - org-level `shipyard:<orgId>:projects:write`
+ *   - project-scoped `shipyard:<orgId>:<projectId>:project:manage`
  */
 export function hasProjectEditAccess(
 	role: MemberRole | null | undefined,
 	permissions: string[],
+	orgId: string,
 	projectId: string
 ): boolean {
 	if (!role) return false;
 	if (role === 'owner' || role === 'admin') return true;
-	if (permissions.includes('app:project:write')) return true;
+	if (permissions.includes(perm(orgId, 'projects', 'write'))) return true;
 	if (!projectId) return false;
-	return permissions.includes(`orgs:${projectId}:manage`);
+	return permissions.includes(permProject(orgId, projectId, 'project', 'manage'));
+}
+
+/**
+ * True if the user can DEPLOY services in a specific project.
+ */
+export function hasServiceDeployAccess(
+	role: MemberRole | null | undefined,
+	permissions: string[],
+	orgId: string,
+	projectId: string
+): boolean {
+	if (!role) return false;
+	if (role === 'owner' || role === 'admin') return true;
+	if (!projectId) return false;
+	return permissions.includes(permProject(orgId, projectId, 'service', 'deploy'));
 }

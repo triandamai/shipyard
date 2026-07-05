@@ -4,8 +4,12 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { isOwnerRole } from '$lib/auth/permissions';
 	import {
-		Database, RefreshCw, Trash2, AlertTriangle, X, Loader2, ShieldOff, TableProperties
+		Database, RefreshCw, Trash2, AlertTriangle, X, Loader2, TableProperties
 	} from '@lucide/svelte';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+	import { page } from '$app/state';
+
+	let orgSlug = $derived(page.params.orgSlug ?? '');
 
 	interface DbTable {
 		name: string;
@@ -74,12 +78,14 @@
 	}
 </script>
 
-{#if !isOwner}
-	<div class="no-access">
-		<ShieldOff size={36} />
-		<p>Only organization owners can access database management.</p>
-	</div>
-{:else}
+<PermissionDeniedDialog
+	open={!isOwner}
+	message="Only organization owners can access database management."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if isOwner}
 	<div class="db-page">
 		<div class="section-header">
 			<div class="section-title">
@@ -210,17 +216,6 @@
 <style>
 	:global(.spin) { animation: spin 0.8s linear infinite; }
 	@keyframes spin { to { transform: rotate(360deg); } }
-
-	.no-access {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		height: 240px;
-		color: var(--text-muted);
-		font-size: 14px;
-	}
 
 	.db-page {
 		display: flex;

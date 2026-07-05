@@ -115,7 +115,7 @@ export interface PublicInvite {
 // ─── Permission definitions ───────────────────────────────────────────────────
 
 export interface PermissionDef {
-	id: string;
+	id: string;   // suffix only: e.g. "settings:read" — prepend "shipyard:<orgId>:" when saving
 	label: string;
 	description: string;
 }
@@ -125,26 +125,88 @@ export interface PermissionGroup {
 	permissions: PermissionDef[];
 }
 
+/**
+ * Org-level permission definitions.
+ * `id` is the suffix after `shipyard:<orgId>:` — the full string is built at save time.
+ * Use `buildOrgPermission(orgId, def.id)` to get the canonical string.
+ */
 export const PERMISSION_GROUPS: PermissionGroup[] = [
 	{
 		group: 'Organization',
 		permissions: [
-			{ id: 'app:org:settings:read',  label: 'View settings',    description: 'Read organization settings and configuration' },
-			{ id: 'app:org:settings:write', label: 'Edit settings',    description: 'Modify organization settings, domain, and Traefik config' },
-			{ id: 'app:org:members:read',   label: 'View members',     description: 'See the member list and their roles' },
-			{ id: 'app:org:members:invite', label: 'Invite members',   description: 'Send invitations to new members' },
-			{ id: 'app:org:members:manage', label: 'Manage members',   description: 'Change roles, set permissions, and remove members' },
+			{ id: 'settings:read',   label: 'View settings',   description: 'Read org settings and Traefik config' },
+			{ id: 'settings:write',  label: 'Edit settings',   description: 'Modify org settings and domain config' },
+			{ id: 'members:read',    label: 'View members',    description: 'See the member list and their roles' },
+			{ id: 'members:invite',  label: 'Invite members',  description: 'Send invitations to new members' },
+			{ id: 'members:manage',  label: 'Manage members',  description: 'Change roles, set permissions, and remove members' },
 		],
 	},
 	{
 		group: 'Projects',
 		permissions: [
-			{ id: 'app:project:read',   label: 'View projects',          description: 'See all projects and their services' },
-			{ id: 'app:project:write',  label: 'Create & edit projects', description: 'Create new projects and edit existing ones' },
-			{ id: 'app:project:delete', label: 'Delete projects',        description: 'Permanently delete projects and all their resources' },
+			{ id: 'projects:read',   label: 'View all projects', description: 'Access any project in the organization' },
+			{ id: 'projects:write',  label: 'Manage projects',   description: 'Create and delete projects' },
+		],
+	},
+	{
+		group: 'Infrastructure',
+		permissions: [
+			{ id: 'infra:read',  label: 'View infrastructure',   description: 'View system metrics, swarm nodes, and join tokens' },
+			{ id: 'infra:write', label: 'Manage infrastructure', description: 'Add/remove swarm nodes and modify cluster config' },
+		],
+	},
+	{
+		group: 'Docker',
+		permissions: [
+			{ id: 'docker:read',  label: 'View Docker',   description: 'Browse containers, services, volumes, and networks' },
+			{ id: 'docker:write', label: 'Manage Docker', description: 'Prune containers and perform destructive Docker operations' },
+		],
+	},
+	{
+		group: 'Deployments',
+		permissions: [
+			{ id: 'deployments:read',  label: 'View deployments',  description: 'View deployment history and status across all projects' },
+			{ id: 'deployments:write', label: 'Manage deployments', description: 'Configure deployment parallelism and settings' },
+		],
+	},
+	{
+		group: 'Email (SMTP)',
+		permissions: [
+			{ id: 'smtp:read',  label: 'View SMTP config',   description: 'View outgoing email configuration' },
+			{ id: 'smtp:write', label: 'Manage SMTP config', description: 'Edit and test SMTP / email settings' },
+		],
+	},
+	{
+		group: 'Audit',
+		permissions: [
+			{ id: 'audit:read', label: 'View audit logs', description: 'Read organization activity history' },
+		],
+	},
+	{
+		group: 'API Keys',
+		permissions: [
+			{ id: 'keys:read',  label: 'View API keys',   description: 'List API keys in the organization' },
+			{ id: 'keys:write', label: 'Manage API keys', description: 'Create and revoke API keys' },
+		],
+	},
+	{
+		group: 'System',
+		permissions: [
+			{ id: 'system:update', label: 'Update Shipyard', description: 'Trigger platform updates and view update logs' },
 		],
 	},
 ];
+
+/** Build a full org-level shipyard: permission string from a suffix id. */
+export function buildOrgPermission(orgId: string, suffixId: string): string {
+	return `shipyard:${orgId}:${suffixId}`;
+}
+
+/** Extract the suffix id from a full shipyard: org-level permission string. */
+export function parseOrgPermissionSuffix(orgId: string, fullPerm: string): string | null {
+	const prefix = `shipyard:${orgId}:`;
+	return fullPerm.startsWith(prefix) ? fullPerm.slice(prefix.length) : null;
+}
 
 export interface Project {
 	id: string;

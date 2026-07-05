@@ -212,7 +212,7 @@ async fn create_service(
     State(state): State<AppState>,
     Json(body): Json<CreateServiceRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Service>>), ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
 
     if body.name.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("name is required".to_string())));
@@ -290,7 +290,7 @@ async fn create_service(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth_user.user_id),
+        &auth_user,
         "create_service",
         Some("service"),
         Some(service.id),
@@ -347,7 +347,7 @@ async fn update_service(
     State(state): State<AppState>,
     Json(body): Json<UpdateServiceRequest>,
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
 
     // Fetch current service first
     let current = sqlx::query_as::<_, Service>(
@@ -421,7 +421,7 @@ async fn delete_service(
     Path((project_id, service_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:delete").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:delete").await.map_err(ApiAppError)?;
 
     // Fetch service info before deleting.
     let svc_info: Option<(String, String, String)> = sqlx::query_as(
@@ -537,7 +537,7 @@ async fn delete_service(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth_user.user_id),
+        &auth_user,
         "delete_service",
         Some("service"),
         Some(service_id),
@@ -608,7 +608,7 @@ async fn bulk_update_env(
     State(state): State<AppState>,
     Json(body): Json<Vec<EnvVarRequest>>,
 ) -> Result<Json<ApiResponse<Vec<ServiceEnvResponse>>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
     let secret_key = state.config.auth.secret_key.clone();
@@ -679,7 +679,7 @@ async fn add_env(
     State(state): State<AppState>,
     Json(body): Json<EnvVarRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<ServiceEnvResponse>>), ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
 
     if body.key.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("key is required".to_string())));
@@ -729,7 +729,7 @@ async fn delete_env(
     Path((project_id, service_id, key)): Path<(Uuid, Uuid, String)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
     let rows_affected = sqlx::query(
@@ -774,7 +774,7 @@ async fn reveal_env(
     Path((project_id, service_id, env_id)): Path<(Uuid, Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:service:write").await.map_err(ApiAppError)?;
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
     let row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
@@ -895,7 +895,7 @@ async fn rotate_webhook(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     rbac::require_project_permission(
-        &state.db, auth_user.user_id, project_id, "app:project:service:write",
+        &state.db, auth_user.user_id, project_id, "service:write",
     ).await.map_err(ApiAppError)?;
     verify_service_project(&state.db, service_id, project_id).await?;
 
@@ -1162,9 +1162,9 @@ async fn handle_exec_socket(
     let mut output = exec_handle.output;
     let mut stdin  = exec_handle.stdin;
 
-    // Write audit log (fire-and-forget)
-    crate::middleware::audit::write_audit_log(
-        &state.db, Some(user_id), "exec_container", Some("service"), Some(service_id),
+    // Write audit log (fire-and-forget) — WS path has no AuthUser, use bare variant
+    crate::middleware::audit::write_audit_log_user(
+        &state.db, user_id, "", "exec_container", Some("service"), Some(service_id),
         None, None,
     ).await;
 

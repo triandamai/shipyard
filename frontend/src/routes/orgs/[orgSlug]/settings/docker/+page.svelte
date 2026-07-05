@@ -1,10 +1,22 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+	import { page } from '$app/state';
 	import {
 		Box, Layers, HardDrive, Network, RefreshCw,
 		Search, ChevronDown, ChevronRight, Trash2
 	} from '@lucide/svelte';
+
+	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole   = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canDockerRead  = $derived(can(myRole, myPerms, perm(orgId, 'docker', 'read')));
+	let canDockerWrite = $derived(can(myRole, myPerms, perm(orgId, 'docker', 'write')));
+	let canDockerAny   = $derived(canDockerRead || canDockerWrite);
 
 	type Tab = 'containers' | 'services' | 'volumes' | 'networks';
 	let activeTab = $state<Tab>('containers');
@@ -42,27 +54,29 @@
 	let search = $state('');
 	let expanded = $state<string | null>(null);
 
+	function dockerUrl(path: string) { return `${path}?org_id=${orgId}`; }
+
 	async function loadContainers() {
 		loadingC = true;
-		const r = await api.get<ContainerSummary[]>('/admin/docker/containers');
+		const r = await api.get<ContainerSummary[]>(dockerUrl('/admin/docker/containers'));
 		if (r.data) containers = r.data;
 		loadingC = false;
 	}
 	async function loadServices() {
 		loadingS = true;
-		const r = await api.get<ServiceSummary[]>('/admin/docker/services');
+		const r = await api.get<ServiceSummary[]>(dockerUrl('/admin/docker/services'));
 		if (r.data) services = r.data;
 		loadingS = false;
 	}
 	async function loadVolumes() {
 		loadingV = true;
-		const r = await api.get<VolumeSummary[]>('/admin/docker/volumes');
+		const r = await api.get<VolumeSummary[]>(dockerUrl('/admin/docker/volumes'));
 		if (r.data) volumes = r.data;
 		loadingV = false;
 	}
 	async function loadNetworks() {
 		loadingN = true;
-		const r = await api.get<NetworkSummary[]>('/admin/docker/networks');
+		const r = await api.get<NetworkSummary[]>(dockerUrl('/admin/docker/networks'));
 		if (r.data) networks = r.data;
 		loadingN = false;
 	}
@@ -90,11 +104,12 @@
 	let pruneResult   = $state<string | null>(null);
 
 	async function pruneContainers() {
+		if (!canDockerWrite) return;
 		if (!pruneConfirm) { pruneConfirm = true; return; }
 		pruning = true;
 		pruneConfirm = false;
 		pruneResult = null;
-		const r = await api.post<{ removed: number }>('/admin/docker/containers/prune', {});
+		const r = await api.post<{ removed: number }>(dockerUrl('/admin/docker/containers/prune'), {});
 		if (r.data) {
 			pruneResult = `Removed ${r.data.removed} stopped container${r.data.removed !== 1 ? 's' : ''}.`;
 			containers = [];
@@ -149,9 +164,17 @@
 		(activeTab === 'networks'   && loadingN)
 	);
 
-	onMount(() => loadContainers());
+	onMount(() => { if (canDockerAny) loadContainers(); });
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canDockerAny}
+	message="You need the 'View Docker' permission to access this page."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if canDockerAny}
 <div class="docker-page">
 
 	<div class="toolbar">
@@ -577,6 +600,7 @@
 	{/if}
 
 </div>
+{/if}
 
 <style>
 	.docker-page { display: flex; flex-direction: column; gap: 14px; }

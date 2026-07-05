@@ -9,6 +9,7 @@
 	import { initToastHandler } from '$lib/mqtt/handlers/toast.handler';
 	import Toast from '$lib/components/Toast.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { authStore } from '$lib/stores/auth.store';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
@@ -64,13 +65,8 @@
 		}
 	});
 
-	// Redirect to /unauthorized whenever the API returns 403.
-	$effect(() => {
-		if ($authStore.forbidden) {
-			authStore.clearForbidden();
-			goto('/unauthorized');
-		}
-	});
+	// Show a dialog instead of navigating on 403.
+	// User stays on the current page; they just see the overlay.
 
 	function handleContextMenu(e: MouseEvent) {
 		// Allow right-click on input/textarea/select so users can still paste.
@@ -126,3 +122,8 @@
 {@render children()}
 <Toast />
 <CommandPalette open={$uiStore.commandPaletteOpen} onClose={() => uiStore.closeCommandPalette()} />
+<PermissionDeniedDialog
+	open={$authStore.forbidden}
+	message="You don't have permission to perform this action."
+	onDismiss={() => authStore.clearForbidden()}
+/>

@@ -19,7 +19,7 @@
 	import { deploymentStore } from '$lib/stores/deployment.store';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { orgStore } from '$lib/stores/org.store';
-	import { can } from '$lib/auth/permissions';
+	import { can, permProject } from '$lib/auth/permissions';
 	import { subscribeToService, subscribeToDeployment, subscribeToDeploymentSteps } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import EnvManagerPanel from './EnvManagerPanel.svelte';
@@ -51,9 +51,9 @@ import ExecPanel from './ExecPanel.svelte';
 	// ── Permission gates ─────────────────────────────────────────────
 	let myRole  = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms = $derived($orgStore.myMembership?.permissions ?? []);
-	let canDeploy = $derived(can(myRole, myPerms, 'service:deploy'));
-	let canWrite  = $derived(can(myRole, myPerms, 'service:write'));
-	let canDelete = $derived(can(myRole, myPerms, 'service:delete'));
+	let canDeploy = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'deploy')));
+	let canWrite  = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'write')));
+	let canDelete = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'delete')));
 
 	// ── Tabs ─────────────────────────────────────────────────────────
 	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings' | 'monitor';

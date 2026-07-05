@@ -2,13 +2,12 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
 	import { page } from '$app/stores';
 	import {
 		Globe, GitBranch, Save, Check, AlertCircle, Key, Loader2,
-		RefreshCw, Terminal, Zap, PackageOpen, Mail, Eye, EyeOff, Send
+		RefreshCw, Terminal, Zap, PackageOpen
 	} from '@lucide/svelte';
-	import SlidePanel from '$lib/components/SlidePanel.svelte';
-
 	interface PlatformSettings {
 		main_domain?: string;
 		traefik_network?: string;
@@ -20,35 +19,6 @@
 		git_bitbucket_token?: string;
 		git_webhook_secret?: string;
 		max_parallel_deployments?: number;
-		smtp_enabled?: boolean;
-		smtp_host?: string;
-		smtp_port?: number;
-		smtp_username?: string;
-		smtp_password?: string;
-		smtp_from_address?: string;
-		smtp_from_name?: string;
-		smtp_security?: string;
-	}
-
-	let showSmtpPassword = $state(false);
-
-	let smtpTestPanelOpen = $state(false);
-	let smtpTestTo      = $state('');
-	let smtpTestSubject = $state('Shipyard SMTP Test');
-	let smtpTestBody    = $state('This is a test email sent from Shipyard to verify your SMTP configuration.');
-	let smtpTesting     = $state(false);
-	let smtpTestResult  = $state<{ ok: boolean; msg: string } | null>(null);
-
-	async function testSmtp() {
-		smtpTesting = true;
-		smtpTestResult = null;
-		const res = await api.post<{ message: string }>('/admin/smtp/test', {
-			to: smtpTestTo,
-			subject: smtpTestSubject,
-			body: smtpTestBody,
-		});
-		smtpTestResult = res.error ? { ok: false, msg: res.error.message } : { ok: true, msg: res.data?.message ?? 'Test email sent' };
-		smtpTesting = false;
 	}
 
 	// ── Version info ────────────────────────────────────────────────────────────
@@ -88,7 +58,7 @@
 	let updateSource: EventSource | null = null;
 
 	function startUpdate() {
-		if (updateStatus === 'running') return;
+		if (!canUpdate || updateStatus === 'running') return;
 		updateLog = [];
 		updateStatus = 'running';
 
@@ -151,7 +121,10 @@
 		{ id: 'bitbucket', label: 'Bitbucket', host: 'bitbucket.org', tokenKey: 'git_bitbucket_token', color: '#0052CC', patHint: 'Create an App Password at bitbucket.org/account/settings/app-passwords with Repositories Read permission' },
 	];
 
-	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole   = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
+	let canUpdate = $derived(can(myRole, myPerms, perm(orgId, 'system', 'update')));
 
 	let patInputFor = $state('');
 	let patValues   = $state<Record<string, string>>({});
@@ -346,78 +319,6 @@
 			</div>
 		</section>
 
-		<!-- SMTP / Email -->
-		<section class="settings-section">
-			<div class="section-header">
-				<div class="section-icon smtp-icon"><Mail size={16} /></div>
-				<div>
-					<h2 class="section-title">Email (SMTP)</h2>
-					<p class="section-desc">Configure outgoing email for invitation links and notifications.</p>
-				</div>
-			</div>
-
-			<div class="smtp-toggle-row">
-				<label class="toggle-label">
-					<input type="checkbox" bind:checked={settings.smtp_enabled} />
-					<span class="toggle-track"></span>
-					<span class="toggle-text">{settings.smtp_enabled ? 'Enabled' : 'Disabled'}</span>
-				</label>
-			</div>
-
-			{#if settings.smtp_enabled}
-				<div class="fields-grid">
-					<div class="field">
-						<label class="field-label" for="smtp-host">SMTP Host</label>
-						<input id="smtp-host" class="field-input font-mono" type="text" bind:value={settings.smtp_host} placeholder="smtp.example.com" />
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-port">Port</label>
-						<input id="smtp-port" class="field-input font-mono" type="number" bind:value={settings.smtp_port} placeholder="587" min="1" max="65535" />
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-security">Security</label>
-						<select id="smtp-security" class="field-input" bind:value={settings.smtp_security}>
-							<option value="starttls">STARTTLS (port 587)</option>
-							<option value="tls">Implicit TLS (port 465)</option>
-							<option value="none">None (port 25)</option>
-						</select>
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-user">Username</label>
-						<input id="smtp-user" class="field-input" type="text" bind:value={settings.smtp_username} placeholder="user@example.com" autocomplete="off" />
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-pass">Password</label>
-						<div class="password-row">
-							<input
-								id="smtp-pass"
-								class="field-input"
-								type={showSmtpPassword ? 'text' : 'password'}
-								bind:value={settings.smtp_password}
-								placeholder="••••••••"
-								autocomplete="new-password"
-							/>
-							<button type="button" class="eye-btn" onclick={() => (showSmtpPassword = !showSmtpPassword)}>
-								{#if showSmtpPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-							</button>
-						</div>
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-from">From Address</label>
-						<input id="smtp-from" class="field-input" type="email" bind:value={settings.smtp_from_address} placeholder="noreply@example.com" />
-					</div>
-					<div class="field">
-						<label class="field-label" for="smtp-name">From Name</label>
-						<input id="smtp-name" class="field-input" type="text" bind:value={settings.smtp_from_name} placeholder="Shipyard" />
-					</div>
-				</div>
-				<div class="smtp-test-bar">
-					<button type="button" class="smtp-test-btn" onclick={() => { smtpTestPanelOpen = true; smtpTestResult = null; }}>
-						<Mail size={12} />Send test email
-					</button>
-				</div>
-			{/if}
-		</section>
 
 {#if saveError}
 			<div class="error-banner"><AlertCircle size={14} />{saveError}</div>
@@ -433,46 +334,8 @@
 		</div>
 	</form>
 
-{#if smtpTestPanelOpen}
-	<div class="panel-backdrop" onclick={() => (smtpTestPanelOpen = false)} role="none"></div>
-	<SlidePanel title="Send Test Email" onClose={() => (smtpTestPanelOpen = false)}>
-		<div class="smtp-panel-body">
-			<div class="smtp-panel-fields">
-				<div class="field">
-					<label class="field-label" for="test-to">To</label>
-					<input id="test-to" class="field-input" type="email" bind:value={smtpTestTo} placeholder="you@example.com" />
-				</div>
-				<div class="field">
-					<label class="field-label" for="test-subject">Subject</label>
-					<input id="test-subject" class="field-input" type="text" bind:value={smtpTestSubject} />
-				</div>
-				<div class="field">
-					<label class="field-label" for="test-body">Body</label>
-					<textarea id="test-body" class="field-input smtp-panel-textarea" bind:value={smtpTestBody} rows={5}></textarea>
-				</div>
-			</div>
-
-			{#if smtpTestResult}
-				<div class="smtp-panel-result" class:ok={smtpTestResult.ok} class:fail={!smtpTestResult.ok}>
-					{smtpTestResult.ok ? '✓' : '✗'} {smtpTestResult.msg}
-				</div>
-			{/if}
-
-			<div class="smtp-panel-actions">
-				<button class="btn btn-secondary" onclick={() => (smtpTestPanelOpen = false)}>Cancel</button>
-				<button
-					class="btn btn-primary"
-					disabled={smtpTesting || !smtpTestTo}
-					onclick={testSmtp}
-				>
-					{#if smtpTesting}<Loader2 size={13} class="spin" />Sending…{:else}<Send size={13} />Send{/if}
-				</button>
-			</div>
-		</div>
-	</SlidePanel>
-{/if}
-
 	<!-- Platform Update -->
+	{#if canUpdate}
 	<section class="settings-section update-section">
 		<div class="section-header">
 			<div class="section-icon update-icon"><PackageOpen size={16} /></div>
@@ -562,6 +425,7 @@
 			{/if}
 		</div>
 	</section>
+	{/if}
 {/if}
 
 <style>
@@ -668,53 +532,6 @@
 	.pat-oauth-link { font-size: 11px; color: var(--text-dim); margin: 0; }
 	.link-btn { background: none; border: none; padding: 0; cursor: pointer; color: var(--accent); font-size: 11px; font-family: inherit; }
 	.link-btn:hover { text-decoration: underline; }
-
-	/* ── SMTP ── */
-	.smtp-icon { background: rgba(16,185,129,0.10); color: #10B981; }
-	.smtp-toggle-row { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border); }
-	.toggle-label { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
-	.toggle-label input[type="checkbox"] { display: none; }
-	.toggle-track {
-		width: 34px; height: 18px;
-		background: var(--border);
-		border-radius: 99px;
-		position: relative;
-		transition: background 0.2s;
-		flex-shrink: 0;
-	}
-	.toggle-track::after {
-		content: '';
-		position: absolute;
-		width: 13px; height: 13px;
-		background: white;
-		border-radius: 50%;
-		top: 2.5px; left: 2.5px;
-		transition: left 0.2s;
-		box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-	}
-	.toggle-label input:checked ~ .toggle-track { background: #10B981; }
-	.toggle-label input:checked ~ .toggle-track::after { left: 18.5px; }
-	.toggle-text { font-size: 13px; color: var(--text-secondary); }
-	.password-row { display: flex; align-items: center; gap: 4px; }
-	.password-row .field-input { flex: 1; }
-	.eye-btn { background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); padding: 8px 9px; cursor: pointer; display: flex; align-items: center; transition: color var(--transition-fast); flex-shrink: 0; }
-	.eye-btn:hover { color: var(--text-primary); }
-	.smtp-test-bar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border); }
-	.smtp-test-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 12px; font-weight: 500; font-family: var(--font-sans); cursor: pointer; transition: all var(--transition-fast); }
-	.smtp-test-btn:hover:not(:disabled) { border-color: #10B981; color: #10B981; }
-	.smtp-test-btn:disabled { opacity: 0.5; cursor: default; }
-	.smtp-test-result { font-size: 12px; font-weight: 500; }
-	.smtp-test-result.ok   { color: #10B981; }
-	.smtp-test-result.fail { color: #EF4444; }
-
-	.panel-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 59; }
-	.smtp-panel-body { display: flex; flex-direction: column; gap: 16px; padding: 16px; height: 100%; }
-	.smtp-panel-fields { display: flex; flex-direction: column; gap: 14px; }
-	.smtp-panel-textarea { resize: vertical; min-height: 100px; font-family: var(--font-sans); line-height: 1.5; }
-	.smtp-panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
-	.smtp-panel-result { font-size: 12px; font-weight: 500; padding: 8px 12px; border-radius: var(--radius-sm); }
-	.smtp-panel-result.ok   { background: rgba(16,185,129,0.1); color: #10B981; border: 1px solid rgba(16,185,129,0.25); }
-	.smtp-panel-result.fail { background: rgba(239,68,68,0.08); color: #EF4444;  border: 1px solid rgba(239,68,68,0.25); }
 
 	/* ── Platform Update ── */
 	.update-section { margin-top: 8px; }

@@ -3,7 +3,7 @@
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
-	import { can } from '$lib/auth/permissions';
+	import { can, permProject } from '$lib/auth/permissions';
 	import { HardDrive, Trash2, AlertTriangle } from '@lucide/svelte';
 
 	interface Props {
@@ -14,7 +14,8 @@
 
 	let { volumeId, projectId, onDeleted }: Props = $props();
 
-	let canVolumeWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], 'volume:write'));
+	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let canVolumeWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], permProject(orgId, projectId, 'volume', 'write')));
 
 	interface VolumeDetail {
 		id: string;

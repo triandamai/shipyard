@@ -3,6 +3,16 @@
 	import { Copy, Trash2, Plus, Key, Eye, EyeOff, X, Check, Shield, AlertTriangle } from '@lucide/svelte';
 	import api from '$lib/api/client';
 	import type { ApiKeyItem, CreatedApiKey, ApiKeyScope } from '$lib/api/types';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+
+	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole   = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canKeysRead  = $derived(can(myRole, myPerms, perm(orgId, 'keys', 'read')));
+	let canKeysWrite = $derived(can(myRole, myPerms, perm(orgId, 'keys', 'write')));
 
 	// ─── State ────────────────────────────────────────────────────────────────
 	let keys = $state<ApiKeyItem[]>([]);
@@ -38,9 +48,9 @@
 		loading = true;
 		error = '';
 		try {
-			const res = await api.listApiKeys();
+			const res = await api.listApiKeys(orgId);
 			if (res.data) keys = res.data;
-			else error = res.error ?? 'Failed to load API keys';
+			else error = res.error?.message ?? 'Failed to load API keys';
 		} catch {
 			error = 'Failed to load API keys';
 		} finally {
@@ -48,7 +58,8 @@
 		}
 	}
 
-	onMount(load);
+	let canKeysAny = $derived(canKeysRead || canKeysWrite);
+	onMount(() => { if (canKeysAny) load(); else loading = false; });
 
 	// ─── Helpers ──────────────────────────────────────────────────────────────
 	function toggleScope(scope: ApiKeyScope) {
@@ -93,7 +104,7 @@
 		creating = true;
 		createError = '';
 		try {
-			const res = await api.createApiKey({
+			const res = await api.createApiKey(orgId, {
 				name: newName.trim(),
 				scopes: newScopes,
 				expires_at: newExpiry ? new Date(newExpiry).toISOString() : null,
@@ -108,7 +119,7 @@
 				newScopes = ['read'];
 				await load();
 			} else {
-				createError = res.error ?? 'Failed to create key';
+				createError = res.error?.message ?? 'Failed to create key';
 			}
 		} catch {
 			createError = 'Failed to create key';
@@ -123,7 +134,7 @@
 		revoking = keyId;
 		confirmRevoke = null;
 		try {
-			await api.revokeApiKey(keyId);
+			await api.revokeApiKey(orgId, keyId);
 			await load();
 		} catch {
 			error = 'Failed to revoke key';
@@ -133,6 +144,14 @@
 	}
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canKeysAny}
+	message="You need the 'View API keys' permission to access this page."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if canKeysAny}
 <div class="page">
 	<div class="page-header">
 		<div class="header-text">
@@ -357,6 +376,7 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <style>
 	.page {

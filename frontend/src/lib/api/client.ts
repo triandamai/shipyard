@@ -589,12 +589,12 @@ class ApiClient {
 		return this.get('/admin/version');
 	}
 
-	async getSwarmNodes(): Promise<ApiResponse<import('./types').SwarmNode[]>> {
-		return this.get('/admin/docker/nodes');
+	async getSwarmNodes(orgId: string): Promise<ApiResponse<import('./types').SwarmNode[]>> {
+		return this.get(`/admin/docker/nodes?org_id=${orgId}`);
 	}
 
-	async getSwarmJoinTokens(): Promise<ApiResponse<import('./types').SwarmJoinTokens>> {
-		return this.get('/admin/docker/swarm/join-tokens');
+	async getSwarmJoinTokens(orgId: string): Promise<ApiResponse<import('./types').SwarmJoinTokens>> {
+		return this.get(`/admin/docker/swarm/join-tokens?org_id=${orgId}`);
 	}
 
 	async triggerUpdate(): Promise<ApiResponse<{ message: string; output: string }>> {
@@ -602,26 +602,26 @@ class ApiClient {
 	}
 
 	// ─── Admin Deployments ────────────────────────────────────────────
-	async listAllDeployments(params?: { status?: string; page?: number; per_page?: number }): Promise<ApiResponse<import('./types').AdminDeploymentsResponse>> {
+	async listAllDeployments(orgId: string, params?: { status?: string; page?: number; per_page?: number }): Promise<ApiResponse<import('./types').AdminDeploymentsResponse>> {
 		const qs = new URLSearchParams();
+		qs.set('org_id', orgId);
 		if (params?.status) qs.set('status', params.status);
 		if (params?.page) qs.set('page', String(params.page));
 		if (params?.per_page) qs.set('per_page', String(params.per_page));
-		const suffix = qs.toString() ? `?${qs}` : '';
-		return this.get(`/admin/deployments${suffix}`);
+		return this.get(`/admin/deployments?${qs}`);
 	}
 
 	// ─── API Key Management ───────────────────────────────────────────
-	async listApiKeys(): Promise<ApiResponse<import('./types').ApiKeyItem[]>> {
-		return this.get('/admin/api-keys');
+	async listApiKeys(orgId: string): Promise<ApiResponse<import('./types').ApiKeyItem[]>> {
+		return this.get(`/admin/api-keys?org_id=${orgId}`);
 	}
 
-	async createApiKey(body: import('./types').CreateApiKeyRequest): Promise<ApiResponse<import('./types').CreatedApiKey>> {
-		return this.post('/admin/api-keys', body);
+	async createApiKey(orgId: string, body: import('./types').CreateApiKeyRequest): Promise<ApiResponse<import('./types').CreatedApiKey>> {
+		return this.post(`/admin/api-keys?org_id=${orgId}`, body);
 	}
 
-	async revokeApiKey(keyId: string): Promise<ApiResponse<null>> {
-		return this.delete(`/admin/api-keys/${keyId}`);
+	async revokeApiKey(orgId: string, keyId: string): Promise<ApiResponse<null>> {
+		return this.delete(`/admin/api-keys/${keyId}?org_id=${orgId}`);
 	}
 }
 

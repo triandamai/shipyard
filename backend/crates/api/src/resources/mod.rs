@@ -279,7 +279,7 @@ async fn create_domain(
     State(state): State<AppState>,
     Json(body): Json<CreateDomainRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Domain>>), ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "app:project:domain:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
     if body.hostname.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("hostname is required".to_string())));
     }
@@ -370,7 +370,7 @@ async fn delete_domain(
     Path((service_id, domain_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "app:project:domain:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
     let rows_affected = sqlx::query(
         "DELETE FROM domains WHERE id = $1 AND service_id = $2",
     )
@@ -489,7 +489,7 @@ async fn create_volume(
     State(state): State<AppState>,
     Json(body): Json<CreateVolumeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Volume>>), ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "app:project:volume:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth_user.user_id, service_id, "volume:write").await.map_err(ApiAppError)?;
     if body.name.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("name is required".to_string())));
     }
@@ -563,7 +563,7 @@ async fn delete_volume(
     Path((service_id, volume_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "app:project:volume:write").await.map_err(ApiAppError)?;
+    require_service_permission(&state.db, auth_user.user_id, service_id, "volume:write").await.map_err(ApiAppError)?;
     // Fetch first to get the volume name for Docker removal.
     let row: Option<(String,)> = sqlx::query_as::<_, (String,)>(
         "SELECT name FROM volumes WHERE id = $1 AND service_id = $2",
@@ -625,7 +625,7 @@ async fn attach_volume_to_service(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:volume:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "volume:write").await.map_err(ApiAppError)?;
     let service_id: Uuid = body["service_id"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -683,7 +683,7 @@ async fn create_project_volume(
     State(state): State<AppState>,
     Json(body): Json<CreateVolumeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Volume>>), ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:volume:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "volume:write").await.map_err(ApiAppError)?;
     if body.name.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("name is required".to_string())));
     }
@@ -748,7 +748,7 @@ async fn delete_project_volume(
     Path((project_id, volume_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:volume:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "volume:write").await.map_err(ApiAppError)?;
     let row: Option<(String, Uuid)> = sqlx::query_as::<_, (String, Uuid)>(
         "SELECT v.name, p.org_id
          FROM volumes v
@@ -840,7 +840,7 @@ async fn create_network(
     State(state): State<AppState>,
     Json(body): Json<CreateNetworkRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Network>>), ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:network:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "network:write").await.map_err(ApiAppError)?;
     if body.name.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("name is required".to_string())));
     }
@@ -912,7 +912,7 @@ async fn attach_service(
     State(state): State<AppState>,
     Json(body): Json<AttachServiceRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:network:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "network:write").await.map_err(ApiAppError)?;
     // Verify network belongs to this project
     let network_exists: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
         "SELECT TRUE FROM networks WHERE id = $1 AND project_id = $2",
@@ -992,7 +992,7 @@ async fn detach_service(
     Path((project_id, network_id, service_id)): Path<(Uuid, Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:network:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "network:write").await.map_err(ApiAppError)?;
 
     let rows = sqlx::query(
         "DELETE FROM service_networks WHERE network_id = $1 AND service_id = $2",
@@ -1024,7 +1024,7 @@ async fn delete_network(
     Path((project_id, network_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_project_permission(&state.db, auth_user.user_id, project_id, "app:project:network:write").await.map_err(ApiAppError)?;
+    require_project_permission(&state.db, auth_user.user_id, project_id, "network:write").await.map_err(ApiAppError)?;
     // Fetch the docker_network_id before deleting so we can remove it from Docker.
     let row: Option<(Option<String>,)> = sqlx::query_as::<_, (Option<String>,)>(
         "SELECT docker_network_id FROM networks WHERE id = $1 AND project_id = $2",

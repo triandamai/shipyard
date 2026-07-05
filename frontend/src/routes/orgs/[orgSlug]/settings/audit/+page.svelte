@@ -3,10 +3,18 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { ShieldCheck, RefreshCw, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { AuditLogEntry } from '$lib/api/types';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+	import { page } from '$app/state';
 
 	const LIMIT = 50;
 
+	let orgSlug = $derived(page.params.orgSlug ?? '');
 	let orgId = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole    = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms   = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canViewAudit = $derived(can(myRole, myPerms, perm(orgId, 'audit', 'read')));
 	let logs       = $state<AuditLogEntry[]>([]);
 	let loading    = $state(true);
 	let error      = $state('');
@@ -43,7 +51,7 @@
 		loading    = false;
 	}
 
-	$effect(() => { if (orgId) { cursorStack = []; loadPage(); } });
+	$effect(() => { if (orgId && canViewAudit) { cursorStack = []; loadPage(); } });
 
 	function refresh() { cursorStack = []; loadPage(); }
 
@@ -67,6 +75,14 @@
 	let hasNext = $derived(nextCursor !== null);
 </script>
 
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canViewAudit}
+	message="You need the 'View audit logs' permission to access this page."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
+
+{#if canViewAudit}
 <div class="audit-page">
 	<div class="audit-header">
 		<div class="audit-title-row">
@@ -134,6 +150,7 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <style>
 	:global(.spin) { animation: spin 0.8s linear infinite; }

@@ -190,7 +190,7 @@ async fn trigger_deploy(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth_user.user_id),
+        &auth_user,
         "trigger_deployment",
         Some("deployment"),
         Some(deployment_id),
@@ -620,7 +620,7 @@ async fn rollback_deployment(
 
     crate::middleware::audit::write_audit_log(
         &state.db,
-        Some(auth_user.user_id),
+        &auth_user,
         "rollback_deployment",
         Some("deployment"),
         Some(deployment_id),

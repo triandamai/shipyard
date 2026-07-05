@@ -24,6 +24,12 @@ use crate::cache;
 use crate::error::ApiAppError;
 use crate::AppState;
 
+/// Query param for admin routes that need per-org permission checks.
+#[derive(Debug, Deserialize)]
+struct OrgPermQuery {
+    org_id: Option<uuid::Uuid>,
+}
+
 const SETTINGS_KEYS: &[&str] = &[
     "main_domain",
     "traefik_network",
@@ -124,6 +130,8 @@ pub struct VersionInfo {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/settings", get(get_settings).put(update_settings))
+        .route("/settings/smtp", get(get_smtp_settings).put(update_smtp_settings))
+        .route("/settings/deployments", get(get_deployments_settings).put(update_deployments_settings))
         .route("/settings/traefik/static", get(get_traefik_static))
         .route("/settings/traefik/dynamic", get(list_traefik_dynamic))
         .route("/settings/traefik/dynamic/:filename", get(get_traefik_dynamic_file))
@@ -300,6 +308,82 @@ async fn update_settings(
     state.mqtt.publish_status("settings/traefik", &mqtt_payload).await.ok();
 
     get_settings(auth, State(state)).await
+}
+
+async fn require_keys_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let suffix = if write { "keys:write" } else { "keys:read" };
+    let perm = format!("shipyard:{org_id}:{suffix}");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
+async fn require_deployments_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let suffix = if write { "deployments:write" } else { "deployments:read" };
+    let perm = format!("shipyard:{org_id}:{suffix}");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
+async fn require_smtp_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let suffix = if write { "smtp:write" } else { "smtp:read" };
+    let perm = format!("shipyard:{org_id}:{suffix}");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
+async fn get_smtp_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
+    require_smtp_perm(&state.db, &auth, q.org_id, false).await?;
+    let settings = load_settings(&state).await?;
+    Ok(Json(ApiResponse::ok(settings)))
+}
+
+async fn update_smtp_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+    Json(body): Json<PlatformSettings>,
+) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
+    require_smtp_perm(&state.db, &auth, q.org_id, true).await?;
+
+    let pairs: Vec<(&str, Option<String>)> = vec![
+        ("smtp_enabled",      body.smtp_enabled.map(|v| v.to_string())),
+        ("smtp_host",         body.smtp_host.clone()),
+        ("smtp_port",         body.smtp_port.map(|v| v.to_string())),
+        ("smtp_username",     body.smtp_username.clone()),
+        ("smtp_password",     body.smtp_password.clone()),
+        ("smtp_from_address", body.smtp_from_address.clone()),
+        ("smtp_from_name",    body.smtp_from_name.clone()),
+        ("smtp_security",     body.smtp_security.clone()),
+    ];
+
+    for (key, val) in pairs {
+        if let Some(v) = val {
+            sqlx::query(
+                "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+            )
+            .bind(key)
+            .bind(Value::String(v))
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        }
+    }
+
+    cache::del(&state.redis, "settings").await;
+
+    let settings = load_settings(&state).await?;
+    Ok(Json(ApiResponse::ok(settings)))
 }
 
 /// GET /settings/traefik/static
@@ -552,17 +636,23 @@ async fn trigger_update(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM (
+             SELECT 1 FROM org_members
+             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
+             UNION ALL
+             SELECT 1 FROM org_member_permissions
+             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
+         ) t LIMIT 1",
     )
     .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if is_owner.is_none() {
+    if allowed.is_none() {
         return Err(ApiAppError(AppError::Forbidden(
-            "Only platform owners can trigger updates".to_string()
+            "Only admins or members with the system:update permission can trigger updates".to_string()
         )));
     }
 
@@ -605,17 +695,23 @@ async fn update_stream(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, ApiAppError> {
-    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    let allowed: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM (
+             SELECT 1 FROM org_members
+             WHERE user_id = $1 AND role IN ('owner', 'admin') LIMIT 1
+             UNION ALL
+             SELECT 1 FROM org_member_permissions
+             WHERE user_id = $1 AND permission LIKE 'shipyard:%:system:update' LIMIT 1
+         ) t LIMIT 1",
     )
     .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if is_owner.is_none() {
+    if allowed.is_none() {
         return Err(ApiAppError(AppError::Forbidden(
-            "Only platform owners can trigger updates".to_string()
+            "Only admins or members with the system:update permission can trigger updates".to_string()
         )));
     }
 
@@ -919,64 +1015,102 @@ async fn system_info_stream(
 
 // ── Docker engine routes ──────────────────────────────────────────────────────
 
+async fn require_docker_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let perm = format!("shipyard:{org_id}:docker:read");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
+async fn require_docker_write(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let perm = format!("shipyard:{org_id}:docker:write");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
+async fn require_infra_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let perm = format!("shipyard:{org_id}:infra:read");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
+        .await
+        .map_err(ApiAppError)
+}
+
 async fn docker_containers(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<ContainerSummary>>>, ApiAppError> {
+    require_docker_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.list_all_containers().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
 }
 
 async fn docker_prune_containers(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_docker_write(&state.db, &auth, q.org_id).await?;
     let removed = state.docker.prune_containers().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
 }
 
 async fn docker_services(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<ServiceSummary>>>, ApiAppError> {
+    require_docker_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.list_all_services().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
 }
 
 async fn docker_volumes(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<VolumeSummary>>>, ApiAppError> {
+    require_docker_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.list_all_volumes().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
 }
 
 async fn docker_networks(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<NetworkSummary>>>, ApiAppError> {
+    require_docker_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.list_all_networks().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
 }
 
 async fn docker_nodes(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<NodeInfo>>>, ApiAppError> {
+    require_infra_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.list_nodes().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
 }
 
 async fn docker_swarm_join_tokens(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<SwarmJoinTokens>>, ApiAppError> {
+    require_infra_read(&state.db, &auth, q.org_id).await?;
     let data = state.docker.get_join_tokens().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
@@ -1064,8 +1198,9 @@ fn is_private_ip(addr: &std::net::IpAddr) -> bool {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeploymentListQuery {
-    pub status: Option<String>,
-    pub page:   Option<i64>,
+    pub org_id:   Option<uuid::Uuid>,
+    pub status:   Option<String>,
+    pub page:     Option<i64>,
     pub per_page: Option<i64>,
 }
 
@@ -1106,17 +1241,13 @@ async fn list_all_deployments(
     Query(q): Query<DeploymentListQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<AdminDeploymentsResponse>>, ApiAppError> {
-    // Only owners/admins reach this endpoint (protected by settings layout on frontend,
-    // but we also verify org membership here).
-    let org_id = sqlx::query_as::<_, (uuid::Uuid,)>(
-        "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .map(|(id,)| id)
-    .ok_or_else(|| ApiAppError(AppError::Forbidden("Not a member of any org".to_string())))?;
+    let org_id = q.org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id is required".to_string())))?;
+    // Accept deployments:read or deployments:write — both grant view access.
+    let can_read  = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:deployments:read")).await.is_ok();
+    let can_write = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:deployments:write")).await.is_ok();
+    if !can_read && !can_write {
+        return Err(ApiAppError(AppError::Forbidden("deployments:read or deployments:write permission required".to_string())));
+    }
 
     let page     = q.page.unwrap_or(1).max(1);
     let per_page = q.per_page.unwrap_or(50).clamp(1, 200);
@@ -1258,10 +1389,12 @@ struct CreateApiKeyRequest {
 ///
 /// Sends a test email with custom to/subject/body fields.
 async fn test_smtp(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
     Json(body): Json<SendTestEmailRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_smtp_perm(&state.db, &auth, q.org_id, true).await?;
     let smtp_cfg = crate::email::load_smtp_config(&state.db, &state.config.smtp).await;
 
     if !smtp_cfg.enabled {
@@ -1294,17 +1427,40 @@ fn generate_api_key() -> (String, String, String) {
     (full_key, prefix, hash)
 }
 
-async fn get_caller_org(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<uuid::Uuid, ApiAppError> {
-    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    row.map(|(id,)| id)
-        .ok_or_else(|| ApiAppError(AppError::Forbidden("User is not a member of any org".to_string())))
+async fn get_deployments_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
+    require_deployments_perm(&state.db, &auth, q.org_id, false).await?;
+    let settings = load_settings(&state).await?;
+    Ok(Json(ApiResponse::ok(settings)))
+}
+
+async fn update_deployments_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+    Json(body): Json<PlatformSettings>,
+) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
+    require_deployments_perm(&state.db, &auth, q.org_id, true).await?;
+
+    if let Some(v) = body.max_parallel_deployments {
+        sqlx::query(
+            "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        )
+        .bind("max_parallel_deployments")
+        .bind(Value::String(v.to_string()))
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+
+    cache::del(&state.redis, "settings").await;
+    let settings = load_settings(&state).await?;
+    Ok(Json(ApiResponse::ok(settings)))
 }
 
 async fn require_owner(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<(), ApiAppError> {
@@ -1324,8 +1480,15 @@ async fn require_owner(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<(), Api
 async fn list_api_keys(
     auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<Vec<ApiKeyItem>>>, ApiAppError> {
-    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+    let org_id = q.org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id is required".to_string())))?;
+    // Accept keys:read or keys:write — both grant view access.
+    let can_read  = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:keys:read")).await.is_ok();
+    let can_write = crate::middleware::rbac::require_permission(&state.db, auth.user_id, org_id, &format!("shipyard:{org_id}:keys:write")).await.is_ok();
+    if !can_read && !can_write {
+        return Err(ApiAppError(AppError::Forbidden("keys:read or keys:write permission required".to_string())));
+    }
 
     let rows = sqlx::query_as::<_, (uuid::Uuid, String, String, Vec<String>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, DateTime<Utc>)>(
         "SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at
@@ -1357,10 +1520,11 @@ async fn list_api_keys(
 async fn create_api_key(
     auth: AuthUser,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
     Json(body): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<CreatedApiKey>>), ApiAppError> {
-    require_owner(auth.user_id, &state.db).await?;
-    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+    require_keys_perm(&state.db, &auth, q.org_id, true).await?;
+    let org_id = q.org_id.unwrap();
 
     if body.name.trim().is_empty() {
         return Err(ApiAppError(AppError::Validation("Key name must not be empty".to_string())));
@@ -1418,9 +1582,10 @@ async fn revoke_api_key(
     auth: AuthUser,
     Path(key_id): Path<uuid::Uuid>,
     State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
 ) -> Result<StatusCode, ApiAppError> {
-    require_owner(auth.user_id, &state.db).await?;
-    let org_id = get_caller_org(auth.user_id, &state.db).await?;
+    require_keys_perm(&state.db, &auth, q.org_id, true).await?;
+    let org_id = q.org_id.unwrap();
 
     let result = sqlx::query(
         "DELETE FROM api_keys WHERE id = $1 AND org_id = $2",

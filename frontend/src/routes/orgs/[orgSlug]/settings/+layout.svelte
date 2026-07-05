@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { ShieldOff, Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck, Database } from '@lucide/svelte';
+	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck, Database, Mail } from '@lucide/svelte';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { orgStore } from '$lib/stores/org.store';
-	import { isAdminRole, isOwnerRole } from '$lib/auth/permissions';
+	import { isAdminRole, isOwnerRole, can, perm } from '$lib/auth/permissions';
 
 	let { children } = $props();
 
@@ -14,8 +15,21 @@
 	let isAdmin          = $derived(isAdminRole(myRole));
 	let isOwner          = $derived(isOwnerRole(myRole));
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	// Allow access if admin/owner OR if the member has the explicit settings permission.
-	let canViewSettings  = $derived(isAdmin || permissions.includes('app:org:settings:read') || permissions.includes('app:org:settings:write'));
+	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
+	const SETTINGS_SUFFIXES = [
+		'settings:read','settings:write','members:read','members:invite','members:manage',
+		'infra:read','infra:write','docker:read','docker:write',
+		'deployments:read','deployments:write','smtp:read','smtp:write',
+		'audit:read','keys:read','keys:write','system:update',
+	];
+	// Allow access if admin/owner OR if the member has any settings-area permission.
+	let canViewSettings = $derived(
+		isAdmin ||
+		permissions.some(p =>
+			p.startsWith(`shipyard:${orgId}:`) &&
+			SETTINGS_SUFFIXES.some(suffix => p.endsWith(`:${suffix}`))
+		)
+	);
 
 	const baseTabs = [
 		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2  },
@@ -26,6 +40,7 @@
 		{ label: 'Docker',      href: (slug: string) => `/orgs/${slug}/settings/docker`,       icon: Container  },
 		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,     icon: KeyRound   },
 		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`,  icon: Rocket     },
+		{ label: 'SMTP',        href: (slug: string) => `/orgs/${slug}/settings/smtp`,         icon: Mail       },
 		{ label: 'Audit',       href: (slug: string) => `/orgs/${slug}/settings/audit`,        icon: ShieldCheck },
 	];
 
@@ -43,42 +58,40 @@
 	}
 </script>
 
-{#if membershipLoaded && !canViewSettings}
-	<div class="no-access">
-		<div class="no-access-icon">
-			<ShieldOff size={40} />
+<div class="settings-layout">
+	<div class="settings-header">
+		<div class="page-header">
+			<h1 class="page-title">Settings</h1>
+			<p class="page-subtitle">Organization configuration and team management</p>
 		</div>
-		<h2 class="no-access-title">Access restricted</h2>
-		<p class="no-access-body">You need admin or owner permissions to view organization settings.</p>
-		<a class="btn btn-secondary" href="/orgs/{orgSlug}">Back to dashboard</a>
+		<nav class="tab-bar">
+			{#each tabs as tab}
+				{@const href = tab.href(orgSlug)}
+				<a
+					class="tab-btn"
+					class:active={isActive(href)}
+					{href}
+				>
+					<tab.icon size={14} />
+					{tab.label}
+				</a>
+			{/each}
+		</nav>
 	</div>
-{:else}
-	<div class="settings-layout">
-		<div class="settings-header">
-			<div class="page-header">
-				<h1 class="page-title">Settings</h1>
-				<p class="page-subtitle">Organization configuration and team management</p>
-			</div>
-			<nav class="tab-bar">
-				{#each tabs as tab}
-					{@const href = tab.href(orgSlug)}
-					<a
-						class="tab-btn"
-						class:active={isActive(href)}
-						{href}
-					>
-						<tab.icon size={14} />
-						{tab.label}
-					</a>
-				{/each}
-			</nav>
-		</div>
 
+	{#if !membershipLoaded || canViewSettings}
 		<div class="settings-content">
 			{@render children()}
 		</div>
-	</div>
-{/if}
+	{/if}
+</div>
+
+<PermissionDeniedDialog
+	open={membershipLoaded && !!orgId && !canViewSettings}
+	message="You need settings permission to view organization settings."
+	onDismiss={() => history.back()}
+	onBack={() => history.back()}
+/>
 
 <style>
 	.settings-layout {
@@ -144,41 +157,4 @@
 		.settings-content { padding: 16px 16px 80px; }
 	}
 
-	.no-access {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		height: 100%;
-		text-align: center;
-		padding: 32px;
-		color: var(--text-muted);
-	}
-
-	.no-access-icon {
-		width: 72px;
-		height: 72px;
-		border-radius: 50%;
-		background: var(--bg-elevated, #f5f5f5);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		color: var(--text-muted);
-		margin-bottom: 8px;
-	}
-
-	.no-access-title {
-		font-size: 18px;
-		font-weight: 600;
-		color: var(--text-primary);
-		margin: 0;
-	}
-
-	.no-access-body {
-		font-size: 14px;
-		color: var(--text-muted);
-		margin: 0;
-		max-width: 320px;
-	}
 </style>
