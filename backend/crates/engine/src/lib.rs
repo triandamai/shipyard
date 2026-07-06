@@ -326,30 +326,36 @@ impl DeploymentEngine {
         // Ensure the nginx container exists and is running before we write configs or serve files.
         self.ensure_static_nginx(&sites_base).await?;
 
-        // Step 0: extract_archive + validate static output
+        // Step 0: extract_archive
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 0).await?;
-        let extract_dir_clone = extract_dir.clone();
-        let r = self.static_step_extract(&artifact, &extract_dir, deployment_id, step_id).await
-            .and_then(|_| {
-                // Validate the extracted content is a proper static site
-                crate::static_site::validate_static_output(std::path::Path::new(&extract_dir_clone))
-            });
+        let r = self.static_step_extract(&artifact, &extract_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Step 1: parse shipyard.json from extracted root (optional — defaults if absent)
+        // Step 1: parse shipyard.json + resolve serve root + validate
+        // Resolve happens here so that a zip containing `dist/ shipyard.json` is
+        // automatically unwrapped: the resolved root will be `extract_dir/dist`
+        // rather than `extract_dir` itself.
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 1).await?;
         let deploy_config_result = tokio::task::spawn_blocking({
             let d = extract_dir.clone();
-            move || crate::static_site::parse_shipyard_config(std::path::Path::new(&d))
+            move || {
+                let config = crate::static_site::parse_shipyard_config(std::path::Path::new(&d))?;
+                let root = crate::static_site::resolve_upload_root(
+                    std::path::Path::new(&d),
+                    &config,
+                );
+                crate::static_site::validate_static_output(&root)?;
+                Ok((config, root.to_string_lossy().into_owned()))
+            }
         }).await.map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))?;
-        let deploy_config = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, deploy_config_result).await? {
+        let (deploy_config, upload_root) = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, deploy_config_result).await? {
             Some(c) => c,
             None => return Err(AppError::Internal("parse_shipyard_config returned nothing".into())),
         };
 
-        // Step 2: publish_files (copy extract_dir → version_dir/public, atomic swap)
+        // Step 2: publish_files — copy from the resolved root (not raw extract_dir)
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
-        let r = self.static_step_publish(&extract_dir, &public_dir, deployment_id, step_id).await;
+        let r = self.static_step_publish(&upload_root, &public_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
         // Clean up extract dir — files have been published; no need to keep the intermediate copy.

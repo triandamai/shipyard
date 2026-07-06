@@ -505,6 +505,66 @@ fn nginx_escape_location(src: &str) -> String {
 
 // ─── File publishing helpers ──────────────────────────────────────────────────
 
+/// Determine the directory to actually serve from an uploaded+extracted archive.
+///
+/// Handles the common case where users zip their build output folder instead of
+/// its contents:
+///   zip contains: `dist/index.html` `dist/assets/` `shipyard.json`
+///   → resolved root: `{extract_dir}/dist`
+///
+/// Resolution order:
+/// 1. `shipyard.json` `build.output` field (e.g. `"dist"`) if it exists as a subdir
+/// 2. Auto-detect: exactly one subdirectory and no non-config files → use that subdir
+/// 3. Fall back to `extract_dir` itself
+pub fn resolve_upload_root(extract_dir: &Path, config: &DeployConfig) -> PathBuf {
+    // 1. Explicit output directory in shipyard.json
+    if let Some(build) = &config.build {
+        if let Some(output) = &build.output {
+            if !output.is_empty() {
+                let candidate = extract_dir.join(output);
+                if candidate.is_dir() {
+                    return candidate;
+                }
+            }
+        }
+    }
+
+    // 2. Auto-detect single top-level directory wrapping the build output.
+    if let Ok(entries) = std::fs::read_dir(extract_dir) {
+        let entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        let subdirs: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect();
+        let other_files: Vec<_> = entries
+            .iter()
+            .filter(|e| {
+                e.file_type().map(|t| t.is_file()).unwrap_or(false)
+                    && e.file_name() != "shipyard.json"
+            })
+            .collect();
+        if subdirs.len() == 1 && other_files.is_empty() {
+            return subdirs[0].path();
+        }
+    }
+
+    extract_dir.to_path_buf()
+}
+
+/// Set world-readable permissions on all files and directories under `dir`.
+/// Directories get 0o755, files get 0o644, so the nginx worker (different uid)
+/// can always read the published assets.
+pub fn fixup_permissions(dir: &Path) -> AppResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in walkdir::WalkDir::new(dir) {
+        let entry = entry.map_err(|e| AppError::Internal(format!("Walk error: {e}")))?;
+        let mode = if entry.file_type().is_dir() { 0o755 } else { 0o644 };
+        std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(mode))
+            .map_err(|e| AppError::Internal(format!("chmod {}: {e}", entry.path().display())))?;
+    }
+    Ok(())
+}
+
 /// Copy all files from `src_dir` into `dest_dir`, creating `dest_dir` if needed.
 /// Uses `std::fs` for simplicity; callers should run this in `tokio::task::spawn_blocking`.
 pub fn copy_dir_all(src: &Path, dst: &Path) -> AppResult<u64> {
@@ -528,6 +588,9 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> AppResult<u64> {
                 .map_err(|e| AppError::Internal(format!("copy {}: {e}", entry.path().display())))?;
         }
     }
+    // Ensure all published files are world-readable so the nginx worker process
+    // (different uid than the backend) can serve them.
+    fixup_permissions(dst)?;
     Ok(total_bytes)
 }
 
