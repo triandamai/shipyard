@@ -16,7 +16,10 @@
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canDeploymentsRead  = $derived(can(myRole, myPerms, perm(orgId, 'deployments', 'read')));
+	let canDeploymentsRead  = $derived(
+		can(myRole, myPerms, perm(orgId, 'deployments', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 	let canDeploymentsWrite = $derived(can(myRole, myPerms, perm(orgId, 'deployments', 'write')));
 	let canDeploymentsAny   = $derived(canDeploymentsRead || canDeploymentsWrite);
 

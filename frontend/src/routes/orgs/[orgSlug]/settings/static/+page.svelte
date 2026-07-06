@@ -24,7 +24,12 @@
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
 	let isAdmin  = $derived(isAdminRole(myRole));
-	let canRead  = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'static', 'read')) || can(myRole, myPerms, perm(orgId, 'infra', 'read')));
+	let canRead  = $derived(
+		isAdmin ||
+		can(myRole, myPerms, perm(orgId, 'static', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'infra', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 
 	let confList   = $state<NginxConfList | null>(null);
 	let loading    = $state(true);

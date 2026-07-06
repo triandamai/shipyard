@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { Radio, RefreshCw, Users, BookOpen, Rss, Search, ChevronDown, ChevronRight } from '@lucide/svelte';
+
+	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole           = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms          = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canViewMqtt      = $derived(can(myRole, myPerms, perm(orgId, 'settings', 'read')));
 
 	type Tab = 'clients' | 'subscriptions' | 'topics';
 	let activeTab = $state<Tab>('clients');
@@ -96,6 +105,9 @@
 	onMount(() => loadClients());
 </script>
 
+<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canViewMqtt} />
+
+{#if canViewMqtt}
 <div class="mqtt-page">
 	<div class="page-toolbar">
 		<div class="inner-tabs">
@@ -308,6 +320,7 @@
 		{/if}
 	{/if}
 </div>
+{/if}
 
 <style>
 	.mqtt-page { display: flex; flex-direction: column; gap: 16px; }

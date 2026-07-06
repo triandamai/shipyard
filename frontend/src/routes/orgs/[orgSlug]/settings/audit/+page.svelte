@@ -14,7 +14,10 @@
 	let myRole    = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms   = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canViewAudit = $derived(can(myRole, myPerms, perm(orgId, 'audit', 'read')));
+	let canViewAudit = $derived(
+		can(myRole, myPerms, perm(orgId, 'audit', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 	let logs       = $state<AuditLogEntry[]>([]);
 	let loading    = $state(true);
 	let error      = $state('');

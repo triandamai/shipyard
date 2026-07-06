@@ -14,7 +14,10 @@
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canDockerRead  = $derived(can(myRole, myPerms, perm(orgId, 'docker', 'read')));
+	let canDockerRead  = $derived(
+		can(myRole, myPerms, perm(orgId, 'docker', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 	let canDockerWrite = $derived(can(myRole, myPerms, perm(orgId, 'docker', 'write')));
 	let canDockerAny   = $derived(canDockerRead || canDockerWrite);
 

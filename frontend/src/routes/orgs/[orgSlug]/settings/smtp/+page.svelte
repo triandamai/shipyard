@@ -11,7 +11,10 @@
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canSmtpRead  = $derived(can(myRole, myPerms, perm(orgId, 'smtp', 'read')));
+	let canSmtpRead  = $derived(
+		can(myRole, myPerms, perm(orgId, 'smtp', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 	let canSmtpWrite = $derived(can(myRole, myPerms, perm(orgId, 'smtp', 'write')));
 	let canSmtpAny   = $derived(canSmtpRead || canSmtpWrite);
 

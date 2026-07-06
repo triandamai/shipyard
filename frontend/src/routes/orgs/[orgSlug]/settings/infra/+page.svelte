@@ -11,7 +11,10 @@
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canInfraRead = $derived(can(myRole, myPerms, perm(orgId, 'infra', 'read')));
+	let canInfraRead = $derived(
+		can(myRole, myPerms, perm(orgId, 'infra', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 
 	interface DiskInfo {
 		mount: string;

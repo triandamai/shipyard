@@ -11,7 +11,10 @@
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
-	let canKeysRead  = $derived(can(myRole, myPerms, perm(orgId, 'keys', 'read')));
+	let canKeysRead  = $derived(
+		can(myRole, myPerms, perm(orgId, 'keys', 'read')) ||
+		can(myRole, myPerms, perm(orgId, 'settings', 'read'))
+	);
 	let canKeysWrite = $derived(can(myRole, myPerms, perm(orgId, 'keys', 'write')));
 
 	// ─── State ────────────────────────────────────────────────────────────────

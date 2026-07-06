@@ -795,23 +795,58 @@ async fn change_member_role(
         )));
     }
 
-    let member: OrgMember = sqlx::query_as::<_, OrgMember>(
-        r#"
-        UPDATE org_members
-        SET role = $3::member_role
-        WHERE org_id = $1 AND user_id = $2
-        RETURNING id, org_id, user_id, role::text AS role, created_at
-        "#,
+    sqlx::query(
+        "UPDATE org_members SET role = $3::member_role WHERE org_id = $1 AND user_id = $2",
     )
     .bind(org_id)
     .bind(target_user_id)
     .bind(&body.role)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    #[derive(sqlx::FromRow)]
+    struct MemberWithEmail {
+        id: Uuid,
+        org_id: Uuid,
+        user_id: Uuid,
+        email: String,
+        role: String,
+        created_at: chrono::DateTime<Utc>,
+        permissions: Vec<String>,
+    }
+
+    let member = sqlx::query_as::<_, MemberWithEmail>(
+        r#"
+        SELECT m.id, m.org_id, m.user_id, u.email, m.role::text AS role, m.created_at,
+               COALESCE(
+                   ARRAY_AGG(p.permission ORDER BY p.permission)
+                   FILTER (WHERE p.permission IS NOT NULL),
+                   ARRAY[]::text[]
+               ) AS permissions
+        FROM org_members m
+        JOIN users u ON u.id = m.user_id
+        LEFT JOIN org_member_permissions p ON p.org_id = m.org_id AND p.user_id = m.user_id
+        WHERE m.org_id = $1 AND m.user_id = $2
+        GROUP BY m.id, m.org_id, m.user_id, u.email, m.role, m.created_at
+        "#,
+    )
+    .bind(org_id)
+    .bind(target_user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound("Member not found in this organization".to_string())))?;
 
-    Ok(Json(ApiResponse::ok(MemberResponse::from(member))))
+    Ok(Json(ApiResponse::ok(MemberResponse {
+        id: member.id,
+        org_id: member.org_id,
+        user_id: member.user_id,
+        email: member.email,
+        role: member.role,
+        permissions: member.permissions,
+        created_at: member.created_at,
+    })))
 }
 
 /// PUT /orgs/:org_id/members/:user_id/permissions — replace all permissions for a member

@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { orgStore } from '$lib/stores/org.store';
+	import { can, perm } from '$lib/auth/permissions';
+	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import type { TraefikFileResponse, TraefikDynamicResponse } from '$lib/api/types';
 	import type { LogLevel } from '$lib/api/types';
 	import LogViewer from '$lib/components/LogViewer.svelte';
@@ -9,6 +12,12 @@
 		FileCode2, FolderOpen, RefreshCw, FileX, Loader2,
 		ScrollText, Play, Square, Wifi, WifiOff
 	} from '@lucide/svelte';
+
+	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
+	let myRole           = $derived($orgStore.myMembership?.role ?? null);
+	let myPerms          = $derived($orgStore.myMembership?.permissions ?? []);
+	let membershipLoaded = $derived($orgStore.membershipLoaded);
+	let canSettingsRead  = $derived(can(myRole, myPerms, perm(orgId, 'settings', 'read')));
 
 	interface TraefikSettings {
 		main_domain?: string;
@@ -323,9 +332,11 @@ volumes:
 	});
 </script>
 
+<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canSettingsRead} />
+
 {#if loading}
 	<div class="loading"><div class="spinner"></div><span>Loading…</span></div>
-{:else}
+{:else if canSettingsRead}
 	<div class="traefik-page">
 
 		<!-- ── Config form ────────────────────────────────────────── -->
