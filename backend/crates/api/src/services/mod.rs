@@ -967,7 +967,8 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 "SELECT s.id, s.project_id FROM services s
                  JOIN projects p ON p.id = s.project_id
-                 WHERE p.org_id = $1 AND LOWER(s.slug) = $2
+                 WHERE p.org_id = $1
+                   AND (LOWER(s.slug) = $2 OR s.id::text = $2)
                  LIMIT 1",
             )
             .bind(org_id).bind(slug.as_str())
@@ -979,7 +980,8 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 "SELECT n.id, n.project_id FROM networks n
                  JOIN projects p ON p.id = n.project_id
-                 WHERE p.org_id = $1 AND LOWER(REPLACE(n.name, ' ', '-')) = $2
+                 WHERE p.org_id = $1
+                   AND (LOWER(REPLACE(n.name, ' ', '-')) = $2 OR n.id::text = $2)
                  LIMIT 1",
             )
             .bind(org_id).bind(slug.as_str())
@@ -993,7 +995,8 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
                  FROM volumes v
                  LEFT JOIN services s ON s.id = v.service_id
                  JOIN projects p ON p.id = COALESCE(v.project_id, s.project_id)
-                 WHERE p.org_id = $1 AND LOWER(REPLACE(v.name, ' ', '-')) = $2
+                 WHERE p.org_id = $1
+                   AND (LOWER(REPLACE(v.name, ' ', '-')) = $2 OR v.id::text = $2)
                  LIMIT 1",
             )
             .bind(org_id).bind(slug.as_str())
