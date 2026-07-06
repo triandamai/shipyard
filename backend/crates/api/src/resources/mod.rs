@@ -171,7 +171,15 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
         return;
     }
 
-    let conf_path = format!("{data_dir}/static/conf.d/{service_id}.conf");
+    let slug: Option<String> = sqlx::query_scalar("SELECT slug FROM services WHERE id = $1")
+        .bind(service_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+    let Some(slug) = slug else { return };
+
+    let conf_path = format!("{data_dir}/static/conf.d/{slug}.conf");
 
     // Nothing to update yet if the service hasn't been deployed once
     let existing = match tokio::fs::read_to_string(&conf_path).await {
@@ -188,28 +196,34 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
     .await
     .unwrap_or_default();
 
-    let server_name_value = if domains.is_empty() {
-        "~^.*$".to_string()
-    } else {
-        domains.join(" ")
-    };
-
-    // Splice the new server_name into the existing conf, preserving all other directives
-    let updated = existing
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("server_name ") {
-                format!("    server_name {server_name_value};")
-            } else {
-                line.to_string()
+    if domains.is_empty() {
+        // All domains removed — delete the conf so the app is no longer served on a wildcard.
+        // The default_server block will return 404 for requests without a known hostname.
+        if let Err(e) = tokio::fs::remove_file(&conf_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("sync_static_nginx_conf: could not remove '{conf_path}': {e}");
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+        }
+    } else {
+        let server_name_value = domains.join(" ");
 
-    if let Err(e) = tokio::fs::write(&conf_path, updated.as_bytes()).await {
-        tracing::warn!("sync_static_nginx_conf: could not write '{conf_path}': {e}");
-        return;
+        // Splice the new server_name into the existing conf, preserving all other directives
+        let updated = existing
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("server_name ") {
+                    format!("    server_name {server_name_value};")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if let Err(e) = tokio::fs::write(&conf_path, updated.as_bytes()).await {
+            tracing::warn!("sync_static_nginx_conf: could not write '{conf_path}': {e}");
+            return;
+        }
     }
 
     let reload = tokio::process::Command::new("docker")

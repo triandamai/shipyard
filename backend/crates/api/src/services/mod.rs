@@ -535,7 +535,7 @@ async fn delete_service(
         }
 
         // Remove nginx site conf
-        let conf_path = format!("{sites_base}/conf.d/{service_id}.conf");
+        let conf_path = format!("{sites_base}/conf.d/{service_slug}.conf");
         match tokio::fs::remove_file(&conf_path).await {
             Ok(()) => tracing::info!(%service_id, "Removed nginx conf: {conf_path}"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

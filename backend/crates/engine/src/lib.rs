@@ -718,7 +718,15 @@ impl DeploymentEngine {
         deployment_id: Uuid,
         step_id: Uuid,
     ) -> AppResult<()> {
-        // Fetch domains for this service
+        // Fetch slug and domains in one round-trip
+        let slug: String = sqlx::query_scalar(
+            "SELECT slug FROM services WHERE id = $1",
+        )
+        .bind(service_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         let domains: Vec<String> = sqlx::query_scalar::<_, String>(
             "SELECT hostname FROM domains WHERE service_id = $1 ORDER BY created_at ASC",
         )
@@ -727,25 +735,40 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let conf = crate::static_site::render_nginx_site_conf(
-            &service_id.to_string(),
-            &domains,
-            serve_root,
-            sites_base,
-            deploy_config,
-        );
+        let conf_path = format!("{conf_dir}/{slug}.conf");
 
-        tokio::fs::create_dir_all(conf_dir).await
-            .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
+        if domains.is_empty() {
+            // No domains assigned yet — remove any stale conf so the app is not served
+            // on a wildcard. The default_server block returns 404 for unrecognised hosts.
+            if let Err(e) = tokio::fs::remove_file(&conf_path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("Could not remove stale nginx conf {conf_path}: {e}");
+                }
+            }
+            self.insert_log(
+                deployment_id, Some(step_id), "info",
+                "No domains assigned — nginx conf skipped; site is not publicly accessible yet",
+            ).await;
+        } else {
+            let conf = crate::static_site::render_nginx_site_conf(
+                &service_id.to_string(),
+                &domains,
+                serve_root,
+                sites_base,
+                deploy_config,
+            );
 
-        let conf_path = format!("{conf_dir}/{service_id}.conf");
-        tokio::fs::write(&conf_path, &conf).await
-            .map_err(|e| AppError::Internal(format!("Cannot write nginx conf: {e}")))?;
+            tokio::fs::create_dir_all(conf_dir).await
+                .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
 
-        self.insert_log(
-            deployment_id, Some(step_id), "info",
-            &format!("Wrote nginx config to {conf_path} ({} domain(s))", domains.len()),
-        ).await;
+            tokio::fs::write(&conf_path, &conf).await
+                .map_err(|e| AppError::Internal(format!("Cannot write nginx conf: {e}")))?;
+
+            self.insert_log(
+                deployment_id, Some(step_id), "info",
+                &format!("Wrote nginx config to {conf_path} ({} domain(s))", domains.len()),
+            ).await;
+        }
 
         // Reload nginx inside the managed container so the new server block takes effect.
         // Falls back gracefully if Docker isn't available in the current environment.

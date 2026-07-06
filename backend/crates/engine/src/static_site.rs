@@ -406,8 +406,10 @@ pub fn render_nginx_site_conf(
     sites_base: &str,
     config: &DeployConfig,
 ) -> String {
+    // Caller must ensure at least one domain is present — never use a wildcard fallback.
+    debug_assert!(!domains.is_empty(), "render_nginx_site_conf called with empty domains");
     if domains.is_empty() {
-        return render_nginx_site_conf(service_id, &[format!("~^.*$")], serve_root, sites_base, config);
+        return String::new();
     }
 
     let server_name = domains.join(" ");
