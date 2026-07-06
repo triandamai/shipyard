@@ -209,7 +209,15 @@ success "shipyard-static-errors.yml written (Traefik reloads automatically)"
 # new labels. Always recreate so Traefik sees the latest catch-all labels.
 step "Recreating nginx-static container (applies updated Docker labels)"
 
-docker rm -f shipyard-nginx-static 2>/dev/null || true
+info "Stopping and removing existing container..."
+docker stop shipyard-nginx-static >/dev/null 2>&1 || true
+docker rm   shipyard-nginx-static >/dev/null 2>&1 || true
+
+# Verify the container is actually gone before we try to create it.
+if docker ps -a --format '{{.Names}}' | grep -q '^shipyard-nginx-static$'; then
+    error "Could not remove shipyard-nginx-static. Run manually: docker rm -f shipyard-nginx-static"
+fi
+
 docker pull nginx:alpine
 docker run -d \
     --name    shipyard-nginx-static \
