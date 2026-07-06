@@ -24,7 +24,7 @@
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
 	let isAdmin  = $derived(isAdminRole(myRole));
-	let canRead  = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'infra', 'read')));
+	let canRead  = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'static', 'read')) || can(myRole, myPerms, perm(orgId, 'infra', 'read')));
 
 	let confList   = $state<NginxConfList | null>(null);
 	let loading    = $state(true);
@@ -76,7 +76,7 @@
 
 <PermissionDeniedDialog
 	open={membershipLoaded && !!orgId && !canRead}
-	message="You need the 'View infrastructure' permission to access this page."
+	message="You need the 'View static server' or 'View infrastructure' permission to access this page."
 	onDismiss={() => history.back()}
 	onBack={() => history.back()}
 />

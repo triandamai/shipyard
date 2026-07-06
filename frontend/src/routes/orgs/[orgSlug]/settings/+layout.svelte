@@ -18,7 +18,9 @@
 	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
 	const SETTINGS_SUFFIXES = [
 		'settings:read','settings:write','members:read','members:invite','members:manage',
-		'infra:read','infra:write','docker:read','docker:write',
+		'providers:read','providers:write',
+		'infra:read','infra:write','static:read',
+		'docker:read','docker:write',
 		'deployments:read','deployments:write','smtp:read','smtp:write',
 		'audit:read','keys:read','keys:write','system:update',
 	];

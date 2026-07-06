@@ -157,6 +157,28 @@
 		setTimeout(() => { pruneImagesResult = null; }, 4000);
 	}
 
+	let pruningVolumes      = $state(false);
+	let pruneVolumesConfirm = $state(false);
+	let pruneVolumesResult  = $state<string | null>(null);
+
+	async function pruneVolumes() {
+		if (!canDockerWrite) return;
+		if (!pruneVolumesConfirm) { pruneVolumesConfirm = true; return; }
+		pruningVolumes = true;
+		pruneVolumesConfirm = false;
+		pruneVolumesResult = null;
+		const r = await api.post<{ removed: number }>(dockerUrl('/admin/docker/volumes/prune'), {});
+		if (r.data) {
+			pruneVolumesResult = `Removed ${r.data.removed} unused volume${r.data.removed !== 1 ? 's' : ''}.`;
+			volumes = [];
+			await loadVolumes();
+		} else {
+			pruneVolumesResult = r.error?.message ?? 'Prune failed.';
+		}
+		pruningVolumes = false;
+		setTimeout(() => { pruneVolumesResult = null; }, 4000);
+	}
+
 	function toggle(id: string) { expanded = expanded === id ? null : id; }
 
 	const stateColor: Record<string, string> = {
@@ -265,6 +287,23 @@
 					<button class="cancel-btn" onclick={() => pruneConfirm = false}>Cancel</button>
 				{/if}
 			{/if}
+			{#if activeTab === 'volumes'}
+				{#if pruneVolumesConfirm}
+					<span class="prune-confirm-text">Remove all unused volumes?</span>
+				{/if}
+				<button
+					class="prune-btn"
+					class:danger={pruneVolumesConfirm}
+					onclick={pruneVolumes}
+					disabled={pruningVolumes}
+				>
+					<Trash2 size={14} />
+					{pruningVolumes ? 'Pruning…' : pruneVolumesConfirm ? 'Confirm' : 'Prune unused'}
+				</button>
+				{#if pruneVolumesConfirm}
+					<button class="cancel-btn" onclick={() => pruneVolumesConfirm = false}>Cancel</button>
+				{/if}
+			{/if}
 			{#if activeTab === 'images'}
 				{#if pruneImagesConfirm}
 					<span class="prune-confirm-text">Remove all unused images?</span>
@@ -293,6 +332,9 @@
 	{/if}
 	{#if pruneImagesResult}
 		<div class="prune-toast">{pruneImagesResult}</div>
+	{/if}
+	{#if pruneVolumesResult}
+		<div class="prune-toast">{pruneVolumesResult}</div>
 	{/if}
 
 	<div class="search-bar">

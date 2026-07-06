@@ -52,11 +52,12 @@
 		{
 			group: 'Infrastructure',
 			items: [
-				{ id: 'infra',          label: 'Infra Monitoring' },
-				{ id: 'swarm',          label: 'Swarm & Multi-node' },
+				{ id: 'infra',            label: 'Infra Monitoring' },
+				{ id: 'swarm',            label: 'Swarm & Multi-node' },
 				{ id: 'docker-resources', label: 'Docker Resources' },
-				{ id: 'mqtt',           label: 'MQTT Settings' },
-				{ id: 'traefik',        label: 'Traefik Settings' },
+				{ id: 'static-server',    label: 'Static Server' },
+				{ id: 'mqtt',             label: 'MQTT Settings' },
+				{ id: 'traefik',          label: 'Traefik Settings' },
 			],
 		},
 		{
@@ -260,7 +261,7 @@
 			</ol>
 
 			<div class="callout callout-info">
-				SMTP must be configured under <strong>Settings → General → SMTP</strong> for invitation emails to be delivered.
+				SMTP must be configured under <strong>Settings → SMTP</strong> for invitation emails to be delivered.
 			</div>
 
 			<h3>Fine-grained permissions</h3>
@@ -296,15 +297,18 @@
 						<tr><th>Permission string</th><th>Label</th><th>What it allows</th></tr>
 					</thead>
 					<tbody>
-						<tr><td><code>settings:read</code></td><td>View settings</td><td>Read org settings and Traefik config</td></tr>
-						<tr><td><code>settings:write</code></td><td>Edit settings</td><td>Modify org settings, SMTP, OAuth, and domain config</td></tr>
+						<tr><td><code>settings:read</code></td><td>View settings</td><td>Read org settings, main domain, and Traefik config</td></tr>
+						<tr><td><code>settings:write</code></td><td>Edit settings</td><td>Modify org settings, SMTP, and domain config</td></tr>
 						<tr><td><code>members:read</code></td><td>View members</td><td>See the member list and their roles</td></tr>
 						<tr><td><code>members:invite</code></td><td>Invite members</td><td>Send invitations to new members</td></tr>
 						<tr><td><code>members:manage</code></td><td>Manage members</td><td>Change roles, set permissions, and remove members</td></tr>
 						<tr><td><code>projects:read</code></td><td>View all projects</td><td>Access any project in the organization</td></tr>
 						<tr><td><code>projects:write</code></td><td>Manage projects</td><td>Create and delete projects</td></tr>
-						<tr><td><code>infra:read</code></td><td>View infrastructure</td><td>View system metrics, swarm nodes, and join tokens</td></tr>
+						<tr><td><code>providers:read</code></td><td>View providers</td><td>View connected Git provider accounts and webhook config (Settings → Providers)</td></tr>
+						<tr><td><code>providers:write</code></td><td>Manage providers</td><td>Connect / disconnect GitHub, GitLab, Bitbucket and set webhook secrets</td></tr>
+						<tr><td><code>infra:read</code></td><td>View infrastructure</td><td>View system metrics, swarm nodes, join tokens, and core service health</td></tr>
 						<tr><td><code>infra:write</code></td><td>Manage infrastructure</td><td>Add/remove swarm nodes and modify cluster config</td></tr>
+						<tr><td><code>static:read</code></td><td>View static server</td><td>View nginx static server configuration and site conf files (Settings → Static)</td></tr>
 						<tr><td><code>docker:read</code></td><td>View Docker</td><td>Browse containers, services, volumes, and networks</td></tr>
 						<tr><td><code>docker:write</code></td><td>Manage Docker</td><td>Prune containers and perform destructive Docker operations</td></tr>
 						<tr><td><code>deployments:read</code></td><td>View deployments</td><td>View deployment history and status across all projects</td></tr>
@@ -607,7 +611,17 @@
 		<!-- ── Integrations ────────────────────────────────────────────── -->
 		<section id="git-providers">
 			<h2>Git Providers</h2>
-			<p>Connect your GitHub, GitLab, or Bitbucket account to enable OAuth login and repository browsing.</p>
+			<p>
+				Connect your GitHub, GitLab, or Bitbucket account to enable OAuth login and private repository access.
+				Navigate to <strong>Settings → Providers</strong> to manage all connections. Requires the <code>providers:read</code> permission (or Admin/Owner role).
+			</p>
+
+			<h3>Personal Access Token (PAT)</h3>
+			<ol>
+				<li>Open <strong>Settings → Providers</strong> and click <strong>Connect</strong> next to the provider</li>
+				<li>Paste a Personal Access Token with repository read scope</li>
+				<li>Click <strong>Save Token</strong> — Shipyard stores it encrypted and uses it for all deploys</li>
+			</ol>
 
 			<h3>GitHub OAuth setup</h3>
 			<ol>
@@ -615,13 +629,19 @@
 				<li>Set <em>Homepage URL</em> to your Shipyard domain</li>
 				<li>Set <em>Authorization callback URL</em> to <code>https://ship.example.com/auth/oauth/github/callback</code></li>
 				<li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
-				<li>In Shipyard, open <strong>Settings → General → OAuth</strong> and paste them in</li>
+				<li>In Shipyard, open <strong>Settings → Providers</strong>, click <strong>Connect via OAuth</strong> and complete the flow</li>
 			</ol>
 
-			<p>GitLab and Bitbucket follow the same pattern — create an OAuth application in each provider's developer settings and paste the credentials into the corresponding fields in Shipyard.</p>
+			<p>GitLab and Bitbucket follow the same pattern — create an OAuth application in each provider's developer settings and complete the OAuth flow in Shipyard.</p>
 
-			<div class="callout callout-tip">
-				OAuth is used for login only. To pull private repositories you still need to add a deploy key or personal access token as an env var (<code>GIT_TOKEN</code>).
+			<h3>Webhook secret</h3>
+			<p>
+				To verify push event signatures from your provider, set a <strong>Webhook Secret</strong> on the Providers page and configure the same value in each webhook you create on GitHub/GitLab.
+				The incoming webhook URL is shown on the same page and in each service's detail panel.
+			</p>
+
+			<div class="callout callout-info">
+				Admins can grant <code>providers:read</code> / <code>providers:write</code> to Members so they can view or manage provider connections without full settings access.
 			</div>
 		</section>
 
@@ -631,7 +651,7 @@
 
 			<h3>Configuration</h3>
 			<ol>
-				<li>Go to <strong>Settings → General → SMTP</strong></li>
+				<li>Go to <strong>Settings → SMTP</strong></li>
 				<li>Toggle <strong>Enable SMTP</strong></li>
 				<li>Enter host, port, username, password, and from address</li>
 				<li>Click <strong>Save</strong>, then <strong>Send test email</strong> to verify delivery</li>
@@ -744,6 +764,24 @@
 			<p>The <strong>Swarm Nodes</strong> table on the infra page shows each node's hostname, role, status (<em>ready / down</em>), availability (<em>active / drain / pause</em>), address, and Docker engine version.</p>
 		</section>
 
+		<section id="static-server">
+			<h2>Static Server</h2>
+			<p>
+				Shipyard includes an nginx-based static file server (<code>shipyard-nginx-static</code>) that hosts static sites deployed from the platform.
+				Navigate to <strong>Settings → Static</strong> to inspect its current nginx configuration. Requires the <code>static:read</code> permission (or <code>infra:read</code> / Admin).
+			</p>
+
+			<h3>Conf file viewer</h3>
+			<p>
+				The left panel lists all <code>.conf</code> files inside the container's <code>/etc/nginx/conf.d/</code> directory.
+				Select a file to view its full content in the right panel. Files are named after the service slug (e.g. <code>my-landing-page.conf</code>).
+			</p>
+
+			<div class="callout callout-info">
+				A conf file is only written when at least one domain is assigned to a static service. Services without a domain return 404 until a domain is attached.
+			</div>
+		</section>
+
 		<section id="docker-resources">
 			<h2>Docker Resources</h2>
 			<p>Navigate to <strong>Settings → Docker</strong> to inspect and manage raw Docker resources on the host.</p>
@@ -828,7 +866,7 @@ certificatesResolvers:
 
 		<section id="update">
 			<h2>Update Shipyard</h2>
-			<p>Navigate to <strong>Settings → General → Platform</strong> to check for and apply updates.</p>
+			<p>Navigate to <strong>Settings → General</strong> to check for and apply updates.</p>
 
 			<h3>One-click update</h3>
 			<ol>

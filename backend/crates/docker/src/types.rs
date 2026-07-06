@@ -226,3 +226,14 @@ pub struct NodeInfo {
     pub engine_version: Option<String>,
     pub addr: Option<String>,
 }
+
+/// One-shot resource usage snapshot for a container.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerResourceStats {
+    pub cpu_pct: f64,
+    pub mem_used_mb: f64,
+    pub mem_limit_mb: f64,
+    pub mem_pct: f64,
+    pub blkio_read_bytes: u64,
+    pub blkio_write_bytes: u64,
+}

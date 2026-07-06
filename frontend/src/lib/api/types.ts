@@ -149,10 +149,18 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 		],
 	},
 	{
+		group: 'Git Providers',
+		permissions: [
+			{ id: 'providers:read',  label: 'View providers',   description: 'View connected Git provider accounts and webhook config' },
+			{ id: 'providers:write', label: 'Manage providers', description: 'Connect / disconnect GitHub, GitLab, Bitbucket and set webhook secrets' },
+		],
+	},
+	{
 		group: 'Infrastructure',
 		permissions: [
-			{ id: 'infra:read',  label: 'View infrastructure',   description: 'View system metrics, swarm nodes, and join tokens' },
-			{ id: 'infra:write', label: 'Manage infrastructure', description: 'Add/remove swarm nodes and modify cluster config' },
+			{ id: 'infra:read',   label: 'View infrastructure',   description: 'View system metrics, swarm nodes, join tokens, and core services' },
+			{ id: 'infra:write',  label: 'Manage infrastructure', description: 'Add/remove swarm nodes and modify cluster config' },
+			{ id: 'static:read',  label: 'View static server',    description: 'View nginx static server configuration and site conf files' },
 		],
 	},
 	{
@@ -165,7 +173,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 	{
 		group: 'Deployments',
 		permissions: [
-			{ id: 'deployments:read',  label: 'View deployments',  description: 'View deployment history and status across all projects' },
+			{ id: 'deployments:read',  label: 'View deployments',   description: 'View deployment history and status across all projects' },
 			{ id: 'deployments:write', label: 'Manage deployments', description: 'Configure deployment parallelism and settings' },
 		],
 	},

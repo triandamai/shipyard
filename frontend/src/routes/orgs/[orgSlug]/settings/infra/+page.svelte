@@ -52,17 +52,27 @@
 		created: number;
 	}
 
+	interface ContainerResourceStats {
+		cpu_pct: number;
+		mem_used_mb: number;
+		mem_limit_mb: number;
+		mem_pct: number;
+		blkio_read_bytes: number;
+		blkio_write_bytes: number;
+	}
+
 	const CORE_SERVICES = [
-		{ key: 'shipyard-traefik',   label: 'Traefik',   desc: 'Reverse proxy & TLS' },
-		{ key: 'shipyard-backend',   label: 'Backend',   desc: 'API server' },
-		{ key: 'shipyard-frontend',  label: 'Frontend',  desc: 'Web UI' },
-		{ key: 'shipyard-mqtt',      label: 'MQTT',      desc: 'Broker / events' },
-		{ key: 'shipyard-redis',     label: 'Redis',     desc: 'Cache & sessions' },
-		{ key: 'shipyard-postgres',  label: 'Postgres',  desc: 'Primary database' },
+		{ key: 'shipyard-traefik',      label: 'Traefik',      desc: 'Reverse proxy & TLS' },
+		{ key: 'shipyard-backend',      label: 'Backend',      desc: 'API server' },
+		{ key: 'shipyard-frontend',     label: 'Frontend',     desc: 'Web UI' },
+		{ key: 'shipyard-mqtt',         label: 'MQTT',         desc: 'Broker / events' },
+		{ key: 'shipyard-redis',        label: 'Redis',        desc: 'Cache & sessions' },
+		{ key: 'shipyard-postgres',     label: 'Postgres',     desc: 'Primary database' },
 		{ key: 'shipyard-nginx-static', label: 'Nginx Static', desc: 'Static file server' },
 	] as const;
 
 	let coreContainers   = $state<ContainerSummary[]>([]);
+	let coreStats        = $state<Record<string, ContainerResourceStats>>({});
 	let coreLoading      = $state(false);
 	let coreError        = $state('');
 	let coreLastRefresh  = $state<Date | null>(null);
@@ -85,17 +95,26 @@
 		return '#f97316';
 	}
 
+	function fmtMemMb(mb: number): string {
+		if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+		return `${mb.toFixed(0)} MB`;
+	}
+
 	async function loadCoreServices() {
 		if (!orgId) return;
 		coreLoading = true;
 		coreError = '';
 		try {
 			const res = await api.get<ContainerSummary[]>(`/admin/docker/containers?org_id=${orgId}`);
-			if (res.error) coreError = res.error.message;
-			else {
-				coreContainers = res.data ?? [];
-				coreLastRefresh = new Date();
-			}
+			if (res.error) { coreError = res.error.message; return; }
+			coreContainers = res.data ?? [];
+			coreLastRefresh = new Date();
+			// fetch resource stats for all core services in one call
+			const names = CORE_SERVICES.map(s => s.key).join(',');
+			const sres = await api.get<Record<string, ContainerResourceStats>>(
+				`/admin/docker/containers/resource-stats?org_id=${orgId}&names=${names}`
+			);
+			if (sres.data) coreStats = sres.data;
 		} catch (e) {
 			coreError = String(e);
 		} finally {
@@ -113,6 +132,8 @@
 	let copiedToken = $state<'worker' | 'manager' | null>(null);
 
 	let es: EventSource | null = null;
+	// Last time resource stats were fetched — throttle to once every 30 s.
+	let lastStatsFetch = 0;
 
 	function openStream() {
 		if (es) {
@@ -135,6 +156,12 @@
 				info = JSON.parse(ev.data) as SystemInfo;
 				connected = true;
 				error = '';
+				// Piggy-back resource stats refresh on the SSE tick, throttled.
+				const now = Date.now();
+				if (canInfraRead && orgId && now - lastStatsFetch > 30_000) {
+					lastStatsFetch = now;
+					loadCoreServices();
+				}
 			} catch {
 				// ignore malformed frame
 			}
@@ -173,6 +200,21 @@
 		if (pct >= 90) return '#ef4444';
 		if (pct >= 70) return '#f97316';
 		return 'var(--accent)';
+	}
+
+	// Deduplicate disk entries: multiple bind-mounted paths can share the same
+	// underlying partition (same total_gb + used_gb). Keep only the shortest
+	// (most generic) mount path per unique partition signature.
+	function deduplicateDisks(disks: DiskInfo[]): DiskInfo[] {
+		const seen = new Map<string, DiskInfo>();
+		for (const d of disks) {
+			const key = `${d.total_gb}:${d.used_gb}`;
+			const existing = seen.get(key);
+			if (!existing || d.mount.length < existing.mount.length) {
+				seen.set(key, d);
+			}
+		}
+		return [...seen.values()].sort((a, b) => a.mount.localeCompare(b.mount));
 	}
 
 	const HIDE_IFACES = new Set(['lo', 'docker0', 'docker_gwbridge']);
@@ -356,6 +398,7 @@
 				{#each CORE_SERVICES as svc}
 					{@const container = findContainer(svc.key)}
 					{@const state = serviceState(container)}
+					{@const stats = coreStats[svc.key]}
 					<div class="core-card" class:running={state === 'running'} class:stopped={state === 'stopped'}>
 						<div class="core-card-header">
 							<span class="core-status-dot" style="background:{stateColor(state)}"></span>
@@ -365,9 +408,38 @@
 						<div class="core-desc">{svc.desc}</div>
 						{#if container}
 							<div class="core-image">{container.image}</div>
-							<div class="core-status-text">{container.status}</div>
 						{:else if !coreLoading}
 							<div class="core-status-text muted">Container not found</div>
+						{/if}
+						{#if stats}
+							<div class="core-metrics">
+								<!-- CPU -->
+								<div class="core-metric-row">
+									<span class="core-metric-label">CPU</span>
+									<div class="core-gauge-track">
+										<div class="core-gauge-fill" style="width:{Math.min(stats.cpu_pct, 100)}%;background:{gaugeColor(stats.cpu_pct)}"></div>
+									</div>
+									<span class="core-metric-val" style="color:{gaugeColor(stats.cpu_pct)}">{stats.cpu_pct.toFixed(1)}%</span>
+								</div>
+								<!-- Memory -->
+								<div class="core-metric-row">
+									<span class="core-metric-label">MEM</span>
+									<div class="core-gauge-track">
+										<div class="core-gauge-fill" style="width:{Math.min(stats.mem_pct, 100)}%;background:{gaugeColor(stats.mem_pct)}"></div>
+									</div>
+									<span class="core-metric-val" style="color:{gaugeColor(stats.mem_pct)}">{fmtMemMb(stats.mem_used_mb)}</span>
+								</div>
+								<!-- Disk I/O -->
+								<div class="core-io-row">
+									<span class="core-metric-label">I/O</span>
+									<span class="core-io-val">
+										<span class="io-read">↑ {formatBytes(stats.blkio_read_bytes)}</span>
+										<span class="io-write">↓ {formatBytes(stats.blkio_write_bytes)}</span>
+									</span>
+								</div>
+							</div>
+						{:else if state === 'running' && !coreLoading}
+							<div class="core-status-text muted">Stats unavailable</div>
 						{/if}
 					</div>
 				{/each}
@@ -381,7 +453,7 @@
 				<span>Disk</span>
 			</div>
 			<div class="disk-list">
-				{#each info.disks as disk}
+				{#each deduplicateDisks(info.disks) as disk}
 					<div class="disk-row">
 						<div class="disk-meta">
 							<span class="disk-mount mono">{disk.mount}</span>
@@ -808,4 +880,16 @@
 	.core-image { font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
 	.core-status-text { font-size: 11px; color: var(--text-muted); }
 	.core-status-text.muted { color: var(--text-dim); font-style: italic; }
+
+	/* Core card resource metrics */
+	.core-metrics { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+	.core-metric-row { display: flex; align-items: center; gap: 6px; }
+	.core-io-row { display: flex; align-items: center; gap: 6px; }
+	.core-metric-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); width: 24px; flex-shrink: 0; }
+	.core-gauge-track { flex: 1; height: 4px; background: var(--bg-muted); border-radius: 2px; overflow: hidden; }
+	.core-gauge-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+	.core-metric-val { font-size: 10px; font-weight: 600; font-family: var(--font-mono); min-width: 46px; text-align: right; }
+	.core-io-val { display: flex; gap: 8px; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); flex-wrap: wrap; }
+	.io-read  { color: #16a34a; }
+	.io-write { color: #2563eb; }
 </style>

@@ -151,6 +151,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/containers/prune", post(docker_prune_containers))
         .route("/admin/docker/services", get(docker_services))
         .route("/admin/docker/volumes", get(docker_volumes))
+        .route("/admin/docker/volumes/prune", post(docker_prune_volumes))
+        .route("/admin/docker/containers/resource-stats", get(docker_container_resource_stats))
         .route("/admin/docker/networks", get(docker_networks))
         .route("/admin/docker/images", get(docker_images))
         .route("/admin/docker/images/prune", post(docker_prune_images))
@@ -1116,6 +1118,19 @@ async fn require_infra_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<u
         .map_err(ApiAppError)
 }
 
+/// Accepts `static:read` (dedicated permission) or falls back to `infra:read`.
+async fn require_static_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
+    let static_perm = format!("shipyard:{org_id}:static:read");
+    if crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &static_perm).await.is_ok() {
+        return Ok(());
+    }
+    let infra_perm = format!("shipyard:{org_id}:infra:read");
+    crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &infra_perm)
+        .await
+        .map_err(ApiAppError)
+}
+
 async fn docker_containers(
     auth: AuthUser,
     State(state): State<AppState>,
@@ -1191,6 +1206,58 @@ async fn docker_prune_images(
     let removed = state.docker.prune_images().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
+}
+
+async fn docker_prune_volumes(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_docker_write(&state.db, &auth, q.org_id).await?;
+    let removed = state.docker.prune_volumes().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
+}
+
+#[derive(Debug, Deserialize)]
+struct ResourceStatsQuery {
+    org_id: Option<uuid::Uuid>,
+    names: Option<String>, // comma-separated container names
+}
+
+async fn docker_container_resource_stats(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<ResourceStatsQuery>,
+) -> Result<Json<ApiResponse<std::collections::HashMap<String, shipyard_docker::ContainerResourceStats>>>, ApiAppError> {
+    require_infra_read(&state.db, &auth, q.org_id).await?;
+
+    let names: Vec<String> = q.names
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+
+    let mut result = std::collections::HashMap::new();
+
+    let futs: Vec<_> = names.iter().map(|name| {
+        let docker = state.docker.clone();
+        let name = name.clone();
+        async move {
+            let stats = docker.container_resource_stats(&name).await;
+            (name, stats)
+        }
+    }).collect();
+
+    for (name, stats_result) in futures::future::join_all(futs).await {
+        if let Ok(Some(s)) = stats_result {
+            result.insert(name, s);
+        }
+    }
+
+    Ok(Json(ApiResponse::ok(result)))
 }
 
 async fn docker_nodes(
@@ -1804,7 +1871,7 @@ async fn list_nginx_static_confs(
     State(state): State<AppState>,
     Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<NginxConfList>>, ApiAppError> {
-    require_infra_read(&state.db, &auth, q.org_id).await?;
+    require_static_read(&state.db, &auth, q.org_id).await?;
 
     let mut resp = NginxConfList {
         dir: NGINX_CONF_DIR.to_string(),
@@ -1835,7 +1902,7 @@ async fn get_nginx_static_conf(
     Query(q): Query<OrgPermQuery>,
     Path(name): Path<String>,
 ) -> Result<Json<ApiResponse<NginxConfFile>>, ApiAppError> {
-    require_infra_read(&state.db, &auth, q.org_id).await?;
+    require_static_read(&state.db, &auth, q.org_id).await?;
 
     if name.contains('/') || name.contains('\\') || name.starts_with('.') {
         return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));

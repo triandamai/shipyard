@@ -135,6 +135,13 @@ pub trait DockerEngine: Send + Sync {
     /// Remove dangling and unused images; returns count of images deleted.
     async fn prune_images(&self) -> AppResult<u64>;
 
+    /// Remove unused volumes; returns count of volumes removed.
+    async fn prune_volumes(&self) -> AppResult<u64>;
+
+    /// Take a one-shot resource stats snapshot for a container (by name or ID).
+    /// Returns None if the container is not found or not running.
+    async fn container_resource_stats(&self, container_name: &str) -> AppResult<Option<ContainerResourceStats>>;
+
     /// List all nodes in the swarm.
     async fn list_nodes(&self) -> AppResult<Vec<NodeInfo>>;
 
@@ -1275,6 +1282,84 @@ impl DockerEngine for BollardDockerEngine {
             .await
             .map_err(|e| AppError::Docker(format!("prune_images failed: {e}")))?;
         Ok(result.images_deleted.map(|v| v.len() as u64).unwrap_or(0))
+    }
+
+    async fn prune_volumes(&self) -> AppResult<u64> {
+        use bollard::volume::PruneVolumesOptions;
+        let result = self.client
+            .prune_volumes(None::<PruneVolumesOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("prune_volumes failed: {e}")))?;
+        Ok(result.volumes_deleted.map(|v| v.len() as u64).unwrap_or(0))
+    }
+
+    async fn container_resource_stats(&self, container_name: &str) -> AppResult<Option<ContainerResourceStats>> {
+        use bollard::container::{StatsOptions, MemoryStatsStats};
+        use futures::StreamExt;
+
+        let mut stream = self.client.stats(
+            container_name,
+            Some(StatsOptions { stream: false, one_shot: true }),
+        );
+
+        let raw = match stream.next().await {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                let msg = e.to_string();
+                if msg.contains("No such container") || msg.contains("404") {
+                    return Ok(None);
+                }
+                return Err(AppError::Docker(format!("stats failed for {container_name}: {msg}")));
+            }
+            None => return Ok(None),
+        };
+
+        // ── CPU ──────────────────────────────────────────────────────────
+        let cpu_delta = raw.cpu_stats.cpu_usage.total_usage
+            .saturating_sub(raw.precpu_stats.cpu_usage.total_usage);
+        let sys_delta = raw.cpu_stats.system_cpu_usage.unwrap_or(0)
+            .saturating_sub(raw.precpu_stats.system_cpu_usage.unwrap_or(0));
+        let num_cpus = raw.cpu_stats.online_cpus.unwrap_or(1) as f64;
+        let cpu_pct = if sys_delta > 0 {
+            (cpu_delta as f64 / sys_delta as f64) * num_cpus * 100.0
+        } else {
+            0.0
+        };
+
+        // ── Memory ───────────────────────────────────────────────────────
+        let cache = match &raw.memory_stats.stats {
+            Some(MemoryStatsStats::V1(v1)) => v1.cache,
+            _ => 0,
+        };
+        let mem_used_bytes = raw.memory_stats.usage.unwrap_or(0).saturating_sub(cache);
+        let mem_limit_bytes = raw.memory_stats.limit.unwrap_or(0);
+        let mem_used_mb   = mem_used_bytes  as f64 / 1_048_576.0;
+        let mem_limit_mb  = mem_limit_bytes as f64 / 1_048_576.0;
+        let mem_pct = if mem_limit_bytes > 0 {
+            mem_used_bytes as f64 / mem_limit_bytes as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        // ── Block I/O ────────────────────────────────────────────────────
+        let entries = raw.blkio_stats.io_service_bytes_recursive.unwrap_or_default();
+        let blkio_read_bytes: u64 = entries.iter()
+            .filter(|e| e.op.eq_ignore_ascii_case("read"))
+            .map(|e| e.value)
+            .sum();
+        let blkio_write_bytes: u64 = entries.iter()
+            .filter(|e| e.op.eq_ignore_ascii_case("write"))
+            .map(|e| e.value)
+            .sum();
+
+        Ok(Some(ContainerResourceStats {
+            cpu_pct,
+            mem_used_mb,
+            mem_limit_mb,
+            mem_pct,
+            blkio_read_bytes,
+            blkio_write_bytes,
+        }))
     }
 
     async fn exec_container(

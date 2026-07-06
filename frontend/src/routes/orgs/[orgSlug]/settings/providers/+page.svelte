@@ -35,8 +35,8 @@
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
 	let isAdmin      = $derived(isAdminRole(myRole));
 
-	let canRead  = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'settings', 'read')));
-	let canWrite = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'settings', 'write')));
+	let canRead  = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'providers', 'read'))  || can(myRole, myPerms, perm(orgId, 'settings', 'read')));
+	let canWrite = $derived(isAdmin || can(myRole, myPerms, perm(orgId, 'providers', 'write')) || can(myRole, myPerms, perm(orgId, 'settings', 'write')));
 
 	let settings    = $state<PlatformSettings>({});
 	let loading     = $state(true);
@@ -103,7 +103,7 @@
 
 <PermissionDeniedDialog
 	open={membershipLoaded && !!orgId && !canRead}
-	message="You need the 'Settings: read' permission to view provider settings."
+	message="You need the 'View providers' or 'View settings' permission to access this page."
 	onDismiss={() => history.back()}
 	onBack={() => history.back()}
 />
