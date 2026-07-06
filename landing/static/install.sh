@@ -704,6 +704,21 @@ services:
       - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
     networks:
       - platform_proxy
+    labels:
+      # Traefik catch-all: route every domain that has no explicit Traefik router
+      # to nginx-static, which then dispatches by server_name.
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_proxy"
+      - "traefik.http.routers.static-sites-http.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-http.priority=1"
+      - "traefik.http.routers.static-sites-http.entrypoints=web"
+      - "traefik.http.routers.static-sites-http.service=static-sites"
+      - "traefik.http.routers.static-sites-https.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-https.priority=1"
+      - "traefik.http.routers.static-sites-https.entrypoints=websecure"
+      - "traefik.http.routers.static-sites-https.tls=true"
+      - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 
 networks:
   internal:

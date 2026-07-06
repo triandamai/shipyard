@@ -102,8 +102,11 @@ step "Patching docker-compose.yml"
 if grep -q "shipyard-nginx-static" "${COMPOSE}"; then
     success "nginx-static service already present — skipping compose patch"
 else
-    # Write a new compose file with nginx-static appended before the networks block.
-    NGINX_SERVICE="
+    # Write the nginx-static service block to a temp file (avoids awk -v issues with
+    # backticks and multiline strings).
+    _NGINX_TMPFILE=$(mktemp)
+    cat > "${_NGINX_TMPFILE}" <<NGINX_SVC
+
   # Serves all static sites deployed through Shipyard.
   nginx-static:
     image: nginx:alpine
@@ -114,13 +117,31 @@ else
       - ${SITES_DIR}/conf.d:/etc/nginx/conf.d:ro
     networks:
       - platform_proxy
-"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_proxy"
+      - "traefik.http.routers.static-sites-http.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-http.priority=1"
+      - "traefik.http.routers.static-sites-http.entrypoints=web"
+      - "traefik.http.routers.static-sites-http.service=static-sites"
+      - "traefik.http.routers.static-sites-https.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-https.priority=1"
+      - "traefik.http.routers.static-sites-https.entrypoints=websecure"
+      - "traefik.http.routers.static-sites-https.tls=true"
+      - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.services.static-sites.loadbalancer.server.port=80"
+NGINX_SVC
+
     # Insert before the 'networks:' top-level key
-    awk -v svc="${NGINX_SERVICE}" '
-        /^networks:/ && !done { print svc; done=1 }
+    awk -v svcfile="${_NGINX_TMPFILE}" '
+        /^networks:/ && !done {
+            while ((getline line < svcfile) > 0) print line;
+            done=1
+        }
         { print }
     ' "${COMPOSE}" > "${COMPOSE}.tmp"
     mv "${COMPOSE}.tmp" "${COMPOSE}"
+    rm -f "${_NGINX_TMPFILE}"
     success "nginx-static service added to docker-compose.yml"
 fi
 

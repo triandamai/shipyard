@@ -661,6 +661,7 @@ impl DeploymentEngine {
                 // We mount the entire sites_base at the same path inside the container so that
                 // nginx `root` directives written by the engine (host paths) work as-is.
                 // conf.d is also mounted to the nginx default include path.
+                let traefik_network_label = format!("traefik.docker.network={}", self.traefik_network);
                 let status = tokio::process::Command::new("docker")
                     .args([
                         "run", "-d",
@@ -671,6 +672,20 @@ impl DeploymentEngine {
                         "-v", &format!("{sites_base}:{sites_base}:ro"),
                         // conf.d bind: nginx reads *.conf from /etc/nginx/conf.d by default
                         "-v", &format!("{conf_dir}:/etc/nginx/conf.d:ro"),
+                        // Traefik Docker-provider labels: catch-all for all unmatched domains.
+                        // Priority 1 ensures explicit app routes always win.
+                        "--label", "traefik.enable=true",
+                        "--label", &traefik_network_label,
+                        "--label", "traefik.http.routers.static-sites-http.rule=HostRegexp(`.+`)",
+                        "--label", "traefik.http.routers.static-sites-http.priority=1",
+                        "--label", "traefik.http.routers.static-sites-http.entrypoints=web",
+                        "--label", "traefik.http.routers.static-sites-http.service=static-sites",
+                        "--label", "traefik.http.routers.static-sites-https.rule=HostRegexp(`.+`)",
+                        "--label", "traefik.http.routers.static-sites-https.priority=1",
+                        "--label", "traefik.http.routers.static-sites-https.entrypoints=websecure",
+                        "--label", "traefik.http.routers.static-sites-https.tls=true",
+                        "--label", "traefik.http.routers.static-sites-https.service=static-sites",
+                        "--label", "traefik.http.services.static-sites.loadbalancer.server.port=80",
                         "nginx:alpine",
                     ])
                     .status().await

@@ -700,13 +700,26 @@ services:
     container_name: shipyard-nginx-static
     restart: unless-stopped
     volumes:
-      # Bind the sites dir at the same host path so nginx `root` directives
-      # written by the engine (absolute host paths) resolve correctly in the container.
       - ${INSTALL_DIR}/data/static:${INSTALL_DIR}/data/static:ro
-      # conf.d at the standard nginx include path — engine writes *.conf files here.
       - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
     networks:
       - platform_proxy
+    labels:
+      # Traefik catch-all: route every domain that has no explicit Traefik router
+      # to nginx-static, which then dispatches by server_name.
+      # Two routers cover both HTTP (before redirect) and HTTPS.
+      - "traefik.enable=true"
+      - "traefik.docker.network=platform_proxy"
+      - "traefik.http.routers.static-sites-http.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-http.priority=1"
+      - "traefik.http.routers.static-sites-http.entrypoints=web"
+      - "traefik.http.routers.static-sites-http.service=static-sites"
+      - "traefik.http.routers.static-sites-https.rule=HostRegexp(\`.+\`)"
+      - "traefik.http.routers.static-sites-https.priority=1"
+      - "traefik.http.routers.static-sites-https.entrypoints=websecure"
+      - "traefik.http.routers.static-sites-https.tls=true"
+      - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 
 networks:
   internal:
