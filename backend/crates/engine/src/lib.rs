@@ -2580,7 +2580,7 @@ impl DeploymentEngine {
             "SELECT key, value_encrypted
              FROM service_envs
              WHERE service_id = $1
-               AND key NOT LIKE '__\\_%' ESCAPE '\\'
+               AND key NOT LIKE '\\_\\_%' ESCAPE '\\'
              ORDER BY key ASC",
         )
         .bind(service_id)
@@ -2600,7 +2600,8 @@ impl DeploymentEngine {
         Ok(env)
     }
 
-    /// Step 3: Build MountSpec list from the volumes table.
+    /// Step 3: Build MountSpec list from the volumes table, supplemented by any
+    /// `__VOLUME_MOUNTS__` env var that was stored during service creation.
     async fn step_configure_volumes(&self, service_id: Uuid) -> AppResult<Vec<MountSpec>> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "SELECT name, mount_path, driver
@@ -2613,7 +2614,7 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let mounts: Vec<MountSpec> = rows
+        let mut mounts: Vec<MountSpec> = rows
             .into_iter()
             .map(|(name, mount_path, driver)| MountSpec {
                 source: name,
@@ -2626,6 +2627,36 @@ impl DeploymentEngine {
                 readonly: false,
             })
             .collect();
+
+        // Also consume the __VOLUME_MOUNTS__ env var written by the creation form.
+        // Each entry is { "source": "<name|path>", "target": "<path>", "read_only": bool }.
+        if let Ok(Some((raw,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT value_encrypted FROM service_envs
+             WHERE service_id = $1 AND key = '__VOLUME_MOUNTS__'",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        {
+            let decrypted = shipyard_common::crypto::decrypt_or_passthrough(&self.secret_key, &raw);
+            if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&decrypted) {
+                for entry in entries {
+                    let source = entry.get("source").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                    let target = entry.get("target").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                    let readonly = entry.get("read_only").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if source.is_empty() || target.is_empty() { continue; }
+                    // Avoid duplicates already present in the volumes table.
+                    if mounts.iter().any(|m| m.target == target) { continue; }
+                    let is_bind = source.starts_with('/') || source.starts_with('.');
+                    mounts.push(MountSpec {
+                        source,
+                        target,
+                        mount_type: if is_bind { MountType::Bind } else { MountType::Volume },
+                        readonly,
+                    });
+                }
+            }
+        }
 
         tracing::info!("Configured {} mounts", mounts.len());
         Ok(mounts)

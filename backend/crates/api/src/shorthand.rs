@@ -379,9 +379,35 @@ async fn restart_service(
         Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted" }))))
     } else {
         let svc_name = docker_service_name(&state, service_id);
-        state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        state.docker.scale_service(&svc_name, 1).await.map_err(ApiAppError)?;
+
+        // Load current env vars from DB and apply them to the running service
+        // so that any vars added/changed since the last deploy take effect.
+        let env_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value_encrypted
+             FROM service_envs
+             WHERE service_id = $1
+               AND key NOT LIKE '\\_\\_%' ESCAPE '\\'
+             ORDER BY key ASC",
+        )
+        .bind(service_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        let env_vars: Vec<String> = env_rows
+            .into_iter()
+            .map(|(k, v)| {
+                let plain = shipyard_common::crypto::decrypt_or_passthrough(
+                    &state.config.auth.secret_key, &v,
+                );
+                format!("{k}={plain}")
+            })
+            .collect();
+
+        // Update the service spec with fresh env vars; this also bumps force_update
+        // so Docker Swarm replaces the running tasks even when the image is unchanged.
+        state.docker.apply_envs_to_service(&svc_name, env_vars).await.map_err(ApiAppError)?;
+
         sqlx::query(
             "UPDATE services SET status = 'running', replicas = 1, updated_at = NOW() WHERE id = $1",
         )

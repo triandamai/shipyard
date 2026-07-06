@@ -41,6 +41,11 @@ pub trait DockerEngine: Send + Sync {
     /// Change the replica count of a replicated service.
     async fn scale_service(&self, id: &str, replicas: u64) -> AppResult<()>;
 
+    /// Replace the env vars of an existing service in-place, incrementing
+    /// `force_update` so Docker Swarm restarts tasks even when the image is
+    /// unchanged.  All other spec fields are preserved from the current service.
+    async fn apply_envs_to_service(&self, id: &str, envs: Vec<String>) -> AppResult<()>;
+
     /// List all tasks (container instances) belonging to a service.
     async fn list_tasks(&self, service_id: &str) -> AppResult<Vec<TaskInfo>>;
 
@@ -596,6 +601,40 @@ impl DockerEngine for BollardDockerEngine {
             )
             .await
             .map_err(|e| AppError::Docker(format!("scale_service failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn apply_envs_to_service(&self, id: &str, envs: Vec<String>) -> AppResult<()> {
+        let current = self
+            .client
+            .inspect_service(id, None::<InspectServiceOptions>)
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_service failed: {e}")))?;
+
+        let version = current
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| AppError::Docker("Could not read service version".into()))?;
+
+        let mut bollard_spec: BollardServiceSpec = current.spec.unwrap_or_default();
+
+        // Patch env vars and bump force_update so Swarm always restarts tasks.
+        let tt = bollard_spec.task_template.get_or_insert_with(Default::default);
+        let current_force = tt.force_update.unwrap_or(0);
+        tt.force_update = Some(current_force + 1);
+        let cs = tt.container_spec.get_or_insert_with(Default::default);
+        cs.env = if envs.is_empty() { None } else { Some(envs) };
+
+        self.client
+            .update_service(
+                id,
+                bollard_spec,
+                UpdateServiceOptions { version, ..Default::default() },
+                None,
+            )
+            .await
+            .map_err(|e| AppError::Docker(format!("apply_envs_to_service failed: {e}")))?;
 
         Ok(())
     }
