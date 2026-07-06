@@ -81,33 +81,11 @@ impl DockerEventWorker {
                     _ => continue,
                 };
 
-                // We need labels to find the managed service_id.  Fetch the
-                // full task detail to get container-spec labels.
-                let detail = match self.engine.inspect_task(&task.id).await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::warn!(
-                            task_id = %task.id,
-                            "Failed to inspect task during reconciliation: {e}"
-                        );
-                        continue;
-                    }
-                };
-
-                // Pull the container's labels via inspect_container.
-                let labels = match self.engine.inspect_container(container_id).await {
-                    Ok(c) => c.labels,
-                    Err(e) => {
-                        tracing::warn!(
-                            container_id = %container_id,
-                            "Failed to inspect container during reconciliation: {e}"
-                        );
-                        continue;
-                    }
-                };
-
+                // Use labels from the task's ContainerSpec — these are set by
+                // the deployment engine and are visible to the manager for ALL
+                // tasks regardless of which node the container runs on.
                 let service_id_key = format!("{}.service_id", self.label_prefix);
-                let service_id_str = match labels.get(&service_id_key) {
+                let service_id_str = match task.labels.get(&service_id_key) {
                     Some(s) => s,
                     None => continue, // not managed by us
                 };
@@ -140,6 +118,7 @@ impl DockerEventWorker {
                     ON CONFLICT (docker_container_id)
                     DO UPDATE SET
                         status      = EXCLUDED.status,
+                        node_id     = EXCLUDED.node_id,
                         updated_at  = NOW()
                     "#,
                 )
@@ -161,8 +140,6 @@ impl DockerEventWorker {
                         "Failed to sync replica count during reconciliation: {e}"
                     );
                 }
-
-                let _ = detail; // suppress unused warning
             }
         }
 
@@ -987,6 +964,87 @@ impl DockerEventWorker {
                 .ok();
         }
 
+        Ok(())
+    }
+
+    /// Poll all Swarm tasks and upsert container records into Postgres.
+    ///
+    /// Called periodically so that containers running on worker nodes (whose
+    /// Docker events are invisible to the manager's local socket) stay in sync.
+    /// Safe to call concurrently with the event worker — all writes are upserts.
+    pub async fn sync_swarm_tasks(&self) -> AppResult<()> {
+        let services = self.engine.list_services().await?;
+        let mut affected: Vec<Uuid> = Vec::new();
+
+        for svc in &services {
+            let tasks = match self.engine.list_tasks(&svc.id).await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(service_id = %svc.id, "sync_swarm_tasks: list_tasks failed: {e}");
+                    continue;
+                }
+            };
+
+            let service_id_key = format!("{}.service_id", self.label_prefix);
+
+            for task in &tasks {
+                let container_id = match task.container_id.as_deref() {
+                    Some(id) if !id.is_empty() => id,
+                    _ => continue,
+                };
+
+                let service_id_str = match task.labels.get(&service_id_key) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                let service_id = match Uuid::parse_str(service_id_str) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
+
+                let status = map_swarm_task_status(&task.status);
+                let replica_index = task.slot.map(|s| s as i32);
+                let node_id = task.node_id.as_deref();
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO containers
+                        (id, service_id, docker_container_id, docker_task_id, node_id,
+                         replica_index, status, image, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::container_status, $8, NOW(), NOW())
+                    ON CONFLICT (docker_container_id)
+                    DO UPDATE SET
+                        status     = EXCLUDED.status,
+                        node_id    = EXCLUDED.node_id,
+                        updated_at = NOW()
+                    "#,
+                )
+                .bind(Uuid::now_v7())
+                .bind(service_id)
+                .bind(container_id)
+                .bind(&task.id)
+                .bind(node_id)
+                .bind(replica_index)
+                .bind(status)
+                .bind(&task.image)
+                .execute(&self.db)
+                .await
+                .ok();
+
+                if !affected.contains(&service_id) {
+                    affected.push(service_id);
+                }
+            }
+        }
+
+        for service_id in affected {
+            if let Err(e) = self.sync_service_replica_count(service_id).await {
+                tracing::warn!(%service_id, "sync_swarm_tasks: replica count sync failed: {e}");
+            }
+        }
+
+        tracing::debug!("sync_swarm_tasks complete");
         Ok(())
     }
 }

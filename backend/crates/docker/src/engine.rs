@@ -1105,6 +1105,7 @@ impl DockerEngine for BollardDockerEngine {
                     error: None,
                     exit_code: None,
                     slot: None,
+                    labels: std::collections::HashMap::new(),
                 }
             })
             .collect();
@@ -1576,6 +1577,14 @@ fn task_value_to_info(v: serde_json::Value) -> TaskInfo {
     let error = v["Status"]["Err"].as_str().map(String::from);
     let exit_code = v["Status"]["ContainerStatus"]["ExitCode"].as_i64();
     let slot = v["Slot"].as_i64();
+    let labels = v["Spec"]["ContainerSpec"]["Labels"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
 
     TaskInfo {
         id,
@@ -1590,6 +1599,7 @@ fn task_value_to_info(v: serde_json::Value) -> TaskInfo {
         error,
         exit_code,
         slot,
+        labels,
     }
 }
 

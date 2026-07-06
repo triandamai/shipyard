@@ -65,6 +65,9 @@ pub struct TaskInfo {
     pub error: Option<String>,
     pub exit_code: Option<i64>,
     pub slot: Option<i64>,
+    /// Labels from the task's ContainerSpec — available on the manager without
+    /// needing to inspect the actual container (which may be on another node).
+    pub labels: HashMap<String, String>,
 }
 
 /// Detailed task/container information.

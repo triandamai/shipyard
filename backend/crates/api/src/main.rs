@@ -236,6 +236,38 @@ async fn main() {
         });
     }
 
+    // Spawn periodic Swarm task sync — keeps container records fresh for all nodes.
+    // The event worker only sees events from the local Docker socket, so containers on
+    // worker nodes never get events. This loop polls Swarm tasks every 60 s to fill the gap.
+    {
+        let sync_docker = Arc::clone(&docker_engine);
+        let sync_db = pool.clone();
+        let sync_mqtt = Arc::clone(&mqtt_publisher);
+        let sync_label_prefix = config.docker.label_prefix.clone();
+
+        tokio::spawn(async move {
+            let worker = match shipyard_docker_worker::DockerEventWorker::new(
+                sync_docker,
+                sync_db,
+                sync_mqtt,
+                sync_label_prefix,
+            ) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Failed to create Swarm sync worker: {e}");
+                    return;
+                }
+            };
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                if let Err(e) = worker.sync_swarm_tasks().await {
+                    tracing::warn!("sync_swarm_tasks failed: {e}");
+                }
+            }
+        });
+    }
+
     // Spawn docker_events retention task — purge events older than 7 days, runs daily.
     {
         let cleanup_db = pool.clone();
