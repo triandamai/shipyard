@@ -685,6 +685,7 @@ impl DeploymentEngine {
                         "--label", "traefik.http.routers.static-sites-https.entrypoints=websecure",
                         "--label", "traefik.http.routers.static-sites-https.tls=true",
                         "--label", "traefik.http.routers.static-sites-https.service=static-sites",
+                        "--label", "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file",
                         "--label", "traefik.http.services.static-sites.loadbalancer.server.port=80",
                         "nginx:alpine",
                     ])

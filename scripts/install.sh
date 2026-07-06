@@ -583,6 +583,16 @@ ${STATIC_SITE_TLS}
       stripPrefix:
         prefixes:
           - "/mqtt"
+
+    # Intercepts 404 responses from any backend and returns the Shipyard branded
+    # error page served by nginx-static. Works alongside the catch-all router so
+    # every possible path to a 404 shows the same styled page.
+    shipyard-error-pages:
+      errors:
+        status:
+          - "404"
+        service: nginx-static
+        query: "/_errors/{status}.html"
 DYNAMIC
 success "Traefik config written"
 
@@ -719,6 +729,7 @@ services:
       - "traefik.http.routers.static-sites-https.entrypoints=websecure"
       - "traefik.http.routers.static-sites-https.tls=true"
       - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file"
       - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 
 networks:

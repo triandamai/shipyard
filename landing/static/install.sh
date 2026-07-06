@@ -580,6 +580,13 @@ ${STATIC_SITE_TLS}
       stripPrefix:
         prefixes:
           - "/mqtt"
+
+    shipyard-error-pages:
+      errors:
+        status:
+          - "404"
+        service: nginx-static
+        query: "/_errors/{status}.html"
 DYNAMIC
 success "Traefik config written"
 
@@ -718,6 +725,7 @@ services:
       - "traefik.http.routers.static-sites-https.entrypoints=websecure"
       - "traefik.http.routers.static-sites-https.tls=true"
       - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file"
       - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 
 networks:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # patch-nginx-static.sh
-# Adds the shipyard-nginx-static container to an existing Shipyard install.
-# Run once on your VPS: sudo bash patch-nginx-static.sh
+# Idempotent patch for existing Shipyard installs.
+# Run any time on your VPS: sudo bash patch-nginx-static.sh
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -22,10 +22,11 @@ DATA_DIR="${INSTALL_DIR}/data"
 SITES_DIR="${DATA_DIR}/static"
 COMPOSE="${INSTALL_DIR}/docker-compose.yml"
 DYNAMIC="${INSTALL_DIR}/traefik/dynamic/shipyard.yml"
+ERRORS_CONFIG="${INSTALL_DIR}/traefik/dynamic/shipyard-static-errors.yml"
 
 [[ -f "${COMPOSE}" ]] || error "Shipyard not found at ${INSTALL_DIR}. Wrong path?"
 
-# ── 1. Directories ─────────────────────────────────────────────────────────────
+# ── 1. Directories + static assets ─────────────────────────────────────────────
 step "Creating static site directories"
 mkdir -p "${SITES_DIR}/conf.d" "${SITES_DIR}/uploads" "${SITES_DIR}/_errors"
 success "Directories ready: ${SITES_DIR}/conf.d"
@@ -75,6 +76,8 @@ cat > "${SITES_DIR}/_errors/404.html" <<'HTML404'
 </html>
 HTML404
 
+# _default.conf: /_errors/ has no 'internal' so Traefik errors middleware can
+# also fetch /_errors/404.html directly for non-static-site requests.
 cat > "${SITES_DIR}/conf.d/_default.conf" <<NGINX_DEFAULT
 # Shipyard default — serves the custom 404 page for unregistered domains.
 server {
@@ -85,7 +88,6 @@ server {
 
     location /_errors/ {
         root ${SITES_DIR};
-        internal;
     }
 
     location / {
@@ -97,15 +99,13 @@ NGINX_DEFAULT
 success "404 page and default conf written"
 
 # ── 2. docker-compose.yml ──────────────────────────────────────────────────────
-step "Patching docker-compose.yml"
+# Always rewrite the nginx-static service block so Docker labels are current.
+# Awk removes any existing nginx-static block then inserts the new one before
+# the top-level `networks:` key.
+step "Updating docker-compose.yml (nginx-static service)"
 
-if grep -q "shipyard-nginx-static" "${COMPOSE}"; then
-    success "nginx-static service already present — skipping compose patch"
-else
-    # Write the nginx-static service block to a temp file (avoids awk -v issues with
-    # backticks and multiline strings).
-    _NGINX_TMPFILE=$(mktemp)
-    cat > "${_NGINX_TMPFILE}" <<NGINX_SVC
+_NGINX_TMPFILE=$(mktemp)
+cat > "${_NGINX_TMPFILE}" <<NGINX_SVC
 
   # Serves all static sites deployed through Shipyard.
   nginx-static:
@@ -129,74 +129,109 @@ else
       - "traefik.http.routers.static-sites-https.entrypoints=websecure"
       - "traefik.http.routers.static-sites-https.tls=true"
       - "traefik.http.routers.static-sites-https.service=static-sites"
+      - "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file"
       - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 NGINX_SVC
 
-    # Insert before the 'networks:' top-level key
-    awk -v svcfile="${_NGINX_TMPFILE}" '
-        /^networks:/ && !done {
-            while ((getline line < svcfile) > 0) print line;
-            done=1
-        }
-        { print }
-    ' "${COMPOSE}" > "${COMPOSE}.tmp"
-    mv "${COMPOSE}.tmp" "${COMPOSE}"
-    rm -f "${_NGINX_TMPFILE}"
-    success "nginx-static service added to docker-compose.yml"
-fi
+# Remove existing nginx-static block, then insert the updated block before networks:
+awk -v tmpfile="${_NGINX_TMPFILE}" '
+    BEGIN { skip=0; inserted=0 }
+    /^  nginx-static:/ { skip=1; next }
+    skip && (/^  [a-zA-Z]/ || /^networks:/ || /^volumes:/) { skip=0 }
+    skip { next }
+    /^networks:/ && !inserted {
+        while ((getline line < tmpfile) > 0) print line
+        close(tmpfile)
+        inserted=1
+    }
+    { print }
+    END { if (!inserted) { while ((getline line < tmpfile) > 0) print line } }
+' "${COMPOSE}" > "${COMPOSE}.tmp"
+mv "${COMPOSE}.tmp" "${COMPOSE}"
+rm -f "${_NGINX_TMPFILE}"
+success "nginx-static service updated in docker-compose.yml"
 
-# ── 3. Traefik dynamic config ──────────────────────────────────────────────────
-step "Patching Traefik dynamic config"
+# ── 3. Traefik: error-pages middleware ─────────────────────────────────────────
+# Write a dedicated file so we never have to surgically modify shipyard.yml.
+# Traefik watches the whole dynamic/ directory and merges all files.
+# Only define the nginx-static service here if shipyard.yml doesn't already have it
+# (duplicate service names across files would cause a Traefik load error).
+step "Writing Traefik error-pages middleware config"
 
-if grep -q "nginx-static" "${DYNAMIC}"; then
-    success "nginx-static route already present in Traefik config — skipping"
+if grep -q "nginx-static" "${DYNAMIC}" 2>/dev/null; then
+    # Service already declared in shipyard.yml — only write the middleware.
+    cat > "${ERRORS_CONFIG}" <<ERRORS_CONF
+# Written by patch-nginx-static.sh — safe to re-run (idempotent).
+http:
+  middlewares:
+    shipyard-error-pages:
+      errors:
+        status:
+          - "404"
+        service: nginx-static
+        query: "/_errors/{status}.html"
+ERRORS_CONF
 else
-    # Detect whether TLS is in use — catch-all uses self-signed fallback (tls: {}),
-    # not certResolver, so it is always active regardless of cert issuance state.
-    if grep -q "certResolver" "${DYNAMIC}"; then
-        TLS_BLOCK="      tls: {}"
-        ENTRYPOINTS="[websecure]"
-    else
-        TLS_BLOCK=""
-        ENTRYPOINTS="[web]"
-    fi
-
-    # Append the nginx-static service and catch-all router.
-    cat >> "${DYNAMIC}" <<PATCH
-
-    # Catch-all for static sites — any domain not matched above is forwarded to
-    # the nginx-static container which handles server_name routing per site.
-    # Priority 1 ensures this never wins over explicit Shipyard app routes.
+    # First-time setup — also declare the nginx-static upstream service.
+    cat > "${ERRORS_CONFIG}" <<ERRORS_CONF
+# Written by patch-nginx-static.sh — safe to re-run (idempotent).
+http:
+  routers:
     static-sites:
       rule: "HostRegexp(\`.+\`)"
       priority: 1
-      entryPoints: ${ENTRYPOINTS}
+      entryPoints: [websecure]
       service: nginx-static
-${TLS_BLOCK}
+      middlewares:
+        - shipyard-error-pages
+      tls: {}
 
-  # (appended by patch-nginx-static.sh)
+  services:
     nginx-static:
       loadBalancer:
         servers:
           - url: "http://shipyard-nginx-static:80"
-PATCH
 
-    success "static-sites route added to Traefik dynamic config"
-    warn "Traefik reloads this file automatically — no restart needed."
+  middlewares:
+    shipyard-error-pages:
+      errors:
+        status:
+          - "404"
+        service: nginx-static
+        query: "/_errors/{status}.html"
+ERRORS_CONF
 fi
 
-# ── 4. Start nginx-static ──────────────────────────────────────────────────────
-step "Starting nginx-static container"
+success "shipyard-static-errors.yml written (Traefik reloads automatically)"
 
-cd "${INSTALL_DIR}"
+# ── 4. Recreate nginx-static container ─────────────────────────────────────────
+# Docker labels are baked at creation time — a running container never picks up
+# new labels. Always recreate so Traefik sees the latest catch-all labels.
+step "Recreating nginx-static container (applies updated Docker labels)"
 
-if docker ps --format '{{.Names}}' | grep -q "^shipyard-nginx-static$"; then
-    success "shipyard-nginx-static is already running"
-else
-    docker compose pull nginx-static
-    docker compose up -d nginx-static
-    success "shipyard-nginx-static started"
-fi
+docker rm -f shipyard-nginx-static 2>/dev/null || true
+docker pull nginx:alpine
+docker run -d \
+    --name    shipyard-nginx-static \
+    --restart unless-stopped \
+    --network platform_proxy \
+    -v "${SITES_DIR}:${SITES_DIR}:ro" \
+    -v "${SITES_DIR}/conf.d:/etc/nginx/conf.d:ro" \
+    --label "traefik.enable=true" \
+    --label "traefik.docker.network=platform_proxy" \
+    --label 'traefik.http.routers.static-sites-http.rule=HostRegexp(`.+`)' \
+    --label "traefik.http.routers.static-sites-http.priority=1" \
+    --label "traefik.http.routers.static-sites-http.entrypoints=web" \
+    --label "traefik.http.routers.static-sites-http.service=static-sites" \
+    --label 'traefik.http.routers.static-sites-https.rule=HostRegexp(`.+`)' \
+    --label "traefik.http.routers.static-sites-https.priority=1" \
+    --label "traefik.http.routers.static-sites-https.entrypoints=websecure" \
+    --label "traefik.http.routers.static-sites-https.tls=true" \
+    --label "traefik.http.routers.static-sites-https.service=static-sites" \
+    --label "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file" \
+    --label "traefik.http.services.static-sites.loadbalancer.server.port=80" \
+    nginx:alpine
+success "shipyard-nginx-static recreated with updated labels"
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""
@@ -206,8 +241,10 @@ echo -e "${GREEN}${BOLD}╚═════════════════�
 echo ""
 echo -e "  Static site directories: ${BOLD}${SITES_DIR}${RESET}"
 echo -e "  nginx container:         ${BOLD}shipyard-nginx-static${RESET}"
+echo -e "  Traefik middleware file:  ${BOLD}${ERRORS_CONFIG}${RESET}"
 echo ""
 echo -e "  Verify with:"
 echo -e "    ${BOLD}docker ps | grep nginx-static${RESET}"
+echo -e "    ${BOLD}docker inspect shipyard-nginx-static | grep -A1 traefik${RESET}"
 echo -e "    ${BOLD}docker logs shipyard-nginx-static${RESET}"
 echo ""

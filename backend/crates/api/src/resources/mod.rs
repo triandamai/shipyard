@@ -119,6 +119,9 @@ async fn sync_traefik_dynamic_config(
         let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
         let _ = write!(out, "      entryPoints:\n");
         let _ = write!(out, "        - {entrypoint_https}\n");
+        // shipyard-error-pages replaces 404 responses with the branded Shipyard HTML page.
+        let _ = write!(out, "      middlewares:\n");
+        let _ = write!(out, "        - shipyard-error-pages@file\n");
         if convenience || !*tls_enabled {
             // nip.io / traefik.me / tls_enabled=false: self-signed cert (no LE slot consumed).
             let _ = write!(out, "      tls: {{}}\n");

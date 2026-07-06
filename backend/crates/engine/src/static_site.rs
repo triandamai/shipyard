@@ -382,7 +382,6 @@ server {{
 
     location /_errors/ {{
         root {sites_base};
-        internal;
     }}
 
     location / {{
@@ -427,9 +426,9 @@ pub fn render_nginx_site_conf(
     if let Some(p) = &config.error_pages.server_error {
         out.push_str(&format!("    error_page 500 502 503 504 /{p};\n"));
     }
-    // Shared error-page assets (internal redirect only — not directly accessible by browsers).
+    // Shared error-page assets — also fetched directly by Traefik's errors middleware.
     out.push_str(&format!(
-        "    location /_errors/ {{\n        root {sites_base};\n        internal;\n    }}\n"
+        "    location /_errors/ {{\n        root {sites_base};\n    }}\n"
     ));
     out.push('\n');
 
