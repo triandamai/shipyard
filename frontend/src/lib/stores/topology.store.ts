@@ -43,7 +43,6 @@ function toFlowEdge(edge: TopologyEdge): FlowEdge {
 			style: 'stroke: #7c3aed; stroke-dasharray: 6,3;',
 			labelStyle: 'fill: #7c3aed; font-size: 9px; font-weight: 600;',
 			labelBgStyle: 'fill: transparent;',
-			animated: true,
 		}),
 	};
 }
