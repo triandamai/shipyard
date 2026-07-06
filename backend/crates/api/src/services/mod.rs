@@ -720,6 +720,8 @@ async fn bulk_update_env(
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
+    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
     )
@@ -728,9 +730,10 @@ async fn bulk_update_env(
     .await
     {
         let topic = topics::topology(org_id, project_id);
-        let payload = MqttPayload::new("service.env.changed")
-            .with_meta(serde_json::json!({ "service_id": service_id }));
-        state.mqtt.publish_status(&topic, &payload).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
+            .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("topology.changed")
+            .with_meta(serde_json::json!({ "reason": "env_ref" }))).await.ok();
     }
 
     Ok(Json(ApiResponse::ok(results)))
@@ -771,6 +774,8 @@ async fn add_env(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
+    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
     )
@@ -779,9 +784,10 @@ async fn add_env(
     .await
     {
         let topic = topics::topology(org_id, project_id);
-        let payload = MqttPayload::new("service.env.changed")
-            .with_meta(serde_json::json!({ "service_id": service_id }));
-        state.mqtt.publish_status(&topic, &payload).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
+            .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("topology.changed")
+            .with_meta(serde_json::json!({ "reason": "env_ref" }))).await.ok();
     }
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(ServiceEnvResponse::from_env(env, secret_key)))))
@@ -813,6 +819,8 @@ async fn delete_env(
         ))));
     }
 
+    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
     )
@@ -821,9 +829,10 @@ async fn delete_env(
     .await
     {
         let topic = topics::topology(org_id, project_id);
-        let payload = MqttPayload::new("service.env.changed")
-            .with_meta(serde_json::json!({ "service_id": service_id }));
-        state.mqtt.publish_status(&topic, &payload).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
+            .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
+        state.mqtt.publish_status(&topic, &MqttPayload::new("topology.changed")
+            .with_meta(serde_json::json!({ "reason": "env_ref" }))).await.ok();
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
@@ -880,6 +889,151 @@ async fn verify_service_project(
         ))));
     }
     Ok(())
+}
+
+// ─── Platform-ref detection ───────────────────────────────────────────────────
+
+/// Extract the `{slug}` part from every `platform-{slug}` token in `value`.
+/// Requires that the `p` of `platform-` is either at start-of-string or
+/// preceded by a non-alphanumeric, non-hyphen character so we don't match
+/// inside longer tokens like `no-platform-x`.
+fn extract_platform_slugs(value: &str) -> Vec<String> {
+    let prefix = "platform-";
+    let mut slugs: Vec<String> = Vec::new();
+    let mut search_from = 0;
+
+    while search_from < value.len() {
+        let Some(rel) = value[search_from..].find(prefix) else { break };
+        let abs = search_from + rel;
+        let prev_ok = abs == 0 || {
+            let b = value.as_bytes()[abs - 1];
+            !b.is_ascii_alphanumeric() && b != b'-'
+        };
+        let slug_start = abs + prefix.len();
+        if prev_ok && slug_start < value.len() {
+            let rest = &value[slug_start..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .unwrap_or(rest.len());
+            if end > 0 && rest.as_bytes().first().map(|b| b.is_ascii_alphanumeric()).unwrap_or(false) {
+                slugs.push(rest[..end].to_lowercase());
+            }
+        }
+        search_from = abs + prefix.len();
+    }
+
+    slugs.sort();
+    slugs.dedup();
+    slugs
+}
+
+/// Re-scan all non-secret envs for this service, resolve `platform-{slug}` references
+/// to services / networks / volumes in the same org, and rewrite `service_env_refs`.
+/// Errors are silently discarded — detection failure must not break the env-save response.
+async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid) {
+    let result: Result<(), sqlx::Error> = async {
+        let (org_id,): (Uuid,) = sqlx::query_as(
+            "SELECT org_id FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_one(db)
+        .await?;
+
+        // All non-secret env values for this service
+        let envs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT key, value_encrypted FROM service_envs
+             WHERE service_id = $1 AND is_secret = FALSE",
+        )
+        .bind(service_id)
+        .fetch_all(db)
+        .await?;
+
+        // Collect unique (env_key, slug) pairs
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for (key, value) in &envs {
+            for slug in extract_platform_slugs(value) {
+                if !pairs.iter().any(|(_, s)| s == &slug) {
+                    pairs.push((key.clone(), slug));
+                }
+            }
+        }
+
+        // Resolve each slug → resource (service > network > volume)
+        let mut resolved: Vec<(String, String, String, Uuid, Uuid)> = Vec::new();
+
+        for (env_key, slug) in &pairs {
+            let ref_val = format!("platform-{slug}");
+
+            if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT s.id, s.project_id FROM services s
+                 JOIN projects p ON p.id = s.project_id
+                 WHERE p.org_id = $1 AND LOWER(s.slug) = $2
+                 LIMIT 1",
+            )
+            .bind(org_id).bind(slug.as_str())
+            .fetch_optional(db).await? {
+                resolved.push((env_key.clone(), ref_val, "service".into(), rid, rpid));
+                continue;
+            }
+
+            if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT n.id, n.project_id FROM networks n
+                 JOIN projects p ON p.id = n.project_id
+                 WHERE p.org_id = $1 AND LOWER(REPLACE(n.name, ' ', '-')) = $2
+                 LIMIT 1",
+            )
+            .bind(org_id).bind(slug.as_str())
+            .fetch_optional(db).await? {
+                resolved.push((env_key.clone(), ref_val, "network".into(), rid, rpid));
+                continue;
+            }
+
+            if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT v.id, COALESCE(v.project_id, s.project_id) AS project_id
+                 FROM volumes v
+                 LEFT JOIN services s ON s.id = v.service_id
+                 JOIN projects p ON p.id = COALESCE(v.project_id, s.project_id)
+                 WHERE p.org_id = $1 AND LOWER(REPLACE(v.name, ' ', '-')) = $2
+                 LIMIT 1",
+            )
+            .bind(org_id).bind(slug.as_str())
+            .fetch_optional(db).await? {
+                resolved.push((env_key.clone(), ref_val, "volume".into(), rid, rpid));
+            }
+        }
+
+        // Rewrite refs for this service
+        sqlx::query("DELETE FROM service_env_refs WHERE service_id = $1")
+            .bind(service_id)
+            .execute(db)
+            .await?;
+
+        for (env_key, ref_value, rtype, rid, rpid) in resolved {
+            sqlx::query(
+                "INSERT INTO service_env_refs
+                 (id, service_id, env_key, ref_value, resource_type, resource_id, resource_project_id, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                 ON CONFLICT (service_id, ref_value) DO UPDATE
+                     SET env_key = EXCLUDED.env_key,
+                         resource_type = EXCLUDED.resource_type,
+                         resource_id = EXCLUDED.resource_id,
+                         resource_project_id = EXCLUDED.resource_project_id",
+            )
+            .bind(Uuid::now_v7())
+            .bind(service_id)
+            .bind(&env_key)
+            .bind(&ref_value)
+            .bind(&rtype)
+            .bind(rid)
+            .bind(rpid)
+            .execute(db)
+            .await?;
+        }
+
+        Ok(())
+    }.await;
+
+    result.ok();
 }
 
 // ─── Webhook token helpers ────────────────────────────────────────────────────

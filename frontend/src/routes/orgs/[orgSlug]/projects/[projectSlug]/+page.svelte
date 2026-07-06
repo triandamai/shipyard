@@ -21,6 +21,7 @@
 	import DomainNode from '$lib/flows/DomainNode.svelte';
 	import ContainerNode from '$lib/flows/ContainerNode.svelte';
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
+	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
@@ -72,6 +73,7 @@
 		domain:      DomainNode as any,
 		container:   ContainerNode as any,
 		static_site: StaticSiteNode as any,
+		portal:      PortalNode as any,
 	};
 
 	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
@@ -157,6 +159,8 @@
 				},
 				title: (node.data?.name as string) || 'Static Site'
 			});
+		} else if (node.type === 'portal') {
+			// Portal nodes are read-only info — no panel needed
 		}
 	}
 

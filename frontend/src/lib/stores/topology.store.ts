@@ -32,23 +32,31 @@ function toFlowNode(node: TopologyNode, position?: { x: number; y: number }): Fl
 
 /** Convert a TopologyEdge to a SvelteFlow Edge. */
 function toFlowEdge(edge: TopologyEdge): FlowEdge {
+	const isEnvRef = edge.type === 'env_ref';
 	return {
 		id: edge.id,
 		source: edge.source,
 		target: edge.target,
-		label: edge.type,
-		type: 'default'
+		label: isEnvRef ? 'env ref' : edge.type,
+		type: 'default',
+		...(isEnvRef && {
+			style: 'stroke: #7c3aed; stroke-dasharray: 6,3;',
+			labelStyle: 'fill: #7c3aed; font-size: 9px; font-weight: 600;',
+			labelBgStyle: 'fill: transparent;',
+			animated: true,
+		}),
 	};
 }
 
 // Column X positions — left to right:
-//   domain → root_service → child_service → container/replica → network → volume
+//   domain → root_service → child_service → container/replica → network → volume → portal
 const DOMAIN_X    = -300;
 const ROOT_SVC_X  = 0;
 const CHILD_SVC_X = 270;
 const CONTAINER_X = 540;
 const NETWORK_X   = 810;
 const VOLUME_X    = 1080;
+const PORTAL_X    = 1350;
 const Y_STEP      = 150;   // vertical distance between sibling nodes
 const Y_START     = 60;    // canvas top margin
 const SVC_GAP     = 50;    // extra vertical padding between root-service slots
@@ -57,7 +65,7 @@ const SVC_GAP     = 50;    // extra vertical padding between root-service slots
  * Compute auto-layout positions for nodes that don't have a saved position.
  *
  * Column order (left → right):
- *   domain | root_service | child_service (compose) | container/replica | network | volume
+ *   domain | root_service | child_service (compose) | container/replica | network | volume | portal
  *
  * Algorithm:
  *   Pass 0 — index all nodes into lookup maps
@@ -65,7 +73,7 @@ const SVC_GAP     = 50;    // extra vertical padding between root-service slots
  *   Pass 2 — place child services (compose children) grouped under their root
  *   Pass 3 — place containers relative to their direct parent (child or root service)
  *   Pass 4 — place domains relative to their root service
- *   Pass 5 — stack network / volume nodes in their global columns
+ *   Pass 5 — stack network / volume / portal nodes in their global columns
  */
 function autoLayoutPositions(
 	nodes: TopologyNode[],
@@ -81,6 +89,7 @@ function autoLayoutPositions(
 	const childSvcIdSet = new Set<string>();
 	const networkIds:    string[] = [];
 	const volumeIds:     string[] = [];
+	const portalIds:     string[] = [];
 
 	for (const n of nodes) {
 		const d = n.data as Record<string, unknown>;
@@ -103,6 +112,8 @@ function autoLayoutPositions(
 			networkIds.push(n.id);
 		} else if (n.type === 'volume') {
 			volumeIds.push(n.id);
+		} else if (n.type === 'portal') {
+			portalIds.push(n.id);
 		}
 	}
 
@@ -188,7 +199,7 @@ function autoLayoutPositions(
 		}
 	}
 
-	// --- Pass 5: stack network and volume columns ---
+	// --- Pass 5: stack network, volume, and portal columns ---
 	const placedNetMaxY = networkIds
 		.filter((id) => result[id])
 		.reduce((max, id) => Math.max(max, result[id].y), -Infinity);
@@ -207,6 +218,16 @@ function autoLayoutPositions(
 		if (result[id]) continue;
 		result[id] = { x: VOLUME_X, y: nextVolY };
 		nextVolY += Y_STEP;
+	}
+
+	const placedPortalMaxY = portalIds
+		.filter((id) => result[id])
+		.reduce((max, id) => Math.max(max, result[id].y), -Infinity);
+	let nextPortalY = placedPortalMaxY === -Infinity ? Y_START : placedPortalMaxY + Y_STEP;
+	for (const id of portalIds) {
+		if (result[id]) continue;
+		result[id] = { x: PORTAL_X, y: nextPortalY };
+		nextPortalY += Y_STEP;
 	}
 
 	return result;
@@ -259,7 +280,7 @@ function createTopologyStore() {
 				nodes: topology.nodes,
 				edges: topology.edges,
 				flowNodes: buildFlowNodes(topology.nodes, pos),
-				flowEdges: buildFlowEdges(topology.edges)
+				flowEdges: buildFlowEdges(topology.edges),
 			}));
 		},
 
@@ -287,15 +308,12 @@ function createTopologyStore() {
 					Object.assign(livePositions, canvasPositions);
 				}
 
-				const flowNodes = buildFlowNodes(topology.nodes, livePositions);
-				const flowEdges = buildFlowEdges(topology.edges);
-
 				return {
 					...state,
 					nodes: topology.nodes,
 					edges: topology.edges,
-					flowNodes,
-					flowEdges,
+					flowNodes: buildFlowNodes(topology.nodes, livePositions),
+					flowEdges: buildFlowEdges(topology.edges),
 				};
 			});
 		},

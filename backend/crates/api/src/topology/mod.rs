@@ -99,6 +99,18 @@ struct VolumeServiceRow {
     service_id: Uuid,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct EnvRefRow {
+    service_id: Uuid,
+    env_key: String,
+    ref_value: String,
+    resource_type: String,
+    resource_id: Uuid,
+    resource_project_id: Uuid,
+    resource_project_name: String,
+    resource_name: String,
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
@@ -254,7 +266,35 @@ async fn get_topology(
         static_domain_map.entry(dom.service_id).or_default().push(dom.hostname.clone());
     }
 
-    // 7. Query live containers (non-terminal) for container replica nodes
+    // 7. Query env-based platform references for this project's services
+    let env_refs = sqlx::query_as::<_, EnvRefRow>(
+        "SELECT
+             er.service_id,
+             er.env_key,
+             er.ref_value,
+             er.resource_type,
+             er.resource_id,
+             er.resource_project_id,
+             p.name AS resource_project_name,
+             COALESCE(
+                 CASE er.resource_type
+                     WHEN 'service' THEN (SELECT name FROM services WHERE id = er.resource_id)
+                     WHEN 'network' THEN (SELECT name FROM networks WHERE id = er.resource_id)
+                     WHEN 'volume'  THEN (SELECT name FROM volumes  WHERE id = er.resource_id)
+                 END,
+                 er.ref_value
+             ) AS resource_name
+         FROM service_env_refs er
+         JOIN services src ON src.id = er.service_id
+         JOIN projects p ON p.id = er.resource_project_id
+         WHERE src.project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    // 8. Query live containers (non-terminal) for container replica nodes
     let containers = sqlx::query_as::<_, ContainerRow>(
         "SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
                 c.status::text AS status, c.image, c.node_id
@@ -423,6 +463,49 @@ async fn get_topology(
             target: format!("ctr_{}", ctr.id),
             edge_type: "replica".to_string(),
         });
+    }
+
+    // env_ref edges (same-project) and portal nodes + edges (cross-project)
+    for er in &env_refs {
+        let svc_node_id = format!("svc_{}", er.service_id);
+
+        if er.resource_project_id == project_id {
+            let target_node_id = match er.resource_type.as_str() {
+                "service" => format!("svc_{}", er.resource_id),
+                "network" => format!("net_{}", er.resource_id),
+                "volume"  => format!("vol_{}", er.resource_id),
+                _ => continue,
+            };
+            stable_edges.push(TopologyEdge {
+                id: format!("e_envref_{}_{}", er.service_id, er.resource_id),
+                source: svc_node_id,
+                target: target_node_id,
+                edge_type: "env_ref".to_string(),
+            });
+        } else {
+            let portal_id = format!("portal_{}_{}", er.resource_type, er.resource_id);
+            if !nodes.iter().any(|n| n.id == portal_id) {
+                nodes.push(TopologyNode {
+                    id: portal_id.clone(),
+                    node_type: "portal".to_string(),
+                    data: serde_json::json!({
+                        "resource_type":       er.resource_type,
+                        "resource_id":         er.resource_id,
+                        "resource_name":       er.resource_name,
+                        "source_project_id":   er.resource_project_id,
+                        "source_project_name": er.resource_project_name,
+                        "env_key":             er.env_key,
+                        "full_match":          er.ref_value,
+                    }),
+                });
+            }
+            stable_edges.push(TopologyEdge {
+                id: format!("e_envref_{}_{}", er.service_id, er.resource_id),
+                source: svc_node_id,
+                target: portal_id,
+                edge_type: "env_ref".to_string(),
+            });
+        }
     }
 
     // ── Persist stable edges to topology_edges table ──────────────────────────
