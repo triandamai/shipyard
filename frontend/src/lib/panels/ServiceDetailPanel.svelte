@@ -108,8 +108,20 @@
 	let clogError   = $state('');
 	let clogEl      = $state<HTMLDivElement | null>(null);
 	let clogTail    = $state(200);
+	let clogSearch  = $state('');
 
 	const CLOG_TAIL_OPTIONS = [50, 100, 200, 500, 1000] as const;
+
+	let filteredContainerLogs = $derived(
+		clogSearch
+			? containerLogs.filter(l => l.toLowerCase().includes(clogSearch.toLowerCase()))
+			: containerLogs
+	);
+	let filteredClogLines = $derived(
+		clogSearch
+			? clogLines.filter(l => l.toLowerCase().includes(clogSearch.toLowerCase()))
+			: clogLines
+	);
 
 	// ── Env panel ────────────────────────────────────────────────────
 	let showEnvPanel    = $state(false);
@@ -534,6 +546,7 @@ let showDbClient    = $state(false);
 		clogStatus = 'idle';
 		clogLines = [];
 		clogError = '';
+		clogSearch = '';
 
 		containerLogsTarget = c;
 		isLoadingContainerLogs = true;
@@ -1006,52 +1019,83 @@ let showDbClient    = $state(false);
 	<div use:portal class="clog-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) requestCloseContainerLogs(); }}>
 	<div class="clog-panel">
 		<div class="log-overlay-header">
-			<div class="log-overlay-title">
-				<FileText size={14} />
-				<span>replica-{containerLogsTarget.replica_index ?? '?'}</span>
-				<span class="log-dep-time font-mono">{containerLogsTarget.docker_container_id.slice(0, 12)}</span>
-			</div>
-
-			<!-- Tail selector -->
-			<div class="clog-tail-group">
-				<span class="clog-tail-label">Lines</span>
-				{#each CLOG_TAIL_OPTIONS as n}
-					<button
-						class="clog-tail-btn"
-						class:active={clogTail === n}
-						onclick={async () => {
-							clogTail = n;
-							if (containerLogsTarget) {
-								disconnectContainerLogs();
-								await openContainerLogs(containerLogsTarget);
-							}
+			<div class="clog-header-row clog-header-top">
+				<div class="log-overlay-title">
+					<FileText size={14} />
+					<!-- Replica selector -->
+					<select
+						class="clog-replica-select"
+						value={containerLogsTarget.id}
+						onchange={async (e) => {
+							const target = e.currentTarget as HTMLSelectElement;
+							const c = containers.find(ct => ct.id === target.value);
+							if (c) { disconnectContainerLogs(); await openContainerLogs(c); }
 						}}
-					>{n}</button>
-				{/each}
+					>
+						{#each containers.filter(c => c.docker_container_id).sort((a, b) => (a.replica_index ?? 0) - (b.replica_index ?? 0)) as c}
+							<option value={c.id}>replica-{c.replica_index ?? '?'}</option>
+						{/each}
+					</select>
+					<span class="log-dep-time font-mono">{containerLogsTarget.docker_container_id.slice(0, 12)}</span>
+				</div>
+
+				<!-- Tail selector -->
+				<div class="clog-tail-group">
+					<span class="clog-tail-label">Lines</span>
+					{#each CLOG_TAIL_OPTIONS as n}
+						<button
+							class="clog-tail-btn"
+							class:active={clogTail === n}
+							onclick={async () => {
+								clogTail = n;
+								if (containerLogsTarget) {
+									disconnectContainerLogs();
+									await openContainerLogs(containerLogsTarget);
+								}
+							}}
+						>{n}</button>
+					{/each}
+				</div>
+
+				<div class="log-overlay-controls">
+					{#if clogStatus === 'connected'}
+						<span class="clog-dot"></span>
+						<span class="clog-status-label">Live</span>
+						<button class="clog-ctrl-btn" onclick={disconnectContainerLogs}>
+							<Square size={11} />Stop
+						</button>
+					{:else if clogStatus === 'connecting'}
+						<Loader2 size={13} class="spin" />
+						<span class="clog-status-label muted">Connecting…</span>
+					{:else if clogStatus === 'error'}
+						<span class="clog-status-label error">{clogError}</span>
+						<button class="clog-ctrl-btn" onclick={connectContainerLogs}>
+							<Play size={11} />Retry
+						</button>
+					{:else}
+						<button class="clog-ctrl-btn primary" onclick={connectContainerLogs}>
+							<Play size={11} />Connect
+						</button>
+					{/if}
+				</div>
+				<button class="icon-btn" onclick={requestCloseContainerLogs}><X size={16} /></button>
 			</div>
 
-			<div class="log-overlay-controls">
-				{#if clogStatus === 'connected'}
-					<span class="clog-dot"></span>
-					<span class="clog-status-label">Live</span>
-					<button class="clog-ctrl-btn" onclick={disconnectContainerLogs}>
-						<Square size={11} />Stop
-					</button>
-				{:else if clogStatus === 'connecting'}
-					<Loader2 size={13} class="spin" />
-					<span class="clog-status-label muted">Connecting…</span>
-				{:else if clogStatus === 'error'}
-					<span class="clog-status-label error">{clogError}</span>
-					<button class="clog-ctrl-btn" onclick={connectContainerLogs}>
-						<Play size={11} />Retry
-					</button>
-				{:else}
-					<button class="clog-ctrl-btn primary" onclick={connectContainerLogs}>
-						<Play size={11} />Connect
-					</button>
+			<!-- Search bar -->
+			<div class="clog-search-row">
+				<input
+					class="clog-search-input"
+					type="text"
+					placeholder="Search logs…"
+					bind:value={clogSearch}
+				/>
+				{#if clogSearch}
+					<span class="clog-search-count">
+						{filteredContainerLogs.length + filteredClogLines.length} matches
+					</span>
+					<button class="clog-search-clear" onclick={() => clogSearch = ''}>✕</button>
 				{/if}
 			</div>
-			<button class="icon-btn" onclick={requestCloseContainerLogs}><X size={16} /></button>
 		</div>
 
 		{#if showLogCloseConfirm}
@@ -1076,25 +1120,25 @@ let showDbClient    = $state(false);
 					<div class="empty-logs-msg">
 						{clogStatus === 'idle' ? 'Press Connect to stream live logs.' : 'No output yet…'}
 					</div>
+				{:else if filteredContainerLogs.length === 0 && filteredClogLines.length === 0 && clogSearch}
+					<div class="empty-logs-msg">No lines match "{clogSearch}"</div>
 				{:else}
-					{#each containerLogs as line, i (i)}
+					{#each filteredContainerLogs as line, i (i)}
 						{@const p = parseLine(line)}
 						<div class="clog-line clog-lvl-{p.level}">
 							{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
 							<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
-							{#if p.target}<span class="clog-target">{p.target}</span>{/if}
-							<span class="clog-msg">{p.content || line}</span>
+							<span class="clog-msg">{#if p.target}<span class="clog-target-inline">{p.target}</span> {/if}{p.content || line}</span>
 						</div>
 					{/each}
-					{#if clogLines.length > 0}
+					{#if filteredClogLines.length > 0}
 						<div class="clog-stream-divider">── live ──</div>
-						{#each clogLines as line, i (i)}
+						{#each filteredClogLines as line, i (i)}
 							{@const p = parseLine(line)}
 							<div class="clog-line clog-lvl-{p.level} clog-live">
 								{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
 								<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
-								{#if p.target}<span class="clog-target">{p.target}</span>{/if}
-								<span class="clog-msg">{p.content || line}</span>
+								<span class="clog-msg">{#if p.target}<span class="clog-target-inline">{p.target}</span> {/if}{p.content || line}</span>
 							</div>
 						{/each}
 					{/if}
@@ -3163,8 +3207,9 @@ let showDbClient    = $state(false);
 	:global(.clog-panel) .log-overlay-header {
 		background: #0F172A;
 		border-bottom-color: rgba(0,0,0,0.2);
-		flex-wrap: wrap;
-		gap: 6px;
+		flex-direction: column;
+		gap: 0;
+		padding: 0;
 	}
 	:global(.clog-panel) .log-overlay-title {
 		color: #E5E7EB;
@@ -3172,6 +3217,59 @@ let showDbClient    = $state(false);
 	:global(.clog-panel) .log-dep-time {
 		color: #6B7280;
 	}
+
+	.clog-header-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+	}
+	.clog-header-top {
+		padding: 8px 12px;
+		border-bottom: 1px solid rgba(255,255,255,0.05);
+	}
+
+	/* Replica dropdown */
+	.clog-replica-select {
+		background: rgba(255,255,255,0.05);
+		border: 1px solid rgba(255,255,255,0.1);
+		border-radius: 4px;
+		color: #E5E7EB;
+		font-size: 12px;
+		font-weight: 600;
+		font-family: var(--font-mono);
+		padding: 2px 6px;
+		cursor: pointer;
+		outline: none;
+	}
+	.clog-replica-select:focus { border-color: rgba(37,99,235,0.5); }
+
+	/* Search bar */
+	.clog-search-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 12px;
+	}
+	.clog-search-input {
+		flex: 1;
+		background: rgba(255,255,255,0.04);
+		border: 1px solid rgba(255,255,255,0.08);
+		border-radius: 4px;
+		color: #D1D5DB;
+		font-size: 11.5px;
+		font-family: var(--font-mono);
+		padding: 3px 8px;
+		outline: none;
+		transition: border-color 0.12s;
+	}
+	.clog-search-input::placeholder { color: #374151; }
+	.clog-search-input:focus { border-color: rgba(37,99,235,0.45); background: rgba(255,255,255,0.06); }
+	.clog-search-count { font-size: 10px; color: #4B5563; font-family: var(--font-sans); white-space: nowrap; }
+	.clog-search-clear {
+		background: none; border: none; color: #4B5563; cursor: pointer; font-size: 11px; padding: 0 2px;
+	}
+	.clog-search-clear:hover { color: #9CA3AF; }
 
 	/* Tail selector in container log header */
 	.clog-tail-group {
@@ -3267,15 +3365,10 @@ let showDbClient    = $state(false);
 	.clog-badge-debug   { color: #60A5FA; background: rgba(96,165,250,0.08); }
 	.clog-badge-trace   { color: #6B7280; background: rgba(107,114,128,0.08); }
 
-	/* Module/target */
-	.clog-target {
-		flex-shrink: 0;
+	/* Module/target — inline within message, no clipping */
+	.clog-target-inline {
 		color: #4B5563;
 		font-size: 10.5px;
-		max-width: 180px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 
 	/* Message content */
