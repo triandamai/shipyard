@@ -322,22 +322,93 @@ fn find_html_recursive(dir: &Path, depth: usize) -> bool {
     false
 }
 
+// ─── Custom error page assets ─────────────────────────────────────────────────
+
+/// Branded 404 HTML served for unregistered domains and missing pages.
+pub const HTML_404: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 – Not Found</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 2rem; gap: 0;
+    }
+    .num {
+      font-size: 6.5rem; font-weight: 800; line-height: 1;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text; margin-bottom: 1.25rem;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
+    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.73rem; color: #475569;
+      border: 1px solid #1e293b; border-radius: 9999px;
+      padding: 0.35rem 0.9rem;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="num">404</div>
+  <h1>Page Not Found</h1>
+  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
+  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
+</body>
+</html>
+"#;
+
+/// Returns the nginx `_default.conf` content for `shipyard-nginx-static`.
+///
+/// This server block is the fallback for any domain that doesn't match a deployed
+/// site's conf — it serves the Shipyard 404 page instead of nginx's plain text response.
+pub fn render_default_nginx_conf(sites_base: &str) -> String {
+    format!(
+        r#"# Shipyard default — serves the custom 404 page for unregistered domains.
+server {{
+    listen 80 default_server;
+    server_name _;
+
+    error_page 404 /_errors/404.html;
+
+    location /_errors/ {{
+        root {sites_base};
+        internal;
+    }}
+
+    location / {{
+        return 404;
+    }}
+}}
+"#
+    )
+}
+
 // ─── nginx site.conf renderer ─────────────────────────────────────────────────
 
 /// Generate a complete nginx `server {}` block for one static site.
 ///
-/// `domains`   — space-separated server_name values (e.g. "mysite.example.com www.mysite.example.com")
+/// `sites_base` — absolute path to the static sites base dir (e.g. `/opt/shipyard/data/static`)
 /// `serve_root` — absolute path to the `public/` directory inside the current symlink
 /// `config`    — parsed shipyard.json runtime config
 pub fn render_nginx_site_conf(
     service_id: &str,
     domains: &[String],
     serve_root: &str,
+    sites_base: &str,
     config: &DeployConfig,
 ) -> String {
     if domains.is_empty() {
-        // Fallback: serve on a path prefix so the site is accessible even without a domain
-        return render_nginx_site_conf(service_id, &[format!("~^.*$")], serve_root, config);
+        return render_nginx_site_conf(service_id, &[format!("~^.*$")], serve_root, sites_base, config);
     }
 
     let server_name = domains.join(" ");
@@ -347,13 +418,19 @@ pub fn render_nginx_site_conf(
         "# site: {service_id}\nserver {{\n    listen 80;\n    server_name {server_name};\n    root {serve_root};\n    index index.html index.htm;\n\n"
     ));
 
-    // Error pages
+    // Error pages — use shipyard.json override when set, otherwise Shipyard's branded 404.
     if let Some(p) = &config.error_pages.not_found {
         out.push_str(&format!("    error_page 404 /{p};\n"));
+    } else {
+        out.push_str("    error_page 404 /_errors/404.html;\n");
     }
     if let Some(p) = &config.error_pages.server_error {
         out.push_str(&format!("    error_page 500 502 503 504 /{p};\n"));
     }
+    // Shared error-page assets (internal redirect only — not directly accessible by browsers).
+    out.push_str(&format!(
+        "    location /_errors/ {{\n        root {sites_base};\n        internal;\n    }}\n"
+    ));
     out.push('\n');
 
     // Redirects — each becomes a location = /path { return STATUS /dest; }

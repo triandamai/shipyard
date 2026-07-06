@@ -277,8 +277,73 @@ step "Creating directories"
 mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/certs" "${INSTALL_DIR}/traefik/dynamic"
 # Static site directories — nginx conf.d must exist before the container starts
 # so the bind mount succeeds even before any static site is deployed.
-mkdir -p "${INSTALL_DIR}/data/static/conf.d" "${INSTALL_DIR}/data/static/uploads"
+mkdir -p "${INSTALL_DIR}/data/static/conf.d" "${INSTALL_DIR}/data/static/uploads" "${INSTALL_DIR}/data/static/_errors"
 chmod 700 "${INSTALL_DIR}"
+
+cat > "${INSTALL_DIR}/data/static/conf.d/_default.conf" <<'NGINX_DEFAULT'
+# Shipyard default — serves the custom 404 page for unregistered domains.
+server {
+    listen 80 default_server;
+    server_name _;
+
+    error_page 404 /_errors/404.html;
+
+    location /_errors/ {
+        root SITES_BASE_PLACEHOLDER;
+        internal;
+    }
+
+    location / {
+        return 404;
+    }
+}
+NGINX_DEFAULT
+sed -i "s|SITES_BASE_PLACEHOLDER|${INSTALL_DIR}/data/static|g" \
+    "${INSTALL_DIR}/data/static/conf.d/_default.conf"
+
+cat > "${INSTALL_DIR}/data/static/_errors/404.html" <<'HTML404'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 – Not Found</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 2rem;
+    }
+    .num {
+      font-size: 6.5rem; font-weight: 800; line-height: 1;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text; margin-bottom: 1.25rem;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
+    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.73rem; color: #475569;
+      border: 1px solid #1e293b; border-radius: 9999px;
+      padding: 0.35rem 0.9rem;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="num">404</div>
+  <h1>Page Not Found</h1>
+  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
+  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
+</body>
+</html>
+HTML404
+
 success "Directories ready at ${INSTALL_DIR}"
 
 # ── .env ──────────────────────────────────────────────────────────────────────
@@ -443,10 +508,10 @@ api:
 TRAEFIK
 
 # ── Traefik dynamic config ────────────────────────────────────────────────────
-# Build TLS block for static site router — omit when running HTTP-only.
+# The catch-all uses a self-signed fallback cert (tls: {}) so it is always active —
+# per-domain routers handle real Let's Encrypt cert issuance.
 if [[ "${PROTOCOL}" == "https" ]]; then
-    STATIC_SITE_TLS="      tls:
-        certResolver: letsencrypt"
+    STATIC_SITE_TLS="      tls: {}"
     STATIC_SITE_ENTRYPOINTS="[websecure]"
 else
     STATIC_SITE_TLS=""

@@ -352,10 +352,15 @@ impl DeploymentEngine {
         let r = self.static_step_publish(&extract_dir, &public_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Step 3: write_nginx_conf
+        // Clean up extract dir — files have been published; no need to keep the intermediate copy.
+        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+
+        // Step 3: write_nginx_conf — use the `current` symlink path so the config stays valid
+        // across deployments and can be regenerated when domains change without knowing deployment_id.
+        let current_public = format!("{sites_base}/{service_id}/current/public");
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
         let r = self.static_step_write_nginx_conf(
-            service_id, &public_dir, &conf_dir, &deploy_config, deployment_id, step_id,
+            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -521,10 +526,14 @@ impl DeploymentEngine {
         let r = self.static_step_publish(&built_output_path, &public_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Step 4: write_nginx_conf
+        // Clean up the build output dir — contents are now in public_dir; keep the repo for incremental pulls.
+        let _ = tokio::fs::remove_dir_all(&built_output_path).await;
+
+        // Step 4: write_nginx_conf — use the `current` symlink path (see upload pipeline comment).
+        let current_public = format!("{sites_base}/{service_id}/current/public");
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
         let r = self.static_step_write_nginx_conf(
-            service_id, &public_dir, &conf_dir, &deploy_config, deployment_id, step_id,
+            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -616,6 +625,16 @@ impl DeploymentEngine {
         tokio::fs::create_dir_all(&conf_dir).await
             .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
 
+        // Write the custom error page and default server conf.
+        // Always overwrite so the latest design is used after upgrades.
+        let errors_dir = format!("{sites_base}/_errors");
+        tokio::fs::create_dir_all(&errors_dir).await.ok();
+        tokio::fs::write(format!("{errors_dir}/404.html"), crate::static_site::HTML_404.as_bytes()).await.ok();
+        tokio::fs::write(
+            format!("{conf_dir}/_default.conf"),
+            crate::static_site::render_default_nginx_conf(sites_base).as_bytes(),
+        ).await.ok();
+
         // Check if container exists: `docker inspect --format {{.State.Running}} <name>`
         let inspect = tokio::process::Command::new("docker")
             .args(["inspect", "--format", "{{.State.Running}}", CONTAINER])
@@ -671,6 +690,7 @@ impl DeploymentEngine {
         &self,
         service_id: Uuid,
         serve_root: &str,
+        sites_base: &str,
         conf_dir: &str,
         deploy_config: &crate::static_site::DeployConfig,
         deployment_id: Uuid,
@@ -689,6 +709,7 @@ impl DeploymentEngine {
             &service_id.to_string(),
             &domains,
             serve_root,
+            sites_base,
             deploy_config,
         );
 

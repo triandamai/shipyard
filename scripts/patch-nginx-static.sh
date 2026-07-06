@@ -27,8 +27,74 @@ DYNAMIC="${INSTALL_DIR}/traefik/dynamic/shipyard.yml"
 
 # ── 1. Directories ─────────────────────────────────────────────────────────────
 step "Creating static site directories"
-mkdir -p "${SITES_DIR}/conf.d" "${SITES_DIR}/uploads"
+mkdir -p "${SITES_DIR}/conf.d" "${SITES_DIR}/uploads" "${SITES_DIR}/_errors"
 success "Directories ready: ${SITES_DIR}/conf.d"
+
+step "Writing custom 404 page and default nginx conf"
+
+cat > "${SITES_DIR}/_errors/404.html" <<'HTML404'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 – Not Found</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 2rem;
+    }
+    .num {
+      font-size: 6.5rem; font-weight: 800; line-height: 1;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text; margin-bottom: 1.25rem;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
+    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.73rem; color: #475569;
+      border: 1px solid #1e293b; border-radius: 9999px;
+      padding: 0.35rem 0.9rem;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="num">404</div>
+  <h1>Page Not Found</h1>
+  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
+  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
+</body>
+</html>
+HTML404
+
+cat > "${SITES_DIR}/conf.d/_default.conf" <<NGINX_DEFAULT
+# Shipyard default — serves the custom 404 page for unregistered domains.
+server {
+    listen 80 default_server;
+    server_name _;
+
+    error_page 404 /_errors/404.html;
+
+    location /_errors/ {
+        root ${SITES_DIR};
+        internal;
+    }
+
+    location / {
+        return 404;
+    }
+}
+NGINX_DEFAULT
+
+success "404 page and default conf written"
 
 # ── 2. docker-compose.yml ──────────────────────────────────────────────────────
 step "Patching docker-compose.yml"
@@ -64,10 +130,10 @@ step "Patching Traefik dynamic config"
 if grep -q "nginx-static" "${DYNAMIC}"; then
     success "nginx-static route already present in Traefik config — skipping"
 else
-    # Detect whether TLS is in use by looking for certResolver in the existing config.
+    # Detect whether TLS is in use — catch-all uses self-signed fallback (tls: {}),
+    # not certResolver, so it is always active regardless of cert issuance state.
     if grep -q "certResolver" "${DYNAMIC}"; then
-        TLS_BLOCK="      tls:
-        certResolver: letsencrypt"
+        TLS_BLOCK="      tls: {}"
         ENTRYPOINTS="[websecure]"
     else
         TLS_BLOCK=""
