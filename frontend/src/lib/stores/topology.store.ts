@@ -84,7 +84,7 @@ function autoLayoutPositions(
 
 	for (const n of nodes) {
 		const d = n.data as Record<string, unknown>;
-		if (n.type === 'service') {
+		if (n.type === 'service' || n.type === 'static_site') {
 			const parentId = d?.service_parent_id as string | undefined;
 			if (parentId) {
 				// parentId is already in "svc_{uuid}" format (matches node id)

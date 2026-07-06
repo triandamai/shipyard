@@ -438,7 +438,7 @@ export interface Network {
 // Topology
 export interface TopologyNode {
 	id: string;
-	type: 'service' | 'network' | 'volume' | 'domain' | 'container';
+	type: 'service' | 'network' | 'volume' | 'domain' | 'container' | 'static_site';
 	data: Record<string, unknown>;
 }
 

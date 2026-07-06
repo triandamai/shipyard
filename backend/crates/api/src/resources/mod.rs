@@ -179,12 +179,12 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
         .flatten();
     let Some(slug) = slug else { return };
 
-    let conf_path = format!("{data_dir}/static/conf.d/{slug}.conf");
+    let sites_base = format!("{data_dir}/static");
+    let conf_path = format!("{sites_base}/conf.d/{slug}.conf");
 
-    // Nothing to update yet if the service hasn't been deployed once
     let existing = match tokio::fs::read_to_string(&conf_path).await {
-        Ok(c) => c,
-        Err(_) => return,
+        Ok(c) => Some(c),
+        Err(_) => None,
     };
 
     // Fetch the current full domain list (after the DB mutation that triggered this call)
@@ -205,20 +205,42 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
             }
         }
     } else {
-        let server_name_value = domains.join(" ");
-
-        // Splice the new server_name into the existing conf, preserving all other directives
-        let updated = existing
-            .lines()
-            .map(|line| {
-                if line.trim_start().starts_with("server_name ") {
-                    format!("    server_name {server_name_value};")
-                } else {
-                    line.to_string()
+        let updated = match existing {
+            Some(ref existing_conf) => {
+                // Splice new server_name into existing conf, preserving all other directives
+                let server_name_value = domains.join(" ");
+                existing_conf
+                    .lines()
+                    .map(|line| {
+                        if line.trim_start().starts_with("server_name ") {
+                            format!("    server_name {server_name_value};")
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            None => {
+                // Conf missing — service was deployed with no domains, now the first domain
+                // is being assigned. Generate a full conf from scratch.
+                let serve_root = format!("{sites_base}/{service_id}/current/public");
+                if !tokio::fs::try_exists(&serve_root).await.unwrap_or(false) {
+                    // Service hasn't been deployed yet; nothing to render.
+                    tracing::debug!(
+                        "sync_static_nginx_conf: skipping {slug} — no deployment yet (current/public absent)"
+                    );
+                    return;
                 }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+                shipyard_engine::static_site::render_nginx_site_conf(
+                    &service_id.to_string(),
+                    &domains,
+                    &serve_root,
+                    &sites_base,
+                    &Default::default(),
+                )
+            }
+        };
 
         if let Err(e) = tokio::fs::write(&conf_path, updated.as_bytes()).await {
             tracing::warn!("sync_static_nginx_conf: could not write '{conf_path}': {e}");

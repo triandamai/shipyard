@@ -469,21 +469,29 @@
 		z-index: 10;
 	}
 
-	/* Override @xyflow background to match design tokens */
+	/* Override @xyflow background and edge-label CSS vars with Shipyard design tokens.
+	   xyflow only applies dark-mode defaults when its own .svelte-flow.dark class is set,
+	   which Shipyard never adds — so we override the variables directly here. */
 	.canvas-wrapper :global(.svelte-flow) {
 		background: var(--bg-base);
+		--xy-edge-label-background-color: var(--bg-surface);
+		--xy-edge-label-color: var(--text-secondary);
 	}
 
-	/* Edge labels — transparent background, theme-aware text */
-	.canvas-wrapper :global(.svelte-flow__edge-textbg) {
-		fill: transparent;
-	}
-	.canvas-wrapper :global(.svelte-flow__edge-text) {
-		fill: var(--text-muted);
+	/* Edge label pill — HTML div rendered via portal inside .svelte-flow */
+	.canvas-wrapper :global(.svelte-flow__edge-label) {
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 1px 6px;
 		font-size: 10px;
 		font-family: var(--font-sans);
 		font-weight: 500;
+		white-space: nowrap;
+		line-height: 1.6;
 	}
+
 	.canvas-wrapper :global(.svelte-flow__edge-path) {
 		stroke: var(--border-hover);
 	}

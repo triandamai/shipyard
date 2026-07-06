@@ -7,7 +7,7 @@
 	import { projectStore } from '$lib/stores/project.store';
 	import {
 		ArrowLeft, Settings2, Calendar, FolderOpen,
-		Trash2, AlertTriangle, Loader2, X,
+		Trash2, AlertTriangle, Loader2, X, Save, Check,
 		Layers, Network, HardDrive, Globe, ChevronDown, ChevronRight
 	} from '@lucide/svelte';
 	import type { Project, Service } from '$lib/api/types';
@@ -28,6 +28,33 @@
 	let networkCount = $state(0);
 	let volumeCount  = $state(0);
 	let domainCount  = $state(0);
+
+	// Rename
+	let renameValue  = $state('');
+	let renaming     = $state(false);
+	let renameError  = $state('');
+	let renameSaved  = $state(false);
+
+	$effect(() => { if (project) renameValue = project.name; });
+
+	async function saveRename() {
+		if (!project || !renameValue.trim() || renameValue.trim() === project.name) return;
+		renaming = true; renameError = ''; renameSaved = false;
+		const res = await api.updateProject(orgId, projectId, renameValue.trim());
+		if (res.error) {
+			renameError = res.error.message;
+		} else if (res.data) {
+			project = res.data;
+			renameValue = res.data.name;
+			// sync the store so the sidebar label updates
+			projectStore.setProjects(
+				$projectStore.projects.map(p => p.id === projectId ? { ...p, name: res.data!.name } : p)
+			);
+			renameSaved = true;
+			setTimeout(() => (renameSaved = false), 3000);
+		}
+		renaming = false;
+	}
 
 	// Confirmation dialog
 	let confirmInput = $state('');
@@ -149,6 +176,41 @@
 					<span class="info-value">{formatDate(project.created_at)}</span>
 				</div>
 			</div>
+		</section>
+
+		<!-- Rename card -->
+		<section class="card">
+			<h2 class="card-title">Rename project</h2>
+			<p class="card-desc">Change the display name. The URL slug stays the same.</p>
+			<form class="rename-form" onsubmit={(e) => { e.preventDefault(); saveRename(); }}>
+				<input
+					class="rename-input"
+					type="text"
+					bind:value={renameValue}
+					placeholder="Project name"
+					disabled={renaming}
+					maxlength={80}
+					autocomplete="off"
+				/>
+				{#if renameError}
+					<p class="rename-error">{renameError}</p>
+				{/if}
+				<div class="rename-actions">
+					<button
+						class="btn btn-primary rename-btn"
+						type="submit"
+						disabled={renaming || !renameValue.trim() || renameValue.trim() === project.name}
+					>
+						{#if renaming}
+							<Loader2 size={13} class="spin" /> Saving…
+						{:else if renameSaved}
+							<Check size={13} /> Saved
+						{:else}
+							<Save size={13} /> Save name
+						{/if}
+					</button>
+				</div>
+			</form>
 		</section>
 
 		<!-- Resources card -->
@@ -556,6 +618,23 @@
 		word-break: break-all;
 	}
 	.detail-val.dim { color: var(--text-dim, var(--text-muted)); font-size: 11px; }
+
+	/* Rename */
+	.card-desc { font-size: 13px; color: var(--text-muted); margin: -8px 0 0; line-height: 1.5; }
+	.rename-form { display: flex; flex-direction: column; gap: 10px; }
+	.rename-input {
+		width: 100%; padding: 8px 12px;
+		font-size: 14px; font-family: var(--font-sans);
+		border: 1px solid var(--border); border-radius: 6px;
+		background: var(--bg-base); color: var(--text-primary);
+		box-sizing: border-box; outline: none;
+		transition: border-color 0.15s;
+	}
+	.rename-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
+	.rename-input:disabled { opacity: 0.6; }
+	.rename-error { font-size: 12px; color: #dc2626; margin: 0; }
+	.rename-actions { display: flex; justify-content: flex-end; }
+	.rename-btn { display: flex; align-items: center; gap: 6px; min-width: 110px; justify-content: center; }
 
 	/* Danger zone */
 	.danger-card { border-color: #fecaca; }
