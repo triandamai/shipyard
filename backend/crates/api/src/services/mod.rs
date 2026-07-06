@@ -927,42 +927,53 @@ fn extract_platform_slugs(value: &str) -> Vec<String> {
     slugs
 }
 
-/// Re-scan all non-secret envs for this service, resolve `platform-{slug}` references
+/// Re-scan ALL envs for this service, resolve `platform-{slug}` references
 /// to services / networks / volumes in the same org, and rewrite `service_env_refs`.
-/// Errors are silently discarded — detection failure must not break the env-save response.
 async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) {
-    let result: Result<(), sqlx::Error> = async {
-        let (org_id,): (Uuid,) = sqlx::query_as(
-            "SELECT org_id FROM projects WHERE id = $1",
-        )
-        .bind(project_id)
-        .fetch_one(db)
-        .await?;
+    if let Err(e) = do_detect_platform_refs(db, service_id, project_id, secret_key).await {
+        tracing::error!(%service_id, "platform ref detection failed: {e}");
+    }
+}
 
-        // All non-secret env values for this service
-        let envs: Vec<(String, String)> = sqlx::query_as(
-            "SELECT key, value_encrypted FROM service_envs
-             WHERE service_id = $1 AND is_secret = FALSE",
-        )
-        .bind(service_id)
-        .fetch_all(db)
-        .await?;
+async fn do_detect_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) -> Result<(), sqlx::Error> {
+    let (org_id,): (Uuid,) = sqlx::query_as(
+        "SELECT org_id FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .fetch_one(db)
+    .await?;
 
-        // Collect unique (env_key, slug) pairs — decrypt each value first
-        let mut pairs: Vec<(String, String)> = Vec::new();
-        for (key, value_encrypted) in &envs {
-            let value = shipyard_common::crypto::decrypt_or_passthrough(secret_key, value_encrypted);
-            for slug in extract_platform_slugs(&value) {
-                if !pairs.iter().any(|(_, s)| s == &slug) {
-                    pairs.push((key.clone(), slug));
-                }
+    tracing::debug!(%service_id, %org_id, "scanning envs for platform refs");
+
+    // ALL env values for this service (including secrets — pattern refs are logical, not data)
+    let envs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value_encrypted FROM service_envs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_all(db)
+    .await?;
+
+    // Collect unique (env_key, slug) pairs — decrypt each value first
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (key, value_encrypted) in &envs {
+        let value = shipyard_common::crypto::decrypt_or_passthrough(secret_key, value_encrypted);
+        for slug in extract_platform_slugs(&value) {
+            if !pairs.iter().any(|(_, s)| s == &slug) {
+                tracing::info!(%service_id, key, %slug, "found platform ref");
+                pairs.push((key.clone(), slug));
             }
+        }
+    }
+
+        if pairs.is_empty() {
+            tracing::debug!(%service_id, "no platform refs found in envs");
         }
 
         // Resolve each slug → resource (service > network > volume)
         let mut resolved: Vec<(String, String, String, Uuid, Uuid)> = Vec::new();
 
         for (env_key, slug) in &pairs {
+            tracing::info!(%service_id, %slug, "resolving platform ref");
             let ref_val = format!("platform-{slug}");
 
             if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
@@ -974,9 +985,11 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             )
             .bind(org_id).bind(slug.as_str())
             .fetch_optional(db).await? {
+                tracing::info!(%service_id, %slug, %rid, "resolved as service");
                 resolved.push((env_key.clone(), ref_val, "service".into(), rid, rpid));
                 continue;
             }
+            tracing::debug!(%service_id, %slug, "not a service, trying network");
 
             if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 "SELECT n.id, n.project_id FROM networks n
@@ -987,9 +1000,11 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             )
             .bind(org_id).bind(slug.as_str())
             .fetch_optional(db).await? {
+                tracing::info!(%service_id, %slug, %rid, "resolved as network");
                 resolved.push((env_key.clone(), ref_val, "network".into(), rid, rpid));
                 continue;
             }
+            tracing::debug!(%service_id, %slug, "not a network, trying volume");
 
             if let Some((rid, rpid)) = sqlx::query_as::<_, (Uuid, Uuid)>(
                 "SELECT v.id, COALESCE(v.project_id, s.project_id) AS project_id
@@ -1002,7 +1017,10 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             )
             .bind(org_id).bind(slug.as_str())
             .fetch_optional(db).await? {
+                tracing::info!(%service_id, %slug, %rid, "resolved as volume");
                 resolved.push((env_key.clone(), ref_val, "volume".into(), rid, rpid));
+            } else {
+                tracing::warn!(%service_id, %slug, %org_id, "platform ref slug not found in org");
             }
         }
 
@@ -1012,7 +1030,10 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
             .execute(db)
             .await?;
 
+        tracing::info!(%service_id, count = resolved.len(), "storing platform refs");
+
         for (env_key, ref_value, rtype, rid, rpid) in resolved {
+            tracing::info!(%service_id, %ref_value, %rtype, %rid, "inserting env ref");
             sqlx::query(
                 "INSERT INTO service_env_refs
                  (id, service_id, env_key, ref_value, resource_type, resource_id, resource_project_id, created_at)
@@ -1035,9 +1056,6 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
         }
 
         Ok(())
-    }.await;
-
-    result.ok();
 }
 
 // ─── Webhook token helpers ────────────────────────────────────────────────────
