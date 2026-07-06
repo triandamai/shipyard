@@ -55,6 +55,9 @@ const TRAEFIK_CONTAINER: &str = "shipyard-traefik";
 const TRAEFIK_STATIC_PATH: &str = "/etc/traefik/traefik.yml";
 const TRAEFIK_DYNAMIC_DIR: &str = "/etc/traefik/dynamic";
 
+const NGINX_STATIC_CONTAINER: &str = "shipyard-nginx-static";
+const NGINX_CONF_DIR: &str = "/etc/nginx/conf.d";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlatformSettings {
     pub main_domain: Option<String>,
@@ -153,6 +156,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/images/prune", post(docker_prune_images))
         .route("/admin/docker/nodes", get(docker_nodes))
         .route("/admin/docker/swarm/join-tokens", get(docker_swarm_join_tokens))
+        .route("/admin/nginx-static/confs", get(list_nginx_static_confs))
+        .route("/admin/nginx-static/confs/:name", get(get_nginx_static_conf))
         .route("/admin/host-ip", get(get_host_ip))
         .route("/admin/api-keys", get(list_api_keys).post(create_api_key))
         .route("/admin/api-keys/:key_id", delete(revoke_api_key))
@@ -205,6 +210,22 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
 
 fn is_yaml(name: &str) -> bool {
     name.ends_with(".yml") || name.ends_with(".yaml")
+}
+
+/// Run a command inside a named container via `docker exec`.
+async fn docker_exec_container(container: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd_args = vec!["exec", container];
+    cmd_args.extend_from_slice(args);
+    let out = tokio::process::Command::new("docker")
+        .args(&cmd_args)
+        .output()
+        .await
+        .map_err(|e| format!("failed to spawn docker: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// Run a command inside the Traefik container via `docker exec`.
@@ -1754,4 +1775,82 @@ async fn drop_db_table(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": format!("Table '{}' dropped", table_name)
     }))))
+}
+
+// ── Nginx-static conf endpoints ───────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct NginxConfEntry {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NginxConfList {
+    pub dir: String,
+    pub files: Vec<NginxConfEntry>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NginxConfFile {
+    pub name: String,
+    pub content: Option<String>,
+    pub exists: bool,
+    pub error: Option<String>,
+}
+
+async fn list_nginx_static_confs(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<NginxConfList>>, ApiAppError> {
+    require_infra_read(&state.db, &auth, q.org_id).await?;
+
+    let mut resp = NginxConfList {
+        dir: NGINX_CONF_DIR.to_string(),
+        files: vec![],
+        error: None,
+    };
+
+    match docker_exec_container(NGINX_STATIC_CONTAINER, &["ls", "-1", NGINX_CONF_DIR]).await {
+        Err(e) => { resp.error = Some(e); }
+        Ok(output) => {
+            let mut files: Vec<NginxConfEntry> = output
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && l.ends_with(".conf"))
+                .map(|l| NginxConfEntry { name: l.to_string() })
+                .collect();
+            files.sort_by(|a, b| a.name.cmp(&b.name));
+            resp.files = files;
+        }
+    }
+
+    Ok(Json(ApiResponse::ok(resp)))
+}
+
+async fn get_nginx_static_conf(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+    Path(name): Path<String>,
+) -> Result<Json<ApiResponse<NginxConfFile>>, ApiAppError> {
+    require_infra_read(&state.db, &auth, q.org_id).await?;
+
+    if name.contains('/') || name.contains('\\') || name.starts_with('.') {
+        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
+    }
+    if !name.ends_with(".conf") {
+        return Err(ApiAppError(AppError::BadRequest("Only .conf files are accessible".to_string())));
+    }
+
+    let path = format!("{}/{}", NGINX_CONF_DIR, name);
+    let resp = match docker_exec_container(NGINX_STATIC_CONTAINER, &["cat", &path]).await {
+        Ok(content) => NginxConfFile { name, content: Some(content), exists: true, error: None },
+        Err(e) => {
+            let exists = !e.contains("No such file") && !e.contains("no such file");
+            NginxConfFile { name, content: None, exists, error: Some(e) }
+        }
+    };
+    Ok(Json(ApiResponse::ok(resp)))
 }

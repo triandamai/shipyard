@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { Cpu, MemoryStick, HardDrive, Network, RefreshCw, Activity, Radio, Server, Copy, Check, Link } from '@lucide/svelte';
+	import { Cpu, MemoryStick, HardDrive, Network, RefreshCw, Activity, Radio, Server, Copy, Check, Link, Box, AlertCircle } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm } from '$lib/auth/permissions';
@@ -41,6 +41,67 @@
 	let info      = $state<SystemInfo | null>(null);
 	let error     = $state('');
 	let connected = $state(false);
+
+	// ── Core service monitoring ───────────────────────────────────────────────
+	interface ContainerSummary {
+		id: string;
+		names: string[];
+		image: string;
+		status: string;
+		state: string;
+		created: number;
+	}
+
+	const CORE_SERVICES = [
+		{ key: 'shipyard-traefik',   label: 'Traefik',   desc: 'Reverse proxy & TLS' },
+		{ key: 'shipyard-backend',   label: 'Backend',   desc: 'API server' },
+		{ key: 'shipyard-frontend',  label: 'Frontend',  desc: 'Web UI' },
+		{ key: 'shipyard-mqtt',      label: 'MQTT',      desc: 'Broker / events' },
+		{ key: 'shipyard-redis',     label: 'Redis',     desc: 'Cache & sessions' },
+		{ key: 'shipyard-postgres',  label: 'Postgres',  desc: 'Primary database' },
+		{ key: 'shipyard-nginx-static', label: 'Nginx Static', desc: 'Static file server' },
+	] as const;
+
+	let coreContainers   = $state<ContainerSummary[]>([]);
+	let coreLoading      = $state(false);
+	let coreError        = $state('');
+	let coreLastRefresh  = $state<Date | null>(null);
+
+	function findContainer(key: string): ContainerSummary | undefined {
+		return coreContainers.find(c =>
+			c.names.some(n => n === `/${key}` || n === key)
+		);
+	}
+
+	function serviceState(c: ContainerSummary | undefined): 'running' | 'stopped' | 'unknown' {
+		if (!c) return 'unknown';
+		if (c.state === 'running') return 'running';
+		return 'stopped';
+	}
+
+	function stateColor(s: 'running' | 'stopped' | 'unknown'): string {
+		if (s === 'running') return '#16a34a';
+		if (s === 'stopped') return '#ef4444';
+		return '#f97316';
+	}
+
+	async function loadCoreServices() {
+		if (!orgId) return;
+		coreLoading = true;
+		coreError = '';
+		try {
+			const res = await api.get<ContainerSummary[]>(`/admin/docker/containers?org_id=${orgId}`);
+			if (res.error) coreError = res.error.message;
+			else {
+				coreContainers = res.data ?? [];
+				coreLastRefresh = new Date();
+			}
+		} catch (e) {
+			coreError = String(e);
+		} finally {
+			coreLoading = false;
+		}
+	}
 
 	let nodes        = $state<SwarmNode[]>([]);
 	let nodesError   = $state('');
@@ -160,6 +221,7 @@
 		if (canInfraRead) {
 			loadNodes();
 			loadJoinTokens();
+			loadCoreServices();
 		}
 	});
 
@@ -271,6 +333,45 @@
 				</div>
 			{/if}
 
+		</div>
+
+		<!-- Core Services -->
+		<div class="section">
+			<div class="section-head">
+				<Box size={14} />
+				<span>Core Services</span>
+				{#if coreLastRefresh}
+					<span class="section-hint">Updated {coreLastRefresh.toLocaleTimeString()}</span>
+				{/if}
+				<button class="refresh-inline" onclick={loadCoreServices} disabled={coreLoading} title="Refresh">
+					<RefreshCw size={11} />
+				</button>
+			</div>
+
+			{#if coreError}
+				<div class="core-error"><AlertCircle size={13} />{coreError}</div>
+			{/if}
+
+			<div class="core-grid">
+				{#each CORE_SERVICES as svc}
+					{@const container = findContainer(svc.key)}
+					{@const state = serviceState(container)}
+					<div class="core-card" class:running={state === 'running'} class:stopped={state === 'stopped'}>
+						<div class="core-card-header">
+							<span class="core-status-dot" style="background:{stateColor(state)}"></span>
+							<span class="core-label">{svc.label}</span>
+							<span class="core-state-badge" style="color:{stateColor(state)}">{state}</span>
+						</div>
+						<div class="core-desc">{svc.desc}</div>
+						{#if container}
+							<div class="core-image">{container.image}</div>
+							<div class="core-status-text">{container.status}</div>
+						{:else if !coreLoading}
+							<div class="core-status-text muted">Container not found</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
 		</div>
 
 		<!-- Disk section -->
@@ -675,4 +776,36 @@
 		cursor: pointer; transition: all var(--transition-fast);
 	}
 	.token-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+	/* Core services */
+	.core-error {
+		display: flex; align-items: center; gap: 7px;
+		padding: 10px 16px; font-size: 12px; color: #ef4444;
+		border-bottom: 1px solid var(--border);
+	}
+	.core-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 0;
+	}
+	.core-card {
+		padding: 14px 16px;
+		border-right: 1px solid var(--border);
+		border-bottom: 1px solid var(--border);
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		transition: background var(--transition-fast);
+	}
+	.core-card:hover { background: var(--bg-muted); }
+	.core-card.running { border-left: 3px solid #16a34a; }
+	.core-card.stopped { border-left: 3px solid #ef4444; }
+	.core-card-header { display: flex; align-items: center; gap: 7px; }
+	.core-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+	.core-label { font-size: 13px; font-weight: 600; color: var(--text-primary); flex: 1; }
+	.core-state-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+	.core-desc { font-size: 11px; color: var(--text-muted); }
+	.core-image { font-size: 10px; font-family: var(--font-mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
+	.core-status-text { font-size: 11px; color: var(--text-muted); }
+	.core-status-text.muted { color: var(--text-dim); font-style: italic; }
 </style>

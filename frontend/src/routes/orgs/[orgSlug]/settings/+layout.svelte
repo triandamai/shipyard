@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck, Database, Mail } from '@lucide/svelte';
+	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck, Database, Mail, GitBranch, Globe } from '@lucide/svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole, isOwnerRole, can, perm } from '$lib/auth/permissions';
@@ -33,15 +33,17 @@
 
 	const baseTabs = [
 		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2  },
-		{ label: 'Traefik',     href: (slug: string) => `/orgs/${slug}/settings/traefik`,      icon: Server     },
-		{ label: 'Members',     href: (slug: string) => `/orgs/${slug}/settings/members`,      icon: Users      },
-		{ label: 'MQTT',        href: (slug: string) => `/orgs/${slug}/settings/mqtt`,         icon: Radio      },
-		{ label: 'Infra',       href: (slug: string) => `/orgs/${slug}/settings/infra`,        icon: Cpu        },
-		{ label: 'Docker',      href: (slug: string) => `/orgs/${slug}/settings/docker`,       icon: Container  },
-		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,     icon: KeyRound   },
-		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`,  icon: Rocket     },
-		{ label: 'SMTP',        href: (slug: string) => `/orgs/${slug}/settings/smtp`,         icon: Mail       },
-		{ label: 'Audit',       href: (slug: string) => `/orgs/${slug}/settings/audit`,        icon: ShieldCheck },
+		{ label: 'Providers',   href: (slug: string) => `/orgs/${slug}/settings/providers`,   icon: GitBranch  },
+		{ label: 'Traefik',     href: (slug: string) => `/orgs/${slug}/settings/traefik`,     icon: Server     },
+		{ label: 'Static',      href: (slug: string) => `/orgs/${slug}/settings/static`,      icon: Globe      },
+		{ label: 'Members',     href: (slug: string) => `/orgs/${slug}/settings/members`,     icon: Users      },
+		{ label: 'MQTT',        href: (slug: string) => `/orgs/${slug}/settings/mqtt`,        icon: Radio      },
+		{ label: 'Infra',       href: (slug: string) => `/orgs/${slug}/settings/infra`,       icon: Cpu        },
+		{ label: 'Docker',      href: (slug: string) => `/orgs/${slug}/settings/docker`,      icon: Container  },
+		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,    icon: KeyRound   },
+		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`, icon: Rocket     },
+		{ label: 'SMTP',        href: (slug: string) => `/orgs/${slug}/settings/smtp`,        icon: Mail       },
+		{ label: 'Audit',       href: (slug: string) => `/orgs/${slug}/settings/audit`,       icon: ShieldCheck },
 	];
 
 	const ownerOnlyTabs = [
