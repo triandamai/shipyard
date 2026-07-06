@@ -619,18 +619,22 @@ async fn delete_env(
 }
 
 async fn publish_env_changed(state: &AppState, service_id: Uuid) {
-    if let Ok(Some((project_id, org_id))) = sqlx::query_as::<_, (Uuid, Uuid)>(
+    let Ok(Some((project_id, org_id))) = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT s.project_id, p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )
     .bind(service_id)
     .fetch_optional(&state.db)
-    .await
-    {
-        let topic = shipyard_mqtt::topics::topology(org_id, project_id);
-        let payload = MqttPayload::new("service.env.changed")
-            .with_meta(serde_json::json!({ "service_id": service_id }));
-        state.mqtt.publish_status(&topic, &payload).await.ok();
-    }
+    .await else { return };
+
+    crate::services::detect_and_store_platform_refs(
+        &state.db, service_id, project_id, &state.config.auth.secret_key,
+    ).await;
+
+    let topic = shipyard_mqtt::topics::topology(org_id, project_id);
+    state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
+        .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
+    state.mqtt.publish_status(&topic, &MqttPayload::new("topology.changed")
+        .with_meta(serde_json::json!({ "reason": "env_ref" }))).await.ok();
 }
 
 // ─── Container stats types ───────────────────────────────────────────────────

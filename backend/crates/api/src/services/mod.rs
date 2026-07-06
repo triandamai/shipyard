@@ -929,7 +929,7 @@ fn extract_platform_slugs(value: &str) -> Vec<String> {
 
 /// Re-scan ALL envs for this service, resolve `platform-{slug}` references
 /// to services / networks / volumes in the same org, and rewrite `service_env_refs`.
-async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) {
+pub(crate) async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) {
     if let Err(e) = do_detect_platform_refs(db, service_id, project_id, secret_key).await {
         tracing::error!(%service_id, "platform ref detection failed: {e}");
     }
