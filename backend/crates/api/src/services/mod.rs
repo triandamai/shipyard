@@ -509,6 +509,15 @@ async fn delete_service(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
         tracing::info!(%service_id, "compose stack children + orphan networks deleted");
+
+        // Remove compose directory (uploaded compose files, cloned git repo, etc.)
+        if !directory_path.is_empty() {
+            match tokio::fs::remove_dir_all(&directory_path).await {
+                Ok(()) => tracing::info!(%service_id, "Removed compose dir: {directory_path}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(%service_id, "Could not remove compose dir: {e}"),
+            }
+        }
     } else if svc_type == "static" {
         // Static site: remove served files + nginx conf, then reload nginx.
         // Domains and service_networks are handled by ON DELETE CASCADE in the DB.
@@ -533,28 +542,43 @@ async fn delete_service(
             Err(e) => tracing::warn!(%service_id, "Could not remove nginx conf: {e}"),
         }
 
-        // Reload nginx so the server block is gone (best-effort)
-        match tokio::process::Command::new("nginx")
-            .args(["-s", "reload"])
-            .output()
-            .await
-        {
-            Ok(o) if o.status.success() => {
-                tracing::info!(%service_id, "nginx reloaded after static site removal");
-            }
-            Ok(o) => tracing::warn!(
-                %service_id,
-                "nginx reload returned non-zero after static delete: {}",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-            Err(e) => tracing::debug!(%service_id, "nginx reload skipped (not in PATH): {e}"),
+        // Remove uploaded zip artifacts
+        let uploads_dir = format!("{sites_base}/uploads/{service_id}");
+        match tokio::fs::remove_dir_all(&uploads_dir).await {
+            Ok(()) => tracing::info!(%service_id, "Removed static uploads dir: {uploads_dir}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(%service_id, "Could not remove static uploads dir: {e}"),
         }
+
+        // Remove service data directory (deploy metadata, etc.)
+        if !directory_path.is_empty() {
+            match tokio::fs::remove_dir_all(&directory_path).await {
+                Ok(()) => tracing::info!(%service_id, "Removed static service dir: {directory_path}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(%service_id, "Could not remove static service dir: {e}"),
+            }
+        }
+
+        // Reload nginx inside the container so the server block is gone (best-effort)
+        let _ = tokio::process::Command::new("docker")
+            .args(["exec", "shipyard-nginx-static", "nginx", "-s", "reload"])
+            .output()
+            .await;
     } else {
         // Non-compose, non-static: remove Docker Swarm service
         let docker_svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
         match state.docker.remove_service(&docker_svc_name).await {
             Ok(()) => tracing::info!(%service_id, "Docker swarm service removed"),
             Err(e) => tracing::warn!(%service_id, "Docker remove_service: {e}"),
+        }
+
+        // Remove service data directory (source code, build artefacts, etc.)
+        if !directory_path.is_empty() {
+            match tokio::fs::remove_dir_all(&directory_path).await {
+                Ok(()) => tracing::info!(%service_id, "Removed service dir: {directory_path}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(%service_id, "Could not remove service dir: {e}"),
+            }
         }
     }
 

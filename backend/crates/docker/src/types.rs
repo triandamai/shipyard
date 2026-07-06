@@ -199,6 +199,15 @@ pub struct ServiceSummary {
     pub updated_at: Option<String>,
 }
 
+/// Summary of a Docker image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSummary {
+    pub id: String,
+    pub tags: Vec<String>,
+    pub size: i64,
+    pub created: i64,
+}
+
 /// A live exec session attached to a container — stdin writer + stdout/stderr stream.
 pub struct ExecHandle {
     pub exec_id: String,

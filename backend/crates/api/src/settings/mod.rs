@@ -18,7 +18,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
-use shipyard_docker::{ContainerSummary, NetworkSummary, NodeInfo, ServiceSummary, SwarmJoinTokens, VolumeSummary};
+use shipyard_docker::{ContainerSummary, ImageSummary, NetworkSummary, NodeInfo, ServiceSummary, SwarmJoinTokens, VolumeSummary};
 use crate::auth::AuthUser;
 use crate::cache;
 use crate::error::ApiAppError;
@@ -149,6 +149,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/services", get(docker_services))
         .route("/admin/docker/volumes", get(docker_volumes))
         .route("/admin/docker/networks", get(docker_networks))
+        .route("/admin/docker/images", get(docker_images))
+        .route("/admin/docker/images/prune", post(docker_prune_images))
         .route("/admin/docker/nodes", get(docker_nodes))
         .route("/admin/docker/swarm/join-tokens", get(docker_swarm_join_tokens))
         .route("/admin/host-ip", get(get_host_ip))
@@ -1146,6 +1148,28 @@ async fn docker_networks(
     let data = state.docker.list_all_networks().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
     Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_images(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<Vec<ImageSummary>>>, ApiAppError> {
+    require_docker_read(&state.db, &auth, q.org_id).await?;
+    let data = state.docker.list_all_images().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+async fn docker_prune_images(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_docker_write(&state.db, &auth, q.org_id).await?;
+    let removed = state.docker.prune_images().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
 }
 
 async fn docker_nodes(

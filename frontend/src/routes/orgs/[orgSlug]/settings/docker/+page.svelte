@@ -7,7 +7,7 @@
 	import { page } from '$app/state';
 	import {
 		Box, Layers, HardDrive, Network, RefreshCw,
-		Search, ChevronDown, ChevronRight, Trash2
+		Search, ChevronDown, ChevronRight, Trash2, Image
 	} from '@lucide/svelte';
 
 	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
@@ -18,7 +18,7 @@
 	let canDockerWrite = $derived(can(myRole, myPerms, perm(orgId, 'docker', 'write')));
 	let canDockerAny   = $derived(canDockerRead || canDockerWrite);
 
-	type Tab = 'containers' | 'services' | 'volumes' | 'networks';
+	type Tab = 'containers' | 'services' | 'volumes' | 'networks' | 'images';
 	let activeTab = $state<Tab>('containers');
 
 	interface ContainerSummary {
@@ -43,13 +43,19 @@
 		labels: Record<string, string>; containers: number;
 	}
 
+	interface ImageSummary {
+		id: string; tags: string[]; size: number; created: number;
+	}
+
 	let containers = $state<ContainerSummary[]>([]);
 	let services   = $state<ServiceSummary[]>([]);
 	let volumes    = $state<VolumeSummary[]>([]);
 	let networks   = $state<NetworkSummary[]>([]);
+	let images     = $state<ImageSummary[]>([]);
 
 	let loadingC = $state(false), loadingS = $state(false);
 	let loadingV = $state(false), loadingN = $state(false);
+	let loadingI = $state(false);
 
 	let search = $state('');
 	let expanded = $state<string | null>(null);
@@ -80,6 +86,12 @@
 		if (r.data) networks = r.data;
 		loadingN = false;
 	}
+	async function loadImages() {
+		loadingI = true;
+		const r = await api.get<ImageSummary[]>(dockerUrl('/admin/docker/images'));
+		if (r.data) images = r.data;
+		loadingI = false;
+	}
 
 	async function switchTab(t: Tab) {
 		activeTab = t;
@@ -89,6 +101,7 @@
 		if (t === 'services'   && services.length === 0)   await loadServices();
 		if (t === 'volumes'    && volumes.length === 0)     await loadVolumes();
 		if (t === 'networks'   && networks.length === 0)    await loadNetworks();
+		if (t === 'images'     && images.length === 0)      await loadImages();
 	}
 
 	async function refresh() {
@@ -97,6 +110,7 @@
 		if (activeTab === 'services')   { services = [];   await loadServices(); }
 		if (activeTab === 'volumes')    { volumes = [];    await loadVolumes(); }
 		if (activeTab === 'networks')   { networks = [];   await loadNetworks(); }
+		if (activeTab === 'images')     { images = [];     await loadImages(); }
 	}
 
 	let pruning       = $state(false);
@@ -121,6 +135,28 @@
 		setTimeout(() => { pruneResult = null; }, 4000);
 	}
 
+	let pruningImages      = $state(false);
+	let pruneImagesConfirm = $state(false);
+	let pruneImagesResult  = $state<string | null>(null);
+
+	async function pruneImages() {
+		if (!canDockerWrite) return;
+		if (!pruneImagesConfirm) { pruneImagesConfirm = true; return; }
+		pruningImages = true;
+		pruneImagesConfirm = false;
+		pruneImagesResult = null;
+		const r = await api.post<{ removed: number }>(dockerUrl('/admin/docker/images/prune'), {});
+		if (r.data) {
+			pruneImagesResult = `Removed ${r.data.removed} unused image${r.data.removed !== 1 ? 's' : ''}.`;
+			images = [];
+			await loadImages();
+		} else {
+			pruneImagesResult = r.error?.message ?? 'Prune failed.';
+		}
+		pruningImages = false;
+		setTimeout(() => { pruneImagesResult = null; }, 4000);
+	}
+
 	function toggle(id: string) { expanded = expanded === id ? null : id; }
 
 	const stateColor: Record<string, string> = {
@@ -134,6 +170,13 @@
 		if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
 		if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
 		return `${Math.floor(diff / 86400)}d ago`;
+	}
+
+	function fmtBytes(bytes: number): string {
+		if (bytes < 1024)        return `${bytes} B`;
+		if (bytes < 1024 ** 2)   return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1024 ** 3)   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+		return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 	}
 
 	function shortImg(img: string): string {
@@ -156,12 +199,16 @@
 	let filteredNetworks = $derived(networks.filter(n =>
 		!q || n.name.includes(q) || n.driver.includes(q)
 	));
+	let filteredImages = $derived(images.filter(img =>
+		!q || img.tags.some(t => t.includes(q)) || img.id.includes(q)
+	));
 
 	let isLoading = $derived(
 		(activeTab === 'containers' && loadingC) ||
 		(activeTab === 'services'   && loadingS) ||
 		(activeTab === 'volumes'    && loadingV) ||
-		(activeTab === 'networks'   && loadingN)
+		(activeTab === 'networks'   && loadingN) ||
+		(activeTab === 'images'     && loadingI)
 	);
 
 	onMount(() => { if (canDockerAny) loadContainers(); });
@@ -195,6 +242,10 @@
 				<Network size={13} /> Networks
 				{#if networks.length}<span class="badge">{networks.length}</span>{/if}
 			</button>
+			<button class="tab" class:active={activeTab==='images'} onclick={() => switchTab('images')}>
+				<Image size={13} /> Images
+				{#if images.length}<span class="badge">{images.length}</span>{/if}
+			</button>
 		</div>
 		<div class="toolbar-right">
 			{#if activeTab === 'containers'}
@@ -214,6 +265,23 @@
 					<button class="cancel-btn" onclick={() => pruneConfirm = false}>Cancel</button>
 				{/if}
 			{/if}
+			{#if activeTab === 'images'}
+				{#if pruneImagesConfirm}
+					<span class="prune-confirm-text">Remove all unused images?</span>
+				{/if}
+				<button
+					class="prune-btn"
+					class:danger={pruneImagesConfirm}
+					onclick={pruneImages}
+					disabled={pruningImages}
+				>
+					<Trash2 size={14} />
+					{pruningImages ? 'Pruning…' : pruneImagesConfirm ? 'Confirm' : 'Prune unused'}
+				</button>
+				{#if pruneImagesConfirm}
+					<button class="cancel-btn" onclick={() => pruneImagesConfirm = false}>Cancel</button>
+				{/if}
+			{/if}
 			<button class="refresh-btn" onclick={refresh} disabled={isLoading}>
 				<RefreshCw size={14} class={isLoading ? 'spin' : ''} /> Refresh
 			</button>
@@ -222,6 +290,9 @@
 
 	{#if pruneResult}
 		<div class="prune-toast">{pruneResult}</div>
+	{/if}
+	{#if pruneImagesResult}
+		<div class="prune-toast">{pruneImagesResult}</div>
 	{/if}
 
 	<div class="search-bar">
@@ -599,6 +670,68 @@
 		{/if}
 	{/if}
 
+	<!-- ── Images ── -->
+	{#if activeTab === 'images'}
+		{#if loadingI}
+			<div class="empty"><div class="spinner"></div>Loading images…</div>
+		{:else if filteredImages.length === 0}
+			<div class="empty"><Image size={28} />No images</div>
+		{:else}
+			<div class="card">
+				<table class="tbl">
+					<thead><tr>
+						<th>Tags</th><th>ID</th><th>Size</th><th>Created</th>
+					</tr></thead>
+					<tbody>
+						{#each filteredImages as img (img.id)}
+							<tr class="row no-expand">
+								<td>
+									{#if img.tags.length}
+										<div class="tag-list">
+											{#each img.tags as t}
+												<span class="img-tag">{t}</span>
+											{/each}
+										</div>
+									{:else}
+										<span class="dim">&#x3c;none&#x3e;</span>
+									{/if}
+								</td>
+								<td class="mono dim">{img.id.replace('sha256:', '').slice(0, 12)}</td>
+								<td class="dim">{fmtBytes(img.size)}</td>
+								<td class="dim ts">{ago(img.created)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+
+			<div class="mobile-cards">
+				{#each filteredImages as img (img.id)}
+					<div class="m-card">
+						<div class="m-card-header" style="cursor:default">
+							<div class="m-card-title-row" style="flex-direction:column;align-items:flex-start;gap:4px">
+								{#if img.tags.length}
+									<div class="tag-list">
+										{#each img.tags as t}
+											<span class="img-tag">{t}</span>
+										{/each}
+									</div>
+								{:else}
+									<span class="dim" style="font-size:12px">&lt;none&gt;</span>
+								{/if}
+							</div>
+						</div>
+						<div class="m-rows">
+							<div class="m-row"><span class="m-label">ID</span><span class="mono dim">{img.id.replace('sha256:', '').slice(0, 12)}</span></div>
+							<div class="m-row"><span class="m-label">Size</span><span class="dim">{fmtBytes(img.size)}</span></div>
+							<div class="m-row"><span class="m-label">Created</span><span class="dim">{ago(img.created)}</span></div>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	{/if}
+
 </div>
 {/if}
 
@@ -749,6 +882,17 @@
 		background: var(--bg-muted); border: 1px solid var(--border);
 		border-radius: 4px; font-size: 11px; color: var(--text-secondary);
 		max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+
+	.row.no-expand:hover td { cursor: default; }
+
+	.tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+	.img-tag {
+		display: inline-block; padding: 2px 7px;
+		background: var(--bg-muted); border: 1px solid var(--border);
+		border-radius: 4px; font-size: 11px; font-family: var(--font-mono, monospace);
+		color: var(--text-secondary); max-width: 280px;
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	}
 
 	/* ── Mobile cards ── */

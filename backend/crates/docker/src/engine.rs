@@ -129,6 +129,12 @@ pub trait DockerEngine: Send + Sync {
     /// List all swarm services with full summary.
     async fn list_all_services(&self) -> AppResult<Vec<ServiceSummary>>;
 
+    /// List all local Docker images.
+    async fn list_all_images(&self) -> AppResult<Vec<ImageSummary>>;
+
+    /// Remove dangling and unused images; returns count of images deleted.
+    async fn prune_images(&self) -> AppResult<u64>;
+
     /// List all nodes in the swarm.
     async fn list_nodes(&self) -> AppResult<Vec<NodeInfo>>;
 
@@ -1245,6 +1251,30 @@ impl DockerEngine for BollardDockerEngine {
 
             ServiceSummary { id, name, image, replicas_running, replicas_desired, mode, ports, labels, created_at, updated_at }
         }).collect())
+    }
+
+    async fn list_all_images(&self) -> AppResult<Vec<ImageSummary>> {
+        use bollard::image::ListImagesOptions;
+        let opts = ListImagesOptions::<String> { all: false, ..Default::default() };
+        let raw = self.client
+            .list_images(Some(opts))
+            .await
+            .map_err(|e| AppError::Docker(format!("list_images failed: {e}")))?;
+        Ok(raw.into_iter().map(|img| ImageSummary {
+            id:      img.id,
+            tags:    img.repo_tags,
+            size:    img.size,
+            created: img.created,
+        }).collect())
+    }
+
+    async fn prune_images(&self) -> AppResult<u64> {
+        use bollard::image::PruneImagesOptions;
+        let result = self.client
+            .prune_images(None::<PruneImagesOptions<String>>)
+            .await
+            .map_err(|e| AppError::Docker(format!("prune_images failed: {e}")))?;
+        Ok(result.images_deleted.map(|v| v.len() as u64).unwrap_or(0))
     }
 
     async fn exec_container(
