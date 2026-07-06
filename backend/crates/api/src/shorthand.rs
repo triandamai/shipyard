@@ -890,6 +890,22 @@ async fn container_logs(
     Query(q): Query<ContainerLogsQuery>,
 ) -> Result<Json<ApiResponse<Vec<String>>>, ApiAppError> {
     require_service_access(&state.db, auth.user_id, service_id).await.map_err(ApiAppError)?;
+
+    if is_remote_container(&state, service_id, &container_docker_id).await {
+        // Container is on a worker node — use `docker service logs` (cross-node via manager)
+        let task_id = resolve_task_id(&state.db, service_id, &container_docker_id).await;
+        let target = task_id.unwrap_or_else(|| docker_service_name(&state, service_id));
+        let tail_arg = format!("--tail={}", q.tail.min(5000));
+        let output = tokio::process::Command::new("docker")
+            .args(["service", "logs", "--raw", &tail_arg, &target])
+            .output()
+            .await
+            .map_err(|e| ApiAppError(AppError::Internal(format!("docker service logs failed: {e}"))))?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<String> = text.lines().map(String::from).collect();
+        return Ok(Json(ApiResponse::ok(lines)));
+    }
+
     use shipyard_docker::types::LogOpts;
     let lines = state
         .docker
@@ -930,8 +946,25 @@ async fn container_logs_stream(
         }
 
         let tail_arg = format!("--tail={}", tail);
+
+        // Choose docker logs vs docker service logs based on whether the container
+        // is on the local (manager) node or a remote worker node.
+        let (cmd_args, use_service_logs) =
+            if is_remote_container(&state, service_id, &container_id).await {
+                let target = resolve_task_id(&state.db, service_id, &container_id)
+                    .await
+                    .unwrap_or_else(|| docker_service_name(&state, service_id));
+                (vec!["service".to_string(), "logs".to_string(), "--raw".to_string(),
+                      "-f".to_string(), tail_arg, target], true)
+            } else {
+                let ts = if q.timestamps { "--timestamps" } else { "--no-log-prefix" };
+                (vec!["logs".to_string(), "-f".to_string(), tail_arg,
+                      ts.to_string(), container_id], false)
+            };
+        let _ = use_service_logs; // consumed via cmd_args
+
         let mut child = match tokio::process::Command::new("docker")
-            .args(["logs", "-f", &tail_arg, "--timestamps", &container_id])
+            .args(&cmd_args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -976,6 +1009,46 @@ async fn container_logs_stream(
 
 fn docker_service_name(state: &AppState, service_id: Uuid) -> String {
     format!("{}-{}", state.config.docker.label_prefix, service_id)
+}
+
+/// Returns true if the container is running on a remote Swarm worker node.
+/// Falls back to false (treat as local) when swarm info is unavailable or the
+/// container has no node_id recorded.
+async fn is_remote_container(state: &AppState, service_id: Uuid, docker_container_id: &str) -> bool {
+    let local_node_id = match state.docker.swarm_info().await {
+        Ok(i) if !i.node_id.is_empty() => i.node_id,
+        _ => return false,
+    };
+
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT node_id FROM containers WHERE docker_container_id = $1 AND service_id = $2",
+    )
+    .bind(docker_container_id)
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    matches!(row, Some((Some(ref n),)) if !n.is_empty() && n != &local_node_id)
+}
+
+/// Looks up the Swarm task ID for a container — used to target `docker service logs <task_id>`.
+/// Falls back to None if the container has no task ID recorded.
+async fn resolve_task_id(
+    db: &sqlx::PgPool,
+    service_id: Uuid,
+    docker_container_id: &str,
+) -> Option<String> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT docker_task_id FROM containers WHERE docker_container_id = $1 AND service_id = $2",
+    )
+    .bind(docker_container_id)
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+
+    row.and_then(|(tid,)| tid).filter(|s| !s.is_empty())
 }
 
 /// Look up service_id for a deployment (for auth without a service path param).

@@ -1312,17 +1312,26 @@ async fn list_replicas(
     rbac::require_project_access(&state.db, auth.user_id, project_id).await
         .map_err(ApiAppError)?;
 
+    let local_node_id = state.docker.swarm_info().await
+        .map(|i| i.node_id)
+        .unwrap_or_default();
+
     let swarm_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
     let tasks = state.docker.list_tasks(&swarm_name).await.unwrap_or_default();
 
-    let items: Vec<serde_json::Value> = tasks.into_iter().map(|t| serde_json::json!({
-        "id":           t.id,
-        "slot":         t.slot,
-        "node_id":      t.node_id,
-        "container_id": t.container_id,
-        "status":       t.status,
-        "image":        t.image,
-    })).collect();
+    let items: Vec<serde_json::Value> = tasks.into_iter().map(|t| {
+        let is_local = !local_node_id.is_empty()
+            && t.node_id.as_deref().map(|n| n == local_node_id).unwrap_or(true);
+        serde_json::json!({
+            "id":             t.id,
+            "slot":           t.slot,
+            "node_id":        t.node_id,
+            "container_id":   t.container_id,
+            "status":         t.status,
+            "image":          t.image,
+            "is_local_node":  is_local,
+        })
+    }).collect();
 
     Ok(Json(ApiResponse::ok(items)))
 }
@@ -1383,6 +1392,40 @@ async fn handle_exec_socket(
     user_id:    Uuid,
 ) {
     let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Verify container is on the local node before attempting exec.
+    // exec_container uses the local Docker socket and fails for containers on worker nodes.
+    let local_node_id = state.docker.swarm_info().await
+        .map(|i| i.node_id)
+        .unwrap_or_default();
+
+    if !local_node_id.is_empty() {
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT node_id FROM containers WHERE docker_container_id = $1",
+        )
+        .bind(&params.container_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some((Some(ref node_id),)) = row {
+            if !node_id.is_empty() && node_id != &local_node_id {
+                let _ = ws_sink.send(Message::Text(
+                    serde_json::json!({
+                        "type": "error",
+                        "message": format!(
+                            "This container is running on a different Swarm node ({}). \
+                             Terminal is only available for containers on the manager node.",
+                            &node_id[..node_id.len().min(12)]
+                        )
+                    })
+                    .to_string(),
+                ))
+                .await;
+                return;
+            }
+        }
+    }
 
     let cmd: Vec<String> = params.cmd.split_whitespace().map(String::from).collect();
 

@@ -150,8 +150,12 @@ async fn list_replicas(
     _auth_user: AuthUser,
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Vec<ReplicaInfo>>>, ApiAppError> {
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
     verify_service_exists(&state.db, service_id).await?;
+
+    let local_node_id = state.docker.swarm_info().await
+        .map(|i| i.node_id)
+        .unwrap_or_default();
 
     let replicas = sqlx::query_as::<_, ReplicaInfo>(
         "SELECT id, docker_container_id, docker_task_id, node_id, replica_index,
@@ -166,7 +170,22 @@ async fn list_replicas(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    Ok(Json(ApiResponse::ok(replicas)))
+    let items: Vec<serde_json::Value> = replicas.into_iter().map(|r| {
+        let is_local = local_node_id.is_empty()
+            || r.node_id.as_deref().map(|n| n == local_node_id).unwrap_or(true);
+        serde_json::json!({
+            "id":                  r.id,
+            "docker_container_id": r.docker_container_id,
+            "docker_task_id":      r.docker_task_id,
+            "node_id":             r.node_id,
+            "replica_index":       r.replica_index,
+            "status":              r.status,
+            "started_at":          r.started_at,
+            "is_local_node":       is_local,
+        })
+    }).collect();
+
+    Ok(Json(ApiResponse::ok(items)))
 }
 
 /// GET /services/:service_id/logs/stream — SSE endpoint (polling every 2s)
