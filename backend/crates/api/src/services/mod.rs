@@ -720,7 +720,7 @@ async fn bulk_update_env(
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+    detect_and_store_platform_refs(&state.db, service_id, project_id, &state.config.auth.secret_key).await;
 
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
@@ -774,7 +774,7 @@ async fn add_env(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+    detect_and_store_platform_refs(&state.db, service_id, project_id, &state.config.auth.secret_key).await;
 
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
@@ -819,7 +819,7 @@ async fn delete_env(
         ))));
     }
 
-    detect_and_store_platform_refs(&state.db, service_id, project_id).await;
+    detect_and_store_platform_refs(&state.db, service_id, project_id, &state.config.auth.secret_key).await;
 
     if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
         "SELECT org_id FROM projects WHERE id = $1",
@@ -930,7 +930,7 @@ fn extract_platform_slugs(value: &str) -> Vec<String> {
 /// Re-scan all non-secret envs for this service, resolve `platform-{slug}` references
 /// to services / networks / volumes in the same org, and rewrite `service_env_refs`.
 /// Errors are silently discarded — detection failure must not break the env-save response.
-async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid) {
+async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) {
     let result: Result<(), sqlx::Error> = async {
         let (org_id,): (Uuid,) = sqlx::query_as(
             "SELECT org_id FROM projects WHERE id = $1",
@@ -948,10 +948,11 @@ async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, pro
         .fetch_all(db)
         .await?;
 
-        // Collect unique (env_key, slug) pairs
+        // Collect unique (env_key, slug) pairs — decrypt each value first
         let mut pairs: Vec<(String, String)> = Vec::new();
-        for (key, value) in &envs {
-            for slug in extract_platform_slugs(value) {
+        for (key, value_encrypted) in &envs {
+            let value = shipyard_common::crypto::decrypt_or_passthrough(secret_key, value_encrypted);
+            for slug in extract_platform_slugs(&value) {
                 if !pairs.iter().any(|(_, s)| s == &slug) {
                     pairs.push((key.clone(), slug));
                 }
