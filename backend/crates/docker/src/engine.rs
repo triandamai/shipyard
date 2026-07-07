@@ -852,23 +852,23 @@ impl DockerEngine for BollardDockerEngine {
             let stdout_str = stdout.trim();
             tracing::error!("docker build failed. Stderr: {}\nStdout: {}", stderr_str, stdout_str);
 
-            // Find the most meaningful error line (usually containing ERROR: or failed)
-            let mut summary = String::new();
-            for line in lines.iter().rev() {
-                let trimmed = line.trim();
-                if (trimmed.contains("ERROR:") || trimmed.contains("error") || trimmed.contains("failed")) && !trimmed.contains("See 'docker") {
-                    summary = trimmed.to_string();
-                    break;
-                }
-            }
-            if summary.is_empty() {
-                summary = lines
+            // Collect all non-empty lines from stderr, excluding the generic "See 'docker" message
+            let filtered_stderr_lines: Vec<&str> = stderr_str
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty() && !l.contains("See 'docker"))
+                .collect();
+
+            let summary = if !filtered_stderr_lines.is_empty() {
+                filtered_stderr_lines.join(" | ")
+            } else {
+                let fallback = lines
                     .iter()
-                    .filter(|l| !l.is_empty())
+                    .filter(|l| !l.trim().is_empty() && !l.contains("See 'docker"))
                     .last()
-                    .cloned()
-                    .unwrap_or_else(|| "unknown build error".to_string());
-            }
+                    .cloned();
+                fallback.unwrap_or_else(|| "unknown build error".to_string())
+            };
 
             return Err(AppError::Docker(format!("docker build failed: {summary}")));
         }
