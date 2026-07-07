@@ -108,5 +108,7 @@ walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
-lto      = "thin"  # link-time optimisation — smaller + faster binary
-strip    = true    # remove debug symbols (~70% binary size reduction)
+opt-level     = "z"   # optimize for size — smaller binary text segment in RSS
+lto           = "thin"
+strip         = true
+codegen-units = 1     # single unit enables more dead-code elimination

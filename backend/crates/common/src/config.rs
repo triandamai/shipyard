@@ -171,7 +171,7 @@ impl Default for AppConfig {
             },
             database: DatabaseConfig {
                 url: "postgres://shipyard:shipyard@localhost:5432/shipyard".to_string(),
-                max_connections: 10,
+                max_connections: 5,
             },
             mqtt: MqttConfig {
                 host: "localhost".to_string(),
@@ -239,7 +239,7 @@ impl AppConfig {
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 3001)?
             .set_default("database.url", "postgres://shipyard:shipyard@localhost:5432/shipyard")?
-            .set_default("database.max_connections", 10)?
+            .set_default("database.max_connections", 5)?
             .set_default("mqtt.host", "localhost")?
             .set_default("mqtt.port", 1883)?
             .set_default("mqtt.client_id", "shipyard-api")?

@@ -9,6 +9,8 @@ pub type DbPool = sqlx::PgPool;
 pub async fn init_pool(database_url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(max_connections)
+        .min_connections(0)
+        .idle_timeout(std::time::Duration::from_secs(60))
         .connect(database_url)
         .await?;
 

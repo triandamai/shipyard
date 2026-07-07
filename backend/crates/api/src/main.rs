@@ -69,8 +69,17 @@ pub struct AppState {
     pub swarm_sync_trigger: Arc<Notify>,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(512 * 1024) // 512 KB — async tasks don't deep-recurse
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(async_main());
+}
+
+async fn async_main() {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
