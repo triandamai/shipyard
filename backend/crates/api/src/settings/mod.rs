@@ -167,6 +167,9 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/smtp/test", post(test_smtp))
         .route("/admin/db/tables", get(list_db_tables))
         .route("/admin/db/tables/:table_name", delete(drop_db_table))
+        .route("/admin/db/tables/:table_name/columns", get(list_table_columns))
+        .route("/admin/db/tables/:table_name/rows", get(list_table_rows))
+        .route("/admin/db/tables/:table_name/rows/:pk_value", axum::routing::patch(update_table_row))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1777,6 +1780,283 @@ async fn revoke_api_key(
 struct DbTableInfo {
     name: String,
     row_count: i64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct DbColMeta {
+    name: String,
+    data_type: String,
+    udt_name: String,
+    is_nullable: bool,
+    is_primary_key: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DbTableRowsResponse {
+    columns: Vec<DbColMeta>,
+    rows: Vec<Vec<serde_json::Value>>,
+    total: i64,
+    page: u32,
+    per_page: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct TableRowsQuery {
+    #[serde(default)]
+    search: String,
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_per_page_rows")]
+    per_page: u32,
+}
+fn default_page() -> u32 { 1 }
+fn default_per_page_rows() -> u32 { 50 }
+
+#[derive(Debug, Deserialize)]
+struct DbRowUpdateRequest {
+    updates: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Validate that a table exists in the public schema; return an error if not.
+async fn require_table(db: &sqlx::PgPool, table_name: &str) -> Result<(), ApiAppError> {
+    let exists: Option<(bool,)> = sqlx::query_as(
+        "SELECT TRUE FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = $1",
+    )
+    .bind(table_name)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    exists.map(|_| ()).ok_or_else(|| {
+        ApiAppError(AppError::NotFound(format!("Table '{}' not found", table_name)))
+    })
+}
+
+/// Fetch column metadata (name, type, nullable, pk flag) for a table.
+async fn fetch_table_columns(db: &sqlx::PgPool, table_name: &str) -> Result<Vec<DbColMeta>, ApiAppError> {
+    sqlx::query_as::<_, DbColMeta>(
+        r#"
+        SELECT
+            c.column_name            AS name,
+            c.data_type              AS data_type,
+            c.udt_name               AS udt_name,
+            (c.is_nullable = 'YES')  AS is_nullable,
+            (pk.column_name IS NOT NULL) AS is_primary_key
+        FROM information_schema.columns c
+        LEFT JOIN (
+            SELECT kcu.column_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+                ON kcu.constraint_name = tc.constraint_name
+               AND kcu.table_schema   = tc.table_schema
+               AND kcu.table_name     = tc.table_name
+            WHERE tc.constraint_type = 'PRIMARY KEY'
+              AND tc.table_name      = $1
+              AND tc.table_schema    = 'public'
+        ) pk ON pk.column_name = c.column_name
+        WHERE c.table_schema = 'public' AND c.table_name = $1
+        ORDER BY c.ordinal_position
+        "#,
+    )
+    .bind(table_name)
+    .fetch_all(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))
+}
+
+/// Convert a Postgres row cell to a JSON value — handles common platform types.
+fn platform_pg_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> serde_json::Value {
+    use sqlx::{Column, Row, TypeInfo};
+    let type_name = row.column(idx).type_info().name().to_ascii_uppercase();
+    match type_name.as_str() {
+        "INT2" | "INT4"   => row.try_get::<i32, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+        "INT8" | "OID"    => row.try_get::<i64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+        "FLOAT4"          => row.try_get::<f32, _>(idx).ok().map(|v| serde_json::Value::from(v as f64)).unwrap_or(serde_json::Value::Null),
+        "FLOAT8"          => row.try_get::<f64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+        "BOOL"            => row.try_get::<bool, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+        "JSON" | "JSONB"  => row.try_get::<serde_json::Value, _>(idx).unwrap_or(serde_json::Value::Null),
+        _                 => row.try_get::<String, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+    }
+}
+
+/// GET /admin/db/tables/:table_name/columns
+async fn list_table_columns(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(table_name): Path<String>,
+) -> Result<Json<ApiResponse<Vec<DbColMeta>>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    require_table(&state.db, &table_name).await?;
+    let cols = fetch_table_columns(&state.db, &table_name).await?;
+    Ok(Json(ApiResponse::ok(cols)))
+}
+
+/// GET /admin/db/tables/:table_name/rows?search=&page=&per_page=
+async fn list_table_rows(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(table_name): Path<String>,
+    Query(q): Query<TableRowsQuery>,
+) -> Result<Json<ApiResponse<DbTableRowsResponse>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    require_table(&state.db, &table_name).await?;
+
+    let cols = fetch_table_columns(&state.db, &table_name).await?;
+
+    let per_page = q.per_page.clamp(1, 200);
+    let page = q.page.max(1);
+    let offset = ((page - 1) * per_page) as i64;
+    let search = q.search.trim().to_string();
+
+    // Build a WHERE clause that searches across all columns by casting each to text.
+    // Column names come from information_schema (trusted).
+    let search_clause = if search.is_empty() {
+        "TRUE".to_string()
+    } else {
+        let parts: Vec<String> = cols
+            .iter()
+            .map(|c| format!("CAST(\"{}\" AS TEXT) ILIKE $1", c.name))
+            .collect();
+        format!("({})", parts.join(" OR "))
+    };
+
+    let quoted = table_name.replace('"', "\"\"");
+
+    // Total count
+    let count_sql = format!("SELECT COUNT(*) FROM \"{quoted}\" WHERE {search_clause}");
+    let total: i64 = if search.is_empty() {
+        sqlx::query_scalar(&count_sql)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        let pattern = format!("%{search}%");
+        sqlx::query_scalar(&count_sql)
+            .bind(&pattern)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    };
+
+    // Determine ORDER BY — prefer pk column, else first column
+    let order_col = cols.iter().find(|c| c.is_primary_key).unwrap_or(&cols[0]);
+    let row_sql = format!(
+        "SELECT * FROM \"{quoted}\" WHERE {search_clause} ORDER BY \"{}\" LIMIT $2 OFFSET $3",
+        order_col.name.replace('"', "\"\""),
+    );
+
+    let pg_rows = if search.is_empty() {
+        sqlx::query(&row_sql)
+            .bind("")         // $1 unused but keeps param numbering consistent
+            .bind(per_page as i64)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        let pattern = format!("%{search}%");
+        sqlx::query(&row_sql)
+            .bind(&pattern)
+            .bind(per_page as i64)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    };
+
+    let rows: Vec<Vec<serde_json::Value>> = pg_rows
+        .iter()
+        .map(|row| (0..cols.len()).map(|i| platform_pg_to_json(row, i)).collect())
+        .collect();
+
+    Ok(Json(ApiResponse::ok(DbTableRowsResponse { columns: cols, rows, total, page, per_page })))
+}
+
+/// PATCH /admin/db/tables/:table_name/rows/:pk_value
+///
+/// Updates a single row identified by the table's primary key.
+/// Body: `{"updates": {"col_name": "new_value", ...}}`
+async fn update_table_row(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((table_name, pk_value)): Path<(String, String)>,
+    Json(body): Json<DbRowUpdateRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    require_table(&state.db, &table_name).await?;
+
+    if body.updates.is_empty() {
+        return Err(ApiAppError(AppError::BadRequest("No columns to update".to_string())));
+    }
+
+    let cols = fetch_table_columns(&state.db, &table_name).await?;
+
+    let pk_col = cols.iter().find(|c| c.is_primary_key).ok_or_else(|| {
+        ApiAppError(AppError::BadRequest(format!("Table '{}' has no primary key", table_name)))
+    })?;
+
+    // Validate all update columns exist in the table.
+    let col_map: std::collections::HashMap<&str, &DbColMeta> =
+        cols.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    let mut update_cols: Vec<(&DbColMeta, String)> = Vec::new();
+    for (col_name, new_val) in &body.updates {
+        let meta = col_map.get(col_name.as_str()).ok_or_else(|| {
+            ApiAppError(AppError::BadRequest(format!("Column '{}' does not exist in table '{}'", col_name, table_name)))
+        })?;
+        let val_str = match new_val {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => "".to_string(),
+            other => other.to_string(),
+        };
+        update_cols.push((meta, val_str));
+    }
+
+    // Build SET clauses — $1 is pk_value, $2.. are update values.
+    let quoted_table = table_name.replace('"', "\"\"");
+    let set_clauses: Vec<String> = update_cols
+        .iter()
+        .enumerate()
+        .map(|(i, (meta, _))| {
+            let quoted_col = meta.name.replace('"', "\"\"");
+            // Cast through text so string literals work for enums, uuids, etc.
+            format!("\"{}\" = (${}::TEXT)::{}", quoted_col, i + 2, meta.udt_name)
+        })
+        .collect();
+
+    let pk_quoted = pk_col.name.replace('"', "\"\"");
+    let sql = format!(
+        "UPDATE \"{}\" SET {} WHERE \"{}\" = ($1::TEXT)::{}",
+        quoted_table,
+        set_clauses.join(", "),
+        pk_quoted,
+        pk_col.udt_name,
+    );
+
+    let mut query = sqlx::query(&sql).bind(&pk_value);
+    for (_, val) in &update_cols {
+        query = query.bind(val);
+    }
+
+    let result = query.execute(&state.db).await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiAppError(AppError::NotFound(format!(
+            "No row with pk '{}' in table '{}'", pk_value, table_name
+        ))));
+    }
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        table = %table_name,
+        pk = %pk_value,
+        cols = ?body.updates.keys().collect::<Vec<_>>(),
+        "Admin DB row updated"
+    );
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "rows_affected": result.rows_affected() }))))
 }
 
 /// GET /admin/db/tables — list all user tables with live row counts.
