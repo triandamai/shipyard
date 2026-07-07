@@ -23,6 +23,7 @@ use shipyard_docker::engine::DockerEngine;
 use shipyard_mqtt::MqttPublisher;
 
 use middleware::rate_limit::SharedRateLimiter;
+use tokio::sync::Notify;
 
 mod auth;
 mod cache;
@@ -61,6 +62,8 @@ pub struct AppState {
     pub redis: Option<redis::aio::ConnectionManager>,
     /// Tight per-IP rate limiter for /auth/login and /auth/register (10 req/min).
     pub auth_limiter: SharedRateLimiter,
+    /// Notified whenever a deployment completes so the Swarm sync loop wakes immediately.
+    pub swarm_sync_trigger: Arc<Notify>,
 }
 
 #[tokio::main]
@@ -236,37 +239,6 @@ async fn main() {
         });
     }
 
-    // Spawn periodic Swarm task sync — keeps container records fresh for all nodes.
-    // The event worker only sees events from the local Docker socket, so containers on
-    // worker nodes never get events. This loop polls Swarm tasks every 60 s to fill the gap.
-    {
-        let sync_docker = Arc::clone(&docker_engine);
-        let sync_db = pool.clone();
-        let sync_mqtt = Arc::clone(&mqtt_publisher);
-        let sync_label_prefix = config.docker.label_prefix.clone();
-
-        tokio::spawn(async move {
-            let worker = match shipyard_docker_worker::DockerEventWorker::new(
-                sync_docker,
-                sync_db,
-                sync_mqtt,
-                sync_label_prefix,
-            ) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!("Failed to create Swarm sync worker: {e}");
-                    return;
-                }
-            };
-
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                if let Err(e) = worker.sync_swarm_tasks().await {
-                    tracing::warn!("sync_swarm_tasks failed: {e}");
-                }
-            }
-        });
-    }
 
     // Spawn docker_events retention task — purge events older than 7 days, runs daily.
     {
@@ -338,6 +310,8 @@ async fn main() {
 
     let auth_limiter = middleware::rate_limit::make_auth_rate_limiter();
 
+    let swarm_sync_trigger = Arc::new(Notify::new());
+
     let state = AppState {
         config: Arc::new(config),
         db: pool,
@@ -346,6 +320,7 @@ async fn main() {
         oauth_states: Arc::new(DashMap::new()),
         redis: redis_conn,
         auth_limiter,
+        swarm_sync_trigger: Arc::clone(&swarm_sync_trigger),
     };
 
     // ── Deployment scheduler ──────────────────────────────────────────────────
@@ -421,6 +396,46 @@ async fn main() {
                             tracing::error!(deployment_id = %dep_id, "scheduled deployment failed: {e}");
                         }
                     });
+                }
+            }
+        });
+    }
+
+    // Spawn periodic Swarm task sync — keeps container records fresh for all nodes.
+    // The event worker only sees events from the local Docker socket, so containers on
+    // worker nodes never get events. This loop fills the gap:
+    //   • runs once immediately on startup
+    //   • wakes immediately when `swarm_sync_trigger` is notified (e.g. after a deploy)
+    //   • falls back to a 10 s poll so orphan detection still happens on its own
+    {
+        let sync_docker = Arc::clone(&state.docker);
+        let sync_db = state.db.clone();
+        let sync_mqtt = Arc::clone(&state.mqtt);
+        let sync_label_prefix = state.config.docker.label_prefix.clone();
+        let sync_notify = Arc::clone(&state.swarm_sync_trigger);
+
+        tokio::spawn(async move {
+            let worker = match shipyard_docker_worker::DockerEventWorker::new(
+                sync_docker,
+                sync_db,
+                sync_mqtt,
+                sync_label_prefix,
+            ) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Failed to create Swarm sync worker: {e}");
+                    return;
+                }
+            };
+
+            loop {
+                if let Err(e) = worker.sync_swarm_tasks().await {
+                    tracing::warn!("sync_swarm_tasks failed: {e}");
+                }
+                // Wait for a deploy signal OR 10 s, whichever comes first.
+                tokio::select! {
+                    _ = sync_notify.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
                 }
             }
         });

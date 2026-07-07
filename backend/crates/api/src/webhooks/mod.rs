@@ -264,6 +264,7 @@ async fn handle_push(
         state.config.static_server.retention_versions,
     );
 
+    let webhook_notify = Arc::clone(&state.swarm_sync_trigger);
     tokio::spawn(async move {
         if let Err(e) = engine.deploy(deployment_id, service_id, "webhook", &source_ref).await {
             tracing::error!(
@@ -273,6 +274,7 @@ async fn handle_push(
                 "webhook-triggered deployment failed"
             );
         }
+        webhook_notify.notify_one();
     });
 
     Ok(Json(ApiResponse::ok(serde_json::json!({

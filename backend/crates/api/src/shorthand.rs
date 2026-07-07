@@ -188,10 +188,12 @@ async fn trigger_deploy(
         state.config.static_server.retention_versions,
     );
 
+    let deploy_notify = Arc::clone(&state.swarm_sync_trigger);
     tokio::spawn(async move {
         if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
             tracing::error!(deployment_id = %deployment_id, "Deploy error: {e}");
         }
+        deploy_notify.notify_one();
     });
 
     crate::middleware::audit::write_audit_log(
@@ -516,10 +518,12 @@ async fn redeploy_service(
         state.config.static_server.retention_versions,
     );
 
+    let redeploy_notify = Arc::clone(&state.swarm_sync_trigger);
     tokio::spawn(async move {
         if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
             tracing::error!(deployment_id = %deployment_id, "Redeploy error: {e}");
         }
+        redeploy_notify.notify_one();
     });
 
     let deployment = sqlx::query_as::<_, Deployment>(
@@ -976,9 +980,10 @@ async fn container_logs_stream(
                 (vec!["service".to_string(), "logs".to_string(), "--raw".to_string(),
                       "-f".to_string(), tail_arg, target], true)
             } else {
-                let ts = if q.timestamps { "--timestamps" } else { "--no-log-prefix" };
-                (vec!["logs".to_string(), "-f".to_string(), tail_arg,
-                      ts.to_string(), container_id], false)
+                let mut args = vec!["logs".to_string(), "-f".to_string(), tail_arg];
+                if q.timestamps { args.push("--timestamps".to_string()); }
+                args.push(container_id);
+                (args, false)
             };
         let _ = use_service_logs; // consumed via cmd_args
 
