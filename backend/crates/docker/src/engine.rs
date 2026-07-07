@@ -851,24 +851,21 @@ impl DockerEngine for BollardDockerEngine {
             let stdout_str = stdout.trim();
             tracing::error!("docker build failed. Stderr: {}\nStdout: {}", stderr_str, stdout_str);
 
-            // Collect all non-empty lines from stderr, excluding the generic "See 'docker" message
-            let filtered_stderr_lines: Vec<&str> = stderr_str
-                .lines()
-                .map(|l| l.trim())
+            // Collect all non-empty lines from both stdout and stderr, excluding generic "See 'docker" message
+            let filtered_lines: Vec<String> = lines
+                .iter()
+                .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty() && !l.contains("See 'docker"))
                 .collect();
 
-            let summary = if !filtered_stderr_lines.is_empty() {
-                filtered_stderr_lines.join(" | ")
+            // Take the last 8 lines to capture the error context (like npm / compile errors)
+            let last_lines = if filtered_lines.len() > 8 {
+                &filtered_lines[filtered_lines.len() - 8..]
             } else {
-                let fallback = lines
-                    .iter()
-                    .filter(|l| !l.trim().is_empty() && !l.contains("See 'docker"))
-                    .last()
-                    .cloned();
-                fallback.unwrap_or_else(|| "unknown build error".to_string())
+                &filtered_lines[..]
             };
 
+            let summary = last_lines.join(" | ");
             return Err(AppError::Docker(format!("docker build failed: {summary}")));
         }
 

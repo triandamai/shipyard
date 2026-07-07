@@ -138,7 +138,10 @@ fi
 if ! docker compose version &>/dev/null; then
     info "Docker Compose plugin not found — installing..."
     COMPOSE_VERSION="v2.27.1"
-    COMPOSE_DIR="/usr/local/lib/docker/cli-plugins"
+    COMPOSE_DIR="/usr/libexec/docker/cli-plugins"
+    if [ ! -d "$COMPOSE_DIR" ] && [ -d "/usr/local/lib/docker/cli-plugins" ]; then
+        COMPOSE_DIR="/usr/local/lib/docker/cli-plugins"
+    fi
     mkdir -p "${COMPOSE_DIR}"
 
     ARCH=$(uname -m)
@@ -162,7 +165,10 @@ fi
 if ! docker buildx version &>/dev/null; then
     info "Docker Buildx plugin not found — installing..."
     BUILDX_VERSION="v0.14.1"
-    BUILDX_DIR="/usr/local/lib/docker/cli-plugins"
+    BUILDX_DIR="/usr/libexec/docker/cli-plugins"
+    if [ ! -d "$BUILDX_DIR" ] && [ -d "/usr/local/lib/docker/cli-plugins" ]; then
+        BUILDX_DIR="/usr/local/lib/docker/cli-plugins"
+    fi
     mkdir -p "${BUILDX_DIR}"
 
     ARCH=$(uname -m)
