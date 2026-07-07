@@ -270,6 +270,13 @@ let showDbClient    = $state(false);
 			monitorLoading = false;
 		});
 
+		es.addEventListener('remote', (e: MessageEvent) => {
+			monitorError   = e.data ?? 'Container is on a remote Swarm node — live stats unavailable';
+			monitorLoading = false;
+			es.close();
+			statsSource = null;
+		});
+
 		es.onerror = () => {
 			if (monitorLoading) {
 				monitorError   = 'Could not connect to stats stream';

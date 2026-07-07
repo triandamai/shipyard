@@ -895,7 +895,7 @@ impl DockerEventWorker {
     /// Recount running containers for `service_id`, update the services table,
     /// and publish MQTT events for replica count and service status.
     pub async fn sync_service_replica_count(&self, service_id: Uuid) -> AppResult<()> {
-        // Count currently-running containers.
+        // Count currently-running containers (live observed state).
         let row = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM containers WHERE service_id = $1 AND status = 'running'::container_status",
         )
@@ -907,21 +907,21 @@ impl DockerEventWorker {
         let running = row.0 as i32;
         let svc_status = if running > 0 { "running" } else { "stopped" };
 
+        // Update ONLY status — intentionally do NOT touch `replicas`.
+        //
+        // `services.replicas` is the user-configured desired count and must only
+        // change when the user explicitly scales the service.  Writing the live
+        // running count here caused a race with rolling updates (START_FIRST
+        // strategy briefly creates N+1 containers) that incremented the desired
+        // replica count on every webhook-triggered deployment.
         sqlx::query(
-            r#"
-            UPDATE services
-            SET replicas   = $1,
-                status     = $2,
-                updated_at = NOW()
-            WHERE id = $3
-            "#,
+            "UPDATE services SET status = $1, updated_at = NOW() WHERE id = $2",
         )
-        .bind(running)
         .bind(svc_status)
         .bind(service_id)
         .execute(&self.db)
         .await
-        .map_err(|e| AppError::Database(format!("Failed to update service replica count: {e}")))?;
+        .map_err(|e| AppError::Database(format!("Failed to update service status: {e}")))?;
 
         // Fetch org_id and project_id to build the MQTT topic.
         let ids = sqlx::query_as::<_, (Uuid, Uuid)>(

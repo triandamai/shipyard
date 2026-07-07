@@ -169,7 +169,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/db/tables/:table_name", delete(drop_db_table))
         .route("/admin/db/tables/:table_name/columns", get(list_table_columns))
         .route("/admin/db/tables/:table_name/rows", get(list_table_rows))
-        .route("/admin/db/tables/:table_name/rows/:pk_value", axum::routing::patch(update_table_row))
+        .route("/admin/db/tables/:table_name/rows/:pk_value", axum::routing::patch(update_table_row).delete(delete_table_row))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -2054,6 +2054,52 @@ async fn update_table_row(
         pk = %pk_value,
         cols = ?body.updates.keys().collect::<Vec<_>>(),
         "Admin DB row updated"
+    );
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "rows_affected": result.rows_affected() }))))
+}
+
+/// DELETE /admin/db/tables/:table_name/rows/:pk_value
+///
+/// Deletes a single row identified by the table's primary key.
+async fn delete_table_row(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path((table_name, pk_value)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+    require_table(&state.db, &table_name).await?;
+
+    let cols = fetch_table_columns(&state.db, &table_name).await?;
+
+    let pk_col = cols.iter().find(|c| c.is_primary_key).ok_or_else(|| {
+        ApiAppError(AppError::BadRequest(format!("Table '{}' has no primary key", table_name)))
+    })?;
+
+    let quoted_table = table_name.replace('"', "\"\"");
+    let pk_quoted = pk_col.name.replace('"', "\"\"");
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE \"{}\" = ($1::TEXT)::{}",
+        quoted_table, pk_quoted, pk_col.udt_name,
+    );
+
+    let result = sqlx::query(&sql)
+        .bind(&pk_value)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiAppError(AppError::NotFound(format!(
+            "No row with pk '{}' in table '{}'", pk_value, table_name
+        ))));
+    }
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        table = %table_name,
+        pk = %pk_value,
+        "Admin DB row deleted"
     );
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "rows_affected": result.rows_affected() }))))

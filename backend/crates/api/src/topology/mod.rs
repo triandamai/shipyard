@@ -47,6 +47,7 @@ struct ServiceRow {
     slug: String,
     status: String,
     replicas: i32,
+    running_replicas: i64,
     #[sqlx(rename = "type")]
     service_type: String,
     ports: serde_json::Value,
@@ -148,12 +149,16 @@ async fn get_topology(
         ))));
     }
 
-    // 1. Query all services in the project
+    // 1. Query all services in the project, joining live running-container count.
     let services = sqlx::query_as::<_, ServiceRow>(
-        "SELECT id, name, slug, status, replicas, type::text AS type, ports, service_parent_id
-         FROM services
-         WHERE project_id = $1
-         ORDER BY created_at ASC",
+        "SELECT s.id, s.name, s.slug, s.status, s.replicas, s.type::text AS type,
+                s.ports, s.service_parent_id,
+                COUNT(c.id) FILTER (WHERE c.status = 'running'::container_status) AS running_replicas
+         FROM services s
+         LEFT JOIN containers c ON c.service_id = s.id
+         WHERE s.project_id = $1
+         GROUP BY s.id
+         ORDER BY s.created_at ASC",
     )
     .bind(project_id)
     .fetch_all(db)
@@ -344,6 +349,7 @@ async fn get_topology(
                     "slug":              svc.slug,
                     "status":            svc.status,
                     "replicas":          svc.replicas,
+                    "running_replicas":  svc.running_replicas,
                     "type":              svc.service_type,
                     "ports":             svc.ports,
                     "service_parent_id": svc.service_parent_id.map(|id| format!("svc_{id}")),

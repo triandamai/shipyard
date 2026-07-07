@@ -6,7 +6,7 @@
 	import {
 		Database, RefreshCw, Trash2, AlertTriangle, X, Loader2,
 		TableProperties, ChevronLeft, ChevronRight, Search, Edit2,
-		Check, CornerDownLeft
+		Check, CornerDownLeft, Minus
 	} from '@lucide/svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { page } from '$app/state';
@@ -61,6 +61,37 @@
 	let saving        = $state(false);
 	let saveError     = $state('');
 	let saveSuccess   = $state(false);
+
+	// ── Delete row confirm ─────────────────────────────────────────────────
+	let deleteRowPk   = $state<string | null>(null);
+	let deletingRow   = $state(false);
+	let deleteRowError = $state('');
+
+	async function confirmDeleteRow(row: (string | number | boolean | null)[], e: MouseEvent) {
+		e.stopPropagation();
+		if (!pkCol) return;
+		const pkIdx = columns.findIndex(c => c.is_primary_key);
+		deleteRowPk = String(row[pkIdx] ?? '');
+		deleteRowError = '';
+	}
+
+	function cancelDeleteRow() { if (!deletingRow) { deleteRowPk = null; deleteRowError = ''; } }
+
+	async function doDeleteRow() {
+		if (!browseTable || !deleteRowPk) return;
+		deletingRow = true;
+		deleteRowError = '';
+		const res = await api.delete(
+			`/admin/db/tables/${encodeURIComponent(browseTable.name)}/rows/${encodeURIComponent(deleteRowPk)}`
+		);
+		deletingRow = false;
+		if (res.error) {
+			deleteRowError = res.error.message;
+		} else {
+			deleteRowPk = null;
+			await fetchRows();
+		}
+	}
 
 	// ── Drop confirm ───────────────────────────────────────────────────────
 	let confirmTable  = $state<DbTable | null>(null);
@@ -368,7 +399,17 @@
 										</td>
 									{/each}
 									<td class="action-col">
-										<span class="edit-hint"><Edit2 size={10} /></span>
+										<span class="row-actions">
+											<span class="edit-hint"><Edit2 size={10} /></span>
+											<span
+												class="del-row-btn"
+												title="Delete row"
+												role="button"
+												tabindex="0"
+												onclick={(e) => confirmDeleteRow(row, e)}
+												onkeydown={(e) => e.key === 'Enter' && confirmDeleteRow(row, e as unknown as MouseEvent)}
+											><Minus size={10} /></span>
+										</span>
 									</td>
 								</tr>
 							{/each}
@@ -379,7 +420,7 @@
 
 			<div class="browser-footer">
 				<span>Showing {Math.min((browsePage - 1) * perPage + 1, totalRows)}–{Math.min(browsePage * perPage, totalRows)} of {totalRows.toLocaleString()}</span>
-				<span class="click-hint">Click a row to edit</span>
+				<span class="click-hint">Click row to edit · <Minus size={9} /> to delete</span>
 			</div>
 		</div>
 		{:else}
@@ -450,6 +491,34 @@
 				{:else}
 					<CornerDownLeft size={13} />Save changes
 				{/if}
+			</button>
+		</div>
+	</div>
+{/if}
+
+<!-- ── Delete row confirm modal ── -->
+{#if deleteRowPk !== null}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="modal-backdrop" onclick={cancelDeleteRow} onkeydown={() => {}}></div>
+	<div class="modal" role="dialog" aria-modal="true">
+		<div class="modal-header">
+			<div class="modal-title"><Minus size={16} /><span>Delete row from <code>{browseTable?.name}</code></span></div>
+			<button class="close-btn" onclick={cancelDeleteRow} disabled={deletingRow}><X size={15} /></button>
+		</div>
+		<div class="modal-body">
+			<div class="danger-notice">
+				<AlertTriangle size={16} />
+				<div>
+					<strong>This action is permanent.</strong>
+					<p>Row with {pkCol?.name} = <code>{deleteRowPk}</code> will be permanently deleted.</p>
+				</div>
+			</div>
+			{#if deleteRowError}<p class="drop-error">{deleteRowError}</p>{/if}
+		</div>
+		<div class="modal-footer">
+			<button class="btn btn-secondary" onclick={cancelDeleteRow} disabled={deletingRow}>Cancel</button>
+			<button class="btn btn-danger icon-btn" onclick={doDeleteRow} disabled={deletingRow}>
+				{#if deletingRow}<Loader2 size={13} class="spin" />Deleting…{:else}<Trash2 size={13} />Delete row{/if}
 			</button>
 		</div>
 	</div>
@@ -625,7 +694,7 @@
 		text-transform: uppercase; letter-spacing: 0.04em;
 	}
 	.rows-table th.pk { color: #6366f1; }
-	.rows-table .action-col { width: 28px; padding: 0; }
+	.rows-table .action-col { width: 48px; padding: 0 6px; }
 	.pk-badge {
 		display: inline-block; font-size: 9px; font-weight: 700;
 		color: #6366f1; background: #ede9fe; border-radius: 3px;
@@ -641,7 +710,16 @@
 	}
 	.null-val { color: var(--text-muted); font-style: italic; font-size: 11px; }
 	.cell-val { color: var(--text-primary); }
-	.edit-hint { opacity: 0; color: var(--text-muted); display: flex; align-items: center; justify-content: center; }
+	.row-actions { display: flex; align-items: center; gap: 4px; }
+	.edit-hint { opacity: 0; color: var(--text-muted); display: flex; align-items: center; }
+	.del-row-btn {
+		opacity: 0; display: flex; align-items: center; padding: 2px;
+		border-radius: 3px; color: var(--text-muted); cursor: pointer;
+		transition: color 0.15s, background 0.15s;
+	}
+	.data-row:hover .edit-hint,
+	.data-row:hover .del-row-btn { opacity: 1; }
+	.del-row-btn:hover { color: #dc2626; background: #fee2e2; }
 
 	.browser-footer {
 		display: flex; align-items: center; justify-content: space-between;

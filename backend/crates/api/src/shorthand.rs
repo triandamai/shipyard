@@ -765,6 +765,14 @@ async fn container_stats(
             return;
         }
 
+        // Remote containers can't be stats'd via local Docker socket.
+        if is_remote_container(&state, service_id, &container_docker_id).await {
+            let _ = tx.send(Ok(Event::default().event("remote")
+                .data("Container is running on a remote Swarm node — live stats unavailable")))
+                .await;
+            return;
+        }
+
         use tokio::net::UnixStream;
 
         let mut stream = match UnixStream::connect("/var/run/docker.sock").await {
@@ -819,9 +827,20 @@ async fn container_stats(
         }
 
         if !status_ok {
+            // Container not found locally — mark it as orphan in DB so the UI cleans up.
+            let _ = sqlx::query(
+                "UPDATE containers SET status = 'orphan' \
+                 WHERE docker_container_id = $1 AND service_id = $2 \
+                   AND status NOT IN ('orphan','failed','shutdown','complete','rejected')"
+            )
+            .bind(&container_docker_id)
+            .bind(service_id)
+            .execute(&state.db)
+            .await;
+
             let _ = tx
                 .send(Ok(Event::default().event("error")
-                    .data(format!("Docker returned non-200 for container {container_docker_id}"))))
+                    .data(format!("Container {container_docker_id} not found — record marked as orphan"))))
                 .await;
             return;
         }
