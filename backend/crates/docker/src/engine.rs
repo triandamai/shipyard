@@ -829,7 +829,6 @@ impl DockerEngine for BollardDockerEngine {
         let output = tokio::process::Command::new("docker")
             .args([
                 "build",
-                "--progress=plain",
                 "-t", tag,
                 "-f", &dockerfile_abs,
                 context_path,
