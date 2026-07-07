@@ -346,9 +346,9 @@ async fn async_main() {
 
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-
-                // Read current max_parallel setting
+                // Read current max_parallel setting first — when 0 (disabled) we
+                // skip all scheduling work and back off to 60 s to avoid pointless
+                // DB churn (was: 1 query every 5 s even when the feature is off).
                 let max_parallel: i64 = match sqlx::query_as::<_, (String,)>(
                     "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
                 )
@@ -359,54 +359,61 @@ async fn async_main() {
                     _ => 0,
                 };
 
-                if max_parallel <= 0 { continue; }
+                if max_parallel > 0 {
+                    let running: i64 = match sqlx::query_as::<_, (i64,)>(
+                        "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+                    )
+                    .fetch_one(&sched_db)
+                    .await
+                    {
+                        Ok((n,)) => n,
+                        Err(e) => { tracing::warn!("scheduler: running count query failed: {e}"); 0 }
+                    };
 
-                let running: i64 = match sqlx::query_as::<_, (i64,)>(
-                    "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
-                )
-                .fetch_one(&sched_db)
-                .await
-                {
-                    Ok((n,)) => n,
-                    Err(e) => { tracing::warn!("scheduler: running count query failed: {e}"); continue; }
-                };
+                    let slots = (max_parallel - running).max(0) as usize;
+                    if slots > 0 {
+                        let queued = match sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, String)>(
+                            "SELECT id, service_id, triggered_by, source_ref
+                             FROM deployments
+                             WHERE status = 'queued'::deployment_status
+                             ORDER BY created_at ASC
+                             LIMIT $1",
+                        )
+                        .bind(slots as i64)
+                        .fetch_all(&sched_db)
+                        .await
+                        {
+                            Ok(rows) => rows,
+                            Err(e) => { tracing::warn!("scheduler: queued fetch failed: {e}"); vec![] }
+                        };
 
-                let slots = (max_parallel - running).max(0) as usize;
-                if slots == 0 { continue; }
-
-                let queued = match sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String, String)>(
-                    "SELECT id, service_id, triggered_by, source_ref
-                     FROM deployments
-                     WHERE status = 'queued'::deployment_status
-                     ORDER BY created_at ASC
-                     LIMIT $1",
-                )
-                .bind(slots as i64)
-                .fetch_all(&sched_db)
-                .await
-                {
-                    Ok(rows) => rows,
-                    Err(e) => { tracing::warn!("scheduler: queued fetch failed: {e}"); continue; }
-                };
-
-                for (dep_id, svc_id, triggered_by, source_ref) in queued {
-                    let engine = shipyard_engine::DeploymentEngine::new(
-                        Arc::clone(&sched_docker),
-                        sched_db.clone(),
-                        Arc::clone(&sched_mqtt),
-                        sched_config.docker.label_prefix.clone(),
-                        sched_config.traefik.network.clone(),
-                        sched_config.auth.secret_key.clone(),
-                        sched_config.docker.port_proxy,
-                        sched_config.data_dir.clone(),
-                        sched_config.static_server.retention_versions,
-                    );
-                    tokio::spawn(async move {
-                        if let Err(e) = engine.deploy_queued(dep_id, svc_id, &triggered_by, &source_ref).await {
-                            tracing::error!(deployment_id = %dep_id, "scheduled deployment failed: {e}");
+                        for (dep_id, svc_id, triggered_by, source_ref) in queued {
+                            let engine = shipyard_engine::DeploymentEngine::new(
+                                Arc::clone(&sched_docker),
+                                sched_db.clone(),
+                                Arc::clone(&sched_mqtt),
+                                sched_config.docker.label_prefix.clone(),
+                                sched_config.traefik.network.clone(),
+                                sched_config.auth.secret_key.clone(),
+                                sched_config.docker.port_proxy,
+                                sched_config.data_dir.clone(),
+                                sched_config.static_server.retention_versions,
+                            );
+                            tokio::spawn(async move {
+                                if let Err(e) = engine.deploy_queued(dep_id, svc_id, &triggered_by, &source_ref).await {
+                                    tracing::error!(deployment_id = %dep_id, "scheduled deployment failed: {e}");
+                                }
+                            });
                         }
-                    });
+                    }
                 }
+
+                // When the feature is disabled back off to 60 s; 5 s when active.
+                tokio::time::sleep(if max_parallel <= 0 {
+                    Duration::from_secs(60)
+                } else {
+                    Duration::from_secs(5)
+                }).await;
             }
         });
     }
