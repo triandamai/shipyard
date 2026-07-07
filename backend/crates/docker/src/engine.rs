@@ -848,12 +848,28 @@ impl DockerEngine for BollardDockerEngine {
             .collect();
 
         if !output.status.success() {
-            let summary = lines
-                .iter()
-                .filter(|l| !l.is_empty())
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "unknown build error".to_string());
+            let stderr_str = stderr.trim();
+            let stdout_str = stdout.trim();
+            tracing::error!("docker build failed. Stderr: {}\nStdout: {}", stderr_str, stdout_str);
+
+            // Find the most meaningful error line (usually containing ERROR: or failed)
+            let mut summary = String::new();
+            for line in lines.iter().rev() {
+                let trimmed = line.trim();
+                if (trimmed.contains("ERROR:") || trimmed.contains("error") || trimmed.contains("failed")) && !trimmed.contains("See 'docker") {
+                    summary = trimmed.to_string();
+                    break;
+                }
+            }
+            if summary.is_empty() {
+                summary = lines
+                    .iter()
+                    .filter(|l| !l.is_empty())
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown build error".to_string());
+            }
+
             return Err(AppError::Docker(format!("docker build failed: {summary}")));
         }
 
