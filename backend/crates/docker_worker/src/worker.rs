@@ -20,6 +20,7 @@ use uuid::Uuid;
 ///         ↓                ↓
 ///     DB writes       MQTT publish
 /// ```
+#[derive(Clone)]
 pub struct DockerEventWorker {
     /// Raw bollard client for event streaming (trait doesn't expose streams).
     pub(crate) bollard: bollard::Docker,

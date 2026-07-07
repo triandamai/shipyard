@@ -8,6 +8,7 @@ name = "shipyard"
 path = "src/main.rs"
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 shipyard-common = { path = "../common" }
 shipyard-db = { path = "../db" }
 shipyard-docker = { path = "../docker" }

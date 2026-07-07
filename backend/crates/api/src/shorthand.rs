@@ -760,7 +760,7 @@ async fn container_stats(
     Path((service_id, container_docker_id)): Path<(Uuid, String)>,
     State(state): State<AppState>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
     let auth_ok  = require_service_access(&state.db, auth.user_id, service_id).await;
 
     tokio::spawn(async move {
@@ -956,7 +956,7 @@ async fn container_logs_stream(
     State(state): State<AppState>,
     Query(q): Query<ContainerLogsQuery>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(128);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
     let tail = q.tail.min(5000u32);
 
     // Auth check before handing off to the background task

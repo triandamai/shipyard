@@ -1,3 +1,6 @@
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
@@ -199,27 +202,25 @@ async fn main() {
 
     let mqtt_publisher = Arc::new(mqtt_publisher);
 
+    // Build the Docker Event Worker once — both the event loop and Swarm sync loop
+    // share this instance so they share the same bollard connection pool.
+    let event_worker = match shipyard_docker_worker::DockerEventWorker::new(
+        Arc::clone(&docker_engine),
+        pool.clone(),
+        Arc::clone(&mqtt_publisher),
+        config.docker.label_prefix.clone(),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!("Failed to create Docker event worker: {e}");
+            std::process::exit(1);
+        }
+    };
+
     // Spawn Docker Event Worker (with exponential backoff restart loop)
     {
-        let worker_docker = Arc::clone(&docker_engine);
-        let worker_db = pool.clone();
-        let worker_mqtt = Arc::clone(&mqtt_publisher);
-        let worker_label_prefix = config.docker.label_prefix.clone();
-
+        let worker = event_worker.clone();
         tokio::spawn(async move {
-            let worker = match shipyard_docker_worker::DockerEventWorker::new(
-                worker_docker,
-                worker_db,
-                worker_mqtt,
-                worker_label_prefix,
-            ) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!("Failed to create Docker event worker: {e}");
-                    return;
-                }
-            };
-
             // Reconcile DB state with Docker on startup
             if let Err(e) = worker.reconcile_on_startup().await {
                 tracing::warn!("Startup reconciliation failed: {e}");
@@ -408,28 +409,12 @@ async fn main() {
     //   • wakes immediately when `swarm_sync_trigger` is notified (e.g. after a deploy)
     //   • falls back to a 10 s poll so orphan detection still happens on its own
     {
-        let sync_docker = Arc::clone(&state.docker);
-        let sync_db = state.db.clone();
-        let sync_mqtt = Arc::clone(&state.mqtt);
-        let sync_label_prefix = state.config.docker.label_prefix.clone();
+        let sync_worker = event_worker.clone(); // shared bollard pool — no extra connection
         let sync_notify = Arc::clone(&state.swarm_sync_trigger);
 
         tokio::spawn(async move {
-            let worker = match shipyard_docker_worker::DockerEventWorker::new(
-                sync_docker,
-                sync_db,
-                sync_mqtt,
-                sync_label_prefix,
-            ) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!("Failed to create Swarm sync worker: {e}");
-                    return;
-                }
-            };
-
             loop {
-                if let Err(e) = worker.sync_swarm_tasks().await {
+                if let Err(e) = sync_worker.sync_swarm_tasks().await {
                     tracing::warn!("sync_swarm_tasks failed: {e}");
                 }
                 // Wait for a deploy signal OR 10 s, whichever comes first.
