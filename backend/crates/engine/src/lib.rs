@@ -937,14 +937,40 @@ impl DeploymentEngine {
         use tokio::process::Command;
         use tokio::sync::mpsc;
 
+        let mut user_arg = None;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(meta) = std::fs::metadata(repo_path) {
+                user_arg = Some(format!("{}:{}", meta.uid(), meta.gid()));
+            }
+        }
+
+        let mut docker_args = vec![
+            "run".to_string(),
+            "--rm".to_string(),
+            "--name".to_string(),
+            container_name.clone(),
+        ];
+
+        if let Some(user) = user_arg {
+            docker_args.push("-u".to_string());
+            docker_args.push(user);
+        }
+
+        docker_args.extend([
+            "--entrypoint".to_string(),
+            "".to_string(),
+            "-v".to_string(),
+            format!("{repo_abs}:/src"),
+            image.to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            run_script.clone(),
+        ]);
+
         let mut child = Command::new("docker")
-            .args([
-                "run", "--rm", "--name", &container_name,
-                "--entrypoint", "",
-                "-v", &format!("{repo_abs}:/src"),
-                image,
-                "sh", "-c", &run_script,
-            ])
+            .args(&docker_args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
