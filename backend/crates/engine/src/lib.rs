@@ -1,6 +1,7 @@
 //! Core Deployment Engine
 
 pub mod static_site;
+pub mod ssr;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -2507,15 +2508,65 @@ impl DeploymentEngine {
 
                 let dockerfile_path = format!("{repo_path}/Dockerfile");
                 let dockerfile = if std::path::Path::new(&dockerfile_path).exists() {
-                    "Dockerfile"
+                    "Dockerfile".to_string()
                 } else {
-                    return Err(AppError::BadRequest(
-                        "No Dockerfile found in repository root. \
-                         Add a Dockerfile to the repo to enable git-based deployment.".to_string(),
-                    ));
+                    let search_path = std::path::Path::new(repo_path);
+                    if let Some(ssr_detect) = crate::ssr::detect_ssr_framework(search_path) {
+                        let auto_dockerfile_path = format!("{repo_path}/Dockerfile.shipyard-auto");
+                        tokio::fs::write(&auto_dockerfile_path, &ssr_detect.dockerfile_content)
+                            .await
+                            .map_err(|e| AppError::Internal(format!("Failed to write auto-generated Dockerfile: {e}")))?;
+
+                        let log_msg = format!(
+                            "Auto-detected {} SSR framework. Generated optimized Dockerfile at Dockerfile.shipyard-auto.",
+                            ssr_detect.framework.name()
+                        );
+                        self.insert_log(deployment_id, Some(step_id), "info", &log_msg).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &log_msg).await;
+
+                        // If no port is set on the service, default it to 3000 in the DB so Traefik routes to it
+                        let ports_json: serde_json::Value = sqlx::query_scalar(
+                            "SELECT ports FROM services WHERE id = $1"
+                        )
+                        .bind(service_id)
+                        .fetch_one(&self.db)
+                        .await
+                        .unwrap_or(serde_json::Value::Array(vec![]));
+
+                        let is_ports_empty = match &ports_json {
+                            serde_json::Value::Array(arr) => arr.is_empty(),
+                            _ => true,
+                        };
+
+                        if is_ports_empty {
+                            let default_ports = serde_json::json!([ssr_detect.default_port.to_string()]);
+                            if let Err(e) = sqlx::query("UPDATE services SET ports = $1 WHERE id = $2")
+                                .bind(default_ports)
+                                .bind(service_id)
+                                .execute(&self.db)
+                                .await
+                            {
+                                tracing::error!("Failed to update service default ports for SSR: {e}");
+                            } else {
+                                let port_log = format!(
+                                    "Defaulted routing port to {} for {} SSR application.",
+                                    ssr_detect.default_port,
+                                    ssr_detect.framework.name()
+                                );
+                                self.insert_log(deployment_id, Some(step_id), "info", &port_log).await;
+                                self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &port_log).await;
+                            }
+                        }
+
+                        "Dockerfile.shipyard-auto".to_string()
+                    } else {
+                        return Err(AppError::BadRequest(
+                            "No Dockerfile found in repository root, and no supported SSR framework (Next.js, SvelteKit, Nuxt.js) was detected.".to_string(),
+                        ));
+                    }
                 };
 
-                let build_lines = self.docker.build_image(&local_tag, repo_path, dockerfile).await?;
+                let build_lines = self.docker.build_image(&local_tag, repo_path, &dockerfile).await?;
 
                 for line in &build_lines {
                     if !line.trim().is_empty() {

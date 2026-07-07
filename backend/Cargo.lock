@@ -3565,6 +3565,7 @@ dependencies = [
  "shipyard-mqtt",
  "shipyard-traefik",
  "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

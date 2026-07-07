@@ -7,15 +7,24 @@
 	import type { ServiceEnv } from '$lib/api/types';
 
 	interface Props {
-		serviceId: string;
+		serviceId?: string; // Optional for pre-creation mode
 		projectId: string;
 		serviceName?: string;
+		// Local mode props
+		initialEnvs?: Array<{ key: string; value: string; is_secret: boolean }>;
+		onConfirm?: (envs: Array<{ key: string; value: string; is_secret: boolean }>) => void;
 	}
 
-	let { serviceId, projectId, serviceName = 'Service' }: Props = $props();
+	let { serviceId, projectId, serviceName = 'Service', initialEnvs = [], onConfirm }: Props = $props();
 
 	let orgId = $derived($orgStore.activeOrg?.id ?? '');
-	let canEnvWrite = $derived(can($orgStore.myMembership?.role ?? null, $orgStore.myMembership?.permissions ?? [], permProject(orgId, projectId, 'env', 'write')));
+	let canEnvWrite = $derived(
+		!serviceId || can(
+			$orgStore.myMembership?.role ?? null,
+			$orgStore.myMembership?.permissions ?? [],
+			permProject(orgId, projectId, 'env', 'write')
+		)
+	);
 
 	// ── State ────────────────────────────────────────────────────────
 	type Mode = 'list' | 'raw';
@@ -73,13 +82,11 @@
 	function parseRaw(text: string): Array<{ key: string; value: string; is_secret: boolean }> {
 		const result: Array<{ key: string; value: string; is_secret: boolean }> = [];
 		for (const line of text.split('\n')) {
-			// Strip only \r (Windows line endings) — do not trim the line itself
 			const stripped = line.replace(/\r$/, '');
 			if (!stripped || stripped.trimStart().startsWith('#')) continue;
 			const eq = stripped.indexOf('=');
 			if (eq === -1) continue;
 			const key = stripped.slice(0, eq).trim();
-			// Value: everything after the first `=`, no trimming so spaces/special chars are preserved
 			const value = stripped.slice(eq + 1);
 			if (!key) continue;
 			result.push({ key, value, is_secret: false });
@@ -87,17 +94,40 @@
 		return result;
 	}
 
+	function triggerConfirm() {
+		if (onConfirm) {
+			onConfirm(envs.map(e => ({
+				key: e.key,
+				value: e.value_encrypted,
+				is_secret: e.is_secret
+			})));
+		}
+	}
+
 	// ── Load ─────────────────────────────────────────────────────────
 	async function load() {
 		loading = true;
 		error = null;
-		const res = await api.getServiceEnvs(serviceId);
-		if (res.error) {
-			error = res.error.message;
-		} else if (res.data) {
-			envs = res.data.sort((a, b) => a.key.localeCompare(b.key));
+		if (!serviceId) {
+			envs = (initialEnvs || []).map((e, idx) => ({
+				id: `local-${idx}`,
+				service_id: '',
+				key: e.key,
+				value_encrypted: e.value,
+				is_secret: e.is_secret,
+				created_at: new Date().toISOString()
+			}));
 			buildEdits(envs);
 			rawText = toRaw(envs);
+		} else {
+			const res = await api.getServiceEnvs(serviceId);
+			if (res.error) {
+				error = res.error.message;
+			} else if (res.data) {
+				envs = res.data.sort((a, b) => a.key.localeCompare(b.key));
+				buildEdits(envs);
+				rawText = toRaw(envs);
+			}
 		}
 		loading = false;
 	}
@@ -112,22 +142,25 @@
 	async function toggleReveal(id: string) {
 		if (!edits[id]) return;
 		if (edits[id].revealed) {
-			// hide: mask again
 			edits[id].revealed = false;
 			edits[id].value = '***';
 			edits[id].dirty = false;
 			return;
 		}
-		// reveal: fetch real value if still masked
 		if (edits[id].value === '***') {
-			edits[id].revealing = true;
-			const res = await api.revealEnv(projectId, serviceId, id);
-			edits[id].revealing = false;
-			if (res.error || !res.data) {
-				error = res.error?.message ?? 'Failed to reveal secret';
-				return;
+			if (!serviceId) {
+				const row = envs.find(e => e.id === id);
+				edits[id].value = row ? row.value_encrypted : '';
+			} else {
+				edits[id].revealing = true;
+				const res = await api.revealEnv(projectId, serviceId, id);
+				edits[id].revealing = false;
+				if (res.error || !res.data) {
+					error = res.error?.message ?? 'Failed to reveal secret';
+					return;
+				}
+				edits[id].value = res.data.value;
 			}
-			edits[id].value = res.data.value;
 		}
 		edits[id].revealed = true;
 	}
@@ -135,22 +168,37 @@
 	async function saveRow(id: string) {
 		const edit = edits[id];
 		if (!edit || !edit.dirty) return;
-		// Unrevealed secret — value is still masked. Don't overwrite the stored
-		// secret with an empty string. Reveal first, then save.
 		if (edit.is_secret && edit.value === '***') {
 			error = 'Reveal the secret value before saving changes to this row.';
 			return;
 		}
 		saving = true;
-		const res = await api.upsertEnv(serviceId, {
-			key: edit.key,
-			value: edit.value,
-			is_secret: edit.is_secret
-		});
-		if (res.error) {
-			error = res.error.message;
+		if (!serviceId) {
+			envs = envs.map(e => {
+				if (e.id === id) {
+					return {
+						...e,
+						key: edit.key,
+						value_encrypted: edit.value,
+						is_secret: edit.is_secret
+					};
+				}
+				return e;
+			});
+			buildEdits(envs);
+			rawText = toRaw(envs);
+			triggerConfirm();
 		} else {
-			await load();
+			const res = await api.upsertEnv(serviceId, {
+				key: edit.key,
+				value: edit.value,
+				is_secret: edit.is_secret
+			});
+			if (res.error) {
+				error = res.error.message;
+			} else {
+				await load();
+			}
 		}
 		saving = false;
 	}
@@ -158,11 +206,18 @@
 	async function deleteRow(id: string) {
 		if (!confirm('Delete this environment variable?')) return;
 		saving = true;
-		const res = await api.deleteEnv(serviceId, id);
-		if (res.error) {
-			error = res.error.message;
+		if (!serviceId) {
+			envs = envs.filter(e => e.id !== id);
+			buildEdits(envs);
+			rawText = toRaw(envs);
+			triggerConfirm();
 		} else {
-			await load();
+			const res = await api.deleteEnv(serviceId, id);
+			if (res.error) {
+				error = res.error.message;
+			} else {
+				await load();
+			}
 		}
 		saving = false;
 	}
@@ -170,19 +225,38 @@
 	async function addNew() {
 		if (!newKey.trim()) return;
 		saving = true;
-		const res = await api.upsertEnv(serviceId, {
-			key: newKey.trim(),
-			value: newValue,
-			is_secret: newIsSecret
-		});
-		if (res.error) {
-			error = res.error.message;
-		} else {
+		if (!serviceId) {
+			envs.push({
+				id: `local-${Date.now()}`,
+				service_id: '',
+				key: newKey.trim(),
+				value_encrypted: newValue,
+				is_secret: newIsSecret,
+				created_at: new Date().toISOString()
+			});
+			envs.sort((a, b) => a.key.localeCompare(b.key));
+			buildEdits(envs);
+			rawText = toRaw(envs);
 			newKey = '';
 			newValue = '';
 			newIsSecret = false;
 			showAddForm = false;
-			await load();
+			triggerConfirm();
+		} else {
+			const res = await api.upsertEnv(serviceId, {
+				key: newKey.trim(),
+				value: newValue,
+				is_secret: newIsSecret
+			});
+			if (res.error) {
+				error = res.error.message;
+			} else {
+				newKey = '';
+				newValue = '';
+				newIsSecret = false;
+				showAddForm = false;
+				await load();
+			}
 		}
 		saving = false;
 	}
@@ -201,12 +275,47 @@
 			return;
 		}
 		saving = true;
-		const res = await api.bulkSetEnvs(serviceId, parsed);
-		if (res.error) {
-			error = res.error.message;
-		} else {
-			await load();
+		if (!serviceId) {
+			let nextEnvs: ServiceEnv[] = [];
+			for (const item of parsed) {
+				const existing = envs.find(e => e.key === item.key);
+				if (existing) {
+					nextEnvs.push({
+						...existing,
+						value_encrypted: item.value,
+						is_secret: item.is_secret
+					});
+				} else {
+					nextEnvs.push({
+						id: `local-${Date.now()}-${Math.random()}`,
+						service_id: '',
+						key: item.key,
+						value_encrypted: item.value,
+						is_secret: item.is_secret,
+						created_at: new Date().toISOString()
+					});
+				}
+			}
+			for (const existing of envs) {
+				if (existing.is_secret && !nextEnvs.some(e => e.key === existing.key)) {
+					if (rawText.includes(`# ${existing.key}=`)) {
+						nextEnvs.push(existing);
+					}
+				}
+			}
+			envs = nextEnvs.sort((a, b) => a.key.localeCompare(b.key));
+			buildEdits(envs);
+			rawText = toRaw(envs);
 			mode = 'list';
+			triggerConfirm();
+		} else {
+			const res = await api.bulkSetEnvs(serviceId, parsed);
+			if (res.error) {
+				error = res.error.message;
+			} else {
+				await load();
+				mode = 'list';
+			}
 		}
 		saving = false;
 	}

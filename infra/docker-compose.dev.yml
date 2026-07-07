@@ -80,9 +80,9 @@ services:
     volumes:
       # Bind the sites dir at the same host path so nginx conf `root` directives
       # written by the engine (host absolute paths) resolve correctly inside the container.
-      - /opt/shipyard/data/static:/opt/shipyard/data/static:ro
+      - ./shipyard/data/static:/opt/shipyard/data/static:ro
       # Also expose conf.d at the standard nginx include path.
-      - /opt/shipyard/data/static/conf.d:/etc/nginx/conf.d:ro
+      - ./shipyard/data/static/conf.d:/etc/nginx/conf.d:ro
     networks:
       - platform_proxy
     labels:

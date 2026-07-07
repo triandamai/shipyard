@@ -13,6 +13,7 @@
 	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
 	import type { VolumeMount } from '$lib/components/VolumeMountList.svelte';
 	import type { Network } from '$lib/api/types';
+	import EnvManagerPanel from '$lib/panels/EnvManagerPanel.svelte';
 
 	interface Props {
 		projectId: string;
@@ -54,8 +55,11 @@
 	let selectedNetworks = $state<Network[]>([]);
 	let volumeMounts     = $state<VolumeMount[]>([]);
 
+	// Environment variables
+	let envVars = $state<{ key: string; value: string; is_secret: boolean }[]>([]);
+
 	// Build
-	let buildType = $state<'dockerfile' | 'compose' | 'nixpack' | 'buildpack' | 'railpack'>('dockerfile');
+	let buildType = $state<'auto' | 'dockerfile' | 'compose' | 'nixpack' | 'buildpack' | 'railpack'>('auto');
 	let dockerfilePath = $state('./Dockerfile');
 
 	let isSubmitting = $state(false);
@@ -143,6 +147,19 @@
 		});
 	}
 
+	function openEnvManager() {
+		uiStore.pushPanel({
+			component: EnvManagerPanel,
+			title: 'Manage Environment Variables',
+			props: {
+				projectId,
+				serviceName: name || 'New Service',
+				initialEnvs: envVars,
+				onConfirm: (updated: typeof envVars) => { envVars = updated; },
+			},
+		});
+	}
+
 	function openBranchPicker() {
 		if (!selectedAccount || !selectedRepo) return;
 		uiStore.pushPanel({
@@ -188,6 +205,16 @@
 			];
 			for (const env of gitEnvs) {
 				if (env.value) await api.post(`/projects/${projectId}/services/${serviceId}/env`, env);
+			}
+
+			for (const env of envVars) {
+				if (env.key.trim()) {
+					await api.post(`/projects/${projectId}/services/${serviceId}/env`, {
+						key: env.key.trim(),
+						value: env.value,
+						is_secret: env.is_secret,
+					});
+				}
 			}
 
 			for (const net of selectedNetworks) {
@@ -331,6 +358,18 @@
 			<VolumeMountList {projectId} bind:mounts={volumeMounts} />
 		</div>
 
+		<!-- Environment Variables -->
+		<div class="form-group">
+			<label class="form-label">Environment Variables</label>
+			<button type="button" class="picker-btn" onclick={openEnvManager}>
+				<Settings size={13} class="picker-icon" />
+				<span class="picker-placeholder">
+					{envVars.length > 0 ? `${envVars.length} variable${envVars.length === 1 ? '' : 's'} configured` : 'Configure environment variables…'}
+				</span>
+				<ChevronRight size={14} class="picker-chevron" />
+			</button>
+		</div>
+
 		<div class="divider"></div>
 
 		<!-- Build type -->
@@ -338,6 +377,7 @@
 			<label class="form-label">Build Type</label>
 			<div class="build-types">
 				{#each [
+					{ id: 'auto',       label: 'Auto (SSR)' },
 					{ id: 'dockerfile', label: 'Dockerfile' },
 					{ id: 'compose',    label: 'Compose' },
 					{ id: 'nixpack',    label: 'Nixpack' },
