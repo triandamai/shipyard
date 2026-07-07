@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isOwnerRole } from '$lib/auth/permissions';
 	import {
 		Database, RefreshCw, Trash2, AlertTriangle, X, Loader2,
 		TableProperties, ChevronLeft, ChevronRight, Search, Edit2,
-		Check, CornerDownLeft, Minus
+		Check, CornerDownLeft, Minus, PlugZap, Unplug
 	} from '@lucide/svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { page } from '$app/state';
@@ -31,9 +30,35 @@
 	let myRole  = $derived($orgStore.myMembership?.role ?? null);
 	let isOwner = $derived(isOwnerRole(myRole));
 
+	// ── Connection state ───────────────────────────────────────────────────
+	let isDbConnected  = $state(false);
+	let connecting     = $state(false);
+	let connectError   = $state('');
+
+	async function connect() {
+		connecting = true;
+		connectError = '';
+		const res = await api.get<DbTable[]>('/admin/db/tables');
+		connecting = false;
+		if (res.error) {
+			connectError = res.error.message;
+			return;
+		}
+		tables = res.data ?? [];
+		isDbConnected = true;
+		loadingTables = false;
+	}
+
+	function disconnect() {
+		isDbConnected = false;
+		tables = [];
+		closeBrowser();
+		connectError = '';
+	}
+
 	// ── Table list ─────────────────────────────────────────────────────────
 	let tables        = $state<DbTable[]>([]);
-	let loadingTables = $state(true);
+	let loadingTables = $state(false);
 	let tableError    = $state('');
 	let tableSearch   = $state('');
 
@@ -43,66 +68,7 @@
 			: tables
 	);
 
-	// ── Browser state ──────────────────────────────────────────────────────
-	let browseTable   = $state<DbTable | null>(null);
-	let columns       = $state<ColMeta[]>([]);
-	let rows          = $state<(string | number | boolean | null)[][]>([]);
-	let totalRows     = $state(0);
-	let browsePage    = $state(1);
-	let perPage       = 50;
-	let rowSearch     = $state('');
-	let rowSearchDebounce: ReturnType<typeof setTimeout>;
-	let loadingRows   = $state(false);
-	let rowsError     = $state('');
-
-	// ── Edit modal ─────────────────────────────────────────────────────────
-	let editRow       = $state<(string | number | boolean | null)[] | null>(null);
-	let editValues    = $state<Record<string, string>>({});
-	let saving        = $state(false);
-	let saveError     = $state('');
-	let saveSuccess   = $state(false);
-
-	// ── Delete row confirm ─────────────────────────────────────────────────
-	let deleteRowPk   = $state<string | null>(null);
-	let deletingRow   = $state(false);
-	let deleteRowError = $state('');
-
-	async function confirmDeleteRow(row: (string | number | boolean | null)[], e: MouseEvent) {
-		e.stopPropagation();
-		if (!pkCol) return;
-		const pkIdx = columns.findIndex(c => c.is_primary_key);
-		deleteRowPk = String(row[pkIdx] ?? '');
-		deleteRowError = '';
-	}
-
-	function cancelDeleteRow() { if (!deletingRow) { deleteRowPk = null; deleteRowError = ''; } }
-
-	async function doDeleteRow() {
-		if (!browseTable || !deleteRowPk) return;
-		deletingRow = true;
-		deleteRowError = '';
-		const res = await api.delete(
-			`/admin/db/tables/${encodeURIComponent(browseTable.name)}/rows/${encodeURIComponent(deleteRowPk)}`
-		);
-		deletingRow = false;
-		if (res.error) {
-			deleteRowError = res.error.message;
-		} else {
-			deleteRowPk = null;
-			await fetchRows();
-		}
-	}
-
-	// ── Drop confirm ───────────────────────────────────────────────────────
-	let confirmTable  = $state<DbTable | null>(null);
-	let confirmInput  = $state('');
-	let dropping      = $state(false);
-	let dropError     = $state('');
-
-	onMount(() => { if (isOwner) loadTables(); });
-
-	// ── Table list handlers ────────────────────────────────────────────────
-	async function loadTables() {
+	async function refreshTables() {
 		loadingTables = true;
 		tableError = '';
 		const res = await api.get<DbTable[]>('/admin/db/tables');
@@ -118,6 +84,17 @@
 	}
 
 	// ── Browse handlers ────────────────────────────────────────────────────
+	let browseTable   = $state<DbTable | null>(null);
+	let columns       = $state<ColMeta[]>([]);
+	let rows          = $state<(string | number | boolean | null)[][]>([]);
+	let totalRows     = $state(0);
+	let browsePage    = $state(1);
+	let perPage       = 50;
+	let rowSearch     = $state('');
+	let rowSearchDebounce: ReturnType<typeof setTimeout>;
+	let loadingRows   = $state(false);
+	let rowsError     = $state('');
+
 	async function openBrowser(table: DbTable) {
 		browseTable = table;
 		columns = [];
@@ -150,8 +127,8 @@
 		if (res.error) {
 			rowsError = res.error.message;
 		} else if (res.data) {
-			columns = res.data.columns;
-			rows    = res.data.rows;
+			columns   = res.data.columns;
+			rows      = res.data.rows;
 			totalRows = res.data.total;
 		}
 		loadingRows = false;
@@ -159,10 +136,7 @@
 
 	function onRowSearchInput() {
 		clearTimeout(rowSearchDebounce);
-		rowSearchDebounce = setTimeout(() => {
-			browsePage = 1;
-			fetchRows();
-		}, 350);
+		rowSearchDebounce = setTimeout(() => { browsePage = 1; fetchRows(); }, 350);
 	}
 
 	function prevPage() { if (browsePage > 1) { browsePage--; fetchRows(); } }
@@ -170,7 +144,13 @@
 		if (browsePage < Math.ceil(totalRows / perPage)) { browsePage++; fetchRows(); }
 	}
 
-	// ── Edit modal handlers ────────────────────────────────────────────────
+	// ── Edit modal ─────────────────────────────────────────────────────────
+	let editRow    = $state<(string | number | boolean | null)[] | null>(null);
+	let editValues = $state<Record<string, string>>({});
+	let saving     = $state(false);
+	let saveError  = $state('');
+	let saveSuccess = $state(false);
+
 	function openEdit(row: (string | number | boolean | null)[]) {
 		editRow = row;
 		saveError = '';
@@ -190,17 +170,14 @@
 		const pkCol = columns.find(c => c.is_primary_key);
 		if (!pkCol) { saveError = 'No primary key found for this table'; return; }
 
-		const pkIdx = columns.findIndex(c => c.is_primary_key);
+		const pkIdx   = columns.findIndex(c => c.is_primary_key);
 		const pkValue = String(editRow[pkIdx] ?? '');
 
-		// Only send changed values (skip pk column itself)
 		const updates: Record<string, string> = {};
 		columns.forEach((col, i) => {
 			if (col.is_primary_key) return;
 			const original = editRow![i] === null || editRow![i] === undefined ? '' : String(editRow![i]);
-			if (editValues[col.name] !== original) {
-				updates[col.name] = editValues[col.name];
-			}
+			if (editValues[col.name] !== original) updates[col.name] = editValues[col.name];
 		});
 
 		if (Object.keys(updates).length === 0) { closeEdit(); return; }
@@ -221,7 +198,43 @@
 		}
 	}
 
-	// ── Drop handlers ──────────────────────────────────────────────────────
+	// ── Delete row confirm ─────────────────────────────────────────────────
+	let deleteRowPk    = $state<string | null>(null);
+	let deletingRow    = $state(false);
+	let deleteRowError = $state('');
+
+	function confirmDeleteRow(row: (string | number | boolean | null)[], e: MouseEvent) {
+		e.stopPropagation();
+		if (!pkCol) return;
+		const pkIdx = columns.findIndex(c => c.is_primary_key);
+		deleteRowPk   = String(row[pkIdx] ?? '');
+		deleteRowError = '';
+	}
+
+	function cancelDeleteRow() { if (!deletingRow) { deleteRowPk = null; deleteRowError = ''; } }
+
+	async function doDeleteRow() {
+		if (!browseTable || !deleteRowPk) return;
+		deletingRow = true;
+		deleteRowError = '';
+		const res = await api.delete(
+			`/admin/db/tables/${encodeURIComponent(browseTable.name)}/rows/${encodeURIComponent(deleteRowPk)}`
+		);
+		deletingRow = false;
+		if (res.error) {
+			deleteRowError = res.error.message;
+		} else {
+			deleteRowPk = null;
+			await fetchRows();
+		}
+	}
+
+	// ── Drop confirm ───────────────────────────────────────────────────────
+	let confirmTable = $state<DbTable | null>(null);
+	let confirmInput = $state('');
+	let dropping     = $state(false);
+	let dropError    = $state('');
+
 	function openConfirm(table: DbTable, e: MouseEvent) {
 		e.stopPropagation();
 		confirmTable = table;
@@ -266,15 +279,42 @@
 				<p>Browse, edit, and manage tables in the platform database.</p>
 			</div>
 		</div>
-		<button class="btn btn-secondary btn-sm icon-btn" onclick={loadTables} disabled={loadingTables}>
-			<RefreshCw size={13} class={loadingTables ? 'spin' : ''} />
-			Refresh
-		</button>
+		<div class="header-actions">
+			{#if isDbConnected}
+				<button class="btn btn-secondary btn-sm icon-btn" onclick={refreshTables} disabled={loadingTables}>
+					<RefreshCw size={13} class={loadingTables ? 'spin' : ''} />
+					Refresh
+				</button>
+				<button class="btn btn-ghost btn-sm icon-btn" onclick={disconnect} title="Disconnect">
+					<Unplug size={13} />
+					Disconnect
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if tableError}
 		<div class="alert alert-error"><AlertTriangle size={14} />{tableError}</div>
 	{/if}
+
+	<!-- ── Not connected ── -->
+	{#if !isDbConnected}
+		<div class="connect-state">
+			<div class="connect-icon"><Database size={36} /></div>
+			<h3>Not connected</h3>
+			<p>Connect to browse and manage the platform database tables.</p>
+			{#if connectError}
+				<div class="connect-error"><AlertTriangle size={13} />{connectError}</div>
+			{/if}
+			<button class="btn btn-primary icon-btn connect-btn" onclick={connect} disabled={connecting}>
+				{#if connecting}
+					<Loader2 size={14} class="spin" />Connecting…
+				{:else}
+					<PlugZap size={14} />Connect to database
+				{/if}
+			</button>
+		</div>
+	{:else}
 
 	<div class="layout" class:has-browser={browseTable !== null}>
 
@@ -328,7 +368,6 @@
 		<!-- ── Right: table browser ── -->
 		{#if browseTable}
 		<div class="browser-panel">
-			<!-- Browser header -->
 			<div class="browser-header">
 				<div class="browser-title">
 					<button class="back-btn" onclick={closeBrowser} title="Back to list">
@@ -363,7 +402,6 @@
 				</div>
 			</div>
 
-			<!-- Rows table -->
 			{#if rowsError}
 				<div class="alert alert-error" style="margin:8px 12px"><AlertTriangle size={13} />{rowsError}</div>
 			{/if}
@@ -389,9 +427,9 @@
 						<tbody>
 							{#each rows as row, ri (ri)}
 								<tr onclick={() => openEdit(row)} class="data-row">
-									{#each row as cell, ci}
-										<td class:null-cell={cell === null}>
-											{#if cell === null}
+									{#each row as cell}
+										<td class:null-cell={cell === null || cell === undefined}>
+											{#if cell === null || cell === undefined}
 												<span class="null-val">null</span>
 											{:else}
 												<span class="cell-val">{String(cell)}</span>
@@ -431,6 +469,7 @@
 		{/if}
 
 	</div>
+	{/if}
 </div>
 
 <!-- ── Edit modal ── -->
@@ -458,12 +497,12 @@
 					</label>
 					{#if col.is_primary_key}
 						<div class="field-value-ro">
-						{#if editRow[i] === null || editRow[i] === undefined}
-							<em class="null-val">null</em>
-						{:else}
-							{editRow[i]}
-						{/if}
-					</div>
+							{#if editRow[i] === null || editRow[i] === undefined}
+								<em class="null-val">null</em>
+							{:else}
+								{editRow[i]}
+							{/if}
+						</div>
 					{:else}
 						<input
 							id="edit-{col.name}"
@@ -478,19 +517,15 @@
 			{/each}
 		</div>
 		{#if saveError}
-			<div class="modal-error"><AlertTriangle size={13} />{saveError}</div>
+			<div class="modal-notice modal-notice-error"><AlertTriangle size={13} />{saveError}</div>
 		{/if}
 		{#if saveSuccess}
-			<div class="modal-success"><Check size={13} />Saved!</div>
+			<div class="modal-notice modal-notice-success"><Check size={13} />Saved!</div>
 		{/if}
 		<div class="modal-footer">
 			<button class="btn btn-secondary" onclick={closeEdit} disabled={saving}>Cancel</button>
 			<button class="btn btn-primary icon-btn" onclick={saveEdit} disabled={saving}>
-				{#if saving}
-					<Loader2 size={13} class="spin" />Saving…
-				{:else}
-					<CornerDownLeft size={13} />Save changes
-				{/if}
+				{#if saving}<Loader2 size={13} class="spin" />Saving…{:else}<CornerDownLeft size={13} />Save changes{/if}
 			</button>
 		</div>
 	</div>
@@ -502,7 +537,7 @@
 	<div class="modal-backdrop" onclick={cancelDeleteRow} onkeydown={() => {}}></div>
 	<div class="modal" role="dialog" aria-modal="true">
 		<div class="modal-header">
-			<div class="modal-title"><Minus size={16} /><span>Delete row from <code>{browseTable?.name}</code></span></div>
+			<div class="modal-title"><Trash2 size={14} /><span>Delete row</span></div>
 			<button class="close-btn" onclick={cancelDeleteRow} disabled={deletingRow}><X size={15} /></button>
 		</div>
 		<div class="modal-body">
@@ -510,7 +545,7 @@
 				<AlertTriangle size={16} />
 				<div>
 					<strong>This action is permanent.</strong>
-					<p>Row with {pkCol?.name} = <code>{deleteRowPk}</code> will be permanently deleted.</p>
+					<p>Row with {pkCol?.name} = <code>{deleteRowPk}</code> in <code>{browseTable?.name}</code> will be deleted.</p>
 				</div>
 			</div>
 			{#if deleteRowError}<p class="drop-error">{deleteRowError}</p>{/if}
@@ -524,7 +559,7 @@
 	</div>
 {/if}
 
-<!-- ── Drop confirm modal ── -->
+<!-- ── Drop table confirm modal ── -->
 {#if confirmTable}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="modal-backdrop" onclick={closeConfirm} onkeydown={() => {}}></div>
@@ -571,13 +606,33 @@
 	.header-title { display: flex; align-items: flex-start; gap: 12px; color: var(--text-muted); }
 	.header-title h2 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
 	.header-title p  { font-size: 13px; color: var(--text-muted); margin: 0; }
+	.header-actions { display: flex; align-items: center; gap: 6px; }
 	.icon-btn { display: flex; align-items: center; gap: 6px; }
 
 	.alert {
 		display: flex; align-items: center; gap: 8px;
 		padding: 10px 14px; border-radius: 6px; font-size: 13px;
 	}
-	.alert-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+	.alert-error {
+		background: var(--accent-red-muted); color: var(--accent-red);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+	}
+
+	/* Connect state */
+	.connect-state {
+		flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+		gap: 12px; color: var(--text-muted); text-align: center;
+	}
+	.connect-icon { color: var(--text-muted); opacity: 0.5; }
+	.connect-state h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
+	.connect-state p  { font-size: 13px; margin: 0; max-width: 320px; }
+	.connect-error {
+		display: flex; align-items: center; gap: 6px; font-size: 12px;
+		color: var(--accent-red); background: var(--accent-red-muted);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 25%, transparent);
+		padding: 8px 12px; border-radius: 6px;
+	}
+	.connect-btn { margin-top: 4px; }
 
 	/* Layout */
 	.layout {
@@ -587,7 +642,6 @@
 		flex: 1;
 		min-height: 0;
 	}
-	.layout:not(.has-browser) { grid-template-columns: 260px 1fr; }
 
 	/* Table list panel */
 	.table-panel {
@@ -595,7 +649,6 @@
 		border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
 		background: var(--bg-surface);
 	}
-
 	.table-search-row {
 		display: flex; align-items: center; gap: 8px;
 		padding: 10px 12px; border-bottom: 1px solid var(--border);
@@ -625,11 +678,11 @@
 		align-items: center; padding: 8px 12px; gap: 8px;
 		font-size: 12px; cursor: pointer; width: 100%; text-align: left;
 		background: none; border: none; border-bottom: 1px solid var(--border);
-		color: var(--text-primary);
+		color: var(--text-primary); transition: background 0.1s;
 	}
 	.table-row:last-child { border-bottom: none; }
-	.table-row:hover { background: var(--bg-elevated); }
-	.table-row.active { background: #eff6ff; }
+	.table-row:hover { background: var(--bg-hover); }
+	.table-row.active { background: var(--accent-muted); color: var(--text-primary); }
 	.trow-name { font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.trow-count { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 	.trow-actions { display: flex; align-items: center; }
@@ -638,7 +691,7 @@
 		border-radius: 4px; color: var(--text-muted); cursor: pointer;
 		transition: color 0.15s, background 0.15s;
 	}
-	.drop-btn:hover { color: #dc2626; background: #fee2e2; }
+	.drop-btn:hover { color: var(--accent-red); background: var(--accent-red-muted); }
 
 	/* Browser panel */
 	.browser-panel {
@@ -646,7 +699,6 @@
 		border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
 		background: var(--bg-surface); min-height: 0;
 	}
-
 	.browser-header {
 		display: flex; align-items: center; justify-content: space-between;
 		padding: 10px 14px; border-bottom: 1px solid var(--border);
@@ -657,7 +709,7 @@
 		display: flex; align-items: center; background: none; border: none;
 		cursor: pointer; color: var(--text-muted); padding: 3px; border-radius: 4px;
 	}
-	.back-btn:hover { color: var(--text-primary); background: var(--bg-base); }
+	.back-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 	.tname { font-size: 13px; font-family: var(--font-mono); color: var(--text-primary); }
 	.row-badge {
 		font-size: 11px; color: var(--text-muted);
@@ -671,7 +723,7 @@
 		border: 1px solid var(--border); border-radius: 4px;
 		cursor: pointer; padding: 3px 6px; color: var(--text-muted);
 	}
-	.pg-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-base); }
+	.pg-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
 	.pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 	.pg-label { font-size: 12px; color: var(--text-muted); min-width: 48px; text-align: center; }
 
@@ -682,10 +734,7 @@
 
 	.rows-wrap { flex: 1; overflow: auto; min-height: 0; }
 	.rows-wrap.loading { opacity: 0.6; pointer-events: none; }
-	.rows-table {
-		width: 100%; border-collapse: collapse; font-size: 12px;
-		table-layout: auto;
-	}
+	.rows-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: auto; }
 	.rows-table thead { position: sticky; top: 0; z-index: 1; }
 	.rows-table th {
 		background: var(--bg-elevated); border-bottom: 2px solid var(--border);
@@ -693,16 +742,17 @@
 		color: var(--text-muted); white-space: nowrap;
 		text-transform: uppercase; letter-spacing: 0.04em;
 	}
-	.rows-table th.pk { color: #6366f1; }
+	.rows-table th.pk { color: var(--accent); }
 	.rows-table .action-col { width: 48px; padding: 0 6px; }
 	.pk-badge {
 		display: inline-block; font-size: 9px; font-weight: 700;
-		color: #6366f1; background: #ede9fe; border-radius: 3px;
-		padding: 0 4px; margin-left: 4px; vertical-align: middle;
+		color: var(--accent); background: var(--accent-muted);
+		border-radius: 3px; padding: 0 4px; margin-left: 4px; vertical-align: middle;
 	}
 	.data-row { cursor: pointer; }
-	.data-row:hover { background: #f0f9ff; }
-	.data-row:hover .edit-hint { opacity: 1; }
+	.data-row:hover { background: var(--bg-hover); }
+	.data-row:hover .edit-hint,
+	.data-row:hover .del-row-btn { opacity: 1; }
 	.rows-table td {
 		padding: 6px 10px; border-bottom: 1px solid var(--border);
 		max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -717,9 +767,7 @@
 		border-radius: 3px; color: var(--text-muted); cursor: pointer;
 		transition: color 0.15s, background 0.15s;
 	}
-	.data-row:hover .edit-hint,
-	.data-row:hover .del-row-btn { opacity: 1; }
-	.del-row-btn:hover { color: #dc2626; background: #fee2e2; }
+	.del-row-btn:hover { color: var(--accent-red); background: var(--accent-red-muted); }
 
 	.browser-footer {
 		display: flex; align-items: center; justify-content: space-between;
@@ -727,8 +775,7 @@
 		font-size: 11px; color: var(--text-muted); flex-shrink: 0;
 		background: var(--bg-elevated);
 	}
-	.click-hint { font-style: italic; }
-
+	.click-hint { font-style: italic; display: flex; align-items: center; gap: 4px; }
 	.browser-empty-state {
 		display: flex; flex-direction: column; align-items: center; justify-content: center;
 		gap: 10px; color: var(--text-muted); font-size: 13px;
@@ -740,47 +787,44 @@
 	.edit-body { overflow-y: auto; max-height: 60vh; display: flex; flex-direction: column; gap: 8px; }
 	.field-row {
 		display: grid; grid-template-columns: 180px 1fr; align-items: center;
-		gap: 8px; padding: 6px 0;
-		border-bottom: 1px solid var(--border);
+		gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
 	}
 	.field-row:last-child { border-bottom: none; }
-	.pk-field { background: #fafafa; border-radius: 4px; padding: 6px 4px; }
+	.pk-field { background: var(--bg-elevated); border-radius: 4px; padding: 6px 4px; }
 	.field-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
 	.field-name { font-size: 12px; font-weight: 600; font-family: var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.field-type { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
-	.field-value-ro {
-		font-size: 12px; font-family: var(--font-mono); color: var(--text-muted);
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
+	.field-value-ro { font-size: 12px; font-family: var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.field-input {
 		width: 100%; padding: 5px 8px; font-size: 12px; font-family: var(--font-mono);
 		border: 1px solid var(--border); border-radius: 5px;
 		background: var(--bg-base); color: var(--text-primary); outline: none;
 		box-sizing: border-box;
 	}
-	.field-input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px #ede9fe; }
-	.modal-error {
+	.field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-muted); }
+	.modal-notice {
 		display: flex; align-items: center; gap: 8px;
-		margin: 0 20px 0; padding: 8px 12px; border-radius: 6px;
-		background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; font-size: 12px;
+		margin: 0 20px; padding: 8px 12px; border-radius: 6px; font-size: 12px;
 	}
-	.modal-success {
-		display: flex; align-items: center; gap: 8px;
-		margin: 0 20px; padding: 8px 12px; border-radius: 6px;
-		background: #f0fdf4; border: 1px solid #bbf7d0; color: #16a34a; font-size: 12px;
+	.modal-notice-error {
+		background: var(--accent-red-muted);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 25%, transparent);
+		color: var(--accent-red);
+	}
+	.modal-notice-success {
+		background: var(--accent-green-muted);
+		border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
+		color: var(--accent-green);
 	}
 	.pk-label { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
 
 	/* Shared modal */
-	.modal-backdrop {
-		position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100;
-	}
+	.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 100; }
 	.modal {
-		position: fixed; top: 50%; left: 50%;
-		transform: translate(-50%, -50%);
+		position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
 		width: min(480px, calc(100vw - 32px));
 		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+		border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
 		z-index: 101; display: flex; flex-direction: column;
 	}
 	.modal-header {
@@ -791,39 +835,37 @@
 		display: flex; align-items: center; gap: 8px;
 		font-size: 14px; font-weight: 600; color: var(--text-primary);
 	}
-	.modal-title code { font-family: var(--font-mono); font-size: 13px; color: #dc2626; }
+	.modal-title code { font-family: var(--font-mono); font-size: 13px; color: var(--accent-red); }
 	.close-btn {
 		background: none; border: none; color: var(--text-muted); cursor: pointer;
 		padding: 4px; border-radius: 4px; display: flex; align-items: center;
 	}
 	.close-btn:hover:not(:disabled) { color: var(--text-primary); }
 	.modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
-	.modal-footer {
-		display: flex; justify-content: flex-end; gap: 8px;
-		padding: 14px 18px; border-top: 1px solid var(--border);
-	}
+	.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
 	.danger-notice {
 		display: flex; gap: 12px; padding: 14px;
-		background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
-		color: #dc2626; font-size: 13px;
+		background: var(--accent-red-muted);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 25%, transparent);
+		border-radius: 6px; color: var(--accent-red); font-size: 13px;
 	}
 	.danger-notice :global(svg) { flex-shrink: 0; margin-top: 1px; }
 	.danger-notice strong { display: block; margin-bottom: 4px; }
-	.danger-notice p { margin: 0; color: #7f1d1d; }
+	.danger-notice p { margin: 0; opacity: 0.85; }
 	.danger-notice code { font-family: var(--font-mono); font-size: 12px; }
-	.confirm-label { font-size: 13px; color: var(--text-secondary, var(--text-muted)); margin: 0; }
+	.confirm-label { font-size: 13px; color: var(--text-muted); margin: 0; }
 	.confirm-input {
 		width: 100%; padding: 8px 12px; font-size: 13px; font-family: var(--font-mono);
 		border: 1px solid var(--border); border-radius: 6px;
 		background: var(--bg-base); color: var(--text-primary);
 		box-sizing: border-box; outline: none;
 	}
-	.confirm-input:focus { border-color: #dc2626; box-shadow: 0 0 0 2px #fee2e2; }
-	.drop-error { font-size: 13px; color: #dc2626; margin: 0; }
+	.confirm-input:focus { border-color: var(--accent-red); box-shadow: 0 0 0 2px var(--accent-red-muted); }
+	.drop-error { font-size: 13px; color: var(--accent-red); margin: 0; }
 	.btn-danger {
-		background: #dc2626; border: 1px solid #dc2626; color: #fff;
+		background: var(--accent-red); border: 1px solid var(--accent-red); color: #fff;
 		display: flex; align-items: center; gap: 6px;
 	}
-	.btn-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+	.btn-danger:hover:not(:disabled) { opacity: 0.88; }
 	.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

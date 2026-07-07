@@ -1909,19 +1909,30 @@ async fn list_table_rows(
     let offset = ((page - 1) * per_page) as i64;
     let search = q.search.trim().to_string();
 
-    // Build a WHERE clause that searches across all columns by casting each to text.
-    // Column names come from information_schema (trusted).
+    let quoted = table_name.replace('"', "\"\"");
+
+    // Cast every column to TEXT in the SELECT so we avoid custom-type decode failures
+    // (enums, uuid, timestamptz all cast cleanly to text). Column names come from
+    // information_schema so they are trusted — not user input.
+    let select_cols: String = cols
+        .iter()
+        .map(|c| {
+            let qc = c.name.replace('"', "\"\"");
+            format!("CAST(\"{}\" AS TEXT) AS \"{}\"", qc, qc)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    // Search: ILIKE against every column's already-text cast alias
     let search_clause = if search.is_empty() {
         "TRUE".to_string()
     } else {
         let parts: Vec<String> = cols
             .iter()
-            .map(|c| format!("CAST(\"{}\" AS TEXT) ILIKE $1", c.name))
+            .map(|c| format!("CAST(\"{}\" AS TEXT) ILIKE $1", c.name.replace('"', "\"\"")))
             .collect();
         format!("({})", parts.join(" OR "))
     };
-
-    let quoted = table_name.replace('"', "\"\"");
 
     // Total count
     let count_sql = format!("SELECT COUNT(*) FROM \"{quoted}\" WHERE {search_clause}");
@@ -1942,13 +1953,13 @@ async fn list_table_rows(
     // Determine ORDER BY — prefer pk column, else first column
     let order_col = cols.iter().find(|c| c.is_primary_key).unwrap_or(&cols[0]);
     let row_sql = format!(
-        "SELECT * FROM \"{quoted}\" WHERE {search_clause} ORDER BY \"{}\" LIMIT $2 OFFSET $3",
+        "SELECT {select_cols} FROM \"{quoted}\" WHERE {search_clause} ORDER BY CAST(\"{}\" AS TEXT) LIMIT $2 OFFSET $3",
         order_col.name.replace('"', "\"\""),
     );
 
     let pg_rows = if search.is_empty() {
         sqlx::query(&row_sql)
-            .bind("")         // $1 unused but keeps param numbering consistent
+            .bind("")
             .bind(per_page as i64)
             .bind(offset)
             .fetch_all(&state.db)
@@ -1965,9 +1976,20 @@ async fn list_table_rows(
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     };
 
+    // Every column is now TEXT — use Option<String> to handle NULLs
     let rows: Vec<Vec<serde_json::Value>> = pg_rows
         .iter()
-        .map(|row| (0..cols.len()).map(|i| platform_pg_to_json(row, i)).collect())
+        .map(|row| {
+            (0..cols.len())
+                .map(|i| {
+                    use sqlx::Row;
+                    match row.try_get::<Option<String>, _>(i) {
+                        Ok(Some(s)) => serde_json::Value::String(s),
+                        _ => serde_json::Value::Null,
+                    }
+                })
+                .collect()
+        })
         .collect();
 
     Ok(Json(ApiResponse::ok(DbTableRowsResponse { columns: cols, rows, total, page, per_page })))
