@@ -1,6 +1,0 @@
-baseURL = "/"
-languageCode = "en-us"
-title = "Shipyard — Hugo Example"
-
-[build]
-  writeStats = false

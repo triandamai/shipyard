@@ -425,7 +425,7 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let (_, stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd, _) =
+        let (_, stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd, stored_framework) =
             cfg.unwrap_or_else(|| (
                 "git".into(), "bun run build".into(), "dist".into(),
                 "1".into(), "bun install".into(), "custom".into(),
@@ -464,7 +464,7 @@ impl DeploymentEngine {
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
         // Determine build config — priority: shipyard.json > auto-detect > stored DB config.
-        let (build_command, output_dir, node_version, install_command) = {
+        let (build_command, output_dir, node_version, install_command, image) = {
             let p = repo_path.clone();
             let (shipyard_cfg, detected) = tokio::task::spawn_blocking(move || {
                 let dir = std::path::Path::new(&p);
@@ -484,17 +484,39 @@ impl DeploymentEngine {
                 let out = ov.output.as_deref().unwrap_or(&stored_output_dir).to_string();
                 let nv  = ov.node_version.as_deref().unwrap_or(&stored_node_ver).to_string();
                 let ic  = ov.install_command.as_deref().unwrap_or(&stored_install_cmd).to_string();
-                (cmd, out, nv, ic)
+                let img = ov.image.clone().unwrap_or_else(|| {
+                    let dir = std::path::Path::new(&repo_path);
+                    if let Some(det) = crate::static_site::detect_build_config(dir) {
+                        match det.framework {
+                            "hugo" => "ghcr.io/gohugoio/hugo:latest".to_string(),
+                            "jekyll" => "jekyll/builder:latest".to_string(),
+                            _ => "oven/bun:1-alpine".to_string(),
+                        }
+                    } else {
+                        "oven/bun:1-alpine".to_string()
+                    }
+                });
+                (cmd, out, nv, ic, img)
             } else if let Some(det) = detected {
                 self.insert_log(deployment_id, None, "info",
                     &format!("Auto-detected framework: {} — using defaults (build: '{}', output: '{}')",
                         det.framework, det.build_command, det.output_dir)).await;
+                let img = match det.framework {
+                    "hugo" => "ghcr.io/gohugoio/hugo:latest",
+                    "jekyll" => "jekyll/builder:latest",
+                    _ => "oven/bun:1-alpine",
+                }.to_string();
                 (det.build_command.to_string(), det.output_dir.to_string(),
-                 det.node_version.to_string(), det.install_command.to_string())
+                 det.node_version.to_string(), det.install_command.to_string(), img)
             } else {
                 self.insert_log(deployment_id, None, "info",
                     "No shipyard.json or recognised framework — using stored build config").await;
-                (stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd)
+                let img = match stored_framework.as_str() {
+                    "hugo" => "ghcr.io/gohugoio/hugo:latest",
+                    "jekyll" => "jekyll/builder:latest",
+                    _ => "oven/bun:1-alpine",
+                }.to_string();
+                (stored_build_cmd, stored_output_dir, stored_node_ver, stored_install_cmd, img)
             }
         };
 
@@ -503,7 +525,7 @@ impl DeploymentEngine {
         let built_output_path = {
             let build_result = self.static_step_build(
                 &repo_path, &output_dir, &install_command, &build_command,
-                &node_version, deployment_id, step_id, org_id, project_id, service_id,
+                &node_version, &image, deployment_id, step_id, org_id, project_id, service_id,
             ).await;
             // Validate the output is a static site (not SSR/server)
             let validated = build_result.and_then(|p| {
@@ -885,26 +907,29 @@ impl DeploymentEngine {
         install_command: &str,
         build_command: &str,
         node_version: &str,
+        image: &str,
         deployment_id: Uuid,
         step_id: Uuid,
         org_id: Uuid,
         project_id: Uuid,
         service_id: Uuid,
     ) -> AppResult<String> {
-        // Use the official Bun image — Bun installs packages without needing Python/node-gyp,
-        // which avoids native-addon compilation errors common with npm on Alpine.
-        // node_version is kept in the DB for documentation but doesn't affect the image tag.
-        let image = "oven/bun:1-alpine";
         let container_name = format!("shipyard-build-{deployment_id}");
         let repo_abs = std::fs::canonicalize(repo_path)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| repo_path.to_string());
 
-        let run_script = format!(
-            "set -ex && cd /src && {install_command} && {build_command}"
-        );
+        let run_script = if install_command.is_empty() {
+            format!("set -ex && cd /src && {build_command}")
+        } else {
+            format!("set -ex && cd /src && {install_command} && {build_command}")
+        };
 
-        let msg = format!("Building with {image} (bun): {install_command} && {build_command}");
+        let msg = if install_command.is_empty() {
+            format!("Building with {image}: {build_command}")
+        } else {
+            format!("Building with {image}: {install_command} && {build_command}")
+        };
         self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
 
@@ -915,8 +940,9 @@ impl DeploymentEngine {
         let mut child = Command::new("docker")
             .args([
                 "run", "--rm", "--name", &container_name,
+                "--entrypoint", "",
                 "-v", &format!("{repo_abs}:/src"),
-                &image,
+                image,
                 "sh", "-c", &run_script,
             ])
             .stdout(std::process::Stdio::piped())

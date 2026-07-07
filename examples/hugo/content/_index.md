@@ -1,3 +1,0 @@
----
-title: "Shipyard — Hugo Example"
----

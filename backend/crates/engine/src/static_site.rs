@@ -37,6 +37,7 @@ pub struct BuildConfig {
     pub output: Option<String>,
     pub node_version: Option<String>,
     pub install_command: Option<String>,
+    pub image: Option<String>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 }
