@@ -1191,6 +1191,816 @@ aes-gcm = "0.10"
 
 ---
 
+## Phase 6 — Static Site Hosting
+
+> **Goal:** Allow users to deploy zero-runtime static sites (HTML/CSS/JS/assets) with no per-site memory cost. Sites can be sourced from git (with a build step) or uploaded directly as a pre-built artifact.
+
+### Design Principles
+
+1. **One shared nginx container serves all static sites** — no per-site Swarm task, no idle process overhead (~12 MB total regardless of site count).
+2. **Two deployment sources** — `git` (build on deploy) or `upload` (pre-built artifact via API/CLI). Both paths share the same publish + config-reload tail.
+3. **`deploy.json` in repo/zip root** — optional per-project config that overrides build settings and drives runtime nginx behavior (redirects, rewrites, custom headers, SPA mode).
+4. **Symlink-based atomic versioning** — each deploy writes to a versioned directory; a single `readlink`-swap makes it live. Rollback = swap symlink + reload.
+
+---
+
+### Milestone 6.1 — Database Schema
+
+**Migration: `20250101000020_static_service.sql`**
+
+```sql
+-- Extend the service_type enum
+ALTER TYPE service_type ADD VALUE IF NOT EXISTS 'static';
+
+-- Per-service static config (defaults, overridable per-deploy via deploy.json)
+CREATE TABLE static_site_configs (
+    service_id       UUID PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
+    -- Deployment source: 'git' or 'upload'
+    source           TEXT NOT NULL DEFAULT 'git',
+    -- Build settings (used when source = 'git'; overridable by deploy.json)
+    build_command    TEXT NOT NULL DEFAULT 'npm run build',
+    output_dir       TEXT NOT NULL DEFAULT 'dist',
+    node_version     TEXT NOT NULL DEFAULT '20',
+    install_command  TEXT NOT NULL DEFAULT 'npm ci',
+    -- Framework hint for build image selection and SPA default
+    -- 'vite' | 'sveltekit-static' | 'nextjs-export' | 'hugo' | 'jekyll' | 'custom'
+    framework        TEXT NOT NULL DEFAULT 'custom',
+    -- Effective runtime config merged from last deploy.json (nullable = not yet deployed)
+    deploy_config    JSONB,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-deployment artifact path (which versioned directory is live)
+-- Stored in the existing deployments.deployed_image column repurposed as deployed_artifact.
+-- No schema change needed; the column is already TEXT.
+```
+
+---
+
+### Milestone 6.2 — `deploy.json` Config Format
+
+The file lives at the root of the git repo or the root of the uploaded zip. It is optional; omitting it uses `static_site_configs` defaults and sensible nginx defaults.
+
+```jsonc
+// deploy.json
+{
+  "$schema": "https://shipyard.app/schema/deploy-v1.json",
+
+  // ── Build (applies when source = 'git'; ignored for uploads) ───────────────
+  "build": {
+    "command": "npm run build",       // overrides static_site_configs.build_command
+    "output": "dist",                 // overrides static_site_configs.output_dir
+    "node_version": "20",             // overrides static_site_configs.node_version
+    "install_command": "npm ci",      // overrides static_site_configs.install_command
+    "env": {                          // injected into build container only (not runtime)
+      "VITE_API_URL": "https://api.example.com"
+    }
+  },
+
+  // ── SPA mode ───────────────────────────────────────────────────────────────
+  // When true: unknown paths fall back to /index.html (React/Vue/Svelte router)
+  "spa": true,
+
+  // ── Custom error pages (path relative to output dir) ──────────────────────
+  "error_pages": {
+    "404": "404.html",
+    "500": "50x.html"
+  },
+
+  // ── Redirects (evaluated before rewrites) ─────────────────────────────────
+  // status defaults to 301 for permanent, 302 for temporary
+  "redirects": [
+    { "src": "/old-page",       "dest": "/new-page",   "status": 301 },
+    { "src": "/docs/(.*)",      "dest": "/help/$1",    "status": 302 }
+  ],
+
+  // ── Rewrites (internal, URL stays the same in browser) ────────────────────
+  // Processed after redirects; no status field (always 200 internal)
+  "rewrites": [
+    { "src": "/app/(.*)", "dest": "/index.html" }
+  ],
+
+  // ── Custom response headers ────────────────────────────────────────────────
+  // src is a glob; applied to all matching paths
+  "headers": [
+    {
+      "src": "/assets/(.*)",
+      "values": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      }
+    },
+    {
+      "src": "/(.*)\\.html",
+      "values": {
+        "Cache-Control": "no-cache, must-revalidate",
+        "X-Frame-Options": "SAMEORIGIN"
+      }
+    }
+  ]
+}
+```
+
+**Parsing rules:**
+- `deploy.json` is parsed at the start of Step 3 (`publish_files`) in the static pipeline.
+- Build keys (`build.*`) override `static_site_configs` for this deployment only — they are not written back to the table.
+- Runtime keys (`spa`, `error_pages`, `redirects`, `rewrites`, `headers`) are stored in `static_site_configs.deploy_config` JSONB and used to regenerate `site.conf`.
+- Unknown top-level keys are ignored (forward-compatible).
+- Invalid JSON → deployment fails at Step 3 with a clear error message.
+- The parsed runtime config is also stored on the deployment record (`deployed_image` column stores the artifact path; add `deploy_config_snapshot` JSONB to `deployments` table if rollback needs to restore config too).
+
+---
+
+### Milestone 6.3 — Deployment Sources
+
+Static services have two `source` modes. Both paths share Steps 4–7 (publish, configure, reload, finalize).
+
+#### Source A: Git + Build
+
+```
+Step 0  validate_static      — assert git_repo_url set; build_command non-empty
+Step 1  clone_or_pull        — git fetch into data_dir/repos/<service_id>/
+                               (reuses existing GitService; incremental pull on re-deploy)
+Step 2  run_build            — ephemeral build container (exits after build)
+Step 3  parse_deploy_json    — read deploy.json from repo root; merge with DB config
+Step 4  publish_files        — copy output_dir → data_dir/static/<service_id>/<deploy_id>/
+Step 5  write_nginx_conf     — render site.conf from merged config
+Step 6  atomic_swap          — update symlink: public → <deploy_id>/; reload nginx
+Step 7  finalize             — set service status 'running', record artifact path
+```
+
+**Ephemeral build container (Step 2):**
+
+The build does NOT run on the host. We spawn a one-shot Docker container:
+
+```rust
+// Pseudo-spec for the build container
+ServiceSpec {
+    name: format!("shipyard-build-{deployment_id}"),
+    image: build_image_for_framework(framework, node_version),
+    // e.g. "node:20-alpine" for vite/sveltekit/nextjs
+    // e.g. "klakegg/hugo:0.120-alpine" for hugo
+    // e.g. "ruby:3.3-alpine" for jekyll
+    command: vec![
+        "sh", "-c",
+        &format!("{install_command} && {build_command}")
+    ],
+    mounts: vec![
+        // repo dir mounted read-only
+        MountSpec { source: repo_path, target: "/app", read_only: true, .. },
+        // output collected via a shared tmpfs or second bind-mount
+        MountSpec { source: build_output_path, target: "/output", .. },
+    ],
+    working_dir: Some("/app".into()),
+    env_vars: build_env_vars,  // from deploy.json build.env
+    restart_policy: RestartPolicy::None,  // run once then exit
+    replicas: 1,
+}
+// Wait for task to reach Terminated/Complete state
+// On exit code != 0: fail deployment with build log output
+// Stream stdout/stderr to MQTT (same as existing deployment log streaming)
+```
+
+After the container exits, copy `/output/<output_dir>` to the versioned publish directory. The build container is then removed (`docker service rm`).
+
+#### Source B: Direct Upload
+
+No git clone, no build step. User uploads a pre-built artifact.
+
+```
+Step 0  validate_upload      — assert content-type is zip or tar.gz; size ≤ limit
+Step 1  stream_to_disk       — write multipart body directly to
+                               data_dir/uploads/<service_id>/<deploy_id>.zip
+                               (streaming — never fully buffered in RAM)
+Step 2  extract              — unzip into data_dir/tmp/<deploy_id>/
+Step 3  parse_deploy_json    — read deploy.json from archive root if present
+Step 4  publish_files        — move extracted dir → data_dir/static/<service_id>/<deploy_id>/
+Step 5  write_nginx_conf     — same as git path
+Step 6  atomic_swap          — same as git path
+Step 7  finalize             — same as git path
+```
+
+**Upload API endpoint:**
+
+```
+POST /projects/:project_id/services/:service_id/static/upload
+Content-Type: multipart/form-data
+
+Fields:
+  artifact   — the zip or tar.gz file (required)
+  message    — optional deployment message shown in history
+```
+
+Response: same envelope as `trigger_deploy` — returns `{ deployment_id }` immediately; status tracked via MQTT.
+
+**Streaming upload — memory efficiency:**
+
+Axum's `Multipart` extractor yields `Field` chunks lazily. Write each chunk directly to a temp file:
+
+```rust
+async fn upload_static_artifact(
+    ...
+    mut multipart: Multipart,
+) -> Result<...> {
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("artifact") {
+            let dest = format!("{uploads_dir}/{deploy_id}.zip");
+            let mut file = tokio::fs::File::create(&dest).await?;
+            // Stream chunks — max RAM usage = one chunk (~64 KB), not the whole file
+            while let Some(chunk) = field.chunk().await? {
+                file.write_all(&chunk).await?;
+            }
+        }
+    }
+    // spawn deployment task, return deploy_id
+}
+```
+
+This means a 500 MB upload uses ~64 KB of RAM at any point, not 500 MB.
+
+**Size limit:** configurable in `AppConfig.static_server.max_upload_mb` (default: 256 MB). Enforced with a `ContentLengthLimit` middleware layer.
+
+---
+
+### Milestone 6.4 — Atomic Versioning & Rollback
+
+```
+data_dir/static/<service_id>/
+├── current -> ./<deploy_id_3>/          ← symlink, updated atomically
+├── <deploy_id_1>/                        ← previous version (kept for rollback)
+│   ├── site.conf                         ← nginx config snapshot
+│   └── public/                           ← built files
+├── <deploy_id_2>/
+│   ├── site.conf
+│   └── public/
+└── <deploy_id_3>/                        ← current live version
+    ├── site.conf
+    └── public/
+```
+
+**nginx serves from symlink:**
+```nginx
+root /var/www/static/<service_id>/current/public;
+```
+
+**Atomic swap (Step 6):**
+```rust
+// ln -sfn <deploy_id>/ current   — atomic on Linux (rename syscall)
+std::os::unix::fs::symlink(&new_version_path, &tmp_link)?;
+std::fs::rename(&tmp_link, &current_link)?;  // atomic rename
+// Then reload nginx
+```
+
+**Rollback:** Set the symlink to a previous `<deploy_id>/` directory + reload nginx. No file copy needed. Executes in <500ms.
+
+**Retention policy:** Keep the last N versions (configurable, default 5). The finalize step deletes the oldest beyond the limit. Tracked in `deployments` table — `deployed_image` stores the path.
+
+---
+
+### Milestone 6.5 — Shared nginx Config Generation
+
+**Master nginx.conf** (written once at `shipyard-static` startup via init container or volume):
+```nginx
+user nginx;
+worker_processes auto;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 1024;
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout 65;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css application/json application/javascript
+               text/xml application/xml image/svg+xml font/woff2;
+
+    # One include per deployed static site — nginx hot-reloads when signalled
+    include /var/www/static/*/site.conf;
+}
+```
+
+**Generated `site.conf`** (one per service, written at deploy time from `deploy.json` + domain config):
+```nginx
+server {
+    listen 80;
+    server_name {domains};           # space-separated; populated from service domains table
+
+    root /var/www/static/{service_id}/current/public;
+    index index.html index.htm;
+
+    # ── Error pages ──────────────────────────────────────────────────────────
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html;
+
+    # ── Redirects (from deploy.json redirects[]) ─────────────────────────────
+    # Each redirect entry becomes a location block with return directive
+    location = /old-page {
+        return 301 /new-page;
+    }
+
+    # ── SPA fallback / rewrites (from deploy.json) ───────────────────────────
+    location / {
+        try_files $uri $uri/ /index.html;    # omitted when spa=false
+    }
+
+    # ── Asset caching ─────────────────────────────────────────────────────────
+    location ~* \.(js|css|woff2|woff|ttf|png|jpg|jpeg|gif|ico|svg|webp)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    # ── Custom headers (from deploy.json headers[]) ───────────────────────────
+    # Injected per-location or globally depending on src glob
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+}
+```
+
+**Config generation is done in Rust** — a `render_nginx_site_conf(config: &SiteConfig) -> String` function in the engine crate. No templating library needed; build the string programmatically (the output is small and deterministic).
+
+---
+
+### Milestone 6.6 — `shipyard-static` Infrastructure
+
+**Added to `docker-compose.dev.yml`:**
+```yaml
+shipyard-static:
+  image: nginx:1.27-alpine
+  restart: unless-stopped
+  volumes:
+    # Master config (never changes after initial write)
+    - ./static-server/nginx.conf:/etc/nginx/nginx.conf:ro
+    # Sites bind-mount: both per-site configs and files are here
+    - ${SHIPYARD_DATA_DIR:-/opt/shipyard/data}/static:/var/www/static
+  labels:
+    - "traefik.enable=true"
+    # Catch-all router — lowest priority so app routes win
+    - "traefik.http.routers.shipyard-static.rule=HostRegexp(`{host:.+}`)"
+    - "traefik.http.routers.shipyard-static.priority=1"
+    - "traefik.http.routers.shipyard-static.entrypoints=web,websecure"
+    - "traefik.http.services.shipyard-static.loadbalancer.server.port=80"
+  networks:
+    - platform_proxy
+  deploy:
+    resources:
+      limits:
+        memory: 64M   # nginx + all file metadata; actual file data is on disk
+        cpus: "0.25"
+  healthcheck:
+    test: ["CMD", "nginx", "-t"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+```
+
+**Memory breakdown:**
+| Component | RSS |
+|---|---|
+| nginx master process | ~3 MB |
+| nginx worker (auto = 1 on a single-core host) | ~5–8 MB |
+| Per additional static site | 0 MB (files on disk, config in worker cache) |
+| **Total for 100 sites** | **~12 MB** |
+
+Compare to container-per-site: 100 × ~8 MB = **800 MB**.
+
+**Traefik routing for TLS / custom domains:**
+
+For TLS, each custom domain still needs an explicit Traefik router so the cert resolver can issue per-domain certificates. When a user adds a domain to a static service, write a Traefik dynamic config file:
+
+```yaml
+# data_dir/traefik-dynamic/static-<service_id>-<domain_hash>.yml
+http:
+  routers:
+    static-{service_id}-mysite:
+      rule: "Host(`mysite.example.com`)"
+      entryPoints: [websecure]
+      service: shipyard-static
+      tls:
+        certResolver: letsencrypt
+```
+
+nginx handles the actual host-based file serving. Traefik only handles TLS + routing to the shared container.
+
+---
+
+### Milestone 6.7 — AppConfig Changes
+
+```rust
+// In AppConfig
+pub static_server: StaticServerConfig,
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaticServerConfig {
+    /// Name of the shared nginx Swarm service / container.
+    #[serde(default = "default_static_service_name")]
+    pub service_name: String,
+
+    /// Absolute path on the host where site dirs are stored.
+    /// Must match the bind-mount in the static server compose service.
+    /// Defaults to {data_dir}/static
+    pub sites_dir: Option<String>,
+
+    /// Max upload size in MB for direct-upload deployments.
+    #[serde(default = "default_max_upload_mb")]
+    pub max_upload_mb: u64,
+
+    /// Number of past deployment versions to retain per site.
+    #[serde(default = "default_retention_versions")]
+    pub retention_versions: usize,
+}
+
+fn default_static_service_name() -> String { "shipyard-static".to_string() }
+fn default_max_upload_mb() -> u64 { 256 }
+fn default_retention_versions() -> usize { 5 }
+```
+
+---
+
+### Milestone 6.8 — API Endpoints
+
+```
+# Static site config CRUD
+GET    /projects/:pid/services/:sid/static/config
+PUT    /projects/:pid/services/:sid/static/config
+
+# Direct-upload deployment (returns deployment_id immediately)
+POST   /projects/:pid/services/:sid/static/upload
+  Content-Type: multipart/form-data
+  Body: artifact (zip|tar.gz), message? (string)
+  Response: { deployment_id: UUID }
+
+# Reuse existing deployment endpoints for status/logs/rollback
+POST   /projects/:pid/services/:sid/deploy          (git-based trigger)
+GET    /projects/:pid/services/:sid/deployments
+POST   /projects/:pid/services/:sid/deployments/:did/rollback
+```
+
+**RBAC:** upload endpoint requires `service:write` (same as `trigger_deploy`).
+
+---
+
+### Milestone 6.9 — Frontend Changes
+
+**Service creation dialog — new "Static Site" type:**
+- Tabs: `Git` / `Upload`
+- Git tab: repo URL + branch + framework preset selector
+- Upload tab: drag-and-drop or file picker; shows upload progress bar
+- Framework presets auto-fill build command + output dir:
+
+| Preset | Build command | Output dir |
+|---|---|---|
+| Vite | `npm run build` | `dist` |
+| SvelteKit (static) | `npm run build` | `build` |
+| Next.js (export) | `npm run build && npm run export` | `out` |
+| Hugo | `hugo --minify` | `public` |
+| Jekyll | `bundle exec jekyll build` | `_site` |
+| Custom | (editable) | (editable) |
+
+**Service detail page (static type):**
+- No replicas/ports/resource-limits controls
+- "Preview" button → opens the primary domain
+- "Deploy" button → triggers git rebuild OR opens upload dialog
+- Deployment history shows build steps differently from container services
+- `deploy.json` viewer — shows parsed config in effect for the live deployment
+- Rollback panel — shows previous N versions with timestamp + commit hash
+
+**Deployment step names for static pipeline:**
+
+| Step | Label shown in UI |
+|---|---|
+| 0 | Validate config |
+| 1 | Clone / pull repository |
+| 2 | Build (build container) |
+| 3 | Read deploy.json |
+| 4 | Publish files |
+| 5 | Write nginx config |
+| 6 | Go live |
+| 7 | Finalize |
+
+For upload source, steps 1 and 2 are replaced by "Stream upload" and "Extract archive".
+
+---
+
+### File System Layout (Static Sites)
+
+```
+data_dir/
+├── repos/
+│   └── <service_id>/                   ← git clone (incremental pull on re-deploy)
+├── static/
+│   ├── <service_id>/
+│   │   ├── current -> ./<deploy_id_3>/ ← symlink (atomic swap on each deploy)
+│   │   ├── <deploy_id_1>/              ← retained for rollback
+│   │   │   ├── site.conf               ← nginx config snapshot for this version
+│   │   │   └── public/                 ← built/uploaded files
+│   │   ├── <deploy_id_2>/
+│   │   └── <deploy_id_3>/
+│   └── <service_id_2>/
+│       └── ...
+├── uploads/
+│   └── <service_id>/
+│       └── <deploy_id>.zip             ← raw upload (deleted after extract)
+└── tmp/
+    └── <deploy_id>/                    ← extraction scratch space (deleted after Step 4)
+```
+
+---
+
+### Coding Agent Notes (Static Sites)
+
+1. **Never load the entire artifact into RAM.** Use streaming multipart for upload, `tokio::fs::copy` for file publishing (kernel-managed, not userspace buffers).
+2. **Symlink swap must be atomic.** Use `rename(2)` via `std::fs::rename` — not `remove + symlink`. On Linux this is guaranteed atomic. Write the new symlink to a temp name first, then rename over `current`.
+3. **nginx reload is not a restart.** `nginx -s reload` sends SIGHUP, which causes workers to finish in-flight requests before swapping config. Zero downtime.
+4. **deploy.json is advisory, not required.** A site with no `deploy.json` must deploy successfully with defaults. Never fail a deployment solely because `deploy.json` is absent.
+5. **Build containers must not persist.** After Step 2 exits, immediately `docker service rm` the build service. Lingering build containers are a memory + disk leak.
+6. **Security: validate paths in uploaded archives.** Zip-slip attack — reject any entry whose resolved path escapes the target directory. Use `std::path::Path::components()` to check for `..` segments before extracting.
+7. **The `deploy.json` `build.env` values are injected into the build container only**, not into the published files or nginx config. Do not log or persist them.
+
+---
+
+### Milestone 6.10 — Topology Canvas Integration
+
+Static sites create a specific representation challenge: they have no running container (no `containers` table rows), they are deployed across many projects and organizations, and they all converge on one shared infrastructure node (`shipyard-static`). The solution is two distinct topology views with different scopes.
+
+---
+
+#### 6.10.1 — Within-Project Canvas: `StaticSiteNode`
+
+Static services appear in the project topology as a new node type — `static_site` — replacing `service` for `service_type = 'static'`. This node is visually and semantically different from a container service node.
+
+**Visual differences from `ServiceNode`:**
+
+| Field | ServiceNode | StaticSiteNode |
+|---|---|---|
+| Icon | `Container` | `Globe` |
+| Status label | Running / Stopped / Failed | Live / Building / Failed / Not deployed |
+| Status source | containers table | last deployment status |
+| Replicas badge | ✓ shown | ✗ absent |
+| Ports | ✓ shown | ✗ absent (domains instead) |
+| New: Framework badge | ✗ | ✓ shown (Vite, Hugo, …) |
+| New: Last deploy time | ✗ | ✓ shown (relative, e.g. "3h ago") |
+| Right handle (source) | ✓ → containers | ✗ (no containers) |
+
+**Node data payload** (added to topology backend query for `static` services):
+
+```json
+{
+  "name": "my-site",
+  "slug": "my-site",
+  "type": "static",
+  "status": "running",
+  "framework": "vite",
+  "source": "git",
+  "last_deploy_status": "success",
+  "last_deploy_at": "2025-07-01T12:00:00Z",
+  "deployed_artifact": "/opt/shipyard/data/static/<svc_id>/<deploy_id>"
+}
+```
+
+**Backend topology enrichment** — update the `ServiceRow` struct and query to LEFT JOIN static data for `static` services:
+
+```sql
+SELECT
+    s.id, s.name, s.slug, s.status, s.replicas,
+    s.type, s.ports, s.service_parent_id,
+    ssc.framework, ssc.source,
+    d.status  AS last_deploy_status,
+    d.finished_at AS last_deploy_at,
+    d.deployed_image AS deployed_artifact
+FROM services s
+LEFT JOIN static_site_configs ssc ON ssc.service_id = s.id
+LEFT JOIN LATERAL (
+    SELECT status, finished_at, deployed_image
+    FROM deployments
+    WHERE service_id = s.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) d ON true
+WHERE s.project_id = $1
+```
+
+The node_type emitted is `"static_site"` when `s.type = 'static'`, and `"service"` otherwise.
+
+**Auto-layout:** Static service slots have no container children, so `rootSlotHeight()` returns `max(1, domainCount) × Y_STEP + SVC_GAP`. The CONTAINER_X column stays empty for static services. No algorithm change needed — the existing pass-3 skips them naturally because `containersBySvc[staticSvcId]` is always empty.
+
+**`nodeTypes` registration** in the canvas page:
+
+```typescript
+const nodeTypes: NodeTypes = {
+  service:     ServiceNode    as any,
+  static_site: StaticSiteNode as any,   // NEW
+  network:     NetworkNode    as any,
+  volume:      VolumeNode     as any,
+  domain:      DomainNode     as any,
+  container:   ContainerNode  as any,
+};
+```
+
+**`handleNodeClick` for `static_site`** → pushes a `StaticSiteDetailPanel` (the static-specific service panel) instead of `ServiceDetailPanel`.
+
+**MQTT live updates:** When a static deployment completes, the `deployment.success` / `deployment.failed` MQTT event triggers `topologyStore.refreshNode('svc_<id>', { data: { status: 'running', last_deploy_status: 'success', last_deploy_at: ... } })`. The status dot turns green in real time without a full topology reload.
+
+---
+
+#### 6.10.2 — Cross-Org / Cross-Project: Static Hub Topology
+
+Static services from every project in every organization all route through the same `shipyard-static` nginx instance. Showing this dependency in the per-project canvas would be noisy and misleading (it's infrastructure, not a user-created resource). Instead, a dedicated **Static Hub** view exposes this relationship.
+
+**Scope hierarchy:**
+
+```
+Platform Admin
+└── Global Static Hub (/admin/topology/static)
+    └── shows ALL static sites across ALL orgs → shipyard-static
+
+Org Member / Admin
+└── Org Static Hub (/orgs/:slug/topology/static)
+    └── shows all static sites in this org, grouped by project → shipyard-static
+```
+
+**Hub topology shape (star / spoke model):**
+
+```
+[project-A-group]
+  ├── [static-site-1]  ──┐
+  └── [static-site-2]  ──┤
+                         ├──→  [shipyard-static nginx]  ──→  [Internet / Traefik]
+[project-B-group]        │
+  └── [static-site-3]  ──┘
+```
+
+Node types used in the hub view:
+
+| Node type | Description |
+|---|---|
+| `static_site` | Reuse same component from project canvas |
+| `project_group` | New group node — visual container for sites in one project |
+| `infra_static_server` | New node — represents the shared `shipyard-static` container |
+| `domain` | Reuse existing domain node |
+
+**New backend endpoint:**
+
+```
+GET /orgs/:org_id/topology/static
+```
+
+Returns:
+```json
+{
+  "nodes": [
+    { "id": "infra_static", "type": "infra_static_server", "data": { "service_name": "shipyard-static", "site_count": 12 } },
+    { "id": "proj_<pid>",   "type": "project_group",       "data": { "name": "my-project", "slug": "my-project" } },
+    { "id": "svc_<sid>",    "type": "static_site",         "data": { ... } },
+    { "id": "dom_<did>",    "type": "domain",              "data": { ... } }
+  ],
+  "edges": [
+    { "id": "e_svc_infra",  "source": "svc_<sid>",  "target": "infra_static", "type": "serves" },
+    { "id": "e_dom_svc",    "source": "dom_<did>",  "target": "svc_<sid>",    "type": "domain"  },
+    { "id": "e_svc_proj",   "source": "svc_<sid>",  "target": "proj_<pid>",   "type": "belongs" }
+  ]
+}
+```
+
+The SQL query for this endpoint:
+
+```sql
+SELECT
+    s.id           AS service_id,
+    s.name         AS service_name,
+    s.status       AS service_status,
+    s.project_id,
+    p.name         AS project_name,
+    p.slug         AS project_slug,
+    ssc.framework,
+    d.status       AS last_deploy_status,
+    d.finished_at  AS last_deploy_at,
+    dom.id         AS domain_id,
+    dom.hostname,
+    dom.tls_enabled
+FROM services s
+JOIN projects p        ON p.id = s.project_id
+JOIN static_site_configs ssc ON ssc.service_id = s.id
+LEFT JOIN LATERAL (
+    SELECT status, finished_at FROM deployments
+    WHERE service_id = s.id ORDER BY created_at DESC LIMIT 1
+) d ON true
+LEFT JOIN domains dom  ON dom.service_id = s.id
+WHERE p.org_id = $1
+  AND s.type   = 'static'
+ORDER BY p.name, s.name
+```
+
+**Auto-layout for hub view:**
+
+```
+DOMAIN_X = -400  ← domain nodes (leftmost)
+SITE_X   = -200  ← static site nodes
+HUB_X    =  200  ← infra_static_server (center-right, all edges converge here)
+
+Projects are stacked vertically:
+  Project A group occupies rows 0..N_A
+  Project B group starts at row N_A + 1
+  etc.
+```
+
+`project_group` nodes use SvelteFlow's [sub-flow / group node](https://reactflow.dev/docs/concepts/sub-flows/) feature — they render as a labelled background rectangle that visually groups sites belonging to the same project. The group node's `extent` is set to `'parent'` for its children, keeping them inside the rectangle.
+
+**`InfraStaticServerNode` component:**
+
+```svelte
+<!-- Shows: "shipyard-static", memory usage, total sites count, status indicator -->
+<div class="infra-node">
+  <Server size={14} />
+  <span>shipyard-static</span>
+  <span class="site-count">{data.site_count} sites</span>
+  <span class="mem-badge">{data.memory_mb ?? '~12'} MB</span>
+</div>
+```
+
+Styled distinctly (darker background, dashed border) to signal it is infrastructure rather than a user-created resource.
+
+**`ProjectGroupNode` component:**
+
+Uses SvelteFlow's built-in `group` node type (transparent fill + labelled border). No custom component needed — set `type: 'group'` and `style: 'background: rgba(99,102,241,0.04); border: 1px dashed ...'`.
+
+---
+
+#### 6.10.3 — Status Model for Static Services
+
+Static services never have container rows, so `services.status` has a new semantic:
+
+| `services.status` value | Meaning for static |
+|---|---|
+| `stopped` | Never deployed / explicitly taken offline |
+| `running` | Files live and being served (symlink is valid) |
+| `pending` | Deployment is currently running |
+| `failed` | Last deployment failed; no live files |
+
+The deployment engine's `step_finalize` sets `status = 'running'` on success and `status = 'failed'` on failure, exactly as for container services. No code change needed.
+
+The `StaticSiteNode` maps status → display label:
+
+```typescript
+const STATIC_STATUS: Record<string, { label: string; color: 'green' | 'grey' | 'red' | 'yellow' }> = {
+  running:  { label: 'Live',         color: 'green'  },
+  pending:  { label: 'Building…',    color: 'yellow' },
+  failed:   { label: 'Build failed', color: 'red'    },
+  stopped:  { label: 'Not deployed', color: 'grey'   },
+};
+```
+
+---
+
+#### 6.10.4 — Summary of New Frontend Files
+
+| File | Description |
+|---|---|
+| `src/lib/flows/StaticSiteNode.svelte` | New canvas node for `static_site` type |
+| `src/lib/flows/InfraStaticServerNode.svelte` | Hub view — shared nginx node |
+| `src/lib/flows/ProjectGroupNode.svelte` | Hub view — group container for one project |
+| `src/lib/panels/StaticSiteDetailPanel.svelte` | Side panel for static service (replaces ServiceDetailPanel for `type=static`) |
+| `src/routes/orgs/[orgSlug]/topology/static/+page.svelte` | Org-level Static Hub canvas page |
+| `src/lib/stores/staticHubStore.ts` | Topology store variant scoped to hub view |
+
+**`topology.store.ts` change:** Add `'static_site'` to the column layout logic. Static nodes sit in the `ROOT_SVC_X` column. The layout already handles them correctly (container column is simply empty), but add an explicit guard:
+
+```typescript
+if (n.type === 'static_site') {
+  // place in service column; never extends into container or child-service columns
+  rootSvcIds.push(n.id);
+}
+```
+
+**Routing:** Add "Static Sites" link in the org sidebar that navigates to `/orgs/:slug/topology/static`.
+
+---
+
+#### 6.10.5 — Coding Agent Notes (Topology)
+
+1. **Never show `shipyard-static` in the per-project canvas.** It is platform infrastructure, not a user resource. The per-project view shows static services exactly like regular services (just a different node component) — the shared nginx is abstracted away.
+2. **`static_site` nodes have no right-side container handle.** Remove the `<Handle type="source" position={Position.Right} />` from `StaticSiteNode` — there are no replica containers to connect to.
+3. **SvelteFlow group nodes require children to set `parentId`** on the flow node object. Set `parentId: 'proj_<project_id>'` for each static site node in the hub view so SvelteFlow renders them inside the group rectangle.
+4. **The hub topology is read-only** — no drag-to-connect, no "Add Resource" button. Positions can still be saved per user for layout preference (use a separate `hub_positions` key in localStorage, not the project's `node_positions` DB column).
+5. **RBAC for hub view**: `GET /orgs/:org_id/topology/static` requires `project:view` permission on at least one project in the org. Filter the result to only include projects the requesting user has access to — never leak static site names from projects outside the user's permissions.
+6. **Static services produce zero MQTT container events.** The `deployment.success` MQTT event is the sole trigger for refreshing a static site node's status. Subscribe to `orgs/:org_id/projects/+/services/+/deployments/+/status` in the topology subscription and call `topologyStore.refreshNode()` on receipt.
+
+---
+
 ## File System Layout (Runtime)
 
 ```
