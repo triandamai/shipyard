@@ -972,9 +972,14 @@ impl DockerEventWorker {
     /// Called periodically so that containers running on worker nodes (whose
     /// Docker events are invisible to the manager's local socket) stay in sync.
     /// Safe to call concurrently with the event worker — all writes are upserts.
+    ///
+    /// Also handles orphan detection: any DB container that was non-terminal but
+    /// no longer appears in the Swarm task list gets marked "orphan" so the UI
+    /// can show it as stopped and allow the user to delete the record.
     pub async fn sync_swarm_tasks(&self) -> AppResult<()> {
         let services = self.engine.list_services().await?;
         let mut affected: Vec<Uuid> = Vec::new();
+        let service_id_key = format!("{}.service_id", self.label_prefix);
 
         for svc in &services {
             let tasks = match self.engine.list_tasks(&svc.id).await {
@@ -985,7 +990,10 @@ impl DockerEventWorker {
                 }
             };
 
-            let service_id_key = format!("{}.service_id", self.label_prefix);
+            // Track (service_uuid → set of docker_container_ids seen in Swarm) for
+            // orphan detection below.
+            let mut seen: std::collections::HashMap<Uuid, Vec<String>> =
+                std::collections::HashMap::new();
 
             for task in &tasks {
                 let container_id = match task.container_id.as_deref() {
@@ -1003,7 +1011,14 @@ impl DockerEventWorker {
                     Err(_) => continue,
                 };
 
-                let status = map_swarm_task_status(&task.status);
+                // If DesiredState is "shutdown" the Swarm has decided to stop the task —
+                // map it terminal regardless of what the current Status.State shows.
+                let status = if task.desired_state == "shutdown" {
+                    "shutdown"
+                } else {
+                    map_swarm_task_status(&task.status)
+                };
+
                 let replica_index = task.slot.map(|s| s as i32);
                 let node_id = task.node_id.as_deref();
 
@@ -1032,8 +1047,64 @@ impl DockerEventWorker {
                 .await
                 .ok();
 
+                seen.entry(service_id).or_default().push(container_id.to_string());
+
                 if !affected.contains(&service_id) {
                     affected.push(service_id);
+                }
+            }
+
+            // ── Orphan detection ──────────────────────────────────────────────
+            // For each service we processed above, any DB container that is still
+            // in a non-terminal status but whose docker_container_id was NOT seen
+            // in the current Swarm task list means the task was garbage-collected
+            // by Docker (task-history-limit).  Mark those as "orphan" so the
+            // replica panel shows them as stopped and allows deletion.
+            for (service_id, active_ids) in &seen {
+                // Build a Postgres ANY($1) array from the active container IDs.
+                let orphaned: Vec<Uuid> = sqlx::query_as::<_, (Uuid,)>(
+                    r#"
+                    SELECT id FROM containers
+                    WHERE service_id = $1
+                      AND docker_container_id IS NOT NULL
+                      AND docker_container_id != ''
+                      AND status NOT IN (
+                            'orphan'::container_status,
+                            'failed'::container_status,
+                            'shutdown'::container_status,
+                            'complete'::container_status,
+                            'rejected'::container_status
+                          )
+                      AND docker_container_id != ALL($2)
+                    "#,
+                )
+                .bind(service_id)
+                .bind(active_ids)
+                .fetch_all(&self.db)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id,)| id)
+                .collect();
+
+                if !orphaned.is_empty() {
+                    tracing::info!(
+                        %service_id,
+                        count = orphaned.len(),
+                        "sync_swarm_tasks: marking {} container(s) as orphan (no longer in Swarm)",
+                        orphaned.len()
+                    );
+                    sqlx::query(
+                        r#"
+                        UPDATE containers
+                        SET status = 'orphan'::container_status, updated_at = NOW()
+                        WHERE id = ANY($1)
+                        "#,
+                    )
+                    .bind(&orphaned)
+                    .execute(&self.db)
+                    .await
+                    .ok();
                 }
             }
         }

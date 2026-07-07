@@ -442,9 +442,19 @@ let showDbClient    = $state(false);
 
 	function isTerminal(status: string) { return TERMINAL_STATUSES.has(status); }
 
+	let replicaDeleteError = $state<string | null>(null);
+	let deletingContainerId = $state<string | null>(null);
+
 	async function deleteContainerRecord(containerId: string) {
+		replicaDeleteError = null;
+		deletingContainerId = containerId;
 		const res = await api.deleteContainer(serviceId, containerId);
-		if (!res.error) containers = containers.filter(c => c.id !== containerId);
+		deletingContainerId = null;
+		if (res.error) {
+			replicaDeleteError = res.error.message ?? 'Failed to delete container record';
+		} else {
+			containers = containers.filter(c => c.id !== containerId);
+		}
 	}
 
 	async function removeDomain(domainId: string) {
@@ -1758,6 +1768,12 @@ let showDbClient    = $state(false);
 			<!-- ── Replicas ── -->
 			{:else if activeTab === 'replicas'}
 				<div class="replicas-section">
+					{#if replicaDeleteError}
+						<div class="replica-delete-error">
+							<span>{replicaDeleteError}</span>
+							<button class="btn-icon-xs" onclick={() => replicaDeleteError = null}>✕</button>
+						</div>
+					{/if}
 					{#if isLoadingContainers}
 						<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
 					{:else if containers.length === 0}
@@ -1820,9 +1836,14 @@ let showDbClient    = $state(false);
 											<button
 												class="btn btn-ghost btn-xs replica-del-btn"
 												onclick={() => deleteContainerRecord(c.id)}
+												disabled={deletingContainerId === c.id}
 												title="Remove record"
 											>
-												<Trash2 size={12} />
+												{#if deletingContainerId === c.id}
+													<div class="spinner-sm" style="width:10px;height:10px"></div>
+												{:else}
+													<Trash2 size={12} />
+												{/if}
 											</button>
 										{/if}
 									</div>
@@ -3006,6 +3027,16 @@ let showDbClient    = $state(false);
 	.replica-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 	.replica-del-btn { color: var(--text-dim); }
 	.replica-del-btn:hover { color: #EF4444 !important; }
+	.replica-delete-error {
+		display: flex; align-items: center; justify-content: space-between; gap: 8px;
+		margin: 8px 12px; padding: 8px 10px;
+		background: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px;
+		color: #B91C1C; font-size: 12px;
+	}
+	.replica-delete-error .btn-icon-xs {
+		background: none; border: none; cursor: pointer; color: #B91C1C;
+		padding: 0 2px; font-size: 11px; line-height: 1; flex-shrink: 0;
+	}
 
 	.node-badge {
 		display: inline-flex; align-items: center; gap: 4px;
