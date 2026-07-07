@@ -416,7 +416,13 @@
 						{#if col.is_primary_key}<span class="pk-badge">PK</span>{/if}
 					</label>
 					{#if col.is_primary_key}
-						<div class="field-value-ro">{editRow[i] ?? <em>null</em>}</div>
+						<div class="field-value-ro">
+						{#if editRow[i] === null || editRow[i] === undefined}
+							<em class="null-val">null</em>
+						{:else}
+							{editRow[i]}
+						{/if}
+					</div>
 					{:else}
 						<input
 							id="edit-{col.name}"
