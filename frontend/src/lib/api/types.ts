@@ -372,6 +372,7 @@ export interface ContainerInspect {
 export interface Deployment {
 	id: string;
 	service_id: string;
+	project_id?: string;
 	triggered_by: string;
 	source_ref: string;
 	status: DeploymentStatus;

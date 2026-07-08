@@ -114,6 +114,7 @@ pub fn routes() -> Router<AppState> {
         .route("/services/:id/restart",                           post(restart_service))
         .route("/services/:id/redeploy",                          post(redeploy_service))
         // Deployment-only (look up service for auth)
+        .route("/deployments/:dep_id",                            get(get_dep))
         .route("/deployments/:dep_id/steps",                      get(list_dep_steps))
         .route("/deployments/:dep_id/logs",                       get(list_dep_logs))
         .route("/deployments/:dep_id/cancel",                     post(cancel_dep))
@@ -255,7 +256,30 @@ async fn cancel_service_deployment(
     do_cancel(&state.db, dep_id).await
 }
 
-// ─── Deployment-only handlers (no service_id in path) ────────────────────────
+async fn get_dep(
+    auth: AuthUser,
+    Path(dep_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let service_id = service_id_from_dep(&state.db, dep_id).await?;
+    require_service_access(&state.db, auth.user_id, service_id).await.map_err(ApiAppError)?;
+    let dep = fetch_deployment_for_service(&state.db, dep_id, service_id).await?;
+
+    let (project_id,): (Uuid,) = sqlx::query_as("SELECT project_id FROM services WHERE id = $1")
+        .bind(service_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let mut json = serde_json::to_value(dep)
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert("project_id".to_string(), serde_json::Value::String(project_id.to_string()));
+    }
+
+    Ok(Json(ApiResponse::ok(json)))
+}
 
 async fn list_dep_steps(
     auth: AuthUser,

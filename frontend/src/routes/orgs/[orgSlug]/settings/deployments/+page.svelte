@@ -135,8 +135,8 @@
 		return `${Math.floor(h / 24)}d ago`;
 	}
 
-	function navToService(row: AdminDeploymentRow) {
-		goto(`/orgs/${orgSlug}/projects/${row.project_id}/services/${row.service_id}`);
+	function navToDeployment(row: AdminDeploymentRow) {
+		goto(`/orgs/${orgSlug}/settings/deployments/${row.id}`);
 	}
 
 	const STATUS_COLORS: Record<string, string> = {
@@ -253,8 +253,8 @@
 				</thead>
 				<tbody>
 					{#each response.data as row (row.id)}
-						<tr class="row-link" onclick={() => navToService(row)} role="button" tabindex="0"
-							onkeydown={(e) => e.key === 'Enter' && navToService(row)}>
+						<tr class="row-link" onclick={() => navToDeployment(row)} role="button" tabindex="0"
+							onkeydown={(e) => e.key === 'Enter' && navToDeployment(row)}>
 							<td><span class="status-dot {STATUS_COLORS[row.status] ?? ''}"></span><span class="status-text">{row.status}</span></td>
 							<td>
 								<div class="service-cell">
@@ -275,8 +275,8 @@
 		<!-- Mobile cards -->
 		<div class="mobile-cards">
 			{#each response.data as row (row.id)}
-				<div class="card" onclick={() => navToService(row)} role="button" tabindex="0"
-					onkeydown={(e) => e.key === 'Enter' && navToService(row)}>
+				<div class="card" onclick={() => navToDeployment(row)} role="button" tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && navToDeployment(row)}>
 					<div class="card-header">
 						<div class="card-title">
 							<span class="status-dot {STATUS_COLORS[row.status] ?? ''}"></span>
