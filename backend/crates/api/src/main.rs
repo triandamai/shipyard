@@ -461,6 +461,21 @@ async fn async_main() {
     // Per-IP rate limiter shared via Extension
     let rate_limiter = middleware::rate_limit::make_rate_limiter();
 
+    // Spawn a background task to periodically clean up expired rate limiter entries to prevent memory leak
+    {
+        let main_limiter = Arc::clone(&rate_limiter);
+        let auth_limiter = Arc::clone(&state.auth_limiter);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                main_limiter.retain_recent();
+                auth_limiter.retain_recent();
+                main_limiter.shrink_to_fit();
+                auth_limiter.shrink_to_fit();
+            }
+        });
+    }
+
     // Build the full application router
     let app = Router::new()
         .route("/health", get(health_check))

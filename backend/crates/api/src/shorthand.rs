@@ -1007,22 +1007,34 @@ async fn container_logs_stream(
 
         let tx_out = tx.clone();
         let tx_err = tx.clone();
+        let tx_closed = tx.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            tx_closed.closed().await;
+            let _ = cancel_tx.send(());
+        });
 
-        let h_out = tokio::spawn(async move {
+        let mut h_out = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if tx_out.send(Ok(Event::default().data(line))).await.is_err() { break; }
             }
         });
 
-        let h_err = tokio::spawn(async move {
+        let mut h_err = tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if tx_err.send(Ok(Event::default().data(line))).await.is_err() { break; }
             }
         });
 
-        let _ = tokio::join!(h_out, h_err);
+        tokio::select! {
+            _ = async { tokio::join!(&mut h_out, &mut h_err) } => {}
+            _ = &mut cancel_rx => {
+                h_out.abort();
+                h_err.abort();
+            }
+        }
         let _ = child.kill().await;
     });
 

@@ -1452,7 +1452,7 @@ async fn handle_exec_socket(
     ).await;
 
     // Task 1: container stdout/stderr → WebSocket client
-    let out_task = tokio::spawn(async move {
+    let mut out_task = tokio::spawn(async move {
         while let Some(chunk) = output.next().await {
             if chunk.is_empty() { continue; }
             if ws_sink.send(Message::Binary(chunk.to_vec())).await.is_err() {
@@ -1465,7 +1465,7 @@ async fn handle_exec_socket(
     // Task 2: WebSocket client → container stdin; resize messages handled inline
     let docker = state.docker.clone();
     let exec_id_clone = exec_id.clone();
-    let in_task = tokio::spawn(async move {
+    let mut in_task = tokio::spawn(async move {
         use tokio::io::AsyncWriteExt as _;
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
@@ -1491,7 +1491,11 @@ async fn handle_exec_socket(
 
     // Drive both tasks; cancel the other when one finishes.
     tokio::select! {
-        _ = out_task => {}
-        _ = in_task  => {}
+        _ = &mut out_task => {
+            in_task.abort();
+        }
+        _ = &mut in_task => {
+            out_task.abort();
+        }
     }
 }
