@@ -60,6 +60,9 @@ server.on('upgrade', (req, socket, headBuf) => {
         socket.destroy();
     });
     socket.on('error', () => backend.destroy());
+
+    backend.on('close', () => socket.destroy());
+    socket.on('close', () => backend.destroy());
 });
 
 server.listen(PORT, HOST, () => {
