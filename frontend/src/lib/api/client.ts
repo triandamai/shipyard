@@ -373,6 +373,10 @@ class ApiClient {
 		return this.postForm(`/services/${serviceId}/static/upload`, form);
 	}
 
+	async getStaticLogs(serviceId: string, tail: number = 500): Promise<ApiResponse<string[]>> {
+		return this.get(`/services/${serviceId}/static/logs?tail=${tail}`);
+	}
+
 	// ─── Env Vars ────────────────────────────────────────────────────
 	async getServiceEnvs(serviceId: string): Promise<ApiResponse<ServiceEnv[]>> {
 		return this.get(`/services/${serviceId}/env`);

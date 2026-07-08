@@ -646,6 +646,8 @@ impl DeploymentEngine {
     ///
     /// Subsequent calls: if the container exists and is running this is a no-op;
     /// if it's stopped it is started again.
+
+
     async fn ensure_static_nginx(&self, sites_base: &str) -> AppResult<()> {
         const CONTAINER: &str = "shipyard-nginx-static";
 
@@ -653,6 +655,20 @@ impl DeploymentEngine {
         let conf_dir = format!("{sites_base}/conf.d");
         tokio::fs::create_dir_all(&conf_dir).await
             .map_err(|e| AppError::Internal(format!("Cannot create conf.d dir: {e}")))?;
+
+        // Ensure logs base dir exists and is writable by containerized nginx processes.
+        let logs_base_dir = format!("{sites_base}/logs");
+        tokio::fs::create_dir_all(&logs_base_dir).await
+            .map_err(|e| AppError::Internal(format!("Cannot create logs base dir: {e}")))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = std::fs::metadata(&logs_base_dir) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o777);
+                let _ = std::fs::set_permissions(&logs_base_dir, perms);
+            }
+        }
 
         // Write the custom error page and default server conf.
         // Always overwrite so the latest design is used after upgrades.
@@ -701,6 +717,8 @@ impl DeploymentEngine {
                         "-v", &format!("{sites_base}:{sites_base}:ro"),
                         // conf.d bind: nginx reads *.conf from /etc/nginx/conf.d by default
                         "-v", &format!("{conf_dir}:/etc/nginx/conf.d:ro"),
+                        // Logs bind: host logs folder mounted read-write
+                        "-v", &format!("{logs_base_dir}:/var/log/nginx/shipyard:rw"),
                         // Traefik Docker-provider labels: catch-all for all unmatched domains.
                         // Priority 1 ensures explicit app routes always win.
                         "--label", "traefik.enable=true",
@@ -773,6 +791,19 @@ impl DeploymentEngine {
                 "No domains assigned — nginx conf skipped; site is not publicly accessible yet",
             ).await;
         } else {
+            // Ensure service-specific logs directory exists on the host
+            let service_log_dir = format!("{sites_base}/logs/{service_id}");
+            let _ = tokio::fs::create_dir_all(&service_log_dir).await;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&service_log_dir) {
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o777);
+                    let _ = std::fs::set_permissions(&service_log_dir, perms);
+                }
+            }
+
             let conf = crate::static_site::render_nginx_site_conf(
                 &service_id.to_string(),
                 &domains,

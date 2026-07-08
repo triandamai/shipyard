@@ -469,6 +469,47 @@ async fn async_main() {
     };
     let openapi = shipyard_openapi::routes().with_state(openapi_state);
 
+    // Spawn a background task to periodically clean up static site access logs older than 7 days
+    {
+        let cleaner_config = Arc::clone(&state.config);
+        tokio::spawn(async move {
+            loop {
+                let logs_dir = format!("{}/static/logs", cleaner_config.data_dir);
+                tracing::info!("log_cleaner: scanning {logs_dir} for logs older than 7 days...");
+
+                if let Ok(mut entries) = tokio::fs::read_dir(&logs_dir).await {
+                    while let Ok(Some(service_entry)) = entries.next_entry().await {
+                        if service_entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                            let service_log_dir = service_entry.path();
+                            if let Ok(mut log_entries) = tokio::fs::read_dir(&service_log_dir).await {
+                                while let Ok(Some(log_entry)) = log_entries.next_entry().await {
+                                    let name = log_entry.file_name().to_string_lossy().into_owned();
+                                    if name.starts_with("access-") && name.ends_with(".log") {
+                                        let date_str = name.trim_start_matches("access-").trim_end_matches(".log");
+                                        if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                                            let today = chrono::Utc::now().date_naive();
+                                            let days_old = (today - date).num_days();
+                                            if days_old > 7 {
+                                                if let Err(e) = tokio::fs::remove_file(log_entry.path()).await {
+                                                    tracing::warn!("log_cleaner: failed to delete old log file {:?}: {}", log_entry.path(), e);
+                                                } else {
+                                                    tracing::info!("log_cleaner: deleted old log file {:?}", log_entry.path());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Run once every 24 hours
+                tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+            }
+        });
+    }
+
     // Per-IP rate limiter shared via Extension
     let rate_limiter = middleware::rate_limit::make_rate_limiter();
 

@@ -28,7 +28,16 @@
 	let deployments  = $state<Deployment[]>([]);
 	let loading      = $state(true);
 	let loadError    = $state('');
-	let activeTab    = $state<'overview' | 'config' | 'deployments' | 'domains' | 'docs'>('overview');
+	let activeTab    = $state<'overview' | 'config' | 'deployments' | 'domains' | 'docs' | 'visitor_logs'>('overview');
+
+	// ── Visitor Logs ───────────────────────────────────────────────────────────
+	let visitorLogs      = $state<string[]>([]);
+	let isStreamingLogs  = $state(false);
+	let logsError        = $state('');
+	let logsSearch       = $state('');
+	let logsTail         = $state(500);
+	let logsSource       = $state<EventSource | null>(null);
+	let logsContainerEl  = $state<HTMLDivElement | null>(null);
 
 	// ── Delete state ───────────────────────────────────────────────────────────
 	let showDeleteModal  = $state(false);
@@ -323,10 +332,73 @@
 		if (file) uploadFile = file;
 	}
 
+	async function loadStaticLogs() {
+		logsError = '';
+		try {
+			const res = await api.getStaticLogs(serviceId, logsTail);
+			if (res.data) {
+				visitorLogs = res.data;
+				scrollToBottom();
+			} else {
+				logsError = res.error?.message ?? 'Failed to load logs';
+			}
+		} catch {
+			logsError = 'Failed to load logs';
+		}
+	}
+
+	function startLogsStream() {
+		if (logsSource) return;
+		isStreamingLogs = true;
+		logsError = '';
+
+		const es = new EventSource(`/api/services/${serviceId}/static/logs/stream`);
+		logsSource = es;
+
+		es.onmessage = (e) => {
+			if (!e.data?.trim()) return;
+			visitorLogs = [...visitorLogs, e.data];
+			scrollToBottom();
+		};
+
+		es.onerror = () => {
+			logsError = 'Stream disconnected. Reconnecting...';
+		};
+	}
+
+	function stopLogsStream() {
+		logsSource?.close();
+		logsSource = null;
+		isStreamingLogs = false;
+	}
+
+	function scrollToBottom() {
+		if (logsContainerEl) {
+			requestAnimationFrame(() => {
+				if (logsContainerEl) {
+					logsContainerEl.scrollTop = logsContainerEl.scrollHeight;
+				}
+			});
+		}
+	}
+
+	let filteredLogs = $derived(
+		visitorLogs.filter((line) =>
+			line.toLowerCase().includes(logsSearch.toLowerCase())
+		)
+	);
+
 	async function switchTab(tab: typeof activeTab) {
 		activeTab = tab;
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'deployments') await loadDeployments();
+		if (tab === 'visitor_logs') {
+			visitorLogs = [];
+			await loadStaticLogs();
+			startLogsStream();
+		} else {
+			stopLogsStream();
+		}
 	}
 
 	// ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -336,7 +408,9 @@
 		loading = false;
 	});
 
-	onDestroy(() => {});
+	onDestroy(() => {
+		stopLogsStream();
+	});
 </script>
 
 <!-- ─── Delete confirmation modal ────────────────────────────────────────────── -->
@@ -413,6 +487,7 @@
 				['deployments','Deployments'],
 				['config','Build Config'],
 				['domains','Domains'],
+				['visitor_logs','Visitor Logs'],
 				['docs','Guide'],
 			] as [tab, label] (tab)}
 				<button
@@ -782,6 +857,55 @@ export default &#123;
   "error_pages": &#123; "404": "404.html" &#125;
 &#125;</pre>
 					<p><strong>Priority:</strong> <code>shipyard.json</code> → auto-detect → saved UI config</p>
+				</div>
+			</section>
+		{/if}
+
+		<!-- ── Visitor Logs tab ── -->
+		{#if activeTab === 'visitor_logs'}
+			<section class="section" style="display:flex; flex-direction:column; flex:1; height:100%; min-height:400px; gap: 10px;">
+				<div class="logs-toolbar">
+					<input
+						type="text"
+						placeholder="Search logs…"
+						bind:value={logsSearch}
+						class="logs-search-input"
+					/>
+					<div class="logs-controls">
+						<select bind:value={logsTail} onchange={loadStaticLogs} class="logs-select">
+							<option value={100}>100 lines</option>
+							<option value={200}>200 lines</option>
+							<option value={500}>500 lines</option>
+							<option value={1000}>1000 lines</option>
+						</select>
+						<button class="btn btn-ghost btn-sm" onclick={() => { visitorLogs = []; }}>
+							Clear
+						</button>
+						<button
+							class="btn btn-sm"
+							class:btn-primary={!isStreamingLogs}
+							onclick={isStreamingLogs ? stopLogsStream : startLogsStream}
+						>
+							{isStreamingLogs ? 'Disconnect' : 'Connect'}
+						</button>
+					</div>
+				</div>
+
+				{#if logsError}
+					<div class="logs-error-bar">
+						<AlertCircle size={14} />
+						<span>{logsError}</span>
+					</div>
+				{/if}
+
+				<div class="logs-console" bind:this={logsContainerEl}>
+					{#each filteredLogs as line}
+						<div class="logs-line">{line}</div>
+					{:else}
+						<div class="logs-empty">
+							{isStreamingLogs ? 'Waiting for traffic...' : 'Logs disconnected. Click Connect to stream logs.'}
+						</div>
+					{/each}
 				</div>
 			</section>
 		{/if}
@@ -1473,5 +1597,80 @@ export default &#123;
 		border-top-color: white;
 		border-radius: 50%;
 		animation: spin 0.7s linear infinite;
+	}
+
+	/* ── Visitor Logs styles ── */
+	.logs-toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
+		margin-bottom: 4px;
+	}
+	.logs-search-input {
+		flex: 1;
+		padding: 6px 10px;
+		font-size: 11px;
+		background: var(--bg-input);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-primary);
+	}
+	.logs-search-input:focus {
+		border-color: var(--accent);
+		outline: none;
+	}
+	.logs-controls {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.logs-select {
+		padding: 5px 8px;
+		font-size: 11px;
+		background: var(--bg-input);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-primary);
+	}
+	.logs-error-bar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
+		background: rgba(239, 68, 68, 0.1);
+		border: 1px solid rgba(239, 68, 68, 0.2);
+		border-radius: var(--radius-sm);
+		color: #EF4444;
+		font-size: 11px;
+		margin-bottom: 2px;
+	}
+	.logs-console {
+		flex: 1;
+		min-height: 350px;
+		background: #0c0f12;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 12px;
+		overflow-y: auto;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: #e2e8f0;
+		line-height: 1.5;
+		white-space: pre-wrap;
+		word-break: break-all;
+	}
+	.logs-line {
+		padding: 2px 0;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+	}
+	.logs-empty {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		height: 100%;
+		min-height: 300px;
+		color: var(--text-dim);
+		font-size: 11px;
 	}
 </style>

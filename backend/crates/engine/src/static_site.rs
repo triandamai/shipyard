@@ -420,6 +420,16 @@ pub fn render_nginx_site_conf(
         "# site: {service_id}\nserver {{\n    listen 80;\n    server_name {server_name};\n    root {serve_root};\n    index index.html index.htm;\n\n"
     ));
 
+    out.push_str("    if ($time_iso8601 ~ \"^(\\d{4}-\\d{2}-\\d{2})\") {\n");
+    out.push_str("        set $limit_date $1;\n");
+    out.push_str("    }\n");
+    out.push_str(&format!(
+        "    access_log /var/log/nginx/shipyard/{service_id}/access-$limit_date.log;\n"
+    ));
+    out.push_str(&format!(
+        "    error_log /var/log/nginx/shipyard/{service_id}/error.log;\n\n"
+    ));
+
     // Error pages — use shipyard.json override when set, otherwise Shipyard's branded 404.
     if let Some(p) = &config.error_pages.not_found {
         out.push_str(&format!("    error_page 404 /{p};\n"));

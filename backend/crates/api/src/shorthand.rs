@@ -128,6 +128,9 @@ pub fn routes() -> Router<AppState> {
         .route("/services/:id/containers/:cid/logs/stream",       get(container_logs_stream))
         // Container stats (one-shot Docker stats snapshot)
         .route("/services/:id/containers/:cid/stats",             get(container_stats))
+        // Static site logs
+        .route("/services/:id/static/logs",                       get(static_site_logs))
+        .route("/services/:id/static/logs/stream",                get(static_site_logs_stream))
 }
 
 // ─── Deployment handlers (service-scoped) ────────────────────────────────────
@@ -1283,4 +1286,183 @@ async fn do_cancel(db: &sqlx::PgPool, dep_id: Uuid) -> Result<Json<ApiResponse<s
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Deployment cancelled" }))))
+}
+
+// ─── Static site logs handlers ────────────────────────────────────────────────
+
+async fn static_site_logs(
+    auth: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Query(q): Query<ContainerLogsQuery>,
+) -> Result<Json<ApiResponse<Vec<String>>>, ApiAppError> {
+    require_service_access(&state.db, auth.user_id, service_id).await.map_err(ApiAppError)?;
+
+    let logs_dir = format!("{}/static/logs/{}", state.config.data_dir, service_id);
+    let mut access_files = vec![];
+
+    if let Ok(mut entries) = tokio::fs::read_dir(&logs_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("access-") && name.ends_with(".log") {
+                access_files.push(entry.path());
+            }
+        }
+    }
+    access_files.sort(); // Sort alphabetically (access-YYYY-MM-DD.log)
+
+    let tail_lines = q.tail.min(5000) as usize;
+    let mut all_lines = vec![];
+
+    // Read latest access log
+    if let Some(latest_access) = access_files.last() {
+        let lines = read_last_log_lines(latest_access, tail_lines).await;
+        for l in lines {
+            all_lines.push(l);
+        }
+    }
+
+    // Read error log
+    let error_path = std::path::PathBuf::from(&logs_dir).join("error.log");
+    let error_lines = read_last_log_lines(&error_path, tail_lines).await;
+    for l in error_lines {
+        all_lines.push(format!("[ERROR] {}", l));
+    }
+
+    Ok(Json(ApiResponse::ok(all_lines)))
+}
+
+async fn read_last_log_lines(path: &std::path::Path, tail: usize) -> Vec<String> {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let metadata = match file.metadata().await {
+        Ok(m) => m,
+        Err(_) => return vec![],
+    };
+    let size = metadata.len();
+    let chunk_size = 128 * 1024; // last 128KB
+    let seek_pos = if size > chunk_size { size - chunk_size } else { 0 };
+
+    use tokio::io::AsyncSeekExt;
+    if file.seek(tokio::io::SeekFrom::Start(seek_pos)).await.is_err() {
+        return vec![];
+    }
+    let mut buffer = Vec::new();
+    if file.read_to_end(&mut buffer).await.is_err() {
+        return vec![];
+    }
+    let text = String::from_utf8_lossy(&buffer);
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    if seek_pos > 0 && !lines.is_empty() {
+        lines.remove(0); // discard potentially partial first line
+    }
+    if lines.len() > tail {
+        lines.drain(0..lines.len() - tail);
+    }
+    lines
+}
+
+async fn static_site_logs_stream(
+    auth: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+    let auth_res = require_service_access(&state.db, auth.user_id, service_id).await;
+
+    tokio::spawn(async move {
+        if let Err(e) = auth_res {
+            let _ = tx.send(Ok(Event::default().event("error").data(e.to_string()))).await;
+            return;
+        }
+
+        let logs_dir = format!("{}/static/logs/{}", state.config.data_dir, service_id);
+
+        let get_latest_access_path = || {
+            let mut latest_path = None;
+            let mut latest_name = String::new();
+            if let Ok(entries) = std::fs::read_dir(&logs_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with("access-") && name.ends_with(".log") && name > latest_name {
+                        latest_name = name;
+                        latest_path = Some(entry.path());
+                    }
+                }
+            }
+            latest_path
+        };
+
+        let mut access_path = get_latest_access_path();
+        let error_path = std::path::PathBuf::from(&logs_dir).join("error.log");
+
+        let mut access_pos = access_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()).unwrap_or(0);
+        let mut error_pos = std::fs::metadata(&error_path).ok().map(|m| m.len()).unwrap_or(0);
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
+        let tx_closed = tx.clone();
+
+        loop {
+            tokio::select! {
+                _ = tx_closed.closed() => {
+                    break;
+                }
+                _ = interval.tick() => {
+                    let current_access_path = get_latest_access_path();
+                    if current_access_path != access_path {
+                        access_path = current_access_path;
+                        access_pos = 0;
+                    }
+
+                    if let Some(ref path) = access_path {
+                        if let Ok(metadata) = std::fs::metadata(path) {
+                            let len = metadata.len();
+                            if len > access_pos {
+                                if let Ok(mut file) = std::fs::File::open(path) {
+                                    use std::io::{Read, Seek, SeekFrom};
+                                    if file.seek(SeekFrom::Start(access_pos)).is_ok() {
+                                        let mut buf = vec![0u8; (len - access_pos) as usize];
+                                        if file.read_exact(&mut buf).is_ok() {
+                                            let text = String::from_utf8_lossy(&buf);
+                                            for line in text.lines() {
+                                                if tx.send(Ok(Event::default().data(line))).await.is_err() {
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                access_pos = len;
+                            }
+                        }
+                    }
+
+                    if let Ok(metadata) = std::fs::metadata(&error_path) {
+                        let len = metadata.len();
+                        if len > error_pos {
+                            if let Ok(mut file) = std::fs::File::open(&error_path) {
+                                use std::io::{Read, Seek, SeekFrom};
+                                if file.seek(SeekFrom::Start(error_pos)).is_ok() {
+                                    let mut buf = vec![0u8; (len - error_pos) as usize];
+                                    if file.read_exact(&mut buf).is_ok() {
+                                        let text = String::from_utf8_lossy(&buf);
+                                        for line in text.lines() {
+                                            if tx.send(Ok(Event::default().data(format!("[ERROR] {}", line)))).await.is_err() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            error_pos = len;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
