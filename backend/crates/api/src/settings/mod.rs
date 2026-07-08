@@ -1022,11 +1022,12 @@ async fn system_info_stream(
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(2);
 
     tokio::spawn(async move {
-        loop {
-            let snapshot = tokio::task::spawn_blocking(|| {
-                use sysinfo::{Disks, Networks, System};
+        use sysinfo::{Disks, Networks, System};
+        let mut sys = System::new_all();
 
-                let mut sys = System::new_all();
+        loop {
+            let (new_sys, snapshot) = match tokio::task::spawn_blocking(move || {
+                let mut sys = sys;
                 sys.refresh_all();
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 sys.refresh_cpu_all();
@@ -1067,7 +1068,7 @@ async fn system_info_stream(
                     })
                     .collect();
 
-                SystemInfo {
+                let info = SystemInfo {
                     cpu_usage_pct,
                     memory_total_mb: mem_total / 1_048_576,
                     memory_used_mb:  mem_used  / 1_048_576,
@@ -1077,9 +1078,19 @@ async fn system_info_stream(
                     uptime_secs:     System::uptime(),
                     disks,
                     networks,
-                }
+                };
+                (sys, info)
             })
-            .await;
+            .await
+            {
+                Ok((ns, info)) => (ns, Ok(info)),
+                Err(e) => {
+                    tracing::warn!("system_info_stream: spawn_blocking panicked: {e}");
+                    (System::new_all(), Err(e))
+                }
+            };
+
+            sys = new_sys;
 
             match snapshot {
                 Ok(info) => {
@@ -1089,9 +1100,7 @@ async fn system_info_stream(
                         break;
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("system_info_stream: spawn_blocking panicked: {e}");
-                }
+                Err(_) => {}
             }
 
             // Wait before the next sample. If the channel closes during the
