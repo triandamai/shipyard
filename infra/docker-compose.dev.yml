@@ -83,6 +83,8 @@ services:
       - ./shipyard/data/static:/opt/shipyard/data/static:ro
       # Also expose conf.d at the standard nginx include path.
       - ./shipyard/data/static/conf.d:/etc/nginx/conf.d:ro
+      # Bind the logs dir so nginx can write log files successfully
+      - ./shipyard/data/static/logs:/var/log/nginx/shipyard:rw
     networks:
       - platform_proxy
     labels:

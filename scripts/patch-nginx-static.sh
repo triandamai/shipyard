@@ -115,6 +115,7 @@ cat > "${_NGINX_TMPFILE}" <<NGINX_SVC
     volumes:
       - ${SITES_DIR}:${SITES_DIR}:ro
       - ${SITES_DIR}/conf.d:/etc/nginx/conf.d:ro
+      - ${SITES_DIR}/logs:/var/log/nginx/shipyard:rw
     networks:
       - platform_proxy
     labels:
@@ -225,6 +226,7 @@ docker run -d \
     --network platform_proxy \
     -v "${SITES_DIR}:${SITES_DIR}:ro" \
     -v "${SITES_DIR}/conf.d:/etc/nginx/conf.d:ro" \
+    -v "${SITES_DIR}/logs:/var/log/nginx/shipyard:rw" \
     --label "traefik.enable=true" \
     --label "traefik.docker.network=platform_proxy" \
     --label 'traefik.http.routers.static-sites-http.rule=HostRegexp(`.+`)' \

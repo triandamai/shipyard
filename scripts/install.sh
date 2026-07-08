@@ -718,6 +718,7 @@ services:
     volumes:
       - ${INSTALL_DIR}/data/static:${INSTALL_DIR}/data/static:ro
       - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
+      - ${INSTALL_DIR}/data/static/logs:/var/log/nginx/shipyard:rw
     networks:
       - platform_proxy
     labels:
