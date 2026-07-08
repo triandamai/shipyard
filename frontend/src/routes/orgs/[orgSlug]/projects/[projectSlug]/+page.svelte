@@ -172,12 +172,21 @@
 	function handleNodeDragStop(_: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }) {
 		if (!orgId || !projectId || !canEditProject) return;
 		if (_saveTimer) clearTimeout(_saveTimer);
+
+		// Immediately update LocalStorage for all dragged nodes
+		for (const n of _.nodes) {
+			topologyStore.updateLocalStoragePosition(n.id, n.position.x, n.position.y);
+		}
+
 		_saveTimer = setTimeout(async () => {
 			const positions: Record<string, { x: number; y: number }> = {};
 			for (const n of nodes) positions[n.id] = n.position;
 			const res = await api.patchNodePositions(orgId, projectId, positions);
 			if (!res.error) {
 				projectStore.updateNodePositions(projectId, positions);
+				for (const [id, pos] of Object.entries(positions)) {
+					topologyStore.updateLocalStoragePosition(id, pos.x, pos.y);
+				}
 			}
 		}, 800);
 	}

@@ -206,42 +206,15 @@ fi
 success "shipyard-static-errors.yml written (Traefik reloads automatically)"
 
 # ── 4. Recreate nginx-static container ─────────────────────────────────────────
-# Docker labels are baked at creation time — a running container never picks up
-# new labels. Always recreate so Traefik sees the latest catch-all labels.
-step "Recreating nginx-static container (applies updated Docker labels)"
+# Recreate via docker compose to keep all labels and project attributes synchronized.
+step "Recreating nginx-static container (applies updated Docker Compose config)"
 
 info "Stopping and removing existing container..."
-docker stop shipyard-nginx-static >/dev/null 2>&1 || true
-docker rm   shipyard-nginx-static >/dev/null 2>&1 || true
+docker rm -f shipyard-nginx-static >/dev/null 2>&1 || true
 
-# Verify the container is actually gone before we try to create it.
-if docker ps -a --format '{{.Names}}' | grep -q '^shipyard-nginx-static$'; then
-    error "Could not remove shipyard-nginx-static. Run manually: docker rm -f shipyard-nginx-static"
-fi
-
-docker pull nginx:alpine
-docker run -d \
-    --name    shipyard-nginx-static \
-    --restart unless-stopped \
-    --network platform_proxy \
-    -v "${SITES_DIR}:${SITES_DIR}:ro" \
-    -v "${SITES_DIR}/conf.d:/etc/nginx/conf.d:ro" \
-    -v "${SITES_DIR}/logs:/var/log/nginx/shipyard:rw" \
-    --label "traefik.enable=true" \
-    --label "traefik.docker.network=platform_proxy" \
-    --label 'traefik.http.routers.static-sites-http.rule=HostRegexp(`.+`)' \
-    --label "traefik.http.routers.static-sites-http.priority=1" \
-    --label "traefik.http.routers.static-sites-http.entrypoints=web" \
-    --label "traefik.http.routers.static-sites-http.service=static-sites" \
-    --label 'traefik.http.routers.static-sites-https.rule=HostRegexp(`.+`)' \
-    --label "traefik.http.routers.static-sites-https.priority=1" \
-    --label "traefik.http.routers.static-sites-https.entrypoints=websecure" \
-    --label "traefik.http.routers.static-sites-https.tls=true" \
-    --label "traefik.http.routers.static-sites-https.service=static-sites" \
-    --label "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file" \
-    --label "traefik.http.services.static-sites.loadbalancer.server.port=80" \
-    nginx:alpine
-success "shipyard-nginx-static recreated with updated labels"
+info "Running docker compose up to recreate nginx-static..."
+docker compose -f "${COMPOSE}" up -d --force-recreate nginx-static
+success "shipyard-nginx-static recreated successfully"
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 echo ""

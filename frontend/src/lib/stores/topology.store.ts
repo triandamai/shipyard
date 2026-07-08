@@ -20,12 +20,41 @@ const initialState: TopologyState = {
 	isLoading: false
 };
 
+function getStoredPosition(nodeId: string): { x: number; y: number } | null {
+	if (typeof window === 'undefined') return null;
+	try {
+		const value = localStorage.getItem(nodeId);
+		if (!value) return null;
+		const parts = value.split(';');
+		if (parts.length === 2) {
+			const x = parseFloat(parts[0]);
+			const y = parseFloat(parts[1]);
+			if (!isNaN(x) && !isNaN(y)) {
+				return { x, y };
+			}
+		}
+	} catch (e) {
+		console.error('Failed to read from localStorage:', e);
+	}
+	return null;
+}
+
+function setStoredPosition(nodeId: string, x: number, y: number) {
+	if (typeof window === 'undefined') return;
+	try {
+		localStorage.setItem(nodeId, `${x};${y}`);
+	} catch (e) {
+		console.error('Failed to write to localStorage:', e);
+	}
+}
+
 /** Convert a TopologyNode to a SvelteFlow Node, optionally merging a saved position. */
 function toFlowNode(node: TopologyNode, position?: { x: number; y: number }): FlowNode {
+	const stored = getStoredPosition(node.id);
 	return {
 		id: node.id,
 		type: node.type,
-		position: position ?? { x: 0, y: 0 },
+		position: stored ?? position ?? { x: 0, y: 0 },
 		data: node.data
 	};
 }
@@ -79,6 +108,12 @@ function autoLayoutPositions(
 	positions: Record<string, { x: number; y: number }>
 ): Record<string, { x: number; y: number }> {
 	const result: Record<string, { x: number; y: number }> = { ...positions };
+	for (const n of nodes) {
+		const stored = getStoredPosition(n.id);
+		if (stored) {
+			result[n.id] = stored;
+		}
+	}
 
 	// --- Pass 0: build lookup maps ---
 	const childSvcsByParent: Record<string, string[]> = {}; // parent node-id → [child svc node-ids]
@@ -255,6 +290,9 @@ function createTopologyStore() {
 			edges: TopologyEdge[],
 			positions: Record<string, { x: number; y: number }> = {}
 		) {
+			for (const [id, p] of Object.entries(positions)) {
+				setStoredPosition(id, p.x, p.y);
+			}
 			update((state) => ({
 				...state,
 				nodes,
@@ -274,6 +312,9 @@ function createTopologyStore() {
 			positions: Record<string, { x: number; y: number }> | null = null
 		) {
 			const pos = positions ?? {};
+			for (const [id, p] of Object.entries(pos)) {
+				setStoredPosition(id, p.x, p.y);
+			}
 			update((state) => ({
 				...state,
 				nodes: topology.nodes,
@@ -296,6 +337,11 @@ function createTopologyStore() {
 		 * store when the user has dragged nodes without saving.
 		 */
 		mergeTopology(topology: Topology, canvasPositions?: Record<string, { x: number; y: number }>) {
+			if (canvasPositions) {
+				for (const [id, p] of Object.entries(canvasPositions)) {
+					setStoredPosition(id, p.x, p.y);
+				}
+			}
 			update((state) => {
 				// Start from store positions then override with live canvas positions
 				// (the canvas binding is more up-to-date after user drags).
@@ -315,6 +361,10 @@ function createTopologyStore() {
 					flowEdges: buildFlowEdges(topology.edges),
 				};
 			});
+		},
+
+		updateLocalStoragePosition(nodeId: string, x: number, y: number) {
+			setStoredPosition(nodeId, x, y);
 		},
 
 		/** Refresh a single node's data (e.g., status change from MQTT). */
