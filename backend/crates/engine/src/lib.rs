@@ -791,18 +791,6 @@ impl DeploymentEngine {
                 "No domains assigned — nginx conf skipped; site is not publicly accessible yet",
             ).await;
         } else {
-            // Ensure service-specific logs directory exists on the host
-            let service_log_dir = format!("{sites_base}/logs/{service_id}");
-            let _ = tokio::fs::create_dir_all(&service_log_dir).await;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(metadata) = std::fs::metadata(&service_log_dir) {
-                    let mut perms = metadata.permissions();
-                    perms.set_mode(0o777);
-                    let _ = std::fs::set_permissions(&service_log_dir, perms);
-                }
-            }
 
             let conf = crate::static_site::render_nginx_site_conf(
                 &service_id.to_string(),

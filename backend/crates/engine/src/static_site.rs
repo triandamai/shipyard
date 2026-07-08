@@ -424,10 +424,10 @@ pub fn render_nginx_site_conf(
     out.push_str("        set $limit_date $1;\n");
     out.push_str("    }\n");
     out.push_str(&format!(
-        "    access_log /var/log/nginx/shipyard/{service_id}/access-$limit_date.log;\n"
+        "    access_log /var/log/nginx/shipyard/access-{service_id}-$limit_date.log;\n"
     ));
     out.push_str(&format!(
-        "    error_log /var/log/nginx/shipyard/{service_id}/error.log;\n\n"
+        "    error_log /var/log/nginx/shipyard/error-{service_id}.log;\n\n"
     ));
 
     // Error pages — use shipyard.json override when set, otherwise Shipyard's branded 404.

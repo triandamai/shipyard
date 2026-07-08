@@ -1298,18 +1298,19 @@ async fn static_site_logs(
 ) -> Result<Json<ApiResponse<Vec<String>>>, ApiAppError> {
     require_service_access(&state.db, auth.user_id, service_id).await.map_err(ApiAppError)?;
 
-    let logs_dir = format!("{}/static/logs/{}", state.config.data_dir, service_id);
+    let logs_dir = format!("{}/static/logs", state.config.data_dir);
     let mut access_files = vec![];
+    let prefix = format!("access-{}-", service_id);
 
     if let Ok(mut entries) = tokio::fs::read_dir(&logs_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("access-") && name.ends_with(".log") {
+            if name.starts_with(&prefix) && name.ends_with(".log") {
                 access_files.push(entry.path());
             }
         }
     }
-    access_files.sort(); // Sort alphabetically (access-YYYY-MM-DD.log)
+    access_files.sort(); // Sort alphabetically (access-service_id-YYYY-MM-DD.log)
 
     let tail_lines = q.tail.min(5000) as usize;
     let mut all_lines = vec![];
@@ -1323,7 +1324,7 @@ async fn static_site_logs(
     }
 
     // Read error log
-    let error_path = std::path::PathBuf::from(&logs_dir).join("error.log");
+    let error_path = std::path::PathBuf::from(&logs_dir).join(format!("error-{}.log", service_id));
     let error_lines = read_last_log_lines(&error_path, tail_lines).await;
     for l in error_lines {
         all_lines.push(format!("[ERROR] {}", l));
@@ -1378,7 +1379,8 @@ async fn static_site_logs_stream(
             return;
         }
 
-        let logs_dir = format!("{}/static/logs/{}", state.config.data_dir, service_id);
+        let logs_dir = format!("{}/static/logs", state.config.data_dir);
+        let prefix = format!("access-{}-", service_id);
 
         let get_latest_access_path = || {
             let mut latest_path = None;
@@ -1386,7 +1388,7 @@ async fn static_site_logs_stream(
             if let Ok(entries) = std::fs::read_dir(&logs_dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("access-") && name.ends_with(".log") && name > latest_name {
+                    if name.starts_with(&prefix) && name.ends_with(".log") && name > latest_name {
                         latest_name = name;
                         latest_path = Some(entry.path());
                     }
@@ -1396,7 +1398,7 @@ async fn static_site_logs_stream(
         };
 
         let mut access_path = get_latest_access_path();
-        let error_path = std::path::PathBuf::from(&logs_dir).join("error.log");
+        let error_path = std::path::PathBuf::from(&logs_dir).join(format!("error-{}.log", service_id));
 
         let mut access_pos = access_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()).unwrap_or(0);
         let mut error_pos = std::fs::metadata(&error_path).ok().map(|m| m.len()).unwrap_or(0);
