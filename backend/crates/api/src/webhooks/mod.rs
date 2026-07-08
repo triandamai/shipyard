@@ -239,6 +239,45 @@ async fn handle_push(
 
     let source_ref = source_ref.to_string();
 
+    let max_parallel = sqlx::query_as::<_, (String,)>(
+        "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
+    .unwrap_or(2);
+
+    if max_parallel > 0 {
+        let running: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+        )
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        if running.0 >= max_parallel {
+            let deployment_id = uuid::Uuid::now_v7();
+            sqlx::query(
+                "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+                 VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
+            )
+            .bind(deployment_id)
+            .bind(service_id)
+            .bind("webhook")
+            .bind(&source_ref)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            return Ok(Json(ApiResponse::ok(serde_json::json!({
+                "message": "webhook deployment queued",
+                "deployment_id": deployment_id,
+            }))));
+        }
+    }
+
     let deployment_id = uuid::Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)

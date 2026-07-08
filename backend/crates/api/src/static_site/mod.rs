@@ -286,14 +286,42 @@ async fn upload_static(
 
     let triggered_by = format!("user:{}", auth_user.user_id);
 
-    // Insert deployment record as 'running' — engine is spawned immediately below.
+    let max_parallel = sqlx::query_as::<_, (String,)>(
+        "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
+    .unwrap_or(2);
+
+    let mut is_queued = false;
+
+    if max_parallel > 0 {
+        let running: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+        )
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        if running.0 >= max_parallel {
+            is_queued = true;
+        }
+    }
+
+    let status = if is_queued { "queued" } else { "running" };
+
+    // Insert deployment record
     sqlx::query(
         "INSERT INTO deployments
             (id, service_id, status, triggered_by, source_ref, created_at)
-         VALUES ($1, $2, 'running'::deployment_status, $3, 'upload', NOW())",
+         VALUES ($1, $2, $3::deployment_status, $4, 'upload', NOW())",
     )
     .bind(deployment_id)
     .bind(service_id)
+    .bind(status)
     .bind(&triggered_by)
     .execute(&state.db)
     .await
@@ -323,24 +351,24 @@ async fn upload_static(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
 
-    // Spawn the engine — same pattern as trigger_deploy; source_ref = "upload"
-    // routes the engine to run_static_upload_steps which reads the artifact from disk.
-    let engine = DeploymentEngine::new(
-        Arc::clone(&state.docker),
-        state.db.clone(),
-        Arc::clone(&state.mqtt),
-        state.config.docker.label_prefix.clone(),
-        state.config.traefik.network.clone(),
-        state.config.auth.secret_key.clone(),
-        state.config.docker.port_proxy,
-        state.config.data_dir.clone(),
-        state.config.static_server.retention_versions,
-    );
-    tokio::spawn(async move {
-        if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, "upload").await {
-            tracing::error!(deployment_id = %deployment_id, "Upload deployment error: {e}");
-        }
-    });
+    if !is_queued {
+        let engine = DeploymentEngine::new(
+            Arc::clone(&state.docker),
+            state.db.clone(),
+            Arc::clone(&state.mqtt),
+            state.config.docker.label_prefix.clone(),
+            state.config.traefik.network.clone(),
+            state.config.auth.secret_key.clone(),
+            state.config.docker.port_proxy,
+            state.config.data_dir.clone(),
+            state.config.static_server.retention_versions,
+        );
+        tokio::spawn(async move {
+            if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, "upload").await {
+                tracing::error!(deployment_id = %deployment_id, "Upload deployment error: {e}");
+            }
+        });
+    }
 
     Ok(Json(ApiResponse::ok(UploadResponse { deployment_id })))
 }

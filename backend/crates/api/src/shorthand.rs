@@ -164,6 +164,52 @@ async fn trigger_deploy(
     let triggered_by = auth.email.clone();
     let source_ref_log = source_ref.clone();
 
+    let max_parallel = sqlx::query_as::<_, (String,)>(
+        "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
+    .unwrap_or(2);
+
+    if max_parallel > 0 {
+        let running: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+        )
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        if running.0 >= max_parallel {
+            let deployment_id = Uuid::now_v7();
+            sqlx::query(
+                "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+                 VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
+            )
+            .bind(deployment_id)
+            .bind(service_id)
+            .bind(&triggered_by)
+            .bind(&source_ref)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            let deployment = sqlx::query_as::<_, Deployment>(
+                "SELECT id, service_id, triggered_by, source_ref, status::text AS status, created_at, finished_at
+                 FROM deployments WHERE id = $1",
+            )
+            .bind(deployment_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+            .ok_or_else(|| ApiAppError(AppError::NotFound("Deployment not found after creation".to_string())))?;
+
+            return Ok((StatusCode::ACCEPTED, Json(ApiResponse::ok(deployment))));
+        }
+    }
+
     let deployment_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
@@ -516,6 +562,52 @@ async fn redeploy_service(
 
     let source_ref = "manual".to_string();
     let triggered_by = auth.email.clone();
+
+    let max_parallel = sqlx::query_as::<_, (String,)>(
+        "SELECT value::text FROM system_config WHERE key = 'max_parallel_deployments'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
+    .unwrap_or(2);
+
+    if max_parallel > 0 {
+        let running: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
+        )
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        if running.0 >= max_parallel {
+            let deployment_id = Uuid::now_v7();
+            sqlx::query(
+                "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+                 VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
+            )
+            .bind(deployment_id)
+            .bind(service_id)
+            .bind(&triggered_by)
+            .bind(&source_ref)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            let deployment = sqlx::query_as::<_, Deployment>(
+                "SELECT id, service_id, triggered_by, source_ref, status::text AS status, created_at, finished_at
+                 FROM deployments WHERE id = $1",
+            )
+            .bind(deployment_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+            .ok_or_else(|| ApiAppError(AppError::NotFound("Deployment not found after creation".to_string())))?;
+
+            return Ok((StatusCode::ACCEPTED, Json(ApiResponse::ok(deployment))));
+        }
+    }
 
     let deployment_id = Uuid::now_v7();
     sqlx::query(

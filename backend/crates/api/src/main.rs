@@ -388,6 +388,17 @@ async fn async_main() {
                         };
 
                         for (dep_id, svc_id, triggered_by, source_ref) in queued {
+                            if let Err(e) = sqlx::query(
+                                "UPDATE deployments SET status = 'running'::deployment_status WHERE id = $1"
+                            )
+                            .bind(dep_id)
+                            .execute(&sched_db)
+                            .await
+                            {
+                                tracing::error!("scheduler: failed to mark deployment {dep_id} as running: {e}");
+                                continue;
+                            }
+
                             let engine = shipyard_engine::DeploymentEngine::new(
                                 Arc::clone(&sched_docker),
                                 sched_db.clone(),
