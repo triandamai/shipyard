@@ -2635,9 +2635,19 @@ impl DeploymentEngine {
             let db = self.db.clone();
             let path_cp = repo_path.clone();
 
+            let last_log = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(5)));
+            let last_log_cp = std::sync::Arc::clone(&last_log);
+
             tokio::task::spawn_blocking(move || {
                 let git = GitService::new(&path_cp);
                 git.clone_repo(&repo_url, &path_cp, Some(&branch), move |progress| {
+                    if let Ok(mut last) = last_log_cp.lock() {
+                        let is_important = progress.contains("100%") || progress.contains("Resolving deltas");
+                        if last.elapsed() < std::time::Duration::from_millis(500) && !is_important {
+                            return;
+                        }
+                        *last = std::time::Instant::now();
+                    }
                     // Fire-and-forget progress log (can't await inside blocking)
                     let db2 = db.clone();
                     let msg = progress.to_string();

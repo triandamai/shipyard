@@ -467,7 +467,7 @@ async fn async_main() {
         let auth_limiter = Arc::clone(&state.auth_limiter);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                tokio::time::sleep(Duration::from_secs(15)).await;
                 main_limiter.retain_recent();
                 auth_limiter.retain_recent();
                 main_limiter.shrink_to_fit();
