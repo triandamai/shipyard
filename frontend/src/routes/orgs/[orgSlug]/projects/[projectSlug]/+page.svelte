@@ -173,9 +173,9 @@
 		if (!orgId || !projectId || !canEditProject) return;
 		if (_saveTimer) clearTimeout(_saveTimer);
 
-		// Immediately update LocalStorage for all dragged nodes
+		// Immediately update the store and LocalStorage for all dragged nodes
 		for (const n of _.nodes) {
-			topologyStore.updateLocalStoragePosition(n.id, n.position.x, n.position.y);
+			topologyStore.updateNodePosition(n.id, n.position.x, n.position.y);
 		}
 
 		_saveTimer = setTimeout(async () => {
@@ -185,7 +185,7 @@
 			if (!res.error) {
 				projectStore.updateNodePositions(projectId, positions);
 				for (const [id, pos] of Object.entries(positions)) {
-					topologyStore.updateLocalStoragePosition(id, pos.x, pos.y);
+					topologyStore.updateNodePosition(id, pos.x, pos.y);
 				}
 			}
 		}, 800);

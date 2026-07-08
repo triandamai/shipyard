@@ -363,8 +363,14 @@ function createTopologyStore() {
 			});
 		},
 
-		updateLocalStoragePosition(nodeId: string, x: number, y: number) {
+		updateNodePosition(nodeId: string, x: number, y: number) {
 			setStoredPosition(nodeId, x, y);
+			update((state) => {
+				const flowNodes = state.flowNodes.map((fn) =>
+					fn.id === nodeId ? { ...fn, position: { x, y } } : fn
+				);
+				return { ...state, flowNodes };
+			});
 		},
 
 		/** Refresh a single node's data (e.g., status change from MQTT). */
