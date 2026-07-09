@@ -866,6 +866,32 @@ let showDbClient    = $state(false);
 		setTimeout(() => { webhookCopied = false; }, 2000);
 	}
 
+	let isRegisteringWebhook = $state(false);
+	let registerWebhookResult = $state<string | null>(null);
+	let registerWebhookError = $state<string | null>(null);
+
+	async function autoRegisterWebhook() {
+		if (isRegisteringWebhook) return;
+		isRegisteringWebhook = true;
+		registerWebhookResult = null;
+		registerWebhookError = null;
+		try {
+			const res = await api.post<{ message: string }>(
+				`/projects/${projectId}/services/${serviceId}/webhook/auto-register`
+			);
+			if (res.error) {
+				registerWebhookError = res.error.message;
+			} else if (res.data) {
+				registerWebhookResult = res.data.message;
+				setTimeout(() => { registerWebhookResult = null; }, 5000);
+			}
+		} catch (err: any) {
+			registerWebhookError = err.message || 'Failed to auto-register webhook';
+		} finally {
+			isRegisteringWebhook = false;
+		}
+	}
+
 	async function loadGitProviders() {
 		loadingGitProviders = true;
 		const res = await api.listGitProviders(orgId);
@@ -1638,8 +1664,24 @@ let showDbClient    = $state(false);
 									<button class="webhook-rotate-btn" onclick={rotateWebhook} disabled={isRotatingWebhook}>
 										<RefreshCw size={11} />Rotate URL
 									</button>
+									{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+										<button class="webhook-rotate-btn" onclick={autoRegisterWebhook} disabled={isRegisteringWebhook} style="color: var(--accent); border-color: var(--accent);">
+											{#if isRegisteringWebhook}
+												<div class="spinner-xs"></div>Registering…
+											{:else}
+												<Globe size={11} />Auto-register webhook
+											{/if}
+										</button>
+									{/if}
 								{/if}
 							</div>
+
+							{#if registerWebhookResult}
+								<div class="webhook-status success">{registerWebhookResult}</div>
+							{/if}
+							{#if registerWebhookError}
+								<div class="webhook-status error">{registerWebhookError}</div>
+							{/if}
 						{/if}
 					</div>
 					<div class="logs-intro">Select a deployment to view its logs.</div>
@@ -1856,8 +1898,24 @@ let showDbClient    = $state(false);
 									<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
 										<RefreshCw size={11} />Rotate URL
 									</button>
+									{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+										<button class="webhook-rotate-btn" onclick={autoRegisterWebhook} disabled={isRegisteringWebhook} style="color: var(--accent); border-color: var(--accent);">
+											{#if isRegisteringWebhook}
+												<div class="spinner-xs"></div>Registering…
+											{:else}
+												<Globe size={11} />Auto-register webhook
+											{/if}
+										</button>
+									{/if}
 								{/if}
 							</div>
+
+							{#if registerWebhookResult}
+								<div class="webhook-status success">{registerWebhookResult}</div>
+							{/if}
+							{#if registerWebhookError}
+								<div class="webhook-status error">{registerWebhookError}</div>
+							{/if}
 						{/if}
 					</div>
 
@@ -3045,6 +3103,23 @@ let showDbClient    = $state(false);
 	.webhook-rotate-btn.danger { border-color: rgba(239,68,68,0.5); color: #EF4444; }
 	.webhook-rotate-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.08); }
 	.webhook-rotate-btn:disabled { opacity: 0.5; cursor: default; }
+
+	.webhook-status {
+		margin: 6px 14px 0;
+		font-size: 11px;
+		padding: 6px 8px;
+		border-radius: var(--radius-sm);
+	}
+	.webhook-status.success {
+		background: rgba(16,185,129,0.08);
+		color: #10B981;
+		border: 1px solid rgba(16,185,129,0.15);
+	}
+	.webhook-status.error {
+		background: rgba(239,68,68,0.08);
+		color: #EF4444;
+		border: 1px solid rgba(239,68,68,0.15);
+	}
 
 	/* ── Logs tab (deployment list) ── */
 	.logs-section { display: flex; flex-direction: column; height: 100%; }

@@ -171,6 +171,10 @@ pub fn routes() -> Router<AppState> {
             post(rotate_webhook),
         )
         .route(
+            "/projects/:project_id/services/:service_id/webhook/auto-register",
+            post(auto_register_webhook),
+        )
+        .route(
             "/projects/:project_id/services/:service_id/connection",
             get(get_connection_info),
         )
@@ -1181,6 +1185,178 @@ async fn rotate_webhook(
         "token": token,
         "service_id": service_id,
     }))))
+}
+
+fn parse_github_repo(url: &str) -> Option<(String, String)> {
+    let clean = url.trim_end_matches(".git");
+    if clean.starts_with("git@") {
+        let parts: Vec<&str> = clean.split(':').collect();
+        if parts.len() == 2 {
+            let path_parts: Vec<&str> = parts[1].split('/').collect();
+            if path_parts.len() == 2 {
+                return Some((path_parts[0].to_string(), path_parts[1].to_string()));
+            }
+        }
+    } else {
+        let parts: Vec<&str> = clean.split('/').collect();
+        if parts.len() >= 5 {
+            let owner = parts[parts.len() - 2];
+            let repo = parts[parts.len() - 1];
+            return Some((owner.to_string(), repo.to_string()));
+        }
+    }
+    None
+}
+
+fn parse_gitlab_project(url: &str) -> Option<String> {
+    let clean = url.trim_end_matches(".git");
+    if clean.starts_with("git@") {
+        let parts: Vec<&str> = clean.split(':').collect();
+        if parts.len() == 2 {
+            return Some(parts[1].to_string());
+        }
+    } else {
+        if let Some(pos) = clean.find("gitlab.com/") {
+            let path = &clean[pos + 11..];
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+/// POST /projects/:project_id/services/:service_id/webhook/auto-register
+async fn auto_register_webhook(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(
+        &state.db, auth_user.user_id, project_id, "service:write",
+    ).await.map_err(ApiAppError)?;
+    verify_service_project(&state.db, service_id, project_id).await?;
+
+    let service = sqlx::query_as::<_, shipyard_db::models::Service>(
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at 
+         FROM services 
+         WHERE id = $1"
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound("Service not found".to_string())))?;
+
+    let repo_url = service.git_repo_url.as_deref().unwrap_or("");
+    if repo_url.is_empty() {
+        return Err(ApiAppError(AppError::BadRequest("Service is not configured with a Git repository".to_string())));
+    }
+
+    let git_provider_id = match service.git_provider_id {
+        Some(id) => id,
+        None => return Err(ApiAppError(AppError::BadRequest("No Git provider associated with this service".to_string()))),
+    };
+
+    let git_provider = sqlx::query_as::<_, shipyard_db::models::GitProvider>(
+        "SELECT id, org_id, name, provider_type, auth_type, token, username, created_at, updated_at
+         FROM git_providers 
+         WHERE id = $1 AND org_id = (SELECT org_id FROM projects WHERE id = $2)"
+    )
+    .bind(git_provider_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound("Git provider not found".to_string())))?;
+
+    let webhook_token = read_webhook_token(&state.db, &state.config.auth.secret_key, service_id).await?;
+    let base_url = state.config.git.api_base_url.trim_end_matches('/');
+    let webhook_url = format!("{}/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token);
+
+    let client = reqwest::Client::new();
+    match git_provider.provider_type.as_str() {
+        "github" => {
+            let (owner, repo) = parse_github_repo(repo_url)
+                .ok_or_else(|| ApiAppError(AppError::BadRequest("Could not parse owner and repo name from GitHub URL".to_string())))?;
+
+            let api_url = format!("https://api.github.com/repos/{}/{}/hooks", owner, repo);
+            let payload = serde_json::json!({
+                "name": "web",
+                "active": true,
+                "events": ["push"],
+                "config": {
+                    "url": webhook_url,
+                    "content_type": "json",
+                    "secret": webhook_token,
+                    "insecure_ssl": "0"
+                }
+            });
+
+            let res = client.post(&api_url)
+                .header("User-Agent", "shipyard-api")
+                .header("Accept", "application/vnd.github+json")
+                .header("Authorization", format!("token {}", git_provider.token))
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to contact GitHub: {}", e))))?;
+
+            let status = res.status();
+            let body_text = res.text().await.unwrap_or_default();
+
+            if status.is_success() {
+                Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "Webhook auto-registered on GitHub successfully!"
+                }))))
+            } else if status == StatusCode::UNPROCESSABLE_ENTITY && body_text.contains("already exists") {
+                Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "Webhook already exists on this GitHub repository!"
+                }))))
+            } else {
+                Err(ApiAppError(AppError::BadRequest(format!(
+                    "GitHub API returned {}: {}",
+                    status, body_text
+                ))))
+            }
+        }
+        "gitlab" => {
+            let project_path = parse_gitlab_project(repo_url)
+                .ok_or_else(|| ApiAppError(AppError::BadRequest("Could not parse GitLab project path from URL".to_string())))?;
+            
+            let encoded_path = urlencoding::encode(&project_path);
+            let api_url = format!("https://gitlab.com/api/v4/projects/{}/hooks", encoded_path);
+            let payload = serde_json::json!({
+                "url": webhook_url,
+                "push_events": true,
+                "token": webhook_token
+            });
+
+            let res = client.post(&api_url)
+                .header("User-Agent", "shipyard-api")
+                .header("Authorization", format!("Bearer {}", git_provider.token))
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to contact GitLab: {}", e))))?;
+
+            let status = res.status();
+            let body_text = res.text().await.unwrap_or_default();
+
+            if status.is_success() {
+                Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "Webhook auto-registered on GitLab successfully!"
+                }))))
+            } else {
+                Err(ApiAppError(AppError::BadRequest(format!(
+                    "GitLab API returned {}: {}",
+                    status, body_text
+                ))))
+            }
+        }
+        _ => Err(ApiAppError(AppError::BadRequest(format!(
+            "Auto-registration is not supported for provider type: {}",
+            git_provider.provider_type
+        )))),
+    }
 }
 
 // ─── Connection info ───────────────────────────────────────────────────────────

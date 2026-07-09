@@ -3,7 +3,7 @@
 	import {
 		Globe, RefreshCw, Upload, Settings2, Play,
 		ChevronRight, CheckCircle2, XCircle, Clock, AlertCircle,
-		Plus, Trash2, X, CheckCircle, Loader2, AlertTriangle
+		Plus, Trash2, X, CheckCircle, Loader2, AlertTriangle, Copy
 	} from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -24,6 +24,7 @@
 
 	// ── Core state ─────────────────────────────────────────────────────────────
 	let config       = $state<StaticSiteConfig | null>(null);
+	let service      = $state<Service | null>(null);
 	let serviceSlug  = $state('');  // loaded for delete confirmation
 	let deployments  = $state<Deployment[]>([]);
 	let loading      = $state(true);
@@ -72,6 +73,63 @@
 	let gitSaving               = $state(false);
 	let gitSaveError            = $state('');
 	let gitSaveSuccess          = $state('');
+
+	// ── Webhook URL & Auto-register ──────────────────────────────────────────
+	let webhookToken      = $state('');
+	let webhookProvider   = $state<'github' | 'gitlab' | 'gitea'>('github');
+	let isLoadingWebhook  = $state(false);
+	let webhookCopied     = $state(false);
+	let isRotatingWebhook = $state(false);
+	let rotateConfirm     = $state(false);
+	let isRegisteringWebhook = $state(false);
+	let registerWebhookResult = $state<string | null>(null);
+	let registerWebhookError = $state<string | null>(null);
+
+	async function loadWebhookToken() {
+		if (isLoadingWebhook || webhookToken) return;
+		isLoadingWebhook = true;
+		const res = await api.getWebhookToken(projectId, serviceId);
+		if (res.data?.token) webhookToken = res.data.token;
+		isLoadingWebhook = false;
+	}
+
+	async function rotateWebhook() {
+		if (!rotateConfirm) { rotateConfirm = true; return; }
+		rotateConfirm = false;
+		isRotatingWebhook = true;
+		const res = await api.rotateWebhookToken(projectId, serviceId);
+		if (res.data?.token) webhookToken = res.data.token;
+		isRotatingWebhook = false;
+	}
+
+	async function copyWebhookUrl() {
+		const url = `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`;
+		await navigator.clipboard.writeText(url);
+		webhookCopied = true;
+		setTimeout(() => { webhookCopied = false; }, 2000);
+	}
+
+	async function autoRegisterWebhook() {
+		if (isRegisteringWebhook) return;
+		isRegisteringWebhook = true;
+		registerWebhookResult = null;
+		registerWebhookError = null;
+		try {
+			const res = await api.post<{ message: string }>(
+				`/projects/${projectId}/services/${serviceId}/webhook/auto-register`
+			);
+			if (res.error) {
+				registerWebhookError = res.error.message;
+			} else if (res.data) {
+				registerWebhookResult = res.data.message;
+				setTimeout(() => { registerWebhookResult = null; }, 5000);
+			}
+		} catch (err: any) {
+			registerWebhookError = err.message || 'Failed to auto-register webhook';
+		} finally {
+			isRegisteringWebhook = false;
+		}
+	}
 
 	function resetGitEditForm(c: StaticSiteConfig) {
 		editGitDeployStrategy   = c.git_deploy_strategy || 'push';
@@ -251,7 +309,10 @@
 			resetEditForm(cfgRes.data);
 			resetGitEditForm(cfgRes.data);
 		}
-		if (svcRes.data) serviceSlug = svcRes.data.slug;
+		if (svcRes.data) {
+			service = svcRes.data;
+			serviceSlug = svcRes.data.slug;
+		}
 	}
 
 	async function deleteStaticSite() {
@@ -433,6 +494,7 @@
 		activeTab = tab;
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'deployments') await loadDeployments();
+		if (tab === 'git') await loadWebhookToken();
 		if (tab === 'visitor_logs') {
 			visitorLogs = [];
 			await loadStaticLogs();
@@ -738,6 +800,75 @@
 						{/if}
 					</button>
 				</div>
+			</section>
+
+			<!-- Webhook URL Card -->
+			<section class="section" style="margin-top: 1rem;">
+				<div class="git-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+					<div class="section-title" style="margin-bottom: 0;">Webhook URL</div>
+					<div class="webhook-provider-tabs">
+						{#each (['github', 'gitlab', 'gitea'] as const) as p}
+							<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
+								{p.charAt(0).toUpperCase() + p.slice(1)}
+							</button>
+						{/each}
+					</div>
+				</div>
+				<p class="section-desc" style="margin-bottom: 1rem;">
+					Add this URL as a webhook in your Git provider with the <strong>push</strong> event.
+					No secret header is required — the token in the URL authenticates the request.
+				</p>
+
+				{#if isLoadingWebhook}
+					<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
+				{:else}
+					<div class="webhook-url-row">
+						<input
+							class="webhook-url-input"
+							readonly
+							value={webhookToken
+								? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+								: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
+						/>
+						<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
+							{#if webhookCopied}
+								<CheckCircle2 size={13} />Copied
+							{:else}
+								<Copy size={13} />Copy
+							{/if}
+						</button>
+					</div>
+
+					<div class="webhook-actions" style="margin-top: 0.75rem;">
+						{#if rotateConfirm}
+							<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
+							<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+								{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
+							</button>
+							<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
+						{:else}
+							<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
+								<RefreshCw size={11} />Rotate URL
+							</button>
+							{#if service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+								<button class="webhook-rotate-btn" onclick={autoRegisterWebhook} disabled={isRegisteringWebhook} style="color: var(--accent); border-color: var(--accent);">
+									{#if isRegisteringWebhook}
+										<div class="spinner-xs"></div>Registering…
+									{:else}
+										<Globe size={11} />Auto-register webhook
+									{/if}
+								</button>
+							{/if}
+						{/if}
+					</div>
+
+					{#if registerWebhookResult}
+						<div class="webhook-status success">{registerWebhookResult}</div>
+					{/if}
+					{#if registerWebhookError}
+						<div class="webhook-status error">{registerWebhookError}</div>
+					{/if}
+				{/if}
 			</section>
 		{/if}
 
@@ -1789,5 +1920,105 @@ export default &#123;
 		min-height: 300px;
 		color: var(--text-dim);
 		font-size: 11px;
+	}
+	.webhook-provider-tabs {
+		display: inline-flex;
+		gap: 3px;
+		background: var(--bg-elevated);
+		padding: 2px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+	}
+	.webhook-provider-tabs button {
+		background: transparent;
+		border: none;
+		outline: none;
+		font-size: 10px;
+		font-weight: 600;
+		padding: 2px 8px;
+		border-radius: calc(var(--radius-sm) - 1px);
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+	.webhook-provider-tabs button.active {
+		border: 1px solid var(--border);
+		color: var(--accent);
+		background: rgba(37,99,235,0.07);
+	}
+	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
+	.webhook-url-input {
+		flex: 1;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-secondary);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 5px 8px;
+		outline: none;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.webhook-copy-btn {
+		display: flex; align-items: center; gap: 4px;
+		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
+		padding: 5px 10px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		cursor: pointer;
+		white-space: nowrap;
+		flex-shrink: 0;
+		transition: all var(--transition-fast);
+	}
+	.webhook-copy-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+	.webhook-copy-btn:disabled { opacity: 0.5; cursor: default; }
+	.webhook-loading { display: flex; align-items: center; gap: 6px; padding: 10px 14px; font-size: 12px; color: var(--text-dim); }
+	.webhook-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 0 10px;
+		flex-wrap: wrap;
+	}
+	.webhook-rotate-confirm-text { font-size: 11px; color: var(--text-muted); flex: 1; }
+	.webhook-rotate-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-muted);
+		font-size: 11px;
+		font-family: var(--font-sans);
+		padding: 3px 9px;
+		cursor: pointer;
+		transition: all var(--transition-fast);
+	}
+	.webhook-rotate-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+	.webhook-rotate-btn.danger { border-color: rgba(239,68,68,0.5); color: #EF4444; }
+	.webhook-rotate-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.08); }
+	.webhook-rotate-btn:disabled { opacity: 0.5; cursor: default; }
+
+	.webhook-status {
+		margin-top: 6px;
+		font-size: 11px;
+		padding: 6px 8px;
+		border-radius: var(--radius-sm);
+	}
+	.webhook-status.success {
+		background: rgba(16,185,129,0.08);
+		color: #10B981;
+		border: 1px solid rgba(16,185,129,0.15);
+	}
+	.webhook-status.error {
+		background: rgba(239,68,68,0.08);
+		color: #EF4444;
+		border: 1px solid rgba(239,68,68,0.15);
 	}
 </style>
