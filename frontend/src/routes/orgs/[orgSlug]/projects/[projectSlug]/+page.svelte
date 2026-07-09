@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { SvelteFlow, Controls, Background, MiniMap, type NodeTypes, type Node } from '@xyflow/svelte';
+	import { SvelteFlow, Controls, Background, MiniMap, Panel, SelectionMode, type NodeTypes, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff } from '@lucide/svelte';
+	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff, MousePointerSquareDashed, Hand } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 
 	import { page } from '$app/state';
@@ -52,6 +52,7 @@
 
 	let isLoading = $state(true);
 	let error = $state<string | null>(null);
+	let interactionMode = $state<'pan' | 'select'>('pan');
 
 	// SvelteFlow requires $state.raw for both arrays — deep reactivity causes
 	// internal mutation warnings and performance issues inside the flow library.
@@ -303,8 +304,9 @@
 	});
 </script>
 
-<!-- Canvas app bar -->
-<div class="canvas-appbar">
+<div class="canvas-container">
+	<!-- Canvas app bar -->
+	<div class="canvas-appbar">
 	{#if projectMenuOpen}
 		<div class="appbar-backdrop" onclick={closeProjectMenu} role="presentation"></div>
 	{/if}
@@ -341,6 +343,7 @@
 
 	<button
 		class="appbar-action"
+		style="margin-left: auto;"
 		onclick={() => syncTopology(orgId, projectId)}
 		title="Reload topology"
 		aria-label="Reload topology"
@@ -349,6 +352,22 @@
 	</button>
 
 	{#if canEditProject}
+		<div class="appbar-divider"></div>
+
+		<button
+			class="appbar-action"
+			class:active={interactionMode === 'select'}
+			onclick={() => interactionMode = (interactionMode === 'pan' ? 'select' : 'pan')}
+			title={interactionMode === 'select' ? 'Switch to Pan mode' : 'Switch to Select mode (draw marquee box to move multiple nodes)'}
+			aria-label="Toggle selection mode"
+		>
+			{#if interactionMode === 'select'}
+				<MousePointerSquareDashed size={14} />
+			{:else}
+				<Hand size={14} />
+			{/if}
+		</button>
+
 		<div class="appbar-divider"></div>
 
 		<button
@@ -412,6 +431,9 @@
 			nodesDraggable={canEditProject}
 			nodesConnectable={canEditProject}
 			elementsSelectable={canEditProject}
+			panOnDrag={interactionMode === 'pan'}
+			selectionOnDrag={interactionMode === 'select'}
+			selectionMode={SelectionMode.Partial}
 			onnodeclick={handleNodeClick}
 			onnodedragstop={handleNodeDragStop}
 		>
@@ -420,18 +442,37 @@
 			<MiniMap
 				style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);"
 			/>
+			{#if interactionMode === 'select'}
+				<Panel position="top-center" class="selection-banner">
+					<div class="selection-banner-content">
+						<MousePointerSquareDashed size={14} class="banner-icon" />
+						<span><strong>Select Mode Active</strong>: Drag on the canvas to draw a selection box. Hold Space or use right-click to pan.</span>
+						<button class="banner-close-btn" onclick={() => interactionMode = 'pan'}>Exit</button>
+					</div>
+				</Panel>
+			{/if}
 		</SvelteFlow>
 
 		{#if !canEditProject && canViewProject}
 			<div class="view-only-badge">View only</div>
 		{/if}
 	{/if}
+	</div>
 </div>
 
 <style>
-	.canvas-wrapper {
+	.canvas-container {
 		width: 100%;
 		height: 100vh;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		position: relative;
+	}
+
+	.canvas-wrapper {
+		width: 100%;
+		flex: 1;
 		position: relative;
 		background: var(--bg-base);
 	}
@@ -605,19 +646,15 @@
 
 	/* ── Canvas app bar ── */
 	.canvas-appbar {
-		position: fixed;
-		top: 10px;
-		left: 50%;
-		transform: translateX(-50%);
-		z-index: 20;
+		height: 50px;
+		flex-shrink: 0;
 		display: flex;
 		align-items: center;
 		gap: 6px;
 		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		padding: 4px 6px 4px 4px;
-		box-shadow: var(--shadow-md);
+		border-bottom: 1px solid var(--border);
+		padding: 0 16px;
+		box-shadow: var(--shadow-sm);
 	}
 
 	.appbar-backdrop {
@@ -705,6 +742,56 @@
 	}
 
 	.appbar-action:hover { background: var(--bg-elevated); color: var(--text-primary); }
+	.appbar-action.active { background: var(--accent-muted); color: var(--accent); }
 
 	:global(.rotate-180) { transform: rotate(180deg); transition: transform var(--transition-fast); }
+
+	:global(.svelte-flow .selection-banner) {
+		background: var(--bg-surface);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-md);
+		padding: 8px 14px;
+		box-shadow: var(--shadow-md);
+		color: var(--text-primary);
+		font-size: 12px;
+		pointer-events: auto;
+		animation: slide-down 0.2s ease-out;
+		z-index: 10;
+		margin-top: 10px;
+	}
+
+	.selection-banner-content {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		white-space: nowrap;
+	}
+
+	:global(.selection-banner .banner-icon) {
+		color: var(--accent);
+		flex-shrink: 0;
+	}
+
+	.banner-close-btn {
+		background: var(--accent-muted);
+		color: var(--accent);
+		border: none;
+		border-radius: var(--radius-sm);
+		padding: 2px 8px;
+		font-size: 11px;
+		font-weight: 600;
+		cursor: pointer;
+		margin-left: 8px;
+		transition: background var(--transition-fast);
+	}
+
+	.banner-close-btn:hover {
+		background: var(--accent);
+		color: white;
+	}
+
+	@keyframes slide-down {
+		from { transform: translateY(-10px); opacity: 0; }
+		to { transform: translateY(0); opacity: 1; }
+	}
 </style>
