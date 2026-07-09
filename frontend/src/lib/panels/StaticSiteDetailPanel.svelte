@@ -77,6 +77,39 @@
 	// ── Webhook URL & Auto-register ──────────────────────────────────────────
 	let webhookToken      = $state('');
 	let webhookProvider   = $state<'github' | 'gitlab' | 'gitea'>('github');
+	let gitProviderId       = $state<string | null>(null);
+	let orgGitProviders     = $state<import('$lib/api/types').GitProvider[]>([]);
+	let loadingGitProviders = $state(false);
+	let gitProviderSaving   = $state(false);
+	let gitProviderError    = $state('');
+	let gitProviderSuccess  = $state('');
+
+	async function loadGitProviders() {
+		loadingGitProviders = true;
+		const res = await api.listGitProviders(orgId);
+		if (res.data) {
+			orgGitProviders = res.data;
+		}
+		loadingGitProviders = false;
+	}
+
+	async function saveGitProvider() {
+		gitProviderSaving = true;
+		gitProviderError = '';
+		gitProviderSuccess = '';
+		const providerVal = gitProviderId === '' ? null : gitProviderId;
+		const res = await api.put<Service>(`/projects/${projectId}/services/${serviceId}`, {
+			git_provider_id: providerVal,
+		});
+		gitProviderSaving = false;
+		if (res.error) {
+			gitProviderError = res.error.message;
+		} else if (res.data) {
+			service = res.data;
+			gitProviderSuccess = 'Git provider updated successfully';
+		}
+	}
+
 	let isLoadingWebhook  = $state(false);
 	let webhookCopied     = $state(false);
 	let isRotatingWebhook = $state(false);
@@ -312,6 +345,7 @@
 		if (svcRes.data) {
 			service = svcRes.data;
 			serviceSlug = svcRes.data.slug;
+			gitProviderId = svcRes.data.git_provider_id || '';
 		}
 	}
 
@@ -494,7 +528,10 @@
 		activeTab = tab;
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'deployments') await loadDeployments();
-		if (tab === 'git') await loadWebhookToken();
+		if (tab === 'git') {
+			void loadWebhookToken();
+			void loadGitProviders();
+		}
 		if (tab === 'visitor_logs') {
 			visitorLogs = [];
 			await loadStaticLogs();
@@ -737,6 +774,38 @@
 
 		<!-- ── Git tab ── -->
 		{#if activeTab === 'git'}
+			<!-- Linked Git Account / Provider -->
+			<section class="section" style="margin-bottom: 1.5rem;">
+				<div class="section-title">Linked Git Account</div>
+				<p class="section-desc">Connect this static site to a Git provider account to enable automated commit-push tracking and webhook registration.</p>
+				<div class="form-group" style="margin-top: 1rem;">
+					<label class="form-label" for="git-provider-select" style="display: block; margin-bottom: 0.5rem; font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em;">Git Provider</label>
+					<div style="display: flex; gap: 10px;">
+						<select
+							id="git-provider-select"
+							bind:value={gitProviderId}
+							style="width: 100%; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px; outline: none; transition: border-color 0.15s ease;"
+						>
+							<option value="">No provider linked</option>
+							{#each orgGitProviders as provider (provider.id)}
+								<option value={provider.id}>
+									{provider.name} ({provider.provider_type.toUpperCase()})
+								</option>
+							{/each}
+						</select>
+						<button class="btn-primary" onclick={saveGitProvider} disabled={gitProviderSaving} style="white-space: nowrap; height: 36px; padding: 0 16px;">
+							{#if gitProviderSaving}
+								<div class="spinner-xs"></div> Saving…
+							{:else}
+								Link Provider
+							{/if}
+						</button>
+					</div>
+					{#if gitProviderError}<div class="form-error" style="margin-top: 5px; color: var(--status-err); font-size: 12px;">{gitProviderError}</div>{/if}
+					{#if gitProviderSuccess}<div class="form-success" style="margin-top: 5px; color: var(--status-ok); font-size: 12px;">{gitProviderSuccess}</div>{/if}
+				</div>
+			</section>
+
 			<section class="section">
 				<div class="section-title">Git Deployment Settings</div>
 				<p class="section-desc">Configure the rules that trigger automatic deployments when code changes are pushed to GitHub.</p>

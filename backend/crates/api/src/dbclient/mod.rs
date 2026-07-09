@@ -358,7 +358,7 @@ async fn run_redis_command(
     let client = redis::Client::open(url.as_str())
         .map_err(|e| format!("Redis URL error: {e}"))?;
 
-    let mut conn = timeout(Duration::from_secs(10), client.get_async_connection())
+    let mut conn = timeout(Duration::from_secs(10), client.get_multiplexed_async_connection())
         .await
         .map_err(|_| "Connection timed out — check that the host and port are reachable")??;
 

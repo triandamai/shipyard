@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Multipart, Path, State},
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};

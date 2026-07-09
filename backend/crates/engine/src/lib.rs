@@ -305,7 +305,7 @@ impl DeploymentEngine {
     ) -> AppResult<()> {
         // Steps were pre-inserted by the upload API endpoint.
         // Resolve artifact path from the MQTT meta we stored in deployment row.
-        let artifact_path: String = sqlx::query_scalar(
+        let _artifact_path: String = sqlx::query_scalar(
             "SELECT source_ref FROM deployments WHERE id = $1",
         )
         .bind(deployment_id)

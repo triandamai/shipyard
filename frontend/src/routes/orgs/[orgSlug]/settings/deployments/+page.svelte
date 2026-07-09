@@ -83,10 +83,14 @@
 		}
 	}
 
-	onMount(() => {
-		if (canDeploymentsAny) {
-			load();
-			loadParallelism();
+	let lastLoadedOrgId = $state<string | null>(null);
+
+	$effect(() => {
+		if (canDeploymentsAny && orgId && orgId !== lastLoadedOrgId) {
+			lastLoadedOrgId = orgId;
+			currentPage = 1;
+			void load();
+			void loadParallelism();
 		}
 	});
 

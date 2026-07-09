@@ -203,7 +203,7 @@ async fn list_services(
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
 
     let services = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
          FROM services
          WHERE project_id = $1
          ORDER BY created_at ASC",
