@@ -181,6 +181,9 @@ let showDbClient    = $state(false);
 	// Git deploy config — local editable copies
 	let gitAutoDeploy   = $state(true);
 	let gitBranch       = $state('main');
+	let gitDeployStrategy   = $state<'push' | 'tag' | 'pull_request'>('push');
+	let gitDeployBranch     = $state('');
+	let gitDeployTagPattern = $state('');
 	let gitSaving       = $state(false);
 	let gitSaveOk       = $state(false);
 	let gitSaveError    = $state('');
@@ -862,20 +865,33 @@ let showDbClient    = $state(false);
 		if (!service) return;
 		gitAutoDeploy = service.auto_deploy;
 		gitBranch     = service.git_branch ?? 'main';
+		gitDeployStrategy = service.git_deploy_strategy || 'push';
+		gitDeployBranch   = service.git_deploy_branch || '';
+		gitDeployTagPattern = service.git_deploy_tag_pattern || '';
 	}
 
 	async function saveGitConfig() {
 		gitSaving = true;
 		gitSaveOk = false;
 		gitSaveError = '';
+		
+		const branchVal = gitDeployBranch.trim() === '' ? null : gitDeployBranch.trim();
+		const tagPatternVal = gitDeployTagPattern.trim() === '' ? null : gitDeployTagPattern.trim();
+
 		const res = await api.updateService(projectId, serviceId, {
 			git_branch: gitBranch.trim() || 'main',
 			auto_deploy: gitAutoDeploy,
+			git_deploy_strategy: gitDeployStrategy,
+			git_deploy_branch: branchVal,
+			git_deploy_tag_pattern: tagPatternVal,
 		});
 		if (res.error) {
 			gitSaveError = res.error.message;
 		} else {
-			if (res.data) service = res.data;
+			if (res.data) {
+				service = res.data;
+				initGitConfig();
+			}
 			gitSaveOk = true;
 			setTimeout(() => { gitSaveOk = false; }, 2500);
 		}
@@ -1664,24 +1680,78 @@ let showDbClient    = $state(false);
 							Git provider.
 						</p>
 
-						<!-- Branch input -->
-						<div class="git-field">
-							<label class="git-label" for="git-branch-input">Branch to watch</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">⎇</span>
-								<input
-									id="git-branch-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={gitBranch}
-									placeholder="main"
-									disabled={!gitAutoDeploy}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
+						<!-- Deployment Strategy -->
+						<div class="git-field" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 4px;">
+							<label class="git-label">Deployment Strategy</label>
+							<select class="git-select" bind:value={gitDeployStrategy} disabled={!gitAutoDeploy} style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px;">
+								<option value="push">Deploy on Push to Branch</option>
+								<option value="tag">Deploy on Tag Push</option>
+								<option value="pull_request">Deploy on Pull Request Merge</option>
+							</select>
 						</div>
+
+						{#if gitDeployStrategy === 'push'}
+							<!-- Branch input -->
+							<div class="git-field" style="margin-top: 1rem;">
+								<label class="git-label" for="git-branch-input">Branch to watch</label>
+								<div class="git-branch-row">
+									<span class="git-branch-icon">⎇</span>
+									<input
+										id="git-branch-input"
+										class="git-branch-input"
+										type="text"
+										bind:value={gitBranch}
+										placeholder="main"
+										disabled={!gitAutoDeploy}
+										spellcheck="false"
+										autocomplete="off"
+									/>
+								</div>
+								<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
+							</div>
+						{/if}
+
+						{#if gitDeployStrategy === 'tag'}
+							<!-- Tag pattern input -->
+							<div class="git-field" style="margin-top: 1rem;">
+								<label class="git-label" for="git-tag-pattern-input">Tag Pattern</label>
+								<div class="git-branch-row">
+									<span class="git-branch-icon">🏷️</span>
+									<input
+										id="git-tag-pattern-input"
+										class="git-branch-input"
+										type="text"
+										bind:value={gitDeployTagPattern}
+										placeholder="e.g. v* (or * for all tags)"
+										disabled={!gitAutoDeploy}
+										spellcheck="false"
+										autocomplete="off"
+									/>
+								</div>
+								<p class="git-hint">Deployments will trigger when a tag matching this wildcard/glob pattern is pushed.</p>
+							</div>
+						{/if}
+
+						{#if gitDeployStrategy === 'pull_request'}
+							<!-- Target Branch for PR -->
+							<div class="git-field" style="margin-top: 1rem;">
+								<label class="git-label" for="git-pr-branch-input">Target Branch (PR Merge)</label>
+								<div class="git-branch-row">
+									<span class="git-branch-icon">⎇</span>
+									<input
+										id="git-pr-branch-input"
+										class="git-branch-input"
+										type="text"
+										bind:value={gitDeployBranch}
+										placeholder="e.g. main (falls back to watch branch)"
+										disabled={!gitAutoDeploy}
+										spellcheck="false"
+										autocomplete="off"
+									/>
+								</div>
+								<p class="git-hint">Deployments will trigger when a pull request is merged into this branch.</p>
+							</div>
+						{/if}
 
 						{#if gitSaveError}
 							<p class="git-error">{gitSaveError}</p>

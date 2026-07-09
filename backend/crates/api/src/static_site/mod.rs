@@ -38,6 +38,9 @@ pub struct StaticConfigResponse {
     pub install_command: String,
     pub framework:       String,
     pub deploy_config:   Option<serde_json::Value>,
+    pub git_deploy_strategy:    String,
+    pub git_deploy_branch:      Option<String>,
+    pub git_deploy_tag_pattern: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +51,9 @@ pub struct UpdateStaticConfigRequest {
     pub node_version:    Option<String>,
     pub install_command: Option<String>,
     pub framework:       Option<String>,
+    pub git_deploy_strategy:    Option<String>,
+    pub git_deploy_branch:      Option<Option<String>>,
+    pub git_deploy_tag_pattern: Option<Option<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,9 +92,10 @@ async fn get_static_config(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let row = sqlx::query_as::<_, (Uuid, String, String, String, String, String, String, Option<serde_json::Value>)>(
+    let row = sqlx::query_as::<_, (Uuid, String, String, String, String, String, String, Option<serde_json::Value>, String, Option<String>, Option<String>)>(
         "SELECT service_id, source, build_command, output_dir, node_version,
-                install_command, framework, deploy_config
+                install_command, framework, deploy_config, git_deploy_strategy,
+                git_deploy_branch, git_deploy_tag_pattern
          FROM static_site_configs WHERE service_id = $1",
     )
     .bind(service_id)
@@ -105,6 +112,9 @@ async fn get_static_config(
         install_command: row.5,
         framework:       row.6,
         deploy_config:   row.7,
+        git_deploy_strategy:    row.8,
+        git_deploy_branch:      row.9,
+        git_deploy_tag_pattern: row.10,
     })))
 }
 
@@ -164,11 +174,32 @@ async fn put_static_config(
             .bind(v).bind(service_id).execute(&state.db).await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
+    if let Some(v) = &body.git_deploy_strategy {
+        if v != "push" && v != "tag" && v != "pull_request" {
+            return Err(ApiAppError(AppError::BadRequest(
+                "git_deploy_strategy must be 'push', 'tag', or 'pull_request'".into(),
+            )));
+        }
+        sqlx::query("UPDATE static_site_configs SET git_deploy_strategy = $1, updated_at = NOW() WHERE service_id = $2")
+            .bind(v).bind(service_id).execute(&state.db).await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+    if let Some(v) = &body.git_deploy_branch {
+        sqlx::query("UPDATE static_site_configs SET git_deploy_branch = $1, updated_at = NOW() WHERE service_id = $2")
+            .bind(v).bind(service_id).execute(&state.db).await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+    if let Some(v) = &body.git_deploy_tag_pattern {
+        sqlx::query("UPDATE static_site_configs SET git_deploy_tag_pattern = $1, updated_at = NOW() WHERE service_id = $2")
+            .bind(v).bind(service_id).execute(&state.db).await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
 
     // Re-fetch and return
-    let row = sqlx::query_as::<_, (Uuid, String, String, String, String, String, String, Option<serde_json::Value>)>(
+    let row = sqlx::query_as::<_, (Uuid, String, String, String, String, String, String, Option<serde_json::Value>, String, Option<String>, Option<String>)>(
         "SELECT service_id, source, build_command, output_dir, node_version,
-                install_command, framework, deploy_config
+                install_command, framework, deploy_config, git_deploy_strategy,
+                git_deploy_branch, git_deploy_tag_pattern
          FROM static_site_configs WHERE service_id = $1",
     )
     .bind(service_id)
@@ -185,6 +216,9 @@ async fn put_static_config(
         install_command: row.5,
         framework:       row.6,
         deploy_config:   row.7,
+        git_deploy_strategy:    row.8,
+        git_deploy_branch:      row.9,
+        git_deploy_tag_pattern: row.10,
     })))
 }
 

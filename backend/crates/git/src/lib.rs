@@ -3,7 +3,7 @@
 //! Wraps git2 for cloning repositories, pulling updates, and parsing
 //! branches/tags/commits. Milestone 2.10.
 
-use git2::{BranchType, FetchOptions, RemoteCallbacks, Repository};
+use git2::{BranchType, FetchOptions, RemoteCallbacks, Repository, build::CheckoutBuilder};
 use shipyard_common::error::{AppError, AppResult};
 
 /// Information about the HEAD commit of a repository.
@@ -225,5 +225,36 @@ impl GitService {
             author,
             timestamp,
         })
+    }
+
+    /// Checkout a specific reference (branch name, tag name, or commit SHA).
+    /// Resolves the reference using `git2::Repository::revparse_single`,
+    /// updates the repository HEAD state, and updates the working tree.
+    pub fn checkout_ref(&self, repo_path: &str, target_ref: &str) -> AppResult<()> {
+        let repo = Repository::open(repo_path)
+            .map_err(|e| AppError::Git(format!("open repo: {}", e)))?;
+
+        let mut remote = repo
+            .find_remote("origin")
+            .map_err(|e| AppError::Git(format!("find remote: {}", e)))?;
+        remote
+            .fetch(&[] as &[&str], None, None)
+            .map_err(|e| AppError::Git(format!("fetch remote: {}", e)))?;
+
+        let object = repo
+            .revparse_single(target_ref)
+            .map_err(|e| AppError::Git(format!("resolve ref '{}': {}", target_ref, e)))?;
+
+        let mut checkout_opts = CheckoutBuilder::new();
+        checkout_opts.force();
+
+        repo.checkout_tree(&object, Some(&mut checkout_opts))
+            .map_err(|e| AppError::Git(format!("checkout tree: {}", e)))?;
+
+        let commit_id = object.id();
+        repo.set_head_detached(commit_id)
+            .map_err(|e| AppError::Git(format!("set head detached: {}", e)))?;
+
+        Ok(())
     }
 }

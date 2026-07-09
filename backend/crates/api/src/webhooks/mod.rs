@@ -37,6 +37,30 @@ pub fn routes() -> Router<AppState> {
         .route("/gitea/:service_id/:token", post(gitea_webhook))
 }
 
+// ─── Simple Glob Matcher ───────────────────────────────────────────────────────
+
+fn matches_pattern(pattern: &str, text: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if pattern.starts_with('*') && pattern.ends_with('*') {
+        let sub = &pattern[1..pattern.len() - 1];
+        return text.contains(sub);
+    } else if pattern.starts_with('*') {
+        let sub = &pattern[1..];
+        return text.ends_with(sub);
+    } else if pattern.ends_with('*') {
+        let sub = &pattern[..pattern.len() - 1];
+        return text.starts_with(sub);
+    }
+    if let Some(star_idx) = pattern.find('*') {
+        let prefix = &pattern[..star_idx];
+        let suffix = &pattern[star_idx + 1..];
+        return text.starts_with(prefix) && text.ends_with(suffix) && text.len() >= (prefix.len() + suffix.len());
+    }
+    pattern == text
+}
+
 // ─── GitHub ───────────────────────────────────────────────────────────────────
 
 /// POST /webhooks/github/:service_id/:token
@@ -67,18 +91,152 @@ async fn github_webhook(
         )));
     }
 
-    // 4. Parse the push payload
+    // 4. Parse the payload
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?;
 
-    let pushed_ref = payload
-        .get("ref")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let event_type = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("push");
 
-    let pushed_branch = branch_from_ref(pushed_ref);
+    let svc_row: Option<(String, String, bool, String, Option<String>, Option<String>)> = sqlx::query_as::<_, (String, String, bool, String, Option<String>, Option<String>)>(
+        "SELECT type::text, git_branch, auto_deploy, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    handle_push(&state, service_id, pushed_branch, "github-webhook").await
+    let (service_type, services_git_branch, auto_deploy, svc_strategy, svc_git_deploy_branch, svc_git_deploy_tag_pattern) = match svc_row {
+        Some(row) => row,
+        None => return Err(ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))),
+    };
+
+    if !auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "auto-deploy disabled for this service",
+        }))));
+    }
+
+    let (strategy, git_deploy_branch, git_deploy_tag_pattern) = if service_type == "static" {
+        let static_row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern
+             FROM static_site_configs WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        match static_row {
+            Some(row) => row,
+            None => ("push".to_string(), None, None),
+        }
+    } else {
+        (svc_strategy, svc_git_deploy_branch, svc_git_deploy_tag_pattern)
+    };
+
+    let target_branch = git_deploy_branch.as_deref().unwrap_or(&services_git_branch);
+
+    match strategy.as_str() {
+        "push" => {
+            if event_type != "push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored event type (expected push strategy)",
+                }))));
+            }
+            let pushed_ref = payload.get("ref").and_then(|v| v.as_str()).unwrap_or_default();
+            if !pushed_ref.starts_with("refs/heads/") {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored non-branch push",
+                }))));
+            }
+            let pushed_branch = pushed_ref.strip_prefix("refs/heads/").unwrap_or(pushed_ref);
+            if pushed_branch != target_branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "branch mismatch",
+                    "pushed": pushed_branch,
+                    "target": target_branch,
+                }))));
+            }
+            trigger_deploy(&state, service_id, target_branch).await
+        }
+        "tag" => {
+            if event_type != "push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored event type (expected push for tag strategy)",
+                }))));
+            }
+            let pushed_ref = payload.get("ref").and_then(|v| v.as_str()).unwrap_or_default();
+            if !pushed_ref.starts_with("refs/tags/") {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored non-tag push",
+                }))));
+            }
+            let tag_name = pushed_ref.strip_prefix("refs/tags/").unwrap_or(pushed_ref);
+            if let Some(pattern) = &git_deploy_tag_pattern {
+                if !matches_pattern(pattern, tag_name) {
+                    return Ok(Json(ApiResponse::ok(serde_json::json!({
+                        "message": "tag pattern mismatch",
+                        "tag": tag_name,
+                        "pattern": pattern,
+                    }))));
+                }
+            }
+            trigger_deploy(&state, service_id, tag_name).await
+        }
+        "pull_request" => {
+            if event_type != "pull_request" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored event type (expected pull_request)",
+                }))));
+            }
+            let action = payload.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+            let merged = payload.get("pull_request").and_then(|pr| pr.get("merged")).and_then(|m| m.as_bool()).unwrap_or(false);
+            if action != "closed" || !merged {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "ignored pull request event (must be closed and merged)",
+                    "action": action,
+                    "merged": merged,
+                }))));
+            }
+            let base_ref = payload
+                .get("pull_request")
+                .and_then(|pr| pr.get("base"))
+                .and_then(|b| b.get("ref"))
+                .and_then(|r| r.as_str())
+                .unwrap_or_default();
+            
+            if base_ref != target_branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "pull request target branch mismatch",
+                    "base_ref": base_ref,
+                    "target": target_branch,
+                }))));
+            }
+            
+            let merge_sha = payload
+                .get("pull_request")
+                .and_then(|pr| pr.get("merge_commit_sha"))
+                .and_then(|s| s.as_str())
+                .unwrap_or(target_branch);
+
+            trigger_deploy(&state, service_id, merge_sha).await
+        }
+        _ => {
+            let pushed_ref = payload.get("ref").and_then(|v| v.as_str()).unwrap_or_default();
+            let pushed_branch = branch_from_ref(pushed_ref);
+            if pushed_branch != target_branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({
+                    "message": "branch mismatch (unknown strategy fallback)",
+                    "pushed": pushed_branch,
+                    "target": target_branch,
+                }))));
+            }
+            trigger_deploy(&state, service_id, target_branch).await
+        }
+    }
 }
 
 // ─── GitLab ───────────────────────────────────────────────────────────────────
@@ -101,14 +259,12 @@ async fn gitlab_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?;
 
-    // GitLab sends { "object_kind": "push", "ref": "refs/heads/main", ... }
     let kind = payload
         .get("object_kind")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
 
     if kind != "push" {
-        // Ignore non-push events gracefully
         return Ok(Json(ApiResponse::ok(serde_json::json!({
             "message": "ignored non-push event",
             "object_kind": kind,
@@ -122,7 +278,34 @@ async fn gitlab_webhook(
 
     let pushed_branch = branch_from_ref(pushed_ref);
 
-    handle_push(&state, service_id, pushed_branch, "gitlab-webhook").await
+    let svc_row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
+        "SELECT git_branch, auto_deploy FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (configured_branch, auto_deploy) = match svc_row {
+        Some(row) => row,
+        None => return Err(ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))),
+    };
+
+    if !auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "auto-deploy disabled for this service",
+        }))));
+    }
+
+    if configured_branch != pushed_branch {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "push ignored: branch mismatch",
+            "pushed": pushed_branch,
+            "configured": configured_branch,
+        }))));
+    }
+
+    trigger_deploy(&state, service_id, pushed_branch).await
 }
 
 // ─── Gitea ────────────────────────────────────────────────────────────────────
@@ -145,7 +328,6 @@ async fn gitea_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?;
 
-    // Gitea push webhooks have the same shape as GitHub
     let pushed_ref = payload
         .get("ref")
         .and_then(|v| v.as_str())
@@ -153,19 +335,44 @@ async fn gitea_webhook(
 
     let pushed_branch = branch_from_ref(pushed_ref);
 
-    handle_push(&state, service_id, pushed_branch, "gitea-webhook").await
+    let svc_row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
+        "SELECT git_branch, auto_deploy FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (configured_branch, auto_deploy) = match svc_row {
+        Some(row) => row,
+        None => return Err(ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))),
+    };
+
+    if !auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "auto-deploy disabled for this service",
+        }))));
+    }
+
+    if configured_branch != pushed_branch {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "push ignored: branch mismatch",
+            "pushed": pushed_branch,
+            "configured": configured_branch,
+        }))));
+    }
+
+    trigger_deploy(&state, service_id, pushed_branch).await
 }
 
 // ─── Shared logic ─────────────────────────────────────────────────────────────
 
-/// Extract the branch name from a Git ref like `refs/heads/main`.
 fn branch_from_ref(git_ref: &str) -> &str {
     git_ref
         .strip_prefix("refs/heads/")
         .unwrap_or(git_ref)
 }
 
-/// Load the `__WEBHOOK_TOKEN__` value from `service_envs`.
 async fn load_webhook_token(state: &AppState, service_id: Uuid) -> Result<String, ApiAppError> {
     let row = sqlx::query_as::<_, (String,)>(
         "SELECT value_encrypted FROM service_envs
@@ -189,54 +396,11 @@ async fn load_webhook_token(state: &AppState, service_id: Uuid) -> Result<String
     ))
 }
 
-/// Core logic: if auto_deploy is enabled and the pushed branch matches the
-/// service's git_branch, trigger a deployment.
-/// Returns 200 in all non-error cases so providers don't disable the webhook.
-async fn handle_push(
+async fn trigger_deploy(
     state: &AppState,
     service_id: Uuid,
-    pushed_branch: &str,
     source_ref: &str,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    // Read git_branch and auto_deploy from the services table directly.
-    let row: Option<(String, bool)> = sqlx::query_as::<_, (String, bool)>(
-        "SELECT git_branch, auto_deploy FROM services WHERE id = $1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    let (configured_branch, auto_deploy) = row.ok_or_else(|| {
-        ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))
-    })?;
-
-    if !auto_deploy {
-        return Ok(Json(ApiResponse::ok(serde_json::json!({
-            "message": "auto-deploy disabled for this service",
-        }))));
-    }
-
-    if configured_branch != pushed_branch {
-        tracing::debug!(
-            service_id = %service_id,
-            pushed_branch,
-            configured_branch,
-            "webhook: branch mismatch, skipping deploy"
-        );
-        return Ok(Json(ApiResponse::ok(serde_json::json!({
-            "message": "push ignored: branch does not match configured branch",
-            "pushed_branch": pushed_branch,
-            "configured_branch": configured_branch,
-        }))));
-    }
-
-    tracing::info!(
-        service_id = %service_id,
-        pushed_branch,
-        "webhook: triggering deployment"
-    );
-
     let source_ref = source_ref.to_string();
 
     let max_parallel = sqlx::query_as::<_, (String,)>(
@@ -249,6 +413,7 @@ async fn handle_push(
     .and_then(|(v,)| v.trim_matches('"').parse::<i64>().ok())
     .unwrap_or(2);
 
+    let mut is_queued = false;
     if max_parallel > 0 {
         let running: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM deployments WHERE status = 'running'::deployment_status",
@@ -258,38 +423,31 @@ async fn handle_push(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
         if running.0 >= max_parallel {
-            let deployment_id = uuid::Uuid::now_v7();
-            sqlx::query(
-                "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
-                 VALUES ($1, $2, $3, $4, 'queued'::deployment_status, NOW())",
-            )
-            .bind(deployment_id)
-            .bind(service_id)
-            .bind("webhook")
-            .bind(&source_ref)
-            .execute(&state.db)
-            .await
-            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-            return Ok(Json(ApiResponse::ok(serde_json::json!({
-                "message": "webhook deployment queued",
-                "deployment_id": deployment_id,
-            }))));
+            is_queued = true;
         }
     }
 
     let deployment_id = uuid::Uuid::now_v7();
+    let status = if is_queued { "queued" } else { "running" };
+
     sqlx::query(
         "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
-         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+         VALUES ($1, $2, 'webhook', $3, $4::deployment_status, NOW())",
     )
     .bind(deployment_id)
     .bind(service_id)
-    .bind("webhook")
     .bind(&source_ref)
+    .bind(status)
     .execute(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if is_queued {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "webhook deployment queued",
+            "deployment_id": deployment_id,
+        }))));
+    }
 
     let engine = DeploymentEngine::new(
         Arc::clone(&state.docker),
@@ -304,8 +462,9 @@ async fn handle_push(
     );
 
     let webhook_notify = Arc::clone(&state.swarm_sync_trigger);
+    let source_ref_cp = source_ref.clone();
     tokio::spawn(async move {
-        if let Err(e) = engine.deploy(deployment_id, service_id, "webhook", &source_ref).await {
+        if let Err(e) = engine.deploy(deployment_id, service_id, "webhook", &source_ref_cp).await {
             tracing::error!(
                 service_id = %service_id,
                 deployment_id = %deployment_id,
@@ -319,22 +478,13 @@ async fn handle_push(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "deployment triggered",
         "service_id": service_id,
-        "branch": pushed_branch,
+        "ref": source_ref,
     }))))
 }
 
-// ─── HMAC helpers ─────────────────────────────────────────────────────────────
-
-/// Verify the `X-Hub-Signature-256` header from GitHub.
-///
-/// - If the header is absent (`signature` is `None`) the check is skipped and
-///   `true` is returned (token-in-URL is still enforced above).
-/// - If the header is present it must be `sha256=<hex>` and must match
-///   `HMAC-SHA256(secret, body)`.
 pub fn verify_github_signature(secret: &str, body: &[u8], signature: Option<&str>) -> bool {
     let sig_str = match signature {
         Some(s) => s,
-        // Header absent → skip HMAC check (token validation already passed)
         None => return true,
     };
 
@@ -358,8 +508,6 @@ pub fn verify_github_signature(secret: &str, body: &[u8], signature: Option<&str
 
     mac.verify_slice(&expected_bytes).is_ok()
 }
-
-// ─── Response helper ──────────────────────────────────────────────────────────
 
 impl From<(StatusCode, Json<ApiResponse<serde_json::Value>>)> for ApiAppError {
     fn from(_: (StatusCode, Json<ApiResponse<serde_json::Value>>)) -> Self {

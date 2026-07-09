@@ -95,6 +95,9 @@ pub struct Service {
     pub cpu_limit: Option<f64>,
     pub memory_limit_mb: Option<i64>,
     pub service_parent_id: Option<Uuid>,
+    pub git_deploy_strategy: String,
+    pub git_deploy_branch: Option<String>,
+    pub git_deploy_tag_pattern: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

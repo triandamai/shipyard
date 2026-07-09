@@ -291,7 +291,7 @@ impl DeploymentEngine {
         if source_ref == "upload" {
             self.run_static_upload_steps(org_id, project_id, service_id, deployment_id).await
         } else {
-            self.run_static_git_steps(org_id, project_id, service_id, deployment_id).await
+            self.run_static_git_steps(org_id, project_id, service_id, deployment_id, source_ref).await
         }
     }
 
@@ -398,6 +398,7 @@ impl DeploymentEngine {
         project_id: Uuid,
         service_id: Uuid,
         deployment_id: Uuid,
+        source_ref: &str,
     ) -> AppResult<()> {
         // Insert steps — upload path pre-inserts them; git path does it here.
         for (order_index, name) in &Self::STATIC_GIT_STEPS {
@@ -458,9 +459,14 @@ impl DeploymentEngine {
 
         // Step 0: clone_or_pull
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 0).await?;
+        let target_ref = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+            &git_branch
+        } else {
+            source_ref
+        };
         let r = self.step_clone_or_pull(
             org_id, project_id, service_id, deployment_id, step_id,
-            &repo_url, &git_branch, &repo_path,
+            &repo_url, &git_branch, target_ref, &repo_path,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -1168,7 +1174,7 @@ impl DeploymentEngine {
 
         // ── Run all steps ────────────────────────────────────────────────────
         let result = if svc_type == "docker_compose" {
-            self.run_compose_steps(org_id, project_id, service_id, deployment_id)
+            self.run_compose_steps(org_id, project_id, service_id, deployment_id, source_ref)
                 .await
         } else if svc_type == "static" {
             self.run_static_steps(
@@ -1254,7 +1260,7 @@ impl DeploymentEngine {
         service_id: Uuid,
         deployment_id: Uuid,
         _triggered_by: &str,
-        _source_ref: &str,
+        source_ref: &str,
     ) -> AppResult<()> {
         // Pre-insert all steps with status 'pending'
         for (order_index, name) in &STEPS {
@@ -1284,7 +1290,7 @@ impl DeploymentEngine {
 
         // Step 1: Acquire image — pull from registry OR clone+build from git
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 1).await?;
-        let acquire_result = self.step_acquire_image(org_id, project_id, service_id, deployment_id, step_id, &image_source).await;
+        let acquire_result = self.step_acquire_image(org_id, project_id, service_id, deployment_id, step_id, &image_source, source_ref).await;
         let resolved_image_ref = match self
             .finish_step(org_id, project_id, service_id, deployment_id, step_id, acquire_result)
             .await?
@@ -1616,6 +1622,7 @@ impl DeploymentEngine {
         project_id: Uuid,
         service_id: Uuid,
         deployment_id: Uuid,
+        source_ref: &str,
     ) -> AppResult<()> {
         let (directory_path, git_repo_url, git_branch): (String, Option<String>, String) =
             sqlx::query_as(
@@ -1630,7 +1637,7 @@ impl DeploymentEngine {
         if let Some(repo_url) = git_repo_url.filter(|u| !u.is_empty()) {
             self.run_git_compose_steps(
                 org_id, project_id, service_id, deployment_id,
-                directory_path, repo_url, git_branch,
+                directory_path, repo_url, git_branch, source_ref,
             )
             .await
         } else {
@@ -1698,6 +1705,7 @@ impl DeploymentEngine {
         directory_path: String,
         repo_url: String,
         git_branch: String,
+        source_ref: &str,
     ) -> AppResult<()> {
         for (order_index, name) in &Self::GIT_COMPOSE_STEPS {
             sqlx::query(
@@ -1720,9 +1728,14 @@ impl DeploymentEngine {
 
         // Step 1: clone or pull repo into directory_path
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 1).await?;
+        let target_ref = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+            &git_branch
+        } else {
+            source_ref
+        };
         let r = self.step_clone_or_pull(
             org_id, project_id, service_id, deployment_id, step_id,
-            &repo_url, &git_branch, &directory_path,
+            &repo_url, &git_branch, target_ref, &directory_path,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -2475,6 +2488,7 @@ impl DeploymentEngine {
         deployment_id: Uuid,
         step_id: Uuid,
         source: &ImageSource,
+        source_ref: &str,
     ) -> AppResult<String> {
         match source {
             ImageSource::Registry { image, tag } => {
@@ -2504,9 +2518,14 @@ impl DeploymentEngine {
             }
 
             ImageSource::Git { repo_url, branch, repo_path, .. } => {
+                let target_ref = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+                    branch
+                } else {
+                    source_ref
+                };
                 self.step_clone_or_pull(
                     org_id, project_id, service_id, deployment_id, step_id,
-                    repo_url, branch, repo_path,
+                    repo_url, branch, target_ref, repo_path,
                 ).await?;
 
                 // Resolve HEAD commit to finalize the image tag
@@ -2608,7 +2627,7 @@ impl DeploymentEngine {
         }
     }
 
-    /// Clone the repo if it doesn't exist yet, otherwise pull latest changes.
+    /// Clone the repo if it doesn't exist yet, otherwise checkout specific target_ref.
     async fn step_clone_or_pull(
         &self,
         org_id: Uuid,
@@ -2617,27 +2636,29 @@ impl DeploymentEngine {
         deployment_id: Uuid,
         step_id: Uuid,
         repo_url: &str,
-        branch: &str,
+        default_branch: &str,
+        target_ref: &str,
         repo_path: &str,
     ) -> AppResult<()> {
         let repo_path = repo_path.to_string();
         let repo_url = repo_url.to_string();
-        let branch = branch.to_string();
+        let default_branch = default_branch.to_string();
+        let target_ref = target_ref.to_string();
 
         let path_exists = tokio::fs::metadata(&repo_path).await.is_ok();
 
         if path_exists {
-            let msg = format!("Pulling latest changes on branch '{branch}'");
+            let msg = format!("Checking out reference '{target_ref}'");
             self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
 
             tokio::task::spawn_blocking(move || {
                 let git = GitService::new(&repo_path);
-                git.pull_repo(&repo_path, Some(&branch))
+                git.checkout_ref(&repo_path, &target_ref)
             })
             .await
             .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))?
-            .map_err(|e| AppError::Git(format!("pull failed: {e}")))?;
+            .map_err(|e| AppError::Git(format!("checkout failed: {e}")))?;
         } else {
             // Ensure parent directory exists
             if let Some(parent) = std::path::Path::new(&repo_path).parent() {
@@ -2645,7 +2666,7 @@ impl DeploymentEngine {
                     .map_err(|e| AppError::Internal(format!("mkdir failed: {e}")))?;
             }
 
-            let msg = format!("Cloning {repo_url} (branch: {branch})");
+            let msg = format!("Cloning {repo_url} and checking out '{target_ref}'");
             self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
 
@@ -2653,13 +2674,15 @@ impl DeploymentEngine {
             let step_id_cp = step_id;
             let db = self.db.clone();
             let path_cp = repo_path.clone();
+            let target_ref_cp = target_ref.clone();
 
             let last_log = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(5)));
             let last_log_cp = std::sync::Arc::clone(&last_log);
 
             tokio::task::spawn_blocking(move || {
                 let git = GitService::new(&path_cp);
-                git.clone_repo(&repo_url, &path_cp, Some(&branch), move |progress| {
+                // Clone default branch first, then checkout the specific ref
+                git.clone_repo(&repo_url, &path_cp, Some(&default_branch), move |progress| {
                     if let Ok(mut last) = last_log_cp.lock() {
                         let is_important = progress.contains("100%") || progress.contains("Resolving deltas");
                         if last.elapsed() < std::time::Duration::from_millis(500) && !is_important {
@@ -2667,7 +2690,6 @@ impl DeploymentEngine {
                         }
                         *last = std::time::Instant::now();
                     }
-                    // Fire-and-forget progress log (can't await inside blocking)
                     let db2 = db.clone();
                     let msg = progress.to_string();
                     tokio::spawn(async move {
@@ -2678,15 +2700,17 @@ impl DeploymentEngine {
                         .bind(uuid::Uuid::now_v7())
                         .bind(deployment_id_cp)
                         .bind(step_id_cp)
-                        .bind(&msg)
+                        .bind(msg)
                         .execute(&db2)
                         .await;
                     });
-                })
+                })?;
+
+                git.checkout_ref(&path_cp, &target_ref_cp)
             })
             .await
             .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))?
-            .map_err(|e| AppError::Git(format!("clone failed: {e}")))?;
+            .map_err(|e| AppError::Git(format!("clone/checkout failed: {e}")))?;
         }
 
         Ok(())

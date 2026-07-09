@@ -318,6 +318,9 @@ export interface Service {
 	status: string;
 	replicas: number;
 	service_parent_id: string | null;
+	git_deploy_strategy: 'push' | 'tag' | 'pull_request';
+	git_deploy_branch: string | null;
+	git_deploy_tag_pattern: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -668,4 +671,7 @@ export interface StaticSiteConfig {
 	install_command: string;
 	framework:       string;
 	deploy_config:   Record<string, unknown> | null;
+	git_deploy_strategy: 'push' | 'tag' | 'pull_request';
+	git_deploy_branch:    string | null;
+	git_deploy_tag_pattern: string | null;
 }

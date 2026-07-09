@@ -160,6 +160,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/swarm/join-tokens", get(docker_swarm_join_tokens))
         .route("/admin/nginx-static/confs", get(list_nginx_static_confs))
         .route("/admin/nginx-static/confs/:name", get(get_nginx_static_conf))
+        .route("/admin/nginx-static/logs/stream", get(nginx_static_log_stream))
         .route("/admin/host-ip", get(get_host_ip))
         .route("/admin/api-keys", get(list_api_keys).post(create_api_key))
         .route("/admin/api-keys/:key_id", delete(revoke_api_key))
@@ -2288,4 +2289,76 @@ async fn get_nginx_static_conf(
         }
     };
     Ok(Json(ApiResponse::ok(resp)))
+}
+
+async fn nginx_static_log_stream(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+) -> Result<Sse<ReceiverStream<Result<Event, std::convert::Infallible>>>, ApiAppError> {
+    require_static_read(&state.db, &auth, q.org_id).await?;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
+
+    tokio::spawn(async move {
+        let mut child = match tokio::process::Command::new("docker")
+            .args(["logs", "-f", "--tail=200", NGINX_STATIC_CONTAINER])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .event("error")
+                        .data(format!("Failed to start docker logs: {e}"))))
+                    .await;
+                return;
+            }
+        };
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+
+        let tx_out = tx.clone();
+        let tx_err = tx.clone();
+        let tx_closed = tx.clone();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            tx_closed.closed().await;
+            let _ = cancel_tx.send(());
+        });
+
+        let mut h_out = tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tx_out.send(Ok(Event::default().data(line))).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut h_err = tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if tx_err.send(Ok(Event::default().data(line))).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        tokio::select! {
+            _ = async { tokio::join!(&mut h_out, &mut h_err) } => {}
+            _ = &mut cancel_rx => {
+                h_out.abort();
+                h_err.abort();
+            }
+        }
+        let _ = child.kill().await;
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
 }

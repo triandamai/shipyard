@@ -312,6 +312,9 @@ class ApiClient {
 			image: string;
 			git_branch: string;
 			auto_deploy: boolean;
+			git_deploy_strategy: 'push' | 'tag' | 'pull_request';
+			git_deploy_branch: string | null;
+			git_deploy_tag_pattern: string | null;
 		}>
 	): Promise<ApiResponse<Service>> {
 		return this.put(`/projects/${projectId}/services/${serviceId}`, data);

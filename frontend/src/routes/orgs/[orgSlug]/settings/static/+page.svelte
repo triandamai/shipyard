@@ -1,10 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm, isAdminRole } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
-	import { FileText, RefreshCw, ChevronRight, AlertCircle, Globe } from '@lucide/svelte';
+	import { FileText, RefreshCw, ChevronRight, AlertCircle, Globe, ScrollText, Square, Loader2, WifiOff, Play, Wifi } from '@lucide/svelte';
+	import type { LogLevel } from '$lib/api/types';
+	import LogViewer from '$lib/components/LogViewer.svelte';
 
 	interface NginxConfEntry { name: string }
 	interface NginxConfList {
@@ -76,6 +78,101 @@
 
 	$effect(() => {
 		if (orgId && canRead) loadList();
+	});
+
+	// ── Log streaming ─────────────────────────────────────────────────
+	interface LogLine { timestamp: string; level: LogLevel; message: string; }
+	type LogStatus = 'idle' | 'connecting' | 'connected' | 'error';
+	let logStatus  = $state<LogStatus>('idle');
+	let logs       = $state<LogLine[]>([]);
+	let logError   = $state('');
+	let logSource: EventSource | null = null;
+
+	function parseNginxLine(raw: string): LogLine {
+		const now = new Date().toISOString();
+		
+		// Error log format, e.g. 2026/07/08 17:35:11 [emerg] 1#1: ...
+		const errorMatch = raw.match(/^(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}) \[(\w+)\] (.*)$/);
+		if (errorMatch) {
+			const timeStr = errorMatch[1].replace(/\//g, '-').replace(' ', 'T') + 'Z';
+			return {
+				timestamp: timeStr,
+				level: normalizeLevel(errorMatch[2]),
+				message: errorMatch[3]
+			};
+		}
+		
+		// Access log format, e.g. 172.18.0.1 - - [09/Jul/2026:06:14:48 +0000] "GET / HTTP/1.1" ...
+		const accessMatch = raw.match(/^([\d.]+|[a-fA-F\d:]+) - - \[(.*?)\] (.*)$/);
+		if (accessMatch) {
+			const dateStr = accessMatch[2];
+			let timestamp = now;
+			try {
+				const parts = dateStr.split(':');
+				if (parts.length >= 4) {
+					const datePart = parts[0];
+					const timePart = `${parts[1]}:${parts[2]}:${parts[3]}`;
+					const formatted = datePart.replace(/\//g, ' ') + ' ' + timePart;
+					timestamp = new Date(formatted).toISOString();
+				}
+			} catch {}
+			return {
+				timestamp,
+				level: 'info',
+				message: `${accessMatch[1]} - ${accessMatch[3]}`
+			};
+		}
+		
+		return { timestamp: now, level: 'info', message: raw };
+	}
+
+	function normalizeLevel(raw: string): LogLevel {
+		const l = raw.toLowerCase();
+		if (l === 'debug') return 'debug';
+		if (l === 'warn' || l === 'warning' || l === 'notice') return 'warn';
+		if (l === 'error' || l === 'err' || l === 'emerg' || l === 'crit' || l === 'alert') return 'error';
+		return 'info';
+	}
+
+	function connectLogs() {
+		if (logSource) return;
+		logStatus = 'connecting';
+		logError = '';
+		logs = [];
+
+		const es = new EventSource(`/api/admin/nginx-static/logs/stream?org_id=${orgId}`);
+		logSource = es;
+
+		es.onopen = () => { logStatus = 'connected'; };
+
+		es.onmessage = (e) => {
+			if (!e.data?.trim()) return;
+			logs = [...logs, parseNginxLine(e.data)];
+		};
+
+		es.addEventListener('error', (e: MessageEvent) => {
+			logError = e.data ?? 'Stream error';
+			logStatus = 'error';
+		});
+
+		es.onerror = () => {
+			if (logStatus === 'connecting') {
+				logError = 'Could not connect to log stream';
+				logStatus = 'error';
+				es.close();
+				logSource = null;
+			}
+		};
+	}
+
+	function disconnectLogs() {
+		logSource?.close();
+		logSource = null;
+		logStatus = 'idle';
+	}
+
+	onDestroy(() => {
+		logSource?.close();
 	});
 </script>
 
@@ -165,6 +262,52 @@
 		</div>
 
 	{/if}
+
+	<!-- ── Static Site Logs ───────────────────────────────────────── -->
+	<section class="log-section">
+		<div class="log-section-header">
+			<div class="log-title">
+				<div class="section-icon"><ScrollText size={16} /></div>
+				<div>
+					<h2 class="section-title">Static Server Logs</h2>
+					<p class="section-desc">Real-time log stream from the <code>shipyard-nginx-static</code> container.</p>
+				</div>
+			</div>
+			<div class="log-controls">
+				{#if logStatus === 'connected'}
+					<span class="status-dot connected"></span>
+					<span class="status-label">Live</span>
+					<button class="btn btn-ghost btn-sm log-btn" onclick={disconnectLogs}>
+						<Square size={12} />Stop
+					</button>
+				{:else if logStatus === 'connecting'}
+					<Loader2 size={14} class="spin" />
+					<span class="status-label muted">Connecting…</span>
+				{:else if logStatus === 'error'}
+					<WifiOff size={14} style="color:#EF4444" />
+					<span class="status-label error">{logError}</span>
+					<button class="btn btn-ghost btn-sm log-btn" onclick={connectLogs}>
+						<Play size={12} />Retry
+					</button>
+				{:else}
+					<button class="btn btn-primary btn-sm log-btn" onclick={connectLogs}>
+						<Play size={12} />Connect
+					</button>
+				{/if}
+			</div>
+		</div>
+
+		{#if logStatus === 'idle'}
+			<div class="log-placeholder">
+				<Wifi size={28} />
+				<p>Press <strong>Connect</strong> to start streaming logs</p>
+			</div>
+		{:else}
+			<div class="log-viewer-wrap">
+				<LogViewer {logs} follow={true} maxHeight="420px" />
+			</div>
+		{/if}
+	</section>
 
 </div>
 {/if}
@@ -275,8 +418,58 @@
 		background: transparent;
 	}
 
+	/* ── Log section ── */
+	.log-section {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.log-section-header {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 14px 20px;
+		border-bottom: 1px solid var(--border);
+		background: var(--bg-elevated);
+		gap: 16px;
+		flex-shrink: 0;
+	}
+
+	.log-title { display: flex; align-items: flex-start; gap: 14px; }
+	.section-icon { color: var(--text-secondary); margin-top: 2px; }
+	.section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 2px 0; }
+	.section-desc { font-size: 12px; color: var(--text-muted); margin: 0; }
+
+	.log-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+	.status-dot {
+		width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+	}
+	.status-dot.connected { background: #22C55E; box-shadow: 0 0 6px #22C55E; animation: pulse 2s ease-in-out infinite; }
+	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+	.status-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+	.status-label.muted { color: var(--text-dim); }
+	.status-label.error { color: #EF4444; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	.log-btn { display: flex; align-items: center; gap: 5px; }
+
+	.log-placeholder {
+		display: flex; flex-direction: column; align-items: center; justify-content: center;
+		gap: 10px; padding: 48px 24px;
+		color: var(--text-dim); font-size: 13px;
+	}
+	.log-placeholder p { margin: 0; color: var(--text-muted); }
+	.log-placeholder strong { color: var(--text-primary); }
+
+	.log-viewer-wrap { flex: 1; }
+
 	@media (max-width: 767px) {
 		.conf-layout { grid-template-columns: 1fr; }
 		.conf-list-panel { border-right: none; border-bottom: 1px solid var(--border); max-height: 220px; }
+		.log-section-header { flex-wrap: wrap; gap: 10px; padding: 12px 16px; }
+		.log-controls { width: 100%; justify-content: flex-end; }
 	}
 </style>

@@ -28,7 +28,7 @@
 	let deployments  = $state<Deployment[]>([]);
 	let loading      = $state(true);
 	let loadError    = $state('');
-	let activeTab    = $state<'overview' | 'config' | 'deployments' | 'domains' | 'docs' | 'visitor_logs'>('overview');
+	let activeTab    = $state<'overview' | 'config' | 'git' | 'deployments' | 'domains' | 'docs' | 'visitor_logs'>('overview');
 
 	// ── Visitor Logs ───────────────────────────────────────────────────────────
 	let visitorLogs      = $state<string[]>([]);
@@ -64,6 +64,45 @@
 	let editNodeVersion = $state('');
 	let editInstallCmd  = $state('');
 	let editFramework   = $state('');
+
+	// ── Git Config editing ─────────────────────────────────────────────────────
+	let editGitDeployStrategy   = $state<'push' | 'tag' | 'pull_request'>('push');
+	let editGitDeployBranch     = $state('');
+	let editGitDeployTagPattern = $state('');
+	let gitSaving               = $state(false);
+	let gitSaveError            = $state('');
+	let gitSaveSuccess          = $state('');
+
+	function resetGitEditForm(c: StaticSiteConfig) {
+		editGitDeployStrategy   = c.git_deploy_strategy || 'push';
+		editGitDeployBranch     = c.git_deploy_branch || '';
+		editGitDeployTagPattern = c.git_deploy_tag_pattern || '';
+		gitSaveError            = '';
+		gitSaveSuccess          = '';
+	}
+
+	async function saveGitConfig() {
+		gitSaving = true;
+		gitSaveError = '';
+		gitSaveSuccess = '';
+		
+		const branchVal = editGitDeployBranch.trim() === '' ? null : editGitDeployBranch.trim();
+		const tagPatternVal = editGitDeployTagPattern.trim() === '' ? null : editGitDeployTagPattern.trim();
+
+		const res = await api.updateStaticConfig(serviceId, {
+			git_deploy_strategy:    editGitDeployStrategy,
+			git_deploy_branch:      branchVal,
+			git_deploy_tag_pattern: tagPatternVal,
+		});
+		gitSaving = false;
+		if (res.error) {
+			gitSaveError = res.error.message;
+		} else if (res.data) {
+			config = res.data;
+			resetGitEditForm(res.data);
+			gitSaveSuccess = 'Settings saved successfully';
+		}
+	}
 
 	const FRAMEWORK_PRESETS: Record<string, { install: string; build: string; output: string; ver: string }> = {
 		sveltekit: { install: 'bun install', build: 'bun run build',      output: 'build',          ver: '1' },
@@ -210,6 +249,7 @@
 		} else if (cfgRes.data) {
 			config = cfgRes.data;
 			resetEditForm(cfgRes.data);
+			resetGitEditForm(cfgRes.data);
 		}
 		if (svcRes.data) serviceSlug = svcRes.data.slug;
 	}
@@ -242,6 +282,7 @@
 		editNodeVersion = c.node_version;
 		editInstallCmd  = c.install_command;
 		editFramework   = c.framework;
+		resetGitEditForm(c);
 	}
 
 	function startEdit() {
@@ -486,6 +527,7 @@
 				['overview','Overview'],
 				['deployments','Deployments'],
 				['config','Build Config'],
+				...(config.source === 'git' ? [['git', 'Git']] as const : []),
 				['domains','Domains'],
 				['visitor_logs','Visitor Logs'],
 				['docs','Guide'],
@@ -629,6 +671,74 @@
 					</div>
 				</div>
 			</div>
+		{/if}
+
+		<!-- ── Git tab ── -->
+		{#if activeTab === 'git'}
+			<section class="section">
+				<div class="section-title">Git Deployment Settings</div>
+				<p class="section-desc">Configure the rules that trigger automatic deployments when code changes are pushed to GitHub.</p>
+
+				<div class="form-grid">
+					<div class="form-group">
+						<label class="form-label">Deployment Strategy</label>
+						<select class="form-select" bind:value={editGitDeployStrategy}>
+							<option value="push">Deploy on Push to Branch</option>
+							<option value="tag">Deploy on Tag Push</option>
+							<option value="pull_request">Deploy on Pull Request Merge</option>
+						</select>
+					</div>
+
+					{#if editGitDeployStrategy === 'push'}
+						<div class="form-group">
+							<label class="form-label">Target Branch</label>
+							<input
+								class="form-input mono"
+								bind:value={editGitDeployBranch}
+								placeholder="e.g. main (falls back to service default)"
+							/>
+							<span class="field-hint">Deployments will trigger when commits are pushed to this branch.</span>
+						</div>
+					{/if}
+
+					{#if editGitDeployStrategy === 'tag'}
+						<div class="form-group">
+							<label class="form-label">Tag Pattern</label>
+							<input
+								class="form-input mono"
+								bind:value={editGitDeployTagPattern}
+								placeholder="e.g. v* (or * for all tags)"
+							/>
+							<span class="field-hint">Deployments will trigger when a tag matching this wildcard/glob pattern is pushed.</span>
+						</div>
+					{/if}
+
+					{#if editGitDeployStrategy === 'pull_request'}
+						<div class="form-group">
+							<label class="form-label">Target Branch (PR Merge)</label>
+							<input
+								class="form-input mono"
+								bind:value={editGitDeployBranch}
+								placeholder="e.g. main (falls back to service default)"
+							/>
+							<span class="field-hint">Deployments will trigger when a pull request is merged into this branch.</span>
+						</div>
+					{/if}
+				</div>
+
+				{#if gitSaveError}<div class="form-error">{gitSaveError}</div>{/if}
+				{#if gitSaveSuccess}<div class="form-success">{gitSaveSuccess}</div>{/if}
+
+				<div class="action-row" style="margin-top: 1rem;">
+					<button class="btn-primary" onclick={saveGitConfig} disabled={gitSaving}>
+						{#if gitSaving}
+							<div class="spinner-xs"></div> Saving…
+						{:else}
+							Save Settings
+						{/if}
+					</button>
+				</div>
+			</section>
 		{/if}
 
 		<!-- ── Deployments tab ── -->
@@ -946,7 +1056,13 @@ export default &#123;
 		gap: 2px;
 		margin-bottom: 16px;
 		border-bottom: 1px solid var(--border);
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+	}
+	.tabs::-webkit-scrollbar {
+		display: none;
 	}
 
 	.tab {
@@ -961,6 +1077,7 @@ export default &#123;
 		margin-bottom: -1px;
 		transition: all var(--transition-fast);
 		white-space: nowrap;
+		flex-shrink: 0;
 	}
 	.tab:hover { color: var(--text-primary); }
 	.tab.active { color: var(--accent); border-bottom-color: var(--accent); }

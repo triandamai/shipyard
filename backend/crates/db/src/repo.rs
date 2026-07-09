@@ -882,8 +882,7 @@ impl ServiceRepo for PgServiceRepo {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Service>, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
-            SELECT id, project_id, name, slug, type::text AS type, directory_path,
-                   status, replicas, created_at, updated_at
+            SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             FROM services
             WHERE id = $1
             "#,
@@ -896,8 +895,7 @@ impl ServiceRepo for PgServiceRepo {
     async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<Service>, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
-            SELECT id, project_id, name, slug, type::text AS type, directory_path,
-                   status, replicas, created_at, updated_at
+            SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             FROM services
             WHERE project_id = $1
             ORDER BY name ASC
@@ -911,10 +909,9 @@ impl ServiceRepo for PgServiceRepo {
     async fn create(&self, input: CreateServiceInput) -> Result<Service, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
-            INSERT INTO services (project_id, name, slug, type, directory_path)
-            VALUES ($1, $2, $3, $4::service_type, $5)
-            RETURNING id, project_id, name, slug, type::text AS type, directory_path,
-                      status, replicas, created_at, updated_at
+            INSERT INTO services (project_id, name, slug, type, directory_path, git_repo_url, git_branch, auto_deploy, image, ports, status, replicas, git_deploy_strategy)
+            VALUES ($1, $2, $3, $4::service_type, $5, NULL, 'main', true, '', '[]'::jsonb, 'stopped', 1, 'push')
+            RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             "#,
         )
         .bind(input.project_id)
@@ -932,8 +929,7 @@ impl ServiceRepo for PgServiceRepo {
             UPDATE services
             SET status = $2
             WHERE id = $1
-            RETURNING id, project_id, name, slug, type::text AS type, directory_path,
-                      status, replicas, created_at, updated_at
+            RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -948,8 +944,7 @@ impl ServiceRepo for PgServiceRepo {
             UPDATE services
             SET replicas = $2
             WHERE id = $1
-            RETURNING id, project_id, name, slug, type::text AS type, directory_path,
-                      status, replicas, created_at, updated_at
+            RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -964,8 +959,7 @@ impl ServiceRepo for PgServiceRepo {
             UPDATE services
             SET name = $2, slug = $3, type = $4::service_type, directory_path = $5
             WHERE id = $1
-            RETURNING id, project_id, name, slug, type::text AS type, directory_path,
-                      status, replicas, created_at, updated_at
+            RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
             "#,
         )
         .bind(input.id)
