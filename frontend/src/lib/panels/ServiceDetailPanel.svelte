@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import BrandLogo from '$lib/components/BrandLogo.svelte';
 	import {
 		Play, Square, RefreshCw, Trash2, AlertTriangle,
 		GitBranch, Box, FileCode, Terminal, Settings, X,
@@ -1270,15 +1271,18 @@ let showDbClient    = $state(false);
 	{:else if service}
 		<!-- Header -->
 		<div class="svc-header">
-			<div class="svc-identity">
-				<span class="svc-name">{service.name}</span>
-				<div class="svc-meta">
-					<span class="status-dot {statusClass(service.status)}"></span>
-					<span class="svc-status">{statusLabel(service.status)}</span>
-					<span class="meta-sep">·</span>
-					<span class="svc-type">{typeLabel(service.type)}</span>
-					<span class="meta-sep">·</span>
-					<span class="svc-replicas">{service.replicas} replica{service.replicas === 1 ? '' : 's'}</span>
+			<div class="svc-identity-container">
+				<BrandLogo icon={service.icon} type={service.type} size={32} iconSize={16} class="svc-brand-icon" />
+				<div class="svc-identity">
+					<span class="svc-name">{service.name}</span>
+					<div class="svc-meta">
+						<span class="status-dot {statusClass(service.status)}"></span>
+						<span class="svc-status">{statusLabel(service.status)}</span>
+						<span class="meta-sep">·</span>
+						<span class="svc-type">{typeLabel(service.type)}</span>
+						<span class="meta-sep">·</span>
+						<span class="svc-replicas">{service.replicas} replica{service.replicas === 1 ? '' : 's'}</span>
+					</div>
 				</div>
 			</div>
 			<div class="header-actions">
@@ -2544,6 +2548,21 @@ let showDbClient    = $state(false);
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 8px;
+	}
+	.svc-identity-container {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+	}
+	.svc-brand-icon {
+		width: 32px;
+		height: 32px;
+		border-radius: var(--radius-sm);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		margin-top: 2px;
 	}
 	.svc-identity { display: flex; flex-direction: column; gap: 4px; }
 	.svc-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
