@@ -89,6 +89,15 @@
 		const res = await api.listGitProviders(orgId);
 		if (res.data) {
 			orgGitProviders = res.data;
+			if (service?.git_provider_id) {
+				const activeProv = res.data.find(p => p.id === service.git_provider_id);
+				if (activeProv) {
+					const pType = activeProv.provider_type;
+					if (pType === 'github' || pType === 'gitlab' || pType === 'gitea') {
+						webhookProvider = pType;
+					}
+				}
+			}
 		}
 		loadingGitProviders = false;
 	}
@@ -107,6 +116,15 @@
 		} else if (res.data) {
 			service = res.data;
 			gitProviderSuccess = 'Git provider updated successfully';
+			if (res.data.git_provider_id) {
+				const activeProv = orgGitProviders.find(p => p.id === res.data.git_provider_id);
+				if (activeProv) {
+					const pType = activeProv.provider_type;
+					if (pType === 'github' || pType === 'gitlab' || pType === 'gitea') {
+						webhookProvider = pType;
+					}
+				}
+			}
 		}
 	}
 
