@@ -22,6 +22,7 @@ use crate::settings;
 use crate::shorthand;
 use crate::dbclient;
 use crate::static_site;
+use crate::git_providers;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -73,6 +74,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(dbclient::routes())
         // Static site — /services/:service_id/static/config, /static/upload
         .merge(static_site::routes())
+        // Git providers — org-scoped Git integrations
+        .merge(git_providers::routes())
 }
 
 async fn api_status() -> Json<ApiResponse<serde_json::Value>> {

@@ -75,6 +75,8 @@ pub struct CreateServiceRequest {
     /// Number of replicas (default 1)
     #[serde(default = "default_replicas")]
     pub replicas: i32,
+    pub git_provider_id: Option<Uuid>,
+    pub icon: Option<String>,
 }
 
 fn default_branch() -> String { "main".to_string() }
@@ -95,6 +97,8 @@ pub struct UpdateServiceRequest {
     pub git_deploy_strategy: Option<String>,
     pub git_deploy_branch: Option<Option<String>>,
     pub git_deploy_tag_pattern: Option<Option<String>>,
+    pub git_provider_id: Option<Option<Uuid>>,
+    pub icon: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,7 +199,7 @@ async fn list_services(
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
 
     let services = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, created_at, updated_at
          FROM services
          WHERE project_id = $1
          ORDER BY created_at ASC",
@@ -253,9 +257,9 @@ async fn create_service(
     let ports = serde_json::to_value(&body.ports).unwrap_or_default();
     let replicas = body.replicas.max(1);
     let service = sqlx::query_as::<_, Service>(
-        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, true, $9, $10, 'stopped', $11, NULL, NULL, NULL, 'push', NULL, NULL, NOW(), NOW())
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at",
+        "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, true, $9, $10, 'stopped', $11, NULL, NULL, NULL, 'push', NULL, NULL, $12, $13, NOW(), NOW())
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at",
     )
     .bind(service_id)
     .bind(project_id)
@@ -268,6 +272,8 @@ async fn create_service(
     .bind(&directory_path)
     .bind(&ports)
     .bind(replicas)
+    .bind(body.git_provider_id)
+    .bind(&body.icon)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -329,7 +335,7 @@ async fn get_service(
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
     let service = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -354,7 +360,7 @@ async fn update_service(
 
     // Fetch current service first
     let current = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at
+        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
          FROM services
          WHERE id = $1 AND project_id = $2",
     )
@@ -383,15 +389,24 @@ async fn update_service(
         Some(val) => val,
         None => current.git_deploy_tag_pattern,
     };
+    let new_git_provider_id = match body.git_provider_id {
+        Some(val) => val,
+        None => current.git_provider_id,
+    };
+    let new_icon = match body.icon {
+        Some(val) => val,
+        None => current.icon,
+    };
 
     let service = sqlx::query_as::<_, Service>(
         "UPDATE services
          SET name = $1, status = $2, replicas = $3, ports = $4, image = $5,
              cpu_limit = $6, memory_limit_mb = $7, git_branch = $8, auto_deploy = $9,
              git_deploy_strategy = $10, git_deploy_branch = $11, git_deploy_tag_pattern = $12,
+             git_provider_id = $13, icon = $14,
              updated_at = NOW()
-         WHERE id = $13 AND project_id = $14
-         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, created_at, updated_at",
+         WHERE id = $15 AND project_id = $16
+         RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at",
     )
     .bind(&new_name)
     .bind(&new_status)
@@ -405,6 +420,8 @@ async fn update_service(
     .bind(&new_git_strategy)
     .bind(&new_git_deploy_branch)
     .bind(&new_git_deploy_tag_pattern)
+    .bind(new_git_provider_id)
+    .bind(&new_icon)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)

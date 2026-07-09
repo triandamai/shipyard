@@ -22,6 +22,7 @@
 	import ContainerNode from '$lib/flows/ContainerNode.svelte';
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import PortalNode from '$lib/flows/PortalNode.svelte';
+	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
@@ -61,7 +62,21 @@
 
 	// Keep local arrays in sync with topology store
 	$effect(() => {
-		nodes = $topologyStore.flowNodes;
+		const rawNodes = $topologyStore.flowNodes;
+		if (rawNodes.length === 0) {
+			nodes = [
+				{
+					id: 'add_resource_virtual',
+					type: 'add_resource',
+					position: { x: 350, y: 180 },
+					draggable: false,
+					selectable: true,
+					data: {}
+				}
+			];
+		} else {
+			nodes = rawNodes;
+		}
 	});
 	$effect(() => {
 		edges = $topologyStore.flowEdges;
@@ -75,10 +90,21 @@
 		container:   ContainerNode as any,
 		static_site: StaticSiteNode as any,
 		portal:      PortalNode as any,
+		add_resource: AddResourceNode as any,
 	};
 
+	function openAddResource() {
+		uiStore.pushPanel({
+			component: AddResourcePanel,
+			props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
+			title: 'Add Resource'
+		});
+	}
+
 	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
-		if (node.type === 'service') {
+		if (node.type === 'add_resource') {
+			openAddResource();
+		} else if (node.type === 'service') {
 			const serviceId = node.id.replace(/^svc_/, '');
 			uiStore.pushPanel({
 				key: `service:${serviceId}`,
@@ -372,11 +398,7 @@
 
 		<button
 			class="appbar-add-btn"
-			onclick={() => uiStore.pushPanel({
-				component: AddResourcePanel,
-				props: { projectId, orgId, onCreated: () => syncTopology(orgId, projectId) },
-				title: 'Add Resource'
-			})}
+			onclick={openAddResource}
 		>
 			<Plus size={13} />
 			Add Resource

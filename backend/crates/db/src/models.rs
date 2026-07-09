@@ -98,6 +98,8 @@ pub struct Service {
     pub git_deploy_strategy: String,
     pub git_deploy_branch: Option<String>,
     pub git_deploy_tag_pattern: Option<String>,
+    pub git_provider_id: Option<Uuid>,
+    pub icon: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -266,4 +268,19 @@ pub struct Template {
     pub icon: Option<String>,
     pub is_builtin: bool,
     pub created_at: DateTime<Utc>,
+}
+
+// ─── Git Providers ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct GitProvider {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub provider_type: String,
+    pub auth_type: String,
+    pub token: String,
+    pub username: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

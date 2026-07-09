@@ -188,6 +188,10 @@ let showDbClient    = $state(false);
 	let gitSaveOk       = $state(false);
 	let gitSaveError    = $state('');
 
+	let gitProviderId       = $state<string | null>(null);
+	let orgGitProviders     = $state<import('$lib/api/types').GitProvider[]>([]);
+	let loadingGitProviders = $state(false);
+
 	// ── MQTT cleanup ─────────────────────────────────────────────────
 	let unsubscribeService: (() => void) | null = null;
 	let unsubscribeDeployment: (() => void) | null = null;
@@ -861,6 +865,15 @@ let showDbClient    = $state(false);
 		setTimeout(() => { webhookCopied = false; }, 2000);
 	}
 
+	async function loadGitProviders() {
+		loadingGitProviders = true;
+		const res = await api.listGitProviders(orgId);
+		if (res.data) {
+			orgGitProviders = res.data;
+		}
+		loadingGitProviders = false;
+	}
+
 	function initGitConfig() {
 		if (!service) return;
 		gitAutoDeploy = service.auto_deploy;
@@ -868,6 +881,7 @@ let showDbClient    = $state(false);
 		gitDeployStrategy = service.git_deploy_strategy || 'push';
 		gitDeployBranch   = service.git_deploy_branch || '';
 		gitDeployTagPattern = service.git_deploy_tag_pattern || '';
+		gitProviderId = service.git_provider_id || '';
 	}
 
 	async function saveGitConfig() {
@@ -877,6 +891,7 @@ let showDbClient    = $state(false);
 		
 		const branchVal = gitDeployBranch.trim() === '' ? null : gitDeployBranch.trim();
 		const tagPatternVal = gitDeployTagPattern.trim() === '' ? null : gitDeployTagPattern.trim();
+		const providerVal = gitProviderId === '' ? null : gitProviderId;
 
 		const res = await api.updateService(projectId, serviceId, {
 			git_branch: gitBranch.trim() || 'main',
@@ -884,6 +899,7 @@ let showDbClient    = $state(false);
 			git_deploy_strategy: gitDeployStrategy,
 			git_deploy_branch: branchVal,
 			git_deploy_tag_pattern: tagPatternVal,
+			git_provider_id: providerVal,
 		});
 		if (res.error) {
 			gitSaveError = res.error.message;
@@ -912,7 +928,7 @@ let showDbClient    = $state(false);
 		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
 		if (tab === 'deploy' || tab === 'logs') await loadDeployments();
 		if (tab === 'logs') void loadWebhookToken();
-		if (tab === 'git') { initGitConfig(); void loadWebhookToken(); }
+		if (tab === 'git') { initGitConfig(); void loadWebhookToken(); void loadGitProviders(); }
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'settings') {
@@ -1664,6 +1680,20 @@ let showDbClient    = $state(false);
 			<!-- ── Git deploy config ── -->
 			{:else if activeTab === 'git'}
 				<div class="git-config-section">
+
+					<!-- Linked Git Account / Provider -->
+					<div class="git-card" style="margin-bottom: 1rem; padding: 16px;">
+						<div class="git-field" style="display: flex; flex-direction: column; gap: 4px;">
+							<label class="git-label" style="font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em;">Connected Git Account</label>
+							<select class="git-select" bind:value={gitProviderId} style="width: 100%; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px;">
+								<option value="">Legacy Global Settings Token (Default)</option>
+								{#each orgGitProviders as provider (provider.id)}
+									<option value={provider.id}>{provider.name} ({provider.provider_type.toUpperCase()})</option>
+								{/each}
+							</select>
+							<p class="git-hint" style="font-size: 11px; color: var(--text-muted); margin: 2px 0 0;">Change which Git credentials to use when checking out this repository.</p>
+						</div>
+					</div>
 
 					<!-- Auto-deploy toggle -->
 					<div class="git-card">

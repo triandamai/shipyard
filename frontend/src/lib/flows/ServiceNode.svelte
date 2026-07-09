@@ -36,7 +36,11 @@
 <div class="service-node" class:selected>
 	<div class="node-header">
 		<div class="node-icon">
-			<Container size={13} />
+			{#if data.icon}
+				<img src="/brands/{data.icon}/logo.svg" alt={name} style="width: 14px; height: 14px; object-fit: contain;" />
+			{:else}
+				<Container size={13} />
+			{/if}
 		</div>
 		<div class="node-title">
 			<span class="node-name" title={name}>{name}</span>

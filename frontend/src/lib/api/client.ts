@@ -683,6 +683,19 @@ class ApiClient {
 	async runDbQuery(serviceId: string, body: import('./types').DbQueryRequest): Promise<ApiResponse<import('./types').DbQueryResult>> {
 		return this.post(`/services/${serviceId}/db/query`, body);
 	}
+
+	// ─── Git Providers ──────────────────────────────────────────────────────────
+	async listGitProviders(orgId: string): Promise<ApiResponse<import('./types').GitProvider[]>> {
+		return this.get(`/orgs/${orgId}/git-providers`);
+	}
+
+	async createGitProvider(orgId: string, body: { name: string; provider_type: string; auth_type: string; token: string }): Promise<ApiResponse<import('./types').GitProvider>> {
+		return this.post(`/orgs/${orgId}/git-providers`, body);
+	}
+
+	async deleteGitProvider(orgId: string, providerId: string): Promise<ApiResponse<null>> {
+		return this.delete(`/orgs/${orgId}/git-providers/${providerId}`);
+	}
 }
 
 export const api = new ApiClient();

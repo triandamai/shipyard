@@ -178,30 +178,93 @@ async fn oauth_callback(
         }
     };
 
-    // Persist token to settings
-    let def = match provider_def(&provider) {
-        Some(d) => d,
-        None => return Redirect::to(&format!("{frontend_url}{settings_path}?git_error=unknown_provider")),
+    let org_uuid = match org_id.as_deref().and_then(|id| Uuid::parse_str(id).ok()) {
+        Some(uuid) => uuid,
+        None => {
+            return Redirect::to(&format!("{frontend_url}/settings?git_error=missing_org_id"));
+        }
     };
 
+    // Persist token to git_providers table
+    let username = resolve_username(&provider, &token).await;
+    let name = format!("{} ({})", provider.to_uppercase(), username.as_deref().unwrap_or("OAuth"));
+
+    let provider_id = Uuid::now_v7();
     let result = sqlx::query(
-        "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        "INSERT INTO git_providers (id, org_id, name, provider_type, auth_type, token, username, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'oauth', $5, $6, NOW(), NOW())",
     )
-    .bind(def.settings_key)
-    .bind(serde_json::Value::String(token))
+    .bind(provider_id)
+    .bind(org_uuid)
+    .bind(&name)
+    .bind(&provider)
+    .bind(&token)
+    .bind(username)
     .execute(&state.db)
     .await;
 
     match result {
         Ok(_) => {
-            tracing::info!(%provider, "OAuth token saved to settings");
+            tracing::info!(%provider, "OAuth token saved to git_providers");
             Redirect::to(&format!("{frontend_url}{settings_path}?git_connected={provider}"))
         }
         Err(e) => {
             tracing::error!(%provider, "Failed to save OAuth token: {e}");
             Redirect::to(&format!("{frontend_url}{settings_path}?git_error=save_failed"))
         }
+    }
+}
+
+async fn resolve_username(provider: &str, token: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    match provider {
+        "github" => {
+            #[derive(serde::Deserialize)]
+            struct GitHubUser { login: String }
+            let resp = client.get("https://api.github.com/user")
+                .header("User-Agent", "shipyard-api")
+                .header("Authorization", format!("token {}", token))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let user: GitHubUser = resp.json().await.ok()?;
+                Some(format!("@{}", user.login))
+            } else {
+                None
+            }
+        }
+        "gitlab" => {
+            #[derive(serde::Deserialize)]
+            struct GitLabUser { username: String }
+            let resp = client.get("https://gitlab.com/api/v4/user")
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let user: GitLabUser = resp.json().await.ok()?;
+                Some(format!("@{}", user.username))
+            } else {
+                None
+            }
+        }
+        "bitbucket" => {
+            #[derive(serde::Deserialize)]
+            struct BitbucketUser { username: String }
+            let resp = client.get("https://api.bitbucket.org/2.0/user")
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                let user: BitbucketUser = resp.json().await.ok()?;
+                Some(format!("@{}", user.username))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

@@ -92,6 +92,7 @@
 				slug: slug || deriveSlug(name),
 				type: 'docker',
 				image,
+				icon: 'docker',
 				...(ports.length > 0 ? { ports } : {}),
 				replicas: Math.max(1, replicas),
 			});

@@ -508,6 +508,28 @@ impl DeploymentEngine {
                 self.insert_log(deployment_id, None, "info",
                     &format!("Auto-detected framework: {} — using defaults (build: '{}', output: '{}')",
                         det.framework, det.build_command, det.output_dir)).await;
+                
+                let icon_name = match det.framework {
+                    "sveltekit" => Some("sveltekit"),
+                    "nextjs" => Some("nextjs"),
+                    "nuxt" => Some("nuxtjs"),
+                    "astro" => Some("astro"),
+                    "vite" => Some("vite"),
+                    "vue" => Some("vue"),
+                    "react" => Some("react"),
+                    "angular" => Some("angular"),
+                    "solid" => Some("solid"),
+                    _ => None,
+                };
+                if let Some(ic) = icon_name {
+                    sqlx::query("UPDATE services SET icon = $1 WHERE id = $2")
+                        .bind(ic)
+                        .bind(service_id)
+                        .execute(&self.db)
+                        .await
+                        .ok();
+                }
+
                 let img = match det.framework {
                     "hugo" => "ghcr.io/gohugoio/hugo:latest",
                     "jekyll" => "jekyll/builder:latest",
@@ -2562,6 +2584,22 @@ impl DeploymentEngine {
                         self.insert_log(deployment_id, Some(step_id), "info", &log_msg).await;
                         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &log_msg).await;
 
+                        let icon_name = match ssr_detect.framework.name().to_lowercase().as_str() {
+                            "next.js" => Some("nextjs"),
+                            "sveltekit" => Some("sveltekit"),
+                            "nuxt" => Some("nuxtjs"),
+                            "angular" => Some("angular"),
+                            _ => None,
+                        };
+                        if let Some(ic) = icon_name {
+                            sqlx::query("UPDATE services SET icon = $1 WHERE id = $2")
+                                .bind(ic)
+                                .bind(service_id)
+                                .execute(&self.db)
+                                .await
+                                .ok();
+                        }
+
                         // If no port is set on the service, default it to 3000 in the DB so Traefik routes to it
                         let ports_json: serde_json::Value = sqlx::query_scalar(
                             "SELECT ports FROM services WHERE id = $1"
@@ -2645,6 +2683,107 @@ impl DeploymentEngine {
         let default_branch = default_branch.to_string();
         let target_ref = target_ref.to_string();
 
+        let mut authenticated_url = repo_url.clone();
+        
+        let git_provider_row = sqlx::query_as::<_, (Option<Uuid>,)>(
+            "SELECT git_provider_id FROM services WHERE id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .ok()
+        .flatten();
+
+        let git_provider_id = git_provider_row.and_then(|r| r.0);
+
+        if let Some(prov_id) = git_provider_id {
+            let prov_row = sqlx::query_as::<_, (String, String)>(
+                "SELECT provider_type, token FROM git_providers WHERE id = $1",
+            )
+            .bind(prov_id)
+            .fetch_optional(&self.db)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((provider_type, token)) = prov_row {
+                if repo_url.starts_with("https://") {
+                    let domain_part = repo_url.strip_prefix("https://").unwrap_or(&repo_url);
+                    let clean_domain = if let Some(idx) = domain_part.find('@') {
+                        &domain_part[idx + 1..]
+                    } else {
+                        domain_part
+                    };
+
+                    match provider_type.as_str() {
+                        "github" => {
+                            authenticated_url = format!("https://x-access-token:{}@{}", token, clean_domain);
+                        }
+                        "gitlab" => {
+                            authenticated_url = format!("https://oauth2:{}@{}", token, clean_domain);
+                        }
+                        "bitbucket" => {
+                            authenticated_url = format!("https://x-token-auth:{}@{}", token, clean_domain);
+                        }
+                        _ => {
+                            authenticated_url = format!("https://{}@{}", token, clean_domain);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Backward compatibility fallback to global tokens
+            if repo_url.starts_with("https://") {
+                let domain_part = repo_url.strip_prefix("https://").unwrap_or(&repo_url);
+                let clean_domain = if let Some(idx) = domain_part.find('@') {
+                    &domain_part[idx + 1..]
+                } else {
+                    domain_part
+                };
+
+                let global_token = if repo_url.contains("github.com") {
+                    sqlx::query_as::<_, (serde_json::Value,)>(
+                        "SELECT value FROM system_config WHERE key = 'git_github_token' LIMIT 1"
+                    )
+                    .fetch_optional(&self.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.0.as_str().map(str::to_string))
+                } else if repo_url.contains("gitlab.com") {
+                    sqlx::query_as::<_, (serde_json::Value,)>(
+                        "SELECT value FROM system_config WHERE key = 'git_gitlab_token' LIMIT 1"
+                    )
+                    .fetch_optional(&self.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.0.as_str().map(str::to_string))
+                } else if repo_url.contains("bitbucket.org") {
+                    sqlx::query_as::<_, (serde_json::Value,)>(
+                        "SELECT value FROM system_config WHERE key = 'git_bitbucket_token' LIMIT 1"
+                    )
+                    .fetch_optional(&self.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.0.as_str().map(str::to_string))
+                } else {
+                    None
+                };
+
+                if let Some(token) = global_token {
+                    if repo_url.contains("github.com") {
+                        authenticated_url = format!("https://x-access-token:{}@{}", token, clean_domain);
+                    } else if repo_url.contains("gitlab.com") {
+                        authenticated_url = format!("https://oauth2:{}@{}", token, clean_domain);
+                    } else if repo_url.contains("bitbucket.org") {
+                        authenticated_url = format!("https://x-token-auth:{}@{}", token, clean_domain);
+                    }
+                }
+            }
+        }
+
         let path_exists = tokio::fs::metadata(&repo_path).await.is_ok();
 
         if path_exists {
@@ -2675,6 +2814,7 @@ impl DeploymentEngine {
             let db = self.db.clone();
             let path_cp = repo_path.clone();
             let target_ref_cp = target_ref.clone();
+            let authenticated_url_cp = authenticated_url.clone();
 
             let last_log = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(5)));
             let last_log_cp = std::sync::Arc::clone(&last_log);
@@ -2682,7 +2822,7 @@ impl DeploymentEngine {
             tokio::task::spawn_blocking(move || {
                 let git = GitService::new(&path_cp);
                 // Clone default branch first, then checkout the specific ref
-                git.clone_repo(&repo_url, &path_cp, Some(&default_branch), move |progress| {
+                git.clone_repo(&authenticated_url_cp, &path_cp, Some(&default_branch), move |progress| {
                     if let Ok(mut last) = last_log_cp.lock() {
                         let is_important = progress.contains("100%") || progress.contains("Resolving deltas");
                         if last.elapsed() < std::time::Duration::from_millis(500) && !is_important {

@@ -24,10 +24,9 @@
 
 	let { projectId, orgId, onCreated, initialName = '' }: Props = $props();
 
-	type GitProvider = 'github' | 'gitlab' | 'bitbucket';
-	interface ConnectedAccount { id: GitProvider; label: string; host: string; token: string; }
+	interface ConnectedAccount { id: string; label: string; host: string; token: string; provider_type: 'github' | 'gitlab' | 'bitbucket'; }
 
-	const PROVIDER_COLORS: Record<GitProvider, string> = {
+	const PROVIDER_COLORS: Record<string, string> = {
 		github:    '#24292f',
 		gitlab:    '#FC6D26',
 		bitbucket: '#0052CC',
@@ -71,15 +70,16 @@
 
 	async function loadAccounts() {
 		accountsLoading = true;
-		const res = await api.get<Record<string, string>>('/settings');
+		const res = await api.listGitProviders(orgId);
 		if (res.data) {
-			const d = res.data;
-			const accounts: ConnectedAccount[] = [];
-			if (d.git_github_token)    accounts.push({ id: 'github',    label: 'GitHub',    host: 'github.com',    token: d.git_github_token });
-			if (d.git_gitlab_token)    accounts.push({ id: 'gitlab',    label: 'GitLab',    host: 'gitlab.com',    token: d.git_gitlab_token });
-			if (d.git_bitbucket_token) accounts.push({ id: 'bitbucket', label: 'Bitbucket', host: 'bitbucket.org', token: d.git_bitbucket_token });
-			connectedAccounts = accounts;
-			if (accounts.length === 1) selectedAccount = accounts[0];
+			connectedAccounts = res.data.map(p => ({
+				id: p.id,
+				label: p.name,
+				host: p.provider_type === 'github' ? 'github.com' : p.provider_type === 'gitlab' ? 'gitlab.com' : 'bitbucket.org',
+				token: p.token,
+				provider_type: p.provider_type as any
+			}));
+			if (connectedAccounts.length === 1) selectedAccount = connectedAccounts[0];
 		}
 		accountsLoading = false;
 	}
@@ -91,11 +91,20 @@
 			component: GitAccountPickerPanel,
 			title: 'Select Git Account',
 			props: {
-				accounts: connectedAccounts,
-				onSelect: (account: ConnectedAccount) => {
-					selectedAccount = account;
-					selectedRepo = null;
-					selectedBranch = 'main';
+				accounts: connectedAccounts.map(a => ({
+					id: a.provider_type, // Picker expects 'github', 'gitlab', 'bitbucket' as id for icon resolving
+					label: a.label,
+					host: a.host,
+					token: a.token,
+				})),
+				onSelect: (account: any) => {
+					// Match the selected connectedAccount by token/host
+					const matched = connectedAccounts.find(a => a.token === account.token);
+					if (matched) {
+						selectedAccount = matched;
+						selectedRepo = null;
+						selectedBranch = 'main';
+					}
 					uiStore.popPanel();
 				},
 			},
@@ -108,7 +117,7 @@
 			component: GitRepoPickerPanel,
 			title: 'Select Repository',
 			props: {
-				provider: selectedAccount.id,
+				provider: selectedAccount.provider_type,
 				token: selectedAccount.token,
 				onSelect: (repo: { name: string; fullName: string; cloneUrl: string }) => {
 					selectedRepo = repo;
@@ -166,7 +175,7 @@
 			component: GitBranchPickerPanel,
 			title: 'Select Branch',
 			props: {
-				provider: selectedAccount.id,
+				provider: selectedAccount.provider_type,
 				token: selectedAccount.token,
 				repoFullName: selectedRepo.fullName,
 				onSelect: (branch: string) => {
@@ -187,8 +196,10 @@
 				name,
 				slug: slug || deriveSlug(name),
 				type: buildType === 'compose' ? 'docker_compose' : 'git',
+				icon: (buildType === 'compose' || buildType === 'dockerfile') ? 'docker' : null,
 				git_repo_url: selectedRepo.cloneUrl,
 				git_branch: selectedBranch || 'main',
+				git_provider_id: selectedAccount?.id ?? null,
 				...(ports.length > 0 ? { ports } : {}),
 			});
 
@@ -199,7 +210,7 @@
 			const gitEnvs = [
 				{ key: '__GIT_REPO__',       value: selectedRepo.cloneUrl,                                      is_secret: false },
 				{ key: '__GIT_BRANCH__',     value: selectedBranch || 'main',                                   is_secret: false },
-				{ key: '__GIT_PROVIDER__',   value: selectedAccount?.id ?? '',                                  is_secret: false },
+				{ key: '__GIT_PROVIDER__',   value: selectedAccount?.provider_type ?? '',                       is_secret: false },
 				{ key: '__BUILD_TYPE__',     value: buildType,                                                  is_secret: false },
 				{ key: '__DOCKERFILE_PATH__', value: buildType === 'dockerfile' ? dockerfilePath.trim() : '',   is_secret: false },
 			];
@@ -271,7 +282,7 @@
 			{:else}
 				<button type="button" class="picker-btn" onclick={openAccountPicker}>
 					{#if selectedAccount}
-						<span class="selected-dot" style="background:{PROVIDER_COLORS[selectedAccount.id]}"></span>
+						<span class="selected-dot" style="background:{PROVIDER_COLORS[selectedAccount.provider_type]}"></span>
 						<span class="picker-value">{selectedAccount.label} — {selectedAccount.host}</span>
 					{:else}
 						<span class="picker-placeholder">Select account…</span>

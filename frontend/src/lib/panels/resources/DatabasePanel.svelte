@@ -81,6 +81,14 @@
 		});
 	}
 
+	function getDbIcon(eng: string): string {
+		if (eng === 'postgres') return 'postgresql';
+		if (eng === 'mysql') return 'mysql';
+		if (eng === 'redis') return 'redis';
+		if (eng === 'mongodb') return 'mongodb';
+		return 'database';
+	}
+
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
 		submitError = '';
@@ -91,6 +99,7 @@
 				slug: slug || deriveSlug(name),
 				type: 'database',
 				image,
+				icon: getDbIcon(engine),
 				...(ports.length > 0 ? { ports } : {}),
 			});
 

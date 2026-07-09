@@ -321,6 +321,8 @@ export interface Service {
 	git_deploy_strategy: 'push' | 'tag' | 'pull_request';
 	git_deploy_branch: string | null;
 	git_deploy_tag_pattern: string | null;
+	git_provider_id: string | null;
+	icon: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -674,4 +676,16 @@ export interface StaticSiteConfig {
 	git_deploy_strategy: 'push' | 'tag' | 'pull_request';
 	git_deploy_branch:    string | null;
 	git_deploy_tag_pattern: string | null;
+}
+
+export interface GitProvider {
+	id: string;
+	org_id: string;
+	name: string;
+	provider_type: 'github' | 'gitlab' | 'bitbucket' | 'gitea';
+	auth_type: 'pat' | 'oauth';
+	token: string;
+	username: string | null;
+	created_at: string;
+	updated_at: string;
 }
