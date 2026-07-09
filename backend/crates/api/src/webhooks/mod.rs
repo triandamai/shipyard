@@ -95,10 +95,7 @@ async fn github_webhook(
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?;
 
-    let event_type = headers
-        .get("x-github-event")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("push");
+    let event_type_opt = headers.get("x-github-event").and_then(|v| v.to_str().ok());
 
     let svc_row: Option<(String, String, bool, String, Option<String>, Option<String>)> = sqlx::query_as::<_, (String, String, bool, String, Option<String>, Option<String>)>(
         "SELECT type::text, git_branch, auto_deploy, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern FROM services WHERE id = $1",
@@ -139,6 +136,19 @@ async fn github_webhook(
 
     let target_branch = git_deploy_branch.as_deref().unwrap_or(&services_git_branch);
 
+    if event_type_opt.is_none() {
+        // Manual trigger (copied URL, curl, etc.)
+        let pushed_ref = payload.get("ref").and_then(|v| v.as_str()).unwrap_or_default();
+        let target = if pushed_ref.is_empty() {
+            target_branch
+        } else {
+            branch_from_ref(pushed_ref)
+        };
+        return trigger_deploy(&state, service_id, target).await;
+    }
+
+    let event_type = event_type_opt.unwrap_or("push");
+
     match strategy.as_str() {
         "push" => {
             if event_type != "push" {
@@ -147,12 +157,12 @@ async fn github_webhook(
                 }))));
             }
             let pushed_ref = payload.get("ref").and_then(|v| v.as_str()).unwrap_or_default();
-            if !pushed_ref.starts_with("refs/heads/") {
+            if pushed_ref.starts_with("refs/tags/") {
                 return Ok(Json(ApiResponse::ok(serde_json::json!({
                     "message": "ignored non-branch push",
                 }))));
             }
-            let pushed_branch = pushed_ref.strip_prefix("refs/heads/").unwrap_or(pushed_ref);
+            let pushed_branch = branch_from_ref(pushed_ref);
             if pushed_branch != target_branch {
                 return Ok(Json(ApiResponse::ok(serde_json::json!({
                     "message": "branch mismatch",
