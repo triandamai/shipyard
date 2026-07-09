@@ -92,8 +92,32 @@ async fn github_webhook(
     }
 
     // 4. Parse the payload
-    let payload: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?;
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let payload: serde_json::Value = if content_type.contains("application/x-www-form-urlencoded") {
+        let body_str = String::from_utf8_lossy(&body);
+        let mut json_str = None;
+        for part in body_str.split('&') {
+            if let Some(val) = part.strip_prefix("payload=") {
+                let val_replaced = val.replace('+', " ");
+                if let Ok(decoded) = urlencoding::decode(&val_replaced) {
+                    json_str = Some(decoded.into_owned());
+                    break;
+                }
+            }
+        }
+        let json_str = json_str.ok_or_else(|| {
+            ApiAppError(AppError::BadRequest("Missing payload parameter in url-encoded webhook body".to_string()))
+        })?;
+        serde_json::from_str(&json_str)
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON in form payload: {}", e))))?
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {}", e))))?
+    };
 
     let event_type_opt = headers.get("x-github-event").and_then(|v| v.to_str().ok());
 

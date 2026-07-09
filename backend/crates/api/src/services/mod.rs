@@ -1227,6 +1227,7 @@ fn parse_gitlab_project(url: &str) -> Option<String> {
 /// POST /projects/:project_id/services/:service_id/webhook/auto-register
 async fn auto_register_webhook(
     auth_user: AuthUser,
+    headers: axum::http::HeaderMap,
     Path((project_id, service_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
@@ -1269,8 +1270,45 @@ async fn auto_register_webhook(
     .ok_or_else(|| ApiAppError(AppError::NotFound("Git provider not found".to_string())))?;
 
     let webhook_token = read_webhook_token(&state.db, &state.config.auth.secret_key, service_id).await?;
-    let base_url = state.config.git.api_base_url.trim_end_matches('/');
-    let webhook_url = format!("{}/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token);
+    
+    // 1. Prioritize state.config.app_url from .env
+    let mut base_url = state.config.app_url.trim_end_matches('/').to_string();
+
+    // 2. Fall back to headers if app_url is empty or localhost/local IP
+    if base_url.is_empty()
+        || base_url.contains("://localhost")
+        || base_url.contains("://127.0.0.1")
+        || base_url.contains("://0.0.0.0")
+    {
+        let proto = headers.get("x-forwarded-proto")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("http");
+
+        if let Some(forwarded_host) = headers.get("x-forwarded-host").and_then(|h| h.to_str().ok()) {
+            base_url = format!("{}://{}", proto, forwarded_host);
+        } else if let Some(origin) = headers.get("origin").and_then(|h| h.to_str().ok()) {
+            base_url = origin.trim_end_matches('/').to_string();
+        } else if let Some(referer) = headers.get("referer").and_then(|h| h.to_str().ok()) {
+            if let Ok(url) = reqwest::Url::parse(referer) {
+                if let Some(host) = url.host_str() {
+                    let port_str = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
+                    base_url = format!("{}://{}{}", url.scheme(), host, port_str);
+                }
+            }
+        }
+    }
+
+    let webhook_url = if base_url.ends_with("/api") {
+        format!("{}/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token)
+    } else {
+        format!("{}/api/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token)
+    };
+
+    if webhook_url.contains("://localhost") || webhook_url.contains("://127.0.0.1") || webhook_url.contains("://0.0.0.0") {
+        return Err(ApiAppError(AppError::BadRequest(
+            "Localhost URLs are not supported by GitHub/GitLab. To test webhooks locally, use a tunnel service (like ngrok or Cloudflare Tunnel) to expose your local Shipyard instance, and set git.api_base_url in your config.".to_string()
+        )));
+    }
 
     let client = reqwest::Client::new();
     match git_provider.provider_type.as_str() {
