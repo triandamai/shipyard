@@ -201,7 +201,7 @@
 			name,
 			slug: slug || deriveSlug(name),
 			type: 'static',
-			icon: source === 'git' && (useShipyardJson || framework === 'custom') ? null : getFrameworkIcon(framework),
+			icon: (source === 'git' && (useShipyardJson || framework === 'custom')) ? 'html5' : (getFrameworkIcon(framework) || 'html5'),
 			...(source === 'git' && selectedRepo ? {
 				git_repo_url: selectedRepo.cloneUrl,
 				git_branch:   selectedBranch || 'main',

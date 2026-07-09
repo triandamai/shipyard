@@ -29,15 +29,44 @@
 		return ({ running: 'Running', pending: 'Pending', preparing: 'Preparing',
 		          failed: 'Failed', rejected: 'Rejected', stopped: 'Stopped' } as Record<string,string>)[s] ?? s;
 	}
+	const BRAND_COLORS: Record<string, string> = {
+		postgresql: '#336791',
+		mysql:      '#00758f',
+		redis:      '#dc382d',
+		mongodb:    '#47a248',
+		nextjs:     '#000000',
+		nuxtjs:     '#00dc82',
+		sveltekit:  '#ff3e00',
+		astro:      '#bc52ee',
+		vite:       '#646cff',
+		vue:        '#4fc08d',
+		react:      '#61dafb',
+		angular:    '#dd0031',
+		solid:      '#2c4f7c',
+		docker:     '#2496ed',
+		html5:      '#e34f26',
+	};
+
+	let hasIconError = $state(false);
+	let iconName = $derived(data.icon as string | null);
+	let brandColor = $derived(iconName && !hasIconError ? BRAND_COLORS[iconName] : null);
 </script>
 
 <Handle type="target" position={Position.Left} />
 
 <div class="service-node" class:selected>
 	<div class="node-header">
-		<div class="node-icon">
-			{#if data.icon}
-				<img src="/brands/{data.icon}/logo.svg" alt={name} style="width: 14px; height: 14px; object-fit: contain;" />
+		<div
+			class="node-icon"
+			style={brandColor ? `background: ${brandColor}12; color: ${brandColor}; border: 1px solid ${brandColor}24;` : ''}
+		>
+			{#if iconName && !hasIconError}
+				<img
+					src="/brands/{iconName}/logo.svg"
+					alt={name}
+					style="width: 14px; height: 14px; object-fit: contain;"
+					onerror={() => hasIconError = true}
+				/>
 			{:else}
 				<Container size={13} />
 			{/if}

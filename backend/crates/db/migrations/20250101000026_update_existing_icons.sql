@@ -23,7 +23,7 @@ SET icon = CASE
     WHEN c.framework = 'nuxt' THEN 'nuxtjs'
     WHEN c.framework = 'astro' THEN 'astro'
     WHEN c.framework = 'vite' THEN 'vite'
-    ELSE NULL
+    ELSE 'html5'
 END
 FROM static_site_configs c
 WHERE s.id = c.service_id AND s.type = 'static' AND s.icon IS NULL;
