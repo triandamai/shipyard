@@ -8,7 +8,10 @@ const config = {
 		runes: true
 	},
 	kit: {
-		adapter: adapter()
+		adapter: adapter(),
+		csrf: {
+			checkOrigin: false
+		}
 	}
 };
 

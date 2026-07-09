@@ -31,14 +31,12 @@
 	let failedServices  = $derived(allServices.filter(s => s.status === 'failed').length);
 	let successDeploys  = $derived(recentDeployments.filter(d => d.status === 'success').length);
 
-	onMount(async () => {
+	async function fetchStats(activeOrgId: string, projectsList: Project[]) {
 		loading = true;
 		try {
 			// Members count
-			if (org?.id) {
-				const membersRes = await api.getMembers(org.id);
-				if (membersRes.data) memberCount = membersRes.data.length;
-			}
+			const membersRes = await api.getMembers(activeOrgId);
+			if (membersRes.data) memberCount = membersRes.data.length;
 
 			// Services per project + recent deployments
 			const svcs: Service[] = [];
@@ -46,7 +44,7 @@
 			const byProject: Record<string, Service[]> = {};
 
 			await Promise.all(
-				projects.slice(0, 10).map(async (p: Project) => {
+				projectsList.slice(0, 10).map(async (p: Project) => {
 					const svcsRes = await api.getServices(p.id);
 					const pSvcs = svcsRes.data ?? [];
 					svcs.push(...pSvcs);
@@ -72,8 +70,19 @@
 			recentDeployments = deploys
 				.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 				.slice(0, 10);
+		} catch (err) {
+			console.error("Failed to fetch homepage stats:", err);
 		} finally {
 			loading = false;
+		}
+	}
+
+	$effect(() => {
+		const activeOrgId = org?.id;
+		const projectsList = projects;
+
+		if (activeOrgId) {
+			void fetchStats(activeOrgId, projectsList);
 		}
 	});
 
