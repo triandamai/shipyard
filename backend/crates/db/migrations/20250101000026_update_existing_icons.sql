@@ -23,12 +23,7 @@ SET icon = CASE
     WHEN c.framework = 'nuxt' THEN 'nuxtjs'
     WHEN c.framework = 'astro' THEN 'astro'
     WHEN c.framework = 'vite' THEN 'vite'
-    ELSE 'html5'
+    ELSE NULL
 END
 FROM static_site_configs c
 WHERE s.id = c.service_id AND s.type = 'static' AND s.icon IS NULL;
-
--- Update docker and docker_compose services
-UPDATE services
-SET icon = 'docker'
-WHERE type::text IN ('docker', 'docker_compose') AND icon IS NULL;
