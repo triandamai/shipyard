@@ -540,7 +540,19 @@ impl DockerEngine for BollardDockerEngine {
             format!("{}:latest", spec.image)
         };
 
-        let bollard_spec = Self::build_bollard_spec_with_image(&spec, &image);
+        let mut bollard_spec = Self::build_bollard_spec_with_image(&spec, &image);
+
+        // Retrieve current force_update value and increment it so Swarm always restarts tasks.
+        let current_force = current
+            .spec
+            .as_ref()
+            .and_then(|s| s.task_template.as_ref())
+            .and_then(|t| t.force_update)
+            .unwrap_or(0);
+
+        if let Some(tt) = bollard_spec.task_template.as_mut() {
+            tt.force_update = Some(current_force + 1);
+        }
 
         self.client
             .update_service(
