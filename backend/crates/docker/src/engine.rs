@@ -551,7 +551,7 @@ impl DockerEngine for BollardDockerEngine {
             .unwrap_or(0);
 
         if let Some(tt) = bollard_spec.task_template.as_mut() {
-            tt.force_update = Some(current_force + 1);
+            tt.force_update = Some(current_force.wrapping_add(1));
         }
 
         self.client

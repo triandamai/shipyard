@@ -866,32 +866,6 @@ let showDbClient    = $state(false);
 		setTimeout(() => { webhookCopied = false; }, 2000);
 	}
 
-	let isRegisteringWebhook = $state(false);
-	let registerWebhookResult = $state<string | null>(null);
-	let registerWebhookError = $state<string | null>(null);
-
-	async function autoRegisterWebhook() {
-		if (isRegisteringWebhook) return;
-		isRegisteringWebhook = true;
-		registerWebhookResult = null;
-		registerWebhookError = null;
-		try {
-			const res = await api.post<{ message: string }>(
-				`/projects/${projectId}/services/${serviceId}/webhook/auto-register`
-			);
-			if (res.error) {
-				registerWebhookError = res.error.message;
-			} else if (res.data) {
-				registerWebhookResult = res.data.message;
-				setTimeout(() => { registerWebhookResult = null; }, 5000);
-			}
-		} catch (err: any) {
-			registerWebhookError = err.message || 'Failed to auto-register webhook';
-		} finally {
-			isRegisteringWebhook = false;
-		}
-	}
-
 	async function loadGitProviders() {
 		loadingGitProviders = true;
 		const res = await api.listGitProviders(orgId);
@@ -911,11 +885,26 @@ let showDbClient    = $state(false);
 		gitProviderId = service.git_provider_id || '';
 	}
 
+	let webhookRegStatus = $state<{ ok: boolean; message: string } | null>(null);
+
+	async function tryAutoRegisterWebhook() {
+		try {
+			const res = await api.post<{ message: string }>(
+				`/projects/${projectId}/services/${serviceId}/webhook/auto-register`
+			);
+			if (res.error) return { ok: false, message: res.error.message };
+			return { ok: true, message: res.data ? res.data.message : 'Webhook registered' };
+		} catch (err: any) {
+			return { ok: false, message: err.message ?? 'Webhook registration failed' };
+		}
+	}
+
 	async function saveGitConfig() {
 		gitSaving = true;
 		gitSaveOk = false;
 		gitSaveError = '';
-		
+		webhookRegStatus = null;
+
 		const branchVal = gitDeployBranch.trim() === '' ? null : gitDeployBranch.trim();
 		const tagPatternVal = gitDeployTagPattern.trim() === '' ? null : gitDeployTagPattern.trim();
 		const providerVal = gitProviderId === '' ? null : gitProviderId;
@@ -937,6 +926,15 @@ let showDbClient    = $state(false);
 			}
 			gitSaveOk = true;
 			setTimeout(() => { gitSaveOk = false; }, 2500);
+
+			// Auto-register webhook when auto deploy is on and provider is GitHub/GitLab
+			const selectedProvider = orgGitProviders.find(p => p.id === providerVal);
+			if (gitAutoDeploy && selectedProvider && (selectedProvider.provider_type === 'github' || selectedProvider.provider_type === 'gitlab')) {
+				webhookRegStatus = await tryAutoRegisterWebhook();
+				if (webhookRegStatus.ok) {
+					setTimeout(() => { webhookRegStatus = null; }, 5000);
+				}
+			}
 		}
 		gitSaving = false;
 	}
@@ -1664,23 +1662,10 @@ let showDbClient    = $state(false);
 									<button class="webhook-rotate-btn" onclick={rotateWebhook} disabled={isRotatingWebhook}>
 										<RefreshCw size={11} />Rotate URL
 									</button>
-									{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-										<button class="webhook-rotate-btn" onclick={autoRegisterWebhook} disabled={isRegisteringWebhook} style="color: var(--accent); border-color: var(--accent);">
-											{#if isRegisteringWebhook}
-												<div class="spinner-xs"></div>Registering…
-											{:else}
-												<Globe size={11} />Auto-register webhook
-											{/if}
-										</button>
-									{/if}
 								{/if}
 							</div>
-
-							{#if registerWebhookResult}
-								<div class="webhook-status success">{registerWebhookResult}</div>
-							{/if}
-							{#if registerWebhookError}
-								<div class="webhook-status error">{registerWebhookError}</div>
+							{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+								<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
 							{/if}
 						{/if}
 					</div>
@@ -1848,6 +1833,11 @@ let showDbClient    = $state(false);
 								{/if}
 							</button>
 						</div>
+						{#if webhookRegStatus}
+							<div class="webhook-status {webhookRegStatus.ok ? 'success' : 'error'}" style="margin: 6px 0 0;">
+								{webhookRegStatus.message}
+							</div>
+						{/if}
 					</div>
 
 					<!-- Webhook URL -->
@@ -1898,23 +1888,10 @@ let showDbClient    = $state(false);
 									<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
 										<RefreshCw size={11} />Rotate URL
 									</button>
-									{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-										<button class="webhook-rotate-btn" onclick={autoRegisterWebhook} disabled={isRegisteringWebhook} style="color: var(--accent); border-color: var(--accent);">
-											{#if isRegisteringWebhook}
-												<div class="spinner-xs"></div>Registering…
-											{:else}
-												<Globe size={11} />Auto-register webhook
-											{/if}
-										</button>
-									{/if}
 								{/if}
 							</div>
-
-							{#if registerWebhookResult}
-								<div class="webhook-status success">{registerWebhookResult}</div>
-							{/if}
-							{#if registerWebhookError}
-								<div class="webhook-status error">{registerWebhookError}</div>
+							{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+								<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
 							{/if}
 						{/if}
 					</div>
@@ -3119,6 +3096,11 @@ let showDbClient    = $state(false);
 		background: rgba(239,68,68,0.08);
 		color: #EF4444;
 		border: 1px solid rgba(239,68,68,0.15);
+	}
+	.webhook-status.info {
+		background: color-mix(in srgb, var(--accent) 6%, transparent);
+		color: var(--text-muted);
+		border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
 	}
 
 	/* ── Logs tab (deployment list) ── */

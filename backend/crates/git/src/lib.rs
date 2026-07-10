@@ -241,14 +241,14 @@ impl GitService {
             .fetch(&[] as &[&str], None, None)
             .map_err(|e| AppError::Git(format!("fetch remote: {}", e)))?;
 
-        // 1. Try to resolve as origin/target_ref first (for remote branches)
+        // Try origin/<ref> first (remote branches), then direct (tags, SHAs, local refs).
         let remote_ref = format!("origin/{}", target_ref);
         let object = match repo.revparse_single(&remote_ref) {
             Ok(obj) => obj,
-            Err(_) => {
-                // 2. Fallback to direct resolution (for tags, SHAs, or local-only refs)
+            Err(e) => {
+                tracing::debug!("revparse '{}' failed ({}), trying direct ref", remote_ref, e);
                 repo.revparse_single(target_ref)
-                    .map_err(|e| AppError::Git(format!("resolve ref '{}': {}", target_ref, e)))?
+                    .map_err(|e2| AppError::Git(format!("resolve ref '{}': {}", target_ref, e2)))?
             }
         };
 

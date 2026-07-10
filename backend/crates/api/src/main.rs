@@ -64,6 +64,8 @@ pub struct AppState {
     pub mqtt: Arc<MqttPublisher>,
     pub oauth_states: OAuthStates,
     pub redis: Option<redis::aio::ConnectionManager>,
+    /// Shared HTTP client — reuses the connection pool across all outbound requests.
+    pub http_client: reqwest::Client,
     /// Tight per-IP rate limiter for /auth/login and /auth/register (10 req/min).
     pub auth_limiter: SharedRateLimiter,
     /// Notified whenever a deployment completes so the Swarm sync loop wakes immediately.
@@ -330,6 +332,7 @@ async fn async_main() {
         mqtt: mqtt_publisher,
         oauth_states: Arc::new(DashMap::new()),
         redis: redis_conn,
+        http_client: reqwest::Client::new(),
         auth_limiter,
         swarm_sync_trigger: Arc::clone(&swarm_sync_trigger),
     };

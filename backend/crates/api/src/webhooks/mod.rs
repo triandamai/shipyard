@@ -98,20 +98,19 @@ async fn github_webhook(
         .unwrap_or("");
 
     let payload: serde_json::Value = if content_type.contains("application/x-www-form-urlencoded") {
-        let body_str = String::from_utf8_lossy(&body);
-        let mut json_str = None;
-        for part in body_str.split('&') {
-            if let Some(val) = part.strip_prefix("payload=") {
-                let val_replaced = val.replace('+', " ");
-                if let Ok(decoded) = urlencoding::decode(&val_replaced) {
-                    json_str = Some(decoded.into_owned());
-                    break;
+        let body_str = String::from_utf8(body.to_vec())
+            .map_err(|_| ApiAppError(AppError::BadRequest("webhook body is not valid UTF-8".to_string())))?;
+        let json_str = body_str
+            .split('&')
+            .find_map(|part| {
+                let (k, v) = part.split_once('=')?;
+                if urlencoding::decode(k).ok()?.as_ref() == "payload" {
+                    urlencoding::decode(&v.replace('+', " ")).ok().map(|s| s.into_owned())
+                } else {
+                    None
                 }
-            }
-        }
-        let json_str = json_str.ok_or_else(|| {
-            ApiAppError(AppError::BadRequest("Missing payload parameter in url-encoded webhook body".to_string()))
-        })?;
+            })
+            .ok_or_else(|| ApiAppError(AppError::BadRequest("missing payload field in form-encoded webhook body".to_string())))?;
         serde_json::from_str(&json_str)
             .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON in form payload: {}", e))))?
     } else {

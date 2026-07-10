@@ -304,16 +304,6 @@ impl DeploymentEngine {
         deployment_id: Uuid,
     ) -> AppResult<()> {
         // Steps were pre-inserted by the upload API endpoint.
-        // Resolve artifact path from the MQTT meta we stored in deployment row.
-        let _artifact_path: String = sqlx::query_scalar(
-            "SELECT source_ref FROM deployments WHERE id = $1",
-        )
-        .bind(deployment_id)
-        .fetch_optional(&self.db)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?
-        .unwrap_or_default();
-
         // Artifact is stored at: {sites_dir}/uploads/{service_id}/{deployment_id}.zip
         let sites_base = format!("{}/static", self.data_dir);
         let extract_dir = format!("{sites_base}/{service_id}/extracts/{deployment_id}");

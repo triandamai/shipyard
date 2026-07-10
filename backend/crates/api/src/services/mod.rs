@@ -192,6 +192,15 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
+// ─── SQL helpers ──────────────────────────────────────────────────────────────
+
+const SERVICE_SELECT: &str =
+    "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, \
+     auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, \
+     service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, \
+     git_provider_id, icon, created_at, updated_at \
+     FROM services";
+
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// GET /projects/:project_id/services
@@ -202,12 +211,8 @@ async fn list_services(
 ) -> Result<Json<ApiResponse<Vec<Service>>>, ApiAppError> {
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
 
-    let services = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
-         FROM services
-         WHERE project_id = $1
-         ORDER BY created_at ASC",
-    )
+    let sql = format!("{} WHERE project_id = $1 ORDER BY created_at ASC", SERVICE_SELECT);
+    let services = sqlx::query_as::<_, Service>(&sql)
     .bind(project_id)
     .fetch_all(&state.db)
     .await
@@ -338,11 +343,8 @@ async fn get_service(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Service>>, ApiAppError> {
     check_project_access(&state.db, auth_user.user_id, project_id).await?;
-    let service = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
-         FROM services
-         WHERE id = $1 AND project_id = $2",
-    )
+    let sql = format!("{} WHERE id = $1 AND project_id = $2", SERVICE_SELECT);
+    let service = sqlx::query_as::<_, Service>(&sql)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)
@@ -356,6 +358,7 @@ async fn get_service(
 /// PUT /projects/:project_id/services/:service_id
 async fn update_service(
     auth_user: AuthUser,
+    headers: axum::http::HeaderMap,
     Path((project_id, service_id)): Path<(Uuid, Uuid)>,
     State(state): State<AppState>,
     Json(body): Json<UpdateServiceRequest>,
@@ -363,11 +366,8 @@ async fn update_service(
     rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
 
     // Fetch current service first
-    let current = sqlx::query_as::<_, Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at
-         FROM services
-         WHERE id = $1 AND project_id = $2",
-    )
+    let sql = format!("{} WHERE id = $1 AND project_id = $2", SERVICE_SELECT);
+    let current = sqlx::query_as::<_, Service>(&sql)
     .bind(service_id)
     .bind(project_id)
     .fetch_optional(&state.db)
@@ -447,6 +447,28 @@ async fn update_service(
                 "service_name": service.name,
             }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+    }
+
+    // Auto-register webhook when auto_deploy is switched on and a git provider is configured.
+    let auto_deploy_just_enabled = !current.auto_deploy && service.auto_deploy;
+    let has_git_setup = service.git_repo_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false)
+        && service.git_provider_id.is_some();
+    if auto_deploy_just_enabled && has_git_setup {
+        let bg_state = state.clone();
+        let bg_headers = headers.clone();
+        tokio::spawn(async move {
+            match perform_webhook_registration(
+                &bg_state.db,
+                &bg_state.config,
+                &bg_state.http_client,
+                &bg_headers,
+                service_id,
+                project_id,
+            ).await {
+                Ok(msg) => tracing::info!(service_id = %service_id, "{}", msg),
+                Err(e) => tracing::warn!(service_id = %service_id, "auto webhook registration failed: {}", e.0),
+            }
+        });
     }
 
     Ok(Json(ApiResponse::ok(service)))
@@ -1224,97 +1246,88 @@ fn parse_gitlab_project(url: &str) -> Option<String> {
     None
 }
 
-/// POST /projects/:project_id/services/:service_id/webhook/auto-register
-async fn auto_register_webhook(
-    auth_user: AuthUser,
-    headers: axum::http::HeaderMap,
-    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(
-        &state.db, auth_user.user_id, project_id, "service:write",
-    ).await.map_err(ApiAppError)?;
-    verify_service_project(&state.db, service_id, project_id).await?;
+/// Builds the public base URL for webhook registration.
+///
+/// Priority: configured `app_url` → `x-forwarded-host` proxy header.
+/// `origin` and `referer` are intentionally excluded — they are browser-controlled
+/// and could be spoofed to register webhooks pointing to arbitrary servers.
+fn resolve_base_url(config: &shipyard_common::config::AppConfig, headers: &axum::http::HeaderMap) -> String {
+    let configured = config.app_url.trim_end_matches('/');
+    let is_local = configured.is_empty()
+        || configured.contains("://localhost")
+        || configured.contains("://127.0.0.1")
+        || configured.contains("://0.0.0.0");
 
-    let service = sqlx::query_as::<_, shipyard_db::models::Service>(
-        "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at 
-         FROM services 
-         WHERE id = $1"
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .ok_or_else(|| ApiAppError(AppError::NotFound("Service not found".to_string())))?;
+    if !is_local {
+        return configured.to_string();
+    }
+
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("http");
+
+    if let Some(host) = headers.get("x-forwarded-host").and_then(|h| h.to_str().ok()) {
+        return format!("{}://{}", proto, host);
+    }
+
+    configured.to_string()
+}
+
+/// Core webhook registration logic shared by the HTTP endpoint and the auto-trigger
+/// in `update_service`.  Returns the success message on success.
+async fn perform_webhook_registration(
+    db: &sqlx::PgPool,
+    config: &shipyard_common::config::AppConfig,
+    http_client: &reqwest::Client,
+    headers: &axum::http::HeaderMap,
+    service_id: Uuid,
+    project_id: Uuid,
+) -> Result<String, ApiAppError> {
+    let sql = format!("{} WHERE id = $1", SERVICE_SELECT);
+    let service = sqlx::query_as::<_, shipyard_db::models::Service>(&sql)
+        .bind(service_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        .ok_or_else(|| ApiAppError(AppError::NotFound("Service not found".to_string())))?;
 
     let repo_url = service.git_repo_url.as_deref().unwrap_or("");
     if repo_url.is_empty() {
         return Err(ApiAppError(AppError::BadRequest("Service is not configured with a Git repository".to_string())));
     }
 
-    let git_provider_id = match service.git_provider_id {
-        Some(id) => id,
-        None => return Err(ApiAppError(AppError::BadRequest("No Git provider associated with this service".to_string()))),
-    };
+    let git_provider_id = service.git_provider_id
+        .ok_or_else(|| ApiAppError(AppError::BadRequest("No Git provider associated with this service".to_string())))?;
 
     let git_provider = sqlx::query_as::<_, shipyard_db::models::GitProvider>(
         "SELECT id, org_id, name, provider_type, auth_type, token, username, created_at, updated_at
-         FROM git_providers 
-         WHERE id = $1 AND org_id = (SELECT org_id FROM projects WHERE id = $2)"
+         FROM git_providers
+         WHERE id = $1 AND org_id = (SELECT org_id FROM projects WHERE id = $2)",
     )
     .bind(git_provider_id)
     .bind(project_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound("Git provider not found".to_string())))?;
 
-    let webhook_token = read_webhook_token(&state.db, &state.config.auth.secret_key, service_id).await?;
-    
-    // 1. Prioritize state.config.app_url from .env
-    let mut base_url = state.config.app_url.trim_end_matches('/').to_string();
+    let webhook_token = read_webhook_token(db, &config.auth.secret_key, service_id).await?;
 
-    // 2. Fall back to headers if app_url is empty or localhost/local IP
-    if base_url.is_empty()
-        || base_url.contains("://localhost")
-        || base_url.contains("://127.0.0.1")
-        || base_url.contains("://0.0.0.0")
-    {
-        let proto = headers.get("x-forwarded-proto")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("http");
-
-        if let Some(forwarded_host) = headers.get("x-forwarded-host").and_then(|h| h.to_str().ok()) {
-            base_url = format!("{}://{}", proto, forwarded_host);
-        } else if let Some(origin) = headers.get("origin").and_then(|h| h.to_str().ok()) {
-            base_url = origin.trim_end_matches('/').to_string();
-        } else if let Some(referer) = headers.get("referer").and_then(|h| h.to_str().ok()) {
-            if let Ok(url) = reqwest::Url::parse(referer) {
-                if let Some(host) = url.host_str() {
-                    let port_str = url.port().map(|p| format!(":{}", p)).unwrap_or_default();
-                    base_url = format!("{}://{}{}", url.scheme(), host, port_str);
-                }
-            }
-        }
-    }
-
-    let webhook_url = if base_url.ends_with("/api") {
-        format!("{}/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token)
-    } else {
-        format!("{}/api/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token)
-    };
+    let base_url = resolve_base_url(config, headers);
+    let webhook_url = format!("{}/api/webhooks/{}/{}/{}", base_url, git_provider.provider_type, service_id, webhook_token);
 
     if webhook_url.contains("://localhost") || webhook_url.contains("://127.0.0.1") || webhook_url.contains("://0.0.0.0") {
         return Err(ApiAppError(AppError::BadRequest(
-            "Localhost URLs are not supported by GitHub/GitLab. To test webhooks locally, use a tunnel service (like ngrok or Cloudflare Tunnel) to expose your local Shipyard instance, and set git.api_base_url in your config.".to_string()
+            "Localhost URLs are not supported by GitHub/GitLab. To test webhooks locally, \
+             use a tunnel service (e.g. ngrok or Cloudflare Tunnel) and set app_url in your config.".to_string(),
         )));
     }
 
-    let client = reqwest::Client::new();
     match git_provider.provider_type.as_str() {
         "github" => {
             let (owner, repo) = parse_github_repo(repo_url)
-                .ok_or_else(|| ApiAppError(AppError::BadRequest("Could not parse owner and repo name from GitHub URL".to_string())))?;
+                .ok_or_else(|| ApiAppError(AppError::BadRequest("Could not parse owner/repo from GitHub URL".to_string())))?;
 
             let api_url = format!("https://api.github.com/repos/{}/{}/hooks", owner, repo);
             let payload = serde_json::json!({
@@ -1329,7 +1342,7 @@ async fn auto_register_webhook(
                 }
             });
 
-            let res = client.post(&api_url)
+            let res = http_client.post(&api_url)
                 .header("User-Agent", "shipyard-api")
                 .header("Accept", "application/vnd.github+json")
                 .header("Authorization", format!("token {}", git_provider.token))
@@ -1342,24 +1355,17 @@ async fn auto_register_webhook(
             let body_text = res.text().await.unwrap_or_default();
 
             if status.is_success() {
-                Ok(Json(ApiResponse::ok(serde_json::json!({
-                    "message": "Webhook auto-registered on GitHub successfully!"
-                }))))
+                Ok("Webhook auto-registered on GitHub successfully!".to_string())
             } else if status == StatusCode::UNPROCESSABLE_ENTITY && body_text.contains("already exists") {
-                Ok(Json(ApiResponse::ok(serde_json::json!({
-                    "message": "Webhook already exists on this GitHub repository!"
-                }))))
+                Ok("Webhook already exists on this GitHub repository!".to_string())
             } else {
-                Err(ApiAppError(AppError::BadRequest(format!(
-                    "GitHub API returned {}: {}",
-                    status, body_text
-                ))))
+                Err(ApiAppError(AppError::BadRequest(format!("GitHub API returned {}: {}", status, body_text))))
             }
         }
         "gitlab" => {
             let project_path = parse_gitlab_project(repo_url)
                 .ok_or_else(|| ApiAppError(AppError::BadRequest("Could not parse GitLab project path from URL".to_string())))?;
-            
+
             let encoded_path = urlencoding::encode(&project_path);
             let api_url = format!("https://gitlab.com/api/v4/projects/{}/hooks", encoded_path);
             let payload = serde_json::json!({
@@ -1368,7 +1374,7 @@ async fn auto_register_webhook(
                 "token": webhook_token
             });
 
-            let res = client.post(&api_url)
+            let res = http_client.post(&api_url)
                 .header("User-Agent", "shipyard-api")
                 .header("Authorization", format!("Bearer {}", git_provider.token))
                 .json(&payload)
@@ -1380,21 +1386,39 @@ async fn auto_register_webhook(
             let body_text = res.text().await.unwrap_or_default();
 
             if status.is_success() {
-                Ok(Json(ApiResponse::ok(serde_json::json!({
-                    "message": "Webhook auto-registered on GitLab successfully!"
-                }))))
+                Ok("Webhook auto-registered on GitLab successfully!".to_string())
             } else {
-                Err(ApiAppError(AppError::BadRequest(format!(
-                    "GitLab API returned {}: {}",
-                    status, body_text
-                ))))
+                Err(ApiAppError(AppError::BadRequest(format!("GitLab API returned {}: {}", status, body_text))))
             }
         }
-        _ => Err(ApiAppError(AppError::BadRequest(format!(
-            "Auto-registration is not supported for provider type: {}",
-            git_provider.provider_type
+        other => Err(ApiAppError(AppError::BadRequest(format!(
+            "Auto-registration is not supported for provider type: {}", other
         )))),
     }
+}
+
+/// POST /projects/:project_id/services/:service_id/webhook/auto-register
+async fn auto_register_webhook(
+    auth_user: AuthUser,
+    headers: axum::http::HeaderMap,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(
+        &state.db, auth_user.user_id, project_id, "service:write",
+    ).await.map_err(ApiAppError)?;
+    verify_service_project(&state.db, service_id, project_id).await?;
+
+    let msg = perform_webhook_registration(
+        &state.db,
+        &state.config,
+        &state.http_client,
+        &headers,
+        service_id,
+        project_id,
+    ).await?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "message": msg }))))
 }
 
 // ─── Connection info ───────────────────────────────────────────────────────────
