@@ -1,13 +1,43 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
-	import type { AdminOrg } from '$lib/api/types';
+	import type { AdminOrg, OrgQuota } from '$lib/api/types';
 
 	let orgs = $state<AdminOrg[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let patchingId = $state<string | null>(null);
 	let search = $state('');
+
+	// ── Quota modal ───────────────────────────────────────────────────────────
+	let quotaOrg = $state<AdminOrg | null>(null);
+	let quotaLoading = $state(false);
+	let quotaSaving = $state(false);
+	let quotaError = $state<string | null>(null);
+
+	type QuotaForm = {
+		max_projects: number;
+		max_members: number;
+		max_replicas: number;
+		max_parallel_deployments: number;
+		max_git_providers: number;
+		max_orgs: number;
+		node_count: number;
+		cpu_cores: number;
+		memory_gb: number;
+	};
+
+	let quotaForm = $state<QuotaForm>({
+		max_projects: 3,
+		max_members: 5,
+		max_replicas: 1,
+		max_parallel_deployments: 1,
+		max_git_providers: 1,
+		max_orgs: 1,
+		node_count: 1,
+		cpu_cores: 1,
+		memory_gb: 2,
+	});
 
 	onMount(() => load());
 
@@ -25,6 +55,48 @@
 		await api.patchAdminOrg(org.id, { sub_status: next });
 		await load();
 		patchingId = null;
+	}
+
+	async function openQuota(org: AdminOrg) {
+		quotaOrg = org;
+		quotaLoading = true;
+		quotaError = null;
+		const res = await api.getAdminOrgQuota(org.id);
+		if (res.data) {
+			const q = res.data as OrgQuota;
+			quotaForm = {
+				max_projects: q.max_projects,
+				max_members: q.max_members,
+				max_replicas: q.max_replicas,
+				max_parallel_deployments: q.max_parallel_deployments,
+				max_git_providers: q.max_git_providers,
+				max_orgs: q.max_orgs,
+				node_count: q.node_count,
+				cpu_cores: q.cpu_cores,
+				memory_gb: q.memory_gb,
+			};
+		} else {
+			quotaError = res.error?.message ?? 'Failed to load quota';
+		}
+		quotaLoading = false;
+	}
+
+	function closeQuota() {
+		quotaOrg = null;
+		quotaError = null;
+	}
+
+	async function saveQuota() {
+		if (!quotaOrg) return;
+		quotaSaving = true;
+		quotaError = null;
+		const res = await api.putAdminOrgQuota(quotaOrg.id, quotaForm);
+		if (res.error) {
+			quotaError = res.error.message;
+		} else {
+			closeQuota();
+		}
+		quotaSaving = false;
 	}
 
 	let filtered = $derived(
@@ -65,6 +137,18 @@
 	function initials(name: string): string {
 		return name.split(/\s+/).slice(0,2).map(w => w[0]?.toUpperCase() ?? '').join('');
 	}
+
+	const quotaFields: { key: keyof QuotaForm; label: string; hint: string }[] = [
+		{ key: 'max_projects',             label: 'Max Projects',             hint: '-1 = unlimited' },
+		{ key: 'max_members',              label: 'Max Members',              hint: '-1 = unlimited' },
+		{ key: 'max_replicas',             label: 'Max Replicas / Service',   hint: '-1 = unlimited' },
+		{ key: 'max_parallel_deployments', label: 'Max Parallel Deployments', hint: '-1 = unlimited' },
+		{ key: 'max_git_providers',        label: 'Max Git Providers',        hint: '-1 = unlimited' },
+		{ key: 'max_orgs',                 label: 'Max Orgs',                 hint: '-1 = unlimited' },
+		{ key: 'node_count',               label: 'Node Count',               hint: 'compute nodes allowed' },
+		{ key: 'cpu_cores',                label: 'CPU Cores',                hint: 'total cores' },
+		{ key: 'memory_gb',                label: 'Memory (GB)',              hint: 'total RAM' },
+	];
 </script>
 
 <div class="p">
@@ -109,7 +193,7 @@
 				<span class="r" style="flex:0.7">Members</span>
 				<span class="r" style="flex:0.7">Nodes</span>
 				<span style="flex:1">Created</span>
-				<span class="r" style="flex:1.4">Actions</span>
+				<span class="r" style="flex:1.7">Actions</span>
 			</div>
 			{#each rows as org}
 				{@const tm = tierMeta(org.tier)}
@@ -135,8 +219,9 @@
 					<div class="n r" style="flex:0.7">{org.member_count}</div>
 					<div class="n r" style="flex:0.7">{org.node_count}</div>
 					<div class="d" style="flex:1">{new Date(org.created_at).toLocaleDateString()}</div>
-					<div style="flex:1.4;display:flex;justify-content:flex-end;gap:6px">
+					<div style="flex:1.7;display:flex;justify-content:flex-end;gap:6px">
 						<a class="act act-open" href="/orgs/{org.slug}" target="_blank" rel="noopener">Open</a>
+						<button class="act act-quota" onclick={() => openQuota(org)}>Quota</button>
 						<button
 							class="act"
 							class:act-danger={org.sub_status !== 'suspended'}
@@ -177,6 +262,7 @@
 					<div class="m-card-row"><span class="m-key">Nodes</span><span>{org.node_count}</span></div>
 					<div class="m-card-foot" style="gap:6px">
 						<a class="act act-open" href="/orgs/{org.slug}" target="_blank" rel="noopener">Open</a>
+						<button class="act act-quota" onclick={() => openQuota(org)}>Quota</button>
 						<button
 							class="act"
 							class:act-danger={org.sub_status !== 'suspended'}
@@ -199,6 +285,62 @@
 		</div>
 	{/if}
 </div>
+
+<!-- ── Quota Modal ─────────────────────────────────────────────────────────── -->
+{#if quotaOrg}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<div class="overlay" onclick={(e) => { if (e.target === e.currentTarget) closeQuota(); }}>
+		<div class="modal">
+			<div class="modal-hdr">
+				<div>
+					<div class="modal-title">Edit Quota</div>
+					<div class="modal-sub">{quotaOrg.name} &bull; <span class="mono">{quotaOrg.slug}</span></div>
+				</div>
+				<button class="close-btn" onclick={closeQuota}>
+					<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+						<path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+					</svg>
+				</button>
+			</div>
+
+			{#if quotaLoading}
+				<div class="modal-body">
+					<div class="qload">Loading quota…</div>
+				</div>
+			{:else}
+				<div class="modal-body">
+					<p class="hint-top">Set -1 for unlimited. Changes take effect immediately for all new actions.</p>
+					{#if quotaError}
+						<div class="q-err">{quotaError}</div>
+					{/if}
+					<div class="q-grid">
+						{#each quotaFields as field}
+							<div class="q-field">
+								<label class="q-label" for="qf-{field.key}">{field.label}</label>
+								<div class="q-input-wrap">
+									<input
+										id="qf-{field.key}"
+										type="number"
+										class="q-input"
+										bind:value={quotaForm[field.key]}
+										min="-1"
+									/>
+									<span class="q-hint">{field.hint}</span>
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+				<div class="modal-foot">
+					<button class="btn-cancel" onclick={closeQuota} disabled={quotaSaving}>Cancel</button>
+					<button class="btn-save" onclick={saveQuota} disabled={quotaSaving}>
+						{quotaSaving ? 'Saving…' : 'Save Quota'}
+					</button>
+				</div>
+			{/if}
+		</div>
+	</div>
+{/if}
 
 <style>
 	.p { padding: 40px 36px; }
@@ -298,6 +440,8 @@
 	.act-ok:hover:not(:disabled) { background:rgba(22,163,74,0.14); border-color:rgba(22,163,74,0.32); }
 	.act-open { background:var(--surface-2); color:var(--text-2); border-color:var(--border); text-decoration:none; display:inline-flex; align-items:center; }
 	.act-open:hover { background:var(--accent); color:#000; border-color:var(--accent); }
+	.act-quota { background:var(--surface-2); color:var(--text-2); border-color:var(--border); }
+	.act-quota:hover { background:rgba(99,102,241,0.1); color:#6366f1; border-color:rgba(99,102,241,0.3); }
 
 	.pager { display:flex; align-items:center; gap:10px; padding:12px 0 4px; justify-content:center; }
 	.pg-btn { padding:5px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); transition:background .15s; }
@@ -326,5 +470,84 @@
 		.card-list { display:block; }
 		.hdr { flex-direction:column; align-items:flex-start; }
 		.search input { width:100%; }
+	}
+
+	/* ── Quota Modal ─────────────────────────────────────────────────── */
+	.overlay {
+		position:fixed; inset:0; background:rgba(0,0,0,0.45);
+		display:flex; align-items:center; justify-content:center;
+		z-index:200; backdrop-filter:blur(2px);
+	}
+	.modal {
+		background:var(--surface); border:1px solid var(--border);
+		border-radius:var(--radius); box-shadow:0 20px 60px rgba(0,0,0,0.25);
+		width:520px; max-width:calc(100vw - 32px);
+		max-height:90vh; display:flex; flex-direction:column;
+	}
+	.modal-hdr {
+		display:flex; align-items:flex-start; justify-content:space-between;
+		padding:18px 20px 14px; border-bottom:1px solid var(--border);
+		gap:12px;
+	}
+	.modal-title { font-size:15px; font-weight:700; color:var(--text); letter-spacing:-0.01em; }
+	.modal-sub { font-size:11.5px; color:var(--text-3); margin-top:2px; }
+	.mono { font-family:var(--mono); }
+	.close-btn {
+		width:28px; height:28px; border-radius:var(--radius-sm);
+		background:transparent; border:1px solid transparent;
+		cursor:pointer; color:var(--text-3); display:flex; align-items:center; justify-content:center;
+		flex-shrink:0; transition:background .12s, color .12s;
+	}
+	.close-btn:hover { background:var(--surface-2); color:var(--text); border-color:var(--border); }
+
+	.modal-body { padding:18px 20px; overflow-y:auto; flex:1; }
+	.hint-top { font-size:11.5px; color:var(--text-3); margin:0 0 14px; }
+	.q-err {
+		padding:9px 12px; background:var(--danger-soft);
+		border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius-sm);
+		font-size:12.5px; color:var(--danger); margin-bottom:12px;
+	}
+	.qload { font-size:13px; color:var(--text-3); padding:20px 0; text-align:center; }
+
+	.q-grid {
+		display:grid; grid-template-columns:1fr 1fr; gap:12px;
+	}
+	.q-field { display:flex; flex-direction:column; gap:4px; }
+	.q-label { font-size:11px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
+	.q-input-wrap { display:flex; flex-direction:column; gap:2px; }
+	.q-input {
+		height:34px; padding:0 10px;
+		background:var(--surface-2); border:1px solid var(--border);
+		border-radius:var(--radius-sm); font-size:13px; color:var(--text);
+		outline:none; width:100%; box-sizing:border-box;
+		font-family:var(--mono);
+		transition:border-color .15s, box-shadow .15s;
+	}
+	.q-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring); }
+	.q-hint { font-size:10.5px; color:var(--text-3); }
+
+	.modal-foot {
+		display:flex; justify-content:flex-end; gap:8px;
+		padding:12px 20px 16px; border-top:1px solid var(--border);
+	}
+	.btn-cancel {
+		padding:0 16px; height:34px; border-radius:var(--radius-sm);
+		background:var(--surface-2); border:1px solid var(--border);
+		font-size:13px; font-weight:500; cursor:pointer; color:var(--text-2);
+		font-family:var(--font); transition:background .12s;
+	}
+	.btn-cancel:hover:not(:disabled) { background:var(--border); }
+	.btn-cancel:disabled { opacity:.45; cursor:not-allowed; }
+	.btn-save {
+		padding:0 18px; height:34px; border-radius:var(--radius-sm);
+		background:var(--accent); border:none;
+		font-size:13px; font-weight:600; cursor:pointer; color:#000;
+		font-family:var(--font); transition:opacity .12s;
+	}
+	.btn-save:hover:not(:disabled) { opacity:.88; }
+	.btn-save:disabled { opacity:.45; cursor:not-allowed; }
+
+	@media (max-width: 560px) {
+		.q-grid { grid-template-columns:1fr; }
 	}
 </style>

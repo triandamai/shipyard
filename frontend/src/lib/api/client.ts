@@ -753,6 +753,14 @@ class ApiClient {
 		return this.request('PATCH', `/admin/orgs/${orgId}`, body);
 	}
 
+	getAdminOrgQuota(orgId: string): Promise<ApiResponse<OrgQuota>> {
+		return this.request('GET', `/admin/orgs/${orgId}/quota`);
+	}
+
+	putAdminOrgQuota(orgId: string, body: Omit<OrgQuota, 'org_id' | 'plan_id' | 'projects_used' | 'members_used'>): Promise<ApiResponse<unknown>> {
+		return this.request('PUT', `/admin/orgs/${orgId}/quota`, body);
+	}
+
 	getAdminUsers(): Promise<ApiResponse<import('./types').AdminUser[]>> {
 		return this.request('GET', '/admin/users');
 	}

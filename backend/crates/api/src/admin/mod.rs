@@ -63,6 +63,7 @@ pub fn routes() -> Router<AppState> {
         .route("/stats", get(get_stats))
         .route("/orgs", get(list_orgs))
         .route("/orgs/:org_id", patch(patch_org))
+        .route("/orgs/:org_id/quota", get(get_org_quota).put(put_org_quota))
         .route("/users", get(list_users))
         .route("/users/:user_id", patch(patch_user))
         .route("/nodes", get(list_nodes))
@@ -189,6 +190,116 @@ async fn patch_org(
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "updated": true }))))
+}
+
+// ─── GET /admin/orgs/:org_id/quota ────────────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct AdminOrgQuota {
+    org_id: Uuid,
+    plan_id: Option<Uuid>,
+    max_projects: i32,
+    max_members: i32,
+    max_replicas: i32,
+    max_parallel_deployments: i32,
+    max_git_providers: i32,
+    max_orgs: i32,
+    node_count: i32,
+    cpu_cores: i32,
+    memory_gb: i32,
+}
+
+async fn get_org_quota(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(org_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<AdminOrgQuota>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:organization:view").await?;
+
+    let row: Option<AdminOrgQuota> = sqlx::query_as(
+        "SELECT org_id, plan_id,
+                max_projects, max_members, max_replicas, max_parallel_deployments,
+                max_git_providers, max_orgs, node_count, cpu_cores, memory_gb
+         FROM org_quota WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let quota = row.unwrap_or(AdminOrgQuota {
+        org_id,
+        plan_id: None,
+        max_projects: 3,
+        max_members: 5,
+        max_replicas: 1,
+        max_parallel_deployments: 1,
+        max_git_providers: 1,
+        max_orgs: 1,
+        node_count: 1,
+        cpu_cores: 1,
+        memory_gb: 2,
+    });
+
+    Ok(Json(ApiResponse::ok(quota)))
+}
+
+// ─── PUT /admin/orgs/:org_id/quota ────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct PutOrgQuotaRequest {
+    max_projects: i32,
+    max_members: i32,
+    max_replicas: i32,
+    max_parallel_deployments: i32,
+    max_git_providers: i32,
+    max_orgs: i32,
+    node_count: i32,
+    cpu_cores: i32,
+    memory_gb: i32,
+}
+
+async fn put_org_quota(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(org_id): Path<Uuid>,
+    Json(body): Json<PutOrgQuotaRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:organization:manage").await?;
+
+    sqlx::query(
+        "INSERT INTO org_quota
+             (org_id, max_projects, max_members, max_replicas, max_parallel_deployments,
+              max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+              applied_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+         ON CONFLICT (org_id) DO UPDATE SET
+             max_projects             = EXCLUDED.max_projects,
+             max_members              = EXCLUDED.max_members,
+             max_replicas             = EXCLUDED.max_replicas,
+             max_parallel_deployments = EXCLUDED.max_parallel_deployments,
+             max_git_providers        = EXCLUDED.max_git_providers,
+             max_orgs                 = EXCLUDED.max_orgs,
+             node_count               = EXCLUDED.node_count,
+             cpu_cores                = EXCLUDED.cpu_cores,
+             memory_gb                = EXCLUDED.memory_gb,
+             updated_at               = NOW()",
+    )
+    .bind(org_id)
+    .bind(body.max_projects)
+    .bind(body.max_members)
+    .bind(body.max_replicas)
+    .bind(body.max_parallel_deployments)
+    .bind(body.max_git_providers)
+    .bind(body.max_orgs)
+    .bind(body.node_count)
+    .bind(body.cpu_cores)
+    .bind(body.memory_gb)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "updated": true }))))
 }
