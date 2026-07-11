@@ -237,6 +237,7 @@ class ApiClient {
 		admin_password: string;
 		org_name: string;
 		org_slug?: string;
+		plan_id?: string;
 	}): Promise<ApiResponse<unknown>> {
 		return this.post('/setup/init', data);
 	}

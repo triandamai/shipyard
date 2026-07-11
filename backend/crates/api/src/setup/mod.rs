@@ -58,6 +58,8 @@ pub struct InitRequest {
     pub org_name: String,
     #[serde(default)]
     pub org_slug: Option<String>,
+    #[serde(default)]
+    pub plan_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -311,19 +313,96 @@ async fn init(
     .await
     .map_err(|e| ApiAppError(AppError::Database(format!("Failed to create admin user: {e}"))))?;
 
-    // 2. Insert organization
+    // 2. Resolve plan: use provided plan_id or fall back to the free plan
+    let plan_id: Uuid = match body.plan_id {
+        Some(id) => {
+            let exists: Option<(bool,)> = sqlx::query_as("SELECT TRUE FROM plans WHERE id = $1 AND enabled = TRUE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            if exists.is_none() {
+                return Err(ApiAppError(AppError::BadRequest("Invalid or disabled plan".to_string())));
+            }
+            id
+        }
+        None => {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE name = 'free' LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+                .unwrap_or_else(Uuid::now_v7)
+        }
+    };
+
+    let plan_name: Option<String> = sqlx::query_scalar("SELECT name FROM plans WHERE id = $1")
+        .bind(plan_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let tier = plan_name.as_deref().unwrap_or("free");
+
+    // 3. Insert organization with plan_id
     sqlx::query(
-        "INSERT INTO organizations (id, name, slug, created_at)
-         VALUES ($1, $2, $3, NOW())",
+        "INSERT INTO organizations (id, name, slug, plan_id, created_at)
+         VALUES ($1, $2, $3, $4, NOW())",
     )
     .bind(org_id)
     .bind(&body.org_name)
     .bind(&org_slug)
+    .bind(plan_id)
     .execute(&mut *tx)
     .await
     .map_err(|e| ApiAppError(AppError::Database(format!("Failed to create organization: {e}"))))?;
 
-    // 3. Insert org membership (owner role)
+    // 3a. Insert org_billing snapshot
+    sqlx::query(
+        "INSERT INTO org_billing (org_id, plan_id, tier, sub_status, updated_at)
+         VALUES ($1, $2, $3::subscription_tier, 'active', NOW())
+         ON CONFLICT (org_id) DO UPDATE
+             SET plan_id = EXCLUDED.plan_id, tier = EXCLUDED.tier,
+                 sub_status = 'active', updated_at = NOW()",
+    )
+    .bind(org_id)
+    .bind(plan_id)
+    .bind(tier)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(format!("Failed to create org billing: {e}"))))?;
+
+    // 3b. Insert org_quota — frozen snapshot of plan limits at setup time
+    sqlx::query(
+        "INSERT INTO org_quota (
+             org_id, plan_id,
+             max_projects, max_members, max_replicas, max_parallel_deployments,
+             max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+             applied_at, updated_at
+         )
+         SELECT $1, id,
+                max_projects, max_members, max_replicas, max_parallel_deployments,
+                max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+                NOW(), NOW()
+         FROM plans WHERE id = $2
+         ON CONFLICT (org_id) DO UPDATE SET
+             plan_id                  = EXCLUDED.plan_id,
+             max_projects             = EXCLUDED.max_projects,
+             max_members              = EXCLUDED.max_members,
+             max_replicas             = EXCLUDED.max_replicas,
+             max_parallel_deployments = EXCLUDED.max_parallel_deployments,
+             max_git_providers        = EXCLUDED.max_git_providers,
+             max_orgs                 = EXCLUDED.max_orgs,
+             node_count               = EXCLUDED.node_count,
+             cpu_cores                = EXCLUDED.cpu_cores,
+             memory_gb                = EXCLUDED.memory_gb,
+             applied_at               = NOW(), updated_at = NOW()",
+    )
+    .bind(org_id)
+    .bind(plan_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(format!("Failed to create org quota: {e}"))))?;
+
+    // 5. Insert org membership (owner role)
     sqlx::query(
         "INSERT INTO org_members (id, org_id, user_id, role, created_at)
          VALUES ($1, $2, $3, 'owner'::member_role, NOW())",
@@ -335,7 +414,7 @@ async fn init(
     .await
     .map_err(|e| ApiAppError(AppError::Database(format!("Failed to create org member: {e}"))))?;
 
-    // 4. Set setup_status = "done"
+    // 6. Set setup_status = "done"
     sqlx::query(
         r#"
         INSERT INTO system_config (key, value, updated_at)
