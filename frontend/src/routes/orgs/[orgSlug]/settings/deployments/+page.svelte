@@ -176,14 +176,19 @@
 	</div>
 
 	<!-- ── Parallelism setting ── -->
-	<div class="parallelism-card">
+	<div class="parallelism-card" class:parallelism-locked={maxParallel === -1}>
 		<div class="parallelism-info">
 			<Zap size={15} />
 			<div>
 				<span class="parallelism-label">Max parallel deployments</span>
-				<span class="parallelism-hint">Deployments beyond this limit are queued. Default is <code>2</code>. Set to <code>0</code> for unlimited.</span>
+				{#if maxParallel === -1}
+					<span class="parallelism-hint plan-locked">Fixed to <strong>1</strong> by your plan — upgrade to change this limit.</span>
+				{:else}
+					<span class="parallelism-hint">Deployments beyond this limit are queued. Default is <code>2</code>. Set to <code>0</code> for unlimited.</span>
+				{/if}
 			</div>
 		</div>
+		{#if maxParallel !== -1}
 		<div class="parallelism-controls">
 			<input
 				type="number"
@@ -197,6 +202,9 @@
 				{#if savedParallel}<Check size={13} /> Saved{:else if savingParallel}<Loader2 size={13} class="spin" /> Saving…{:else}<Save size={13} /> Save{/if}
 			</button>
 		</div>
+		{:else}
+		<span class="locked-badge">Plan Locked</span>
+		{/if}
 		{#if parallelError}<p class="inline-error">{parallelError}</p>{/if}
 	</div>
 
@@ -347,6 +355,9 @@
 	}
 	.parallelism-label { display: block; font-size: 13px; font-weight: 500; color: var(--text-primary); }
 	.parallelism-hint  { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+	.parallelism-hint.plan-locked { color: var(--warn, #b45309); }
+	.parallelism-locked { background: var(--bg-elevated); border-color: rgba(180,83,9,0.2); }
+	.locked-badge { display:inline-flex; align-items:center; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:600; background:rgba(180,83,9,0.08); color:#b45309; border:1px solid rgba(180,83,9,0.2); white-space:nowrap; }
 	.parallelism-controls { display: flex; align-items: center; gap: 8px; }
 	.parallel-input {
 		width: 100px;

@@ -26,6 +26,7 @@ pub struct Claims {
     pub iat: usize,
     pub token_type: String,      // "access" | "refresh"
     pub jti: Option<String>,     // JWT ID — set on refresh tokens for session tracking
+    pub permissions: Vec<String>,
 }
 
 // ─── JWT Helpers ─────────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ pub fn create_access_token(
     email: &str,
     secret: &str,
     expiry_secs: u64,
+    permissions: Vec<String>,
 ) -> AppResult<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -48,6 +50,7 @@ pub fn create_access_token(
         exp: (now + expiry_secs) as usize,
         token_type: "access".to_string(),
         jti: None,
+        permissions,
     };
 
     encode(
@@ -80,6 +83,7 @@ pub fn create_refresh_token(
         exp: (now + expiry_secs) as usize,
         token_type: "refresh".to_string(),
         jti: Some(jti.clone()),
+        permissions: vec![],
     };
 
     let token = encode(

@@ -10,6 +10,7 @@ use shipyard_common::error::{AppError, AppResult};
 use shipyard_common::types::{LogLevel, MqttPayload};
 use shipyard_docker::engine::DockerEngine;
 use shipyard_docker::types::{MountSpec, MountType, PortSpec, ResourceSpec, ServiceSpec};
+use shipyard_docker::BollardDockerEngine;
 use shipyard_git::GitService;
 use shipyard_mqtt::publisher::MqttPublisher;
 use shipyard_mqtt::topics;
@@ -65,6 +66,22 @@ pub struct DeploymentEngine {
     pub static_retention: usize,
 }
 
+impl Clone for DeploymentEngine {
+    fn clone(&self) -> Self {
+        Self {
+            docker: Arc::clone(&self.docker),
+            db: self.db.clone(),
+            mqtt: Arc::clone(&self.mqtt),
+            label_prefix: self.label_prefix.clone(),
+            traefik_network: self.traefik_network.clone(),
+            secret_key: self.secret_key.clone(),
+            port_proxy: self.port_proxy,
+            data_dir: self.data_dir.clone(),
+            static_retention: self.static_retention,
+        }
+    }
+}
+
 impl DeploymentEngine {
     pub fn new(
         docker: Arc<dyn DockerEngine>,
@@ -87,6 +104,50 @@ impl DeploymentEngine {
             port_proxy,
             data_dir,
             static_retention,
+        }
+    }
+
+    /// Returns the DockerEngine that should be used for a given service.
+    /// Uses public_ip for now (WireGuard overlay ip_address is not yet populated).
+    async fn resolve_docker_for_service(
+        &self,
+        service_id: Uuid,
+    ) -> Arc<dyn DockerEngine> {
+        let row = sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT COALESCE(cn.ip_address, cn.public_ip, ''), cn.status::text
+            FROM service_node_assignments sna
+            JOIN compute_nodes cn ON cn.id = sna.node_id
+            WHERE sna.service_id = $1
+            "#,
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await;
+
+        match row {
+            Ok(Some((ip, status))) if status == "active" && !ip.is_empty() => {
+                let addr = format!("tcp://{}:2375", ip);
+                match BollardDockerEngine::with_http(&addr) {
+                    Ok(engine) => {
+                        tracing::debug!(service_id = %service_id, node_ip = %ip, "routing deploy to dedicated node");
+                        Arc::new(engine) as Arc<dyn DockerEngine>
+                    }
+                    Err(e) => {
+                        tracing::warn!(service_id = %service_id, "failed to connect to node {}: {}, falling back to local", ip, e);
+                        Arc::clone(&self.docker)
+                    }
+                }
+            }
+            Ok(Some((_, status))) => {
+                tracing::debug!(service_id = %service_id, node_status = %status, "node not active, using local docker");
+                Arc::clone(&self.docker)
+            }
+            Ok(None) => Arc::clone(&self.docker),
+            Err(e) => {
+                tracing::warn!(service_id = %service_id, "node assignment lookup failed: {}, using local docker", e);
+                Arc::clone(&self.docker)
+            }
         }
     }
 
@@ -118,7 +179,11 @@ impl DeploymentEngine {
             .parse()
             .map_err(|_| AppError::Internal("Invalid project_id UUID".to_string()))?;
 
-        self.execute_deployment(
+        // ── Resolve target Docker engine ──────────────────────────────────────
+        let resolved_docker = self.resolve_docker_for_service(service_id).await;
+        let engine = Self { docker: resolved_docker, ..self.clone() };
+
+        engine.execute_deployment(
             org_id, project_id, service_id, deployment_id,
             triggered_by, source_ref, &svc_type,
         )
@@ -153,7 +218,11 @@ impl DeploymentEngine {
             .parse()
             .map_err(|_| AppError::Internal("Invalid project_id UUID".to_string()))?;
 
-        self.execute_rollback(org_id, project_id, service_id, deployment_id, triggered_by, image_ref)
+        // ── Resolve target Docker engine ──────────────────────────────────────
+        let resolved_docker = self.resolve_docker_for_service(service_id).await;
+        let engine = Self { docker: resolved_docker, ..self.clone() };
+
+        engine.execute_rollback(org_id, project_id, service_id, deployment_id, triggered_by, image_ref)
             .await?;
         Ok(deployment_id)
     }
@@ -262,8 +331,8 @@ impl DeploymentEngine {
         (0, "extract_archive"),
         (1, "parse_shipyard_config"),
         (2, "publish_files"),
-        (3, "write_nginx_conf"),
-        (4, "go_live"),
+        (3, "go_live"),
+        (4, "write_nginx_conf"),
         (5, "finalize"),
     ];
 
@@ -272,8 +341,8 @@ impl DeploymentEngine {
         (1, "build_site"),
         (2, "parse_shipyard_config"),
         (3, "publish_files"),
-        (4, "write_nginx_conf"),
-        (5, "go_live"),
+        (4, "go_live"),
+        (5, "write_nginx_conf"),
         (6, "finalize"),
     ];
 
@@ -352,21 +421,22 @@ impl DeploymentEngine {
         // Clean up extract dir — files have been published; no need to keep the intermediate copy.
         let _ = tokio::fs::remove_dir_all(&extract_dir).await;
 
-        // Step 3: write_nginx_conf — use the `current` symlink path so the config stays valid
-        // across deployments and can be regenerated when domains change without knowing deployment_id.
-        let current_public = format!("{sites_base}/{service_id}/current/public");
+        // Step 3: go_live — atomic symlink swap (current → new version dir).
+        // This must happen BEFORE write_nginx_conf so that when nginx reloads it can
+        // immediately serve from `current/public` without a transient 404 window.
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let r = self.static_step_write_nginx_conf(
-            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
-        ).await;
-        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
-
-        // Step 4: go_live — atomic symlink swap
-        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
         let r = self.static_step_go_live(
             &current_link, &version_dir,
             format!("{sites_base}/{service_id}"), self.static_retention,
             deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 4: write_nginx_conf — `current/public` now exists (go_live just ran).
+        let current_public = format!("{sites_base}/{service_id}/current/public");
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
+        let r = self.static_step_write_nginx_conf(
+            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -576,20 +646,21 @@ impl DeploymentEngine {
         // Clean up the build output dir — contents are now in public_dir; keep the repo for incremental pulls.
         let _ = tokio::fs::remove_dir_all(&built_output_path).await;
 
-        // Step 4: write_nginx_conf — use the `current` symlink path (see upload pipeline comment).
-        let current_public = format!("{sites_base}/{service_id}/current/public");
+        // Step 4: go_live — atomic symlink swap (must run before write_nginx_conf so
+        // `current/public` exists when nginx reloads, avoiding a transient 404 window).
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
-        let r = self.static_step_write_nginx_conf(
-            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
-        ).await;
-        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
-
-        // Step 5: go_live
-        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
         let r = self.static_step_go_live(
             &current_link, &version_dir,
             format!("{sites_base}/{service_id}"), self.static_retention,
             deployment_id, step_id,
+        ).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Step 5: write_nginx_conf — `current/public` now exists (go_live just ran).
+        let current_public = format!("{sites_base}/{service_id}/current/public");
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
+        let r = self.static_step_write_nginx_conf(
+            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -1108,7 +1179,7 @@ impl DeploymentEngine {
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, svc_result).await?;
 
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 7).await?;
-        let fin_result = self.step_finalize(service_id).await;
+        let fin_result = self.step_finalize(org_id, project_id, service_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, fin_result).await?;
 
         Ok(())
@@ -1418,7 +1489,7 @@ impl DeploymentEngine {
 
         // Step 7: Finalize — update service status
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 7).await?;
-        let fin_result = self.step_finalize(service_id).await;
+        let fin_result = self.step_finalize(org_id, project_id, service_id).await;
         self.finish_step(
             org_id,
             project_id,
@@ -2574,12 +2645,12 @@ impl DeploymentEngine {
                         self.insert_log(deployment_id, Some(step_id), "info", &log_msg).await;
                         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &log_msg).await;
 
-                        let icon_name = match ssr_detect.framework.name().to_lowercase().as_str() {
-                            "next.js" => Some("nextjs"),
-                            "sveltekit" => Some("sveltekit"),
-                            "nuxt" => Some("nuxtjs"),
-                            "angular" => Some("angular"),
-                            _ => None,
+                        let icon_name = match ssr_detect.framework {
+                            crate::ssr::SsrFramework::NextJs        => Some("nextjs"),
+                            crate::ssr::SsrFramework::SvelteKit     => Some("sveltekit"),
+                            crate::ssr::SsrFramework::Nuxt          => Some("nuxtjs"),
+                            crate::ssr::SsrFramework::Angular       => Some("angular"),
+                            crate::ssr::SsrFramework::TanStackStart => Some("tanstack"),
                         };
                         if let Some(ic) = icon_name {
                             sqlx::query("UPDATE services SET icon = $1 WHERE id = $2")
@@ -3159,6 +3230,32 @@ impl DeploymentEngine {
         let (db_replicas, db_ports_json, db_cpu_limit, db_mem_limit) = svc_row.unwrap_or((1, None, None, None));
         let intended_replicas = (db_replicas.max(1)) as u64;
 
+        // Look up the org's billing tier to apply free-tier resource caps.
+        let billing_tier: Option<String> = sqlx::query_scalar(
+            r#"SELECT ob.tier::text
+               FROM services s
+               JOIN projects p ON p.id = s.project_id
+               LEFT JOIN org_billing ob ON ob.org_id = p.org_id
+               WHERE s.id = $1"#,
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .ok()
+        .flatten();
+
+        let is_free_tier = billing_tier.as_deref().map(|t| t == "free").unwrap_or(true);
+
+        // Free tier: cap at 0.5 vCPU and 512 MB. Pro/Max: use the service config as-is.
+        let (effective_cpu, effective_mem): (Option<f64>, Option<i64>) = if is_free_tier {
+            (
+                Some(db_cpu_limit.map(|c| c.min(0.5_f64)).unwrap_or(0.5_f64)),
+                Some(db_mem_limit.map(|m| m.min(512)).unwrap_or(512)),
+            )
+        } else {
+            (db_cpu_limit, db_mem_limit)
+        };
+
         // Parse port strings into PortSpec structs.
         let ports: Vec<PortSpec> = db_ports_json
             .as_ref()
@@ -3212,10 +3309,10 @@ impl DeploymentEngine {
         let proxy_ports = if self.port_proxy { ports.clone() } else { vec![] };
         let swarm_ports = if self.port_proxy { vec![] } else { ports };
 
-        let resources = if db_cpu_limit.is_some() || db_mem_limit.is_some() {
+        let resources = if effective_cpu.is_some() || effective_mem.is_some() {
             Some(ResourceSpec {
-                cpu_limit: db_cpu_limit,
-                memory_limit_mb: db_mem_limit.map(|m| m as u64),
+                cpu_limit: effective_cpu,
+                memory_limit_mb: effective_mem.map(|m| m as u64),
                 cpu_reservation: None,
                 memory_reservation_mb: None,
             })
@@ -3348,10 +3445,15 @@ impl DeploymentEngine {
         Ok(())
     }
 
-    /// Step 7: Finalize — mark the service as 'running' (preserves replicas set by user).
-    async fn step_finalize(&self, service_id: Uuid) -> AppResult<()> {
+    /// Step 7: Finalize — mark the service as 'running' and restore replica count.
+    ///
+    /// If `stop_service` set `replicas = 0` before this deploy, GREATEST(replicas,1)
+    /// resets it to 1 so the topology shows the correct count immediately.
+    async fn step_finalize(&self, org_id: Uuid, project_id: Uuid, service_id: Uuid) -> AppResult<()> {
         sqlx::query(
-            "UPDATE services SET status = 'running', updated_at = NOW() WHERE id = $1",
+            "UPDATE services
+             SET status = 'running', replicas = GREATEST(replicas, 1), updated_at = NOW()
+             WHERE id = $1",
         )
         .bind(service_id)
         .execute(&self.db)
@@ -3359,6 +3461,16 @@ impl DeploymentEngine {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         tracing::info!("Service {service_id} marked as running");
+
+        // Publish topology.changed immediately so the canvas reflects the new state
+        // without waiting for the Docker container-start event.
+        let topic = topics::topology(org_id, project_id);
+        let _ = self.mqtt.publish_status(
+            &topic,
+            &MqttPayload::new("topology.changed")
+                .with_meta(serde_json::json!({ "reason": "deploy_finalized", "service_id": service_id })),
+        ).await;
+
         Ok(())
     }
 }

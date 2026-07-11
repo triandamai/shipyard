@@ -212,6 +212,15 @@ impl BollardDockerEngine {
         Ok(Self { client })
     }
 
+    /// Connect to a remote Docker daemon over a plain HTTP TCP connection.
+    /// Intended for WireGuard overlay connections where the tunnel itself
+    /// provides encryption — use port 2375 on the remote host.
+    pub fn with_http(addr: &str) -> AppResult<Self> {
+        let client = Docker::connect_with_http(addr, 120, bollard::API_DEFAULT_VERSION)
+            .map_err(|e| AppError::Internal(format!("Docker HTTP connect '{}': {}", addr, e)))?;
+        Ok(Self { client })
+    }
+
     /// Return a reference to the underlying bollard `Docker` client.
     pub fn client(&self) -> &Docker {
         &self.client

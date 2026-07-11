@@ -54,6 +54,11 @@
 
 		orgs = res.data;
 		orgStore.setOrganizations(res.data);
+
+		if (orgs.length === 0) {
+			goto('/onboarding');
+			return;
+		}
 	}
 
 	async function handleCreateOrg(e: SubmitEvent) {

@@ -191,9 +191,24 @@ a:hover {
 }
 
 .status-dot.pending,
-.status-dot.preparing {
+.status-dot.preparing,
+.status-dot.queued {
   background-color: var(--accent-yellow);
   animation: pulse 2s ease-in-out infinite;
+}
+
+.status-dot.deploying {
+  background-color: #3b82f6;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-dot.stopping {
+  background-color: #f59e0b;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot.need_attention {
+  background-color: #f97316;
 }
 
 .status-dot.failed,

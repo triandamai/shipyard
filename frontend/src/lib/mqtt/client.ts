@@ -10,6 +10,10 @@ let retryCount = 0;
 const MAX_RETRY_DELAY_MS = 60_000;
 const STORAGE_KEY = 'shipyard_mqtt_cid';
 
+// All topics that have been requested via subscribeTopic() and not yet unsubscribed.
+// On every (re)connect we replay these so subscriptions are never silently lost.
+const pendingSubscriptions = new Set<string>();
+
 // Deduplicate messages delivered multiple times due to overlapping subscriptions
 // (wildcard + specific topic both matching the same message). Key = topic|rawPayload.
 const recentMessages = new Map<string, number>();
@@ -86,6 +90,12 @@ function connectMqtt(brokerUrl: string, options: MqttInitOptions) {
 	client.on('connect', () => {
 		retryCount = 0;
 		mqttStore.setConnected(true);
+		// Replay every subscription that was requested before/during disconnection.
+		// This covers the race where subscribeTopic() was called before the client
+		// finished connecting, or subscriptions were lost after a reconnect.
+		for (const topic of pendingSubscriptions) {
+			client!.subscribe(topic, { qos: 0 });
+		}
 	});
 
 	client.on('close', () => {
@@ -131,8 +141,11 @@ export function initMqtt(options: MqttInitOptions = {}) {
 	return { getClient: () => client };
 }
 
-/** Subscribe to an MQTT topic. */
+/** Subscribe to an MQTT topic.
+ *  Always records the intent so the subscription is replayed on (re)connect
+ *  even if the client is not yet connected when this is called. */
 export function subscribeTopic(topic: string) {
+	pendingSubscriptions.add(topic);
 	if (!client) return;
 	client.subscribe(topic, { qos: 0 }, (err) => {
 		if (!err) mqttStore.addSubscription(topic);
@@ -141,6 +154,7 @@ export function subscribeTopic(topic: string) {
 
 /** Unsubscribe from an MQTT topic. */
 export function unsubscribeTopic(topic: string) {
+	pendingSubscriptions.delete(topic);
 	if (!client) return;
 	client.unsubscribe(topic, {}, (err) => {
 		if (!err) mqttStore.removeSubscription(topic);
@@ -163,4 +177,5 @@ export function disconnectMqtt() {
 		client = null;
 		mqttStore.setConnected(false);
 	}
+	pendingSubscriptions.clear();
 }

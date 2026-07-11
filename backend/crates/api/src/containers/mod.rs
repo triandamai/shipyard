@@ -83,8 +83,12 @@ async fn list_service_containers(
 ) -> Result<Json<ApiResponse<Vec<Container>>>, ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
 
+    // For the default view return only the LATEST container per replica slot so
+    // that a rolling-update's old shutdown replica doesn't appear alongside the
+    // new running one.  Containers with NULL replica_index (compose, manual) are
+    // each returned as-is.  Passing status=all returns every row unfiltered.
     let containers = match filter.status.as_deref() {
-        Some("all") | None => {
+        Some("all") => {
             sqlx::query_as::<_, Container>(
                 "SELECT id, service_id, docker_container_id, docker_task_id, node_id,
                         replica_index, status::text AS status, status_message, image,
@@ -109,6 +113,42 @@ async fn list_service_containers(
             )
             .bind(service_id)
             .bind(status_filter)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        }
+        None => {
+            // Latest per slot for slotted (Swarm) containers; all rows for unslotted.
+            sqlx::query_as::<_, Container>(
+                r#"
+                WITH ranked AS (
+                    SELECT id, service_id, docker_container_id, docker_task_id, node_id,
+                           replica_index, status::text AS status, status_message, image,
+                           started_at, finished_at, exit_code, created_at, updated_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY replica_index
+                               ORDER BY created_at DESC
+                           ) AS rn
+                    FROM containers
+                    WHERE service_id = $1 AND replica_index IS NOT NULL
+                ),
+                unslotted AS (
+                    SELECT id, service_id, docker_container_id, docker_task_id, node_id,
+                           replica_index, status::text AS status, status_message, image,
+                           started_at, finished_at, exit_code, created_at, updated_at
+                    FROM containers
+                    WHERE service_id = $1 AND replica_index IS NULL
+                )
+                SELECT id, service_id, docker_container_id, docker_task_id, node_id,
+                       replica_index, status, status_message, image,
+                       started_at, finished_at, exit_code, created_at, updated_at
+                FROM ranked WHERE rn = 1
+                UNION ALL
+                SELECT * FROM unslotted
+                ORDER BY created_at DESC
+                "#,
+            )
+            .bind(service_id)
             .fetch_all(&state.db)
             .await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
@@ -159,9 +199,9 @@ async fn delete_container(
 ) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
 
-    // Fetch the container and check it belongs to this service and is in a terminal state.
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT status::text FROM containers WHERE id = $1 AND service_id = $2",
+    // Fetch the container and check it belongs to this service.
+    let row = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT status::text, docker_container_id FROM containers WHERE id = $1 AND service_id = $2",
     )
     .bind(container_id)
     .bind(service_id)
@@ -169,8 +209,8 @@ async fn delete_container(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let status = match row {
-        Some((s,)) => s,
+    let (status, docker_container_id) = match row {
+        Some(r) => r,
         None => return Err(ApiAppError(AppError::NotFound(format!(
             "Container '{}' not found",
             container_id
@@ -179,10 +219,39 @@ async fn delete_container(
 
     const TERMINAL: &[&str] = &["shutdown", "failed", "orphan", "complete", "rejected"];
     if !TERMINAL.contains(&status.as_str()) {
-        return Err(ApiAppError(AppError::BadRequest(format!(
-            "Container is still '{}' — stop it before deleting the record",
-            status
-        ))));
+        // Not in a terminal state — try to verify with Docker before refusing.
+        // If Docker says the container doesn't exist (404), treat it as orphaned
+        // and allow the deletion to proceed.
+        let docker_id = docker_container_id.as_deref().unwrap_or("");
+        if !docker_id.is_empty() {
+            let exists_in_docker = match state.docker.inspect_container(docker_id).await {
+                Ok(_) => true,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("No such container") || msg.contains("404") {
+                        false
+                    } else {
+                        // Some other Docker error — refuse deletion to be safe.
+                        return Err(ApiAppError(AppError::BadRequest(format!(
+                            "Container is still '{}' — stop it before deleting the record",
+                            status
+                        ))));
+                    }
+                }
+            };
+            if exists_in_docker {
+                return Err(ApiAppError(AppError::BadRequest(format!(
+                    "Container is still '{}' in Docker — stop it before deleting the record",
+                    status
+                ))));
+            }
+            // Docker 404 — fall through and delete the stale DB record.
+        } else {
+            return Err(ApiAppError(AppError::BadRequest(format!(
+                "Container is still '{}' — stop it before deleting the record",
+                status
+            ))));
+        }
     }
 
     sqlx::query("DELETE FROM containers WHERE id = $1")
@@ -277,7 +346,26 @@ async fn stop_container(
         )));
     }
 
-    state.docker.stop_container(&docker_id, 10).await.map_err(ApiAppError)?;
+    match state.docker.stop_container(&docker_id, 10).await {
+        Ok(()) => {}
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("No such container") || msg.contains("404") {
+                // Container is already gone from Docker — mark it shutdown in DB so
+                // the user can delete the record without a hard refresh.
+                sqlx::query(
+                    "UPDATE containers SET status = 'shutdown'::container_status, \
+                     finished_at = NOW(), updated_at = NOW() WHERE id = $1",
+                )
+                .bind(container_id)
+                .execute(&state.db)
+                .await
+                .ok();
+            } else {
+                return Err(ApiAppError(e));
+            }
+        }
+    }
 
     if let Ok(Some((project_id, org_id))) = sqlx::query_as::<_, (Uuid, Uuid)>(
         "SELECT p.id, p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",

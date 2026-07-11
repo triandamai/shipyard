@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bollard::service::InspectServiceOptions;
 use bollard::system::EventsOptions;
 use futures::StreamExt;
 use shipyard_common::error::{AppError, AppResult};
@@ -408,6 +409,31 @@ impl DockerEventWorker {
                 .await
                 .ok();
                 tracing::info!(container_id, %service_id, ?replica_index, "Container created → inserted");
+
+                // With START_FIRST rolling updates Docker creates the replacement
+                // container BEFORE stopping the old one.  Evict any previous
+                // non-terminal containers occupying the same replica slot so the
+                // ghost never reaches the topology view.
+                if let Some(slot) = replica_index {
+                    sqlx::query(
+                        r#"
+                        UPDATE containers
+                        SET status      = 'shutdown'::container_status,
+                            finished_at = NOW(),
+                            updated_at  = NOW()
+                        WHERE service_id             = $1
+                          AND replica_index          = $2
+                          AND docker_container_id   != $3
+                          AND status::text NOT IN ('orphan', 'complete', 'rejected', 'shutdown', 'failed')
+                        "#,
+                    )
+                    .bind(service_id)
+                    .bind(slot)
+                    .bind(container_id)
+                    .execute(&self.db)
+                    .await
+                    .ok();
+                }
             }
             "start" => {
                 // UPSERT so we recover if the `create` event was missed (e.g., worker restart).
@@ -552,7 +578,6 @@ impl DockerEventWorker {
                 }
             }
             "update" => {
-                // Detect external updates (not triggered by our platform).
                 let managed_key = format!("{}.managed", self.label_prefix);
                 let is_managed = attrs
                     .and_then(|a| a.get(&managed_key))
@@ -564,6 +589,38 @@ impl DockerEventWorker {
                         docker_service_id = %service_docker_id,
                         "External service update detected — not managed by platform"
                     );
+                    return Ok(());
+                }
+
+                let Some(service_id) = self.resolve_service_id(attrs) else {
+                    return Ok(());
+                };
+
+                // In Docker Swarm, container stop/die/destroy events only reach
+                // the node where the container ran — the manager's event stream
+                // never sees them for containers on worker nodes.  The service
+                // `update` event IS always delivered to the manager, so we check
+                // the desired replica count here and purge container records when
+                // the service is scaled to 0.
+                let desired = self
+                    .bollard
+                    .inspect_service(service_docker_id, None::<InspectServiceOptions>)
+                    .await
+                    .ok()
+                    .and_then(|s| s.spec)
+                    .and_then(|s| s.mode)
+                    .and_then(|m| m.replicated)
+                    .and_then(|r| r.replicas)
+                    .unwrap_or(1);
+
+                if desired == 0 {
+                    sqlx::query("DELETE FROM containers WHERE service_id = $1")
+                        .bind(service_id)
+                        .execute(&self.db)
+                        .await
+                        .ok();
+                    tracing::info!(%service_id, "Service scaled to 0 — deleted container records");
+                    self.publish_containers_update(service_id).await;
                 }
             }
             other => {

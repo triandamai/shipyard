@@ -108,6 +108,7 @@ async fn trigger_deploy(
     Json(body): Json<TriggerDeployRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<TriggerDeployResponse>>), ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+    check_billing_allows_deploy(&state.db, service_id).await?;
 
     let triggered_by = auth_user.email.clone();
     let source_ref = body.source_ref.clone();
@@ -516,6 +517,7 @@ async fn redeploy_service(
     State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<ApiResponse<TriggerDeployResponse>>), ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+    check_billing_allows_deploy(&state.db, service_id).await?;
 
     // source_ref is a trigger label ("manual", "webhook", etc.), not a git ref.
     // The engine reads the actual git branch/image from the service config.
@@ -569,6 +571,7 @@ async fn rollback_deployment(
     State(state): State<AppState>,
 ) -> Result<(StatusCode, Json<ApiResponse<TriggerDeployResponse>>), ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+    check_billing_allows_deploy(&state.db, service_id).await?;
 
     // Find the image that was used in the target deployment.
     let row = sqlx::query_as::<_, (Option<String>,)>(
@@ -652,6 +655,52 @@ async fn docker_service_name(state: &AppState, service_id: Uuid) -> Result<Strin
 }
 
 /// Verify that a deployment belongs to the given service.
+/// Returns an error if the org that owns this service has a billing status that
+/// should block new deployments (subscription canceled, or past_due beyond the
+/// 7-day grace window).
+async fn check_billing_allows_deploy(
+    db: &sqlx::PgPool,
+    service_id: Uuid,
+) -> Result<(), ApiAppError> {
+    let row = sqlx::query_as::<_, (String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT ob.sub_status, ob.current_period_end
+           FROM services s
+           JOIN projects p ON p.id = s.project_id
+           LEFT JOIN org_billing ob ON ob.org_id = p.org_id
+           WHERE s.id = $1"#,
+    )
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some((sub_status, period_end)) = row {
+        match sub_status.as_str() {
+            "canceled" => {
+                return Err(ApiAppError(AppError::Forbidden(
+                    "Subscription has been canceled. Renew your plan to resume deployments.".to_string(),
+                )));
+            }
+            "past_due" => {
+                // Allow a 7-day grace window from the last period end.
+                let grace_expired = period_end
+                    .map(|end| {
+                        let grace = end + chrono::Duration::days(7);
+                        chrono::Utc::now() > grace
+                    })
+                    .unwrap_or(false);
+                if grace_expired {
+                    return Err(ApiAppError(AppError::Forbidden(
+                        "Payment is overdue and the grace period has expired. Update your payment method to resume deployments.".to_string(),
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 async fn verify_deployment_service(
     db: &sqlx::PgPool,
     deployment_id: Uuid,

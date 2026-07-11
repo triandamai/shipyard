@@ -21,6 +21,7 @@
 	import { deploymentStore } from '$lib/stores/deployment.store';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { orgStore } from '$lib/stores/org.store';
+	import { topologyStore } from '$lib/stores/topology.store';
 	import { can, permProject } from '$lib/auth/permissions';
 	import { subscribeToService, subscribeToDeployment } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
@@ -330,7 +331,11 @@ let showDbClient    = $state(false);
 	function statusClass(status: string) {
 		switch (status) {
 			case 'running':               return 'running';
+			case 'stopping':              return 'stopping';
+			case 'deploying':             return 'deploying';
+			case 'need_attention':        return 'need_attention';
 			case 'pending':
+			case 'queued':
 			case 'preparing':             return 'pending';
 			case 'failed':
 			case 'rejected':              return 'failed';
@@ -340,7 +345,9 @@ let showDbClient    = $state(false);
 
 	function statusLabel(status: string): string {
 		const map: Record<string, string> = {
-			running: 'Running', pending: 'Pending', preparing: 'Preparing',
+			running: 'Running', stopping: 'Stopping', deploying: 'Deploying',
+			need_attention: 'Need attention', queued: 'Queued',
+			pending: 'Pending', preparing: 'Preparing',
 			failed: 'Failed', rejected: 'Rejected', stopped: 'Stopped',
 			shutdown: 'Shutdown', orphan: 'Orphan', complete: 'Complete'
 		};
@@ -654,6 +661,10 @@ let showDbClient    = $state(false);
 	async function triggerDeploy() {
 		if (!service || isDeploying) return;
 		isDeploying = true;
+
+		// Optimistically push "deploying" to canvas node immediately.
+		topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: 'deploying' } });
+
 		const res = await api.post<Deployment>(`/services/${serviceId}/deploy`);
 		if (res.data) {
 			const depId = res.data.id;
@@ -662,27 +673,60 @@ let showDbClient    = $state(false);
 			unsubscribeDeployment?.();
 			unsubscribeDeployment = subscribeToDeployment(orgId, projectId, serviceId, depId);
 
-			// Listen for the completion event so the list row updates live.
+			// Track all status changes so banner stays accurate.
 			const depStatusTopic = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/deployments/${depId}/status`;
-			const onDepDone = (payload: MqttPayload) => {
+			const onDepStatus = (payload: MqttPayload) => {
 				const evt = payload.event ?? '';
-				if (!evt.startsWith('deployment.success') && !evt.startsWith('deployment.failed')) return;
-				const finalStatus: Deployment['status'] = evt.includes('success') ? 'success' : 'failed';
-				deployments = deployments.map(d => d.id === depId ? { ...d, status: finalStatus } : d);
-				eventBus.off(depStatusTopic, onDepDone);
+				const mqttStatus = (payload.meta as any)?.status as string | undefined;
+				const newStatus: Deployment['status'] | null =
+					(evt.includes('success') || mqttStatus === 'success') ? 'success' :
+					(evt.includes('failed')  || mqttStatus === 'failed')  ? 'failed'  :
+					(evt.includes('cancel')  || mqttStatus === 'cancelled') ? 'cancelled' :
+					(mqttStatus === 'running') ? 'running' : null;
+
+				if (newStatus) {
+					deployments = deployments.map(d => d.id === depId ? { ...d, status: newStatus! } : d);
+				}
+				// Unsubscribe on terminal states only.
+				if (newStatus === 'success' || newStatus === 'failed' || newStatus === 'cancelled') {
+					eventBus.off(depStatusTopic, onDepStatus);
+				}
 			};
-			eventBus.on(depStatusTopic, onDepDone);
+			eventBus.on(depStatusTopic, onDepStatus);
 
 			await loadStepsForLatest();
+		} else {
+			// API call failed — revert canvas optimistic update.
+			topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: service?.status ?? 'stopped' } });
 		}
 		isDeploying = false;
 	}
 
+	let _stopTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
 	async function triggerStop() {
 		if (!service || isStopping) return;
 		isStopping = true;
-		await api.post(`/services/${serviceId}/stop`);
-		isStopping = false;
+
+		// Optimistic UI — show "stopping" immediately on panel + canvas node
+		service = { ...service, status: 'stopping' };
+		topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: 'stopping' } });
+
+		const res = await api.post(`/services/${serviceId}/stop`);
+		if (res.error) {
+			// Revert on failure
+			await loadService();
+			isStopping = false;
+			return;
+		}
+
+		// Keep isStopping = true — MQTT will clear it via handleServiceStatus.
+		// Safety fallback: clear after 30 s in case the MQTT event never arrives.
+		if (_stopTimeoutId) clearTimeout(_stopTimeoutId);
+		_stopTimeoutId = setTimeout(() => {
+			isStopping = false;
+			_stopTimeoutId = null;
+		}, 30_000);
 	}
 
 	async function triggerRestart() {
@@ -982,6 +1026,11 @@ let showDbClient    = $state(false);
 		const meta = payload.meta as any;
 		if (meta?.status && service) {
 			service = { ...service, status: meta.status, replicas: meta.replicas ?? service.replicas };
+			// MQTT confirmed the new state — clear the stopping overlay and safety timer
+			if (isStopping) {
+				isStopping = false;
+				if (_stopTimeoutId) { clearTimeout(_stopTimeoutId); _stopTimeoutId = null; }
+			}
 		}
 	}
 
@@ -1025,6 +1074,7 @@ let showDbClient    = $state(false);
 		unsubscribeDeployment?.();
 		clogSource?.close();
 		disconnectStats();
+		if (_stopTimeoutId) { clearTimeout(_stopTimeoutId); _stopTimeoutId = null; }
 		if (serviceStatusTopic) eventBus.off(serviceStatusTopic, handleServiceStatus);
 		if (serviceContainersTopic) eventBus.off(serviceContainersTopic, handleContainers);
 		serviceStore.setActiveService(null);
@@ -1339,6 +1389,22 @@ let showDbClient    = $state(false);
 				</button>
 			{/each}
 		</div>
+
+		<!-- Deploying banner -->
+		{#if isDeploying || isDeploymentRunning}
+			<div class="deploying-banner">
+				<Loader2 size={13} class="spin" />
+				<span>Deploying{isDeploymentRunning && !isDeploying ? ' — pipeline running' : '…'}</span>
+			</div>
+		{/if}
+
+		<!-- Stopping banner -->
+		{#if isStopping}
+			<div class="stopping-banner">
+				<Loader2 size={13} class="spin" />
+				<span>Stopping service… please wait</span>
+			</div>
+		{/if}
 
 		<!-- Tab content -->
 		<div class="tab-content">
@@ -2513,7 +2579,11 @@ let showDbClient    = $state(false);
 				<Play size={13} />Deploy
 			</button>
 			<button class="btn btn-secondary btn-sm" disabled={isStopping || !canDeploy} onclick={triggerStop} title={canDeploy ? '' : 'Insufficient permissions'}>
-				<Square size={13} />Stop
+				{#if isStopping}
+					<Loader2 size={13} class="spin" />Stopping…
+				{:else}
+					<Square size={13} />Stop
+				{/if}
 			</button>
 			<button class="btn btn-secondary btn-sm" onclick={() => showEnvPanel = true}>
 				<Settings size={13} />Env
@@ -2529,6 +2599,36 @@ let showDbClient    = $state(false);
 		flex-direction: column;
 		height: 100%;
 		position: relative;
+	}
+
+	/* ── Deploying banner ── */
+	.deploying-banner {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 16px;
+		background: color-mix(in srgb, #3b82f6 10%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, #3b82f6 25%, transparent);
+		font-size: 12.5px;
+		color: #1d4ed8;
+		flex-shrink: 0;
+	}
+	:global(.dark) .deploying-banner { color: #93c5fd; }
+
+	/* ── Stopping banner ── */
+	.stopping-banner {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 16px;
+		background: color-mix(in srgb, #f59e0b 10%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, #f59e0b 25%, transparent);
+		font-size: 12.5px;
+		color: #92400e;
+		flex-shrink: 0;
+	}
+	:global(.dark) .stopping-banner {
+		color: #fbbf24;
 	}
 
 	/* ── Loading / Error ── */

@@ -52,8 +52,52 @@ export interface MqttPayload {
 export interface User {
 	id: string;
 	email: string;
+	is_superadmin?: boolean;
+	staff_permissions?: string[];
+	permissions?: string[];
 	created_at: string;
 	updated_at: string;
+}
+
+// ─── Super Admin Types ─────────────────────────────────────────────────────
+
+export interface AdminStats {
+	total_orgs: number;
+	total_users: number;
+	active_nodes: number;
+	paid_orgs: number;
+}
+
+export interface AdminOrg {
+	id: string;
+	name: string;
+	slug: string;
+	tier: string | null;
+	sub_status: string | null;
+	member_count: number;
+	node_count: number;
+	created_at: string;
+}
+
+export interface AdminUser {
+	id: string;
+	email: string;
+	is_superadmin: boolean;
+	is_suspended: boolean;
+	org_count: number;
+	created_at: string;
+}
+
+export interface AdminNode {
+	id: string;
+	org_id: string;
+	org_name: string;
+	name: string;
+	provider: string;
+	region: string;
+	status: string;
+	public_ip: string | null;
+	created_at: string;
 }
 
 export interface Organization {
@@ -156,21 +200,6 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 		],
 	},
 	{
-		group: 'Infrastructure',
-		permissions: [
-			{ id: 'infra:read',   label: 'View infrastructure',   description: 'View system metrics, swarm nodes, join tokens, and core services' },
-			{ id: 'infra:write',  label: 'Manage infrastructure', description: 'Add/remove swarm nodes and modify cluster config' },
-			{ id: 'static:read',  label: 'View static server',    description: 'View nginx static server configuration and site conf files' },
-		],
-	},
-	{
-		group: 'Docker',
-		permissions: [
-			{ id: 'docker:read',  label: 'View Docker',   description: 'Browse containers, services, volumes, and networks' },
-			{ id: 'docker:write', label: 'Manage Docker', description: 'Prune containers and perform destructive Docker operations' },
-		],
-	},
-	{
 		group: 'Deployments',
 		permissions: [
 			{ id: 'deployments:read',  label: 'View deployments',   description: 'View deployment history and status across all projects' },
@@ -195,12 +224,6 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 		permissions: [
 			{ id: 'keys:read',  label: 'View API keys',   description: 'List API keys in the organization' },
 			{ id: 'keys:write', label: 'Manage API keys', description: 'Create and revoke API keys' },
-		],
-	},
-	{
-		group: 'System',
-		permissions: [
-			{ id: 'system:update', label: 'Update Shipyard', description: 'Trigger platform updates and view update logs' },
 		],
 	},
 ];
@@ -686,6 +709,47 @@ export interface GitProvider {
 	auth_type: 'pat' | 'oauth';
 	token: string;
 	username: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+// ─── SaaS Billing & Nodes ─────────────────────────────────────────
+
+export type SubscriptionTier = 'free' | 'pro' | 'max';
+export type NodeStatus =
+	| 'provisioning'
+	| 'cloud_init_running'
+	| 'wireguard_joined'
+	| 'active'
+	| 'degraded'
+	| 'failed'
+	| 'stopped';
+
+export interface OrgBilling {
+	org_id: string;
+	stripe_customer_id: string | null;
+	stripe_sub_id: string | null;
+	tier: SubscriptionTier;
+	sub_status: string;          // 'active' | 'past_due' | 'canceled'
+	current_period_end: string | null;
+	updated_at: string;
+}
+
+export interface ComputeNode {
+	id: string;
+	org_id: string;
+	name: string;
+	provider: string;
+	provider_vm_id: string | null;
+	region: string;
+	ip_address: string | null;
+	public_ip: string | null;
+	status: NodeStatus;
+	last_heartbeat_at: string | null;
+	cpu_cores: number;
+	ram_mb: number;
+	provision_error: string | null;
+	provision_attempts: number;
 	created_at: string;
 	updated_at: string;
 }

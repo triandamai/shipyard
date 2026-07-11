@@ -5,6 +5,7 @@ use axum::{
 };
 
 use crate::AppState;
+use crate::admin;
 use crate::auth;
 use crate::compose;
 use crate::setup;
@@ -23,6 +24,8 @@ use crate::shorthand;
 use crate::dbclient;
 use crate::static_site;
 use crate::git_providers;
+use crate::billing;
+use crate::nodes;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -76,6 +79,14 @@ pub fn api_router() -> Router<AppState> {
         .merge(static_site::routes())
         // Git providers — org-scoped Git integrations
         .merge(git_providers::routes())
+        // Billing webhook — /billing/webhooks
+        .merge(billing::routes())
+        // Billing org routes — /orgs/:org_id/billing
+        .nest("/orgs/:org_id", billing::org_routes())
+        // Nodes — /orgs/:org_id/nodes
+        .nest("/orgs/:org_id", nodes::routes())
+        // Admin — /admin/...
+        .nest("/admin", admin::routes())
 }
 
 async fn api_status() -> Json<ApiResponse<serde_json::Value>> {

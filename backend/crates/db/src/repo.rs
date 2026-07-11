@@ -440,7 +440,7 @@ impl PgUserRepo {
 impl UserRepo for PgUserRepo {
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
+            "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -449,7 +449,7 @@ impl UserRepo for PgUserRepo {
 
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, sqlx::Error> {
         sqlx::query_as::<_, User>(
-            "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
+            "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE email = $1",
         )
         .bind(email)
         .fetch_optional(&self.pool)
@@ -461,7 +461,7 @@ impl UserRepo for PgUserRepo {
             r#"
             INSERT INTO users (email, password_hash)
             VALUES ($1, $2)
-            RETURNING id, email, password_hash, created_at, updated_at
+            RETURNING id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at
             "#,
         )
         .bind(&input.email)
@@ -476,7 +476,7 @@ impl UserRepo for PgUserRepo {
             UPDATE users
             SET password_hash = $2
             WHERE id = $1
-            RETURNING id, email, password_hash, created_at, updated_at
+            RETURNING id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at
             "#,
         )
         .bind(input.id)

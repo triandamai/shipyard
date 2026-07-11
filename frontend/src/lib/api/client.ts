@@ -26,6 +26,8 @@ import type {
 	ImportComposeResponse,
 	AuditLogEntry,
 	StaticSiteConfig,
+	OrgBilling,
+	ComputeNode,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -695,6 +697,74 @@ class ApiClient {
 
 	async deleteGitProvider(orgId: string, providerId: string): Promise<ApiResponse<null>> {
 		return this.delete(`/orgs/${orgId}/git-providers/${providerId}`);
+	}
+
+	// ─── Billing ────────────────────────────────────────────────────────────────
+	getBilling(orgId: string): Promise<ApiResponse<OrgBilling>> {
+		return this.request<OrgBilling>('GET', `/orgs/${orgId}/billing`);
+	}
+
+	createCheckoutSession(orgId: string, tier: 'pro' | 'max', successUrl: string, cancelUrl: string): Promise<ApiResponse<{ url: string }>> {
+		return this.request<{ url: string }>('POST', `/orgs/${orgId}/billing/checkout`, {
+			tier,
+			success_url: successUrl,
+			cancel_url: cancelUrl,
+		});
+	}
+
+	// ─── Compute Nodes ──────────────────────────────────────────────────────────
+	listNodes(orgId: string): Promise<ApiResponse<ComputeNode[]>> {
+		return this.request<ComputeNode[]>('GET', `/orgs/${orgId}/nodes`);
+	}
+
+	getNode(orgId: string, nodeId: string): Promise<ApiResponse<ComputeNode>> {
+		return this.request<ComputeNode>('GET', `/orgs/${orgId}/nodes/${nodeId}`);
+	}
+
+	migrateNode(orgId: string, nodeId: string): Promise<ApiResponse<{ message: string; deployment_ids: string[] }>> {
+		return this.request('POST', `/orgs/${orgId}/nodes/${nodeId}/migrate`);
+	}
+
+	// ─── Super Admin ──────────────────────────────────────────────────────────────
+	getAdminStats(): Promise<ApiResponse<import('./types').AdminStats>> {
+		return this.request('GET', '/admin/stats');
+	}
+
+	getAdminOrgs(): Promise<ApiResponse<import('./types').AdminOrg[]>> {
+		return this.request('GET', '/admin/orgs');
+	}
+
+	patchAdminOrg(orgId: string, body: { sub_status?: string }): Promise<ApiResponse<unknown>> {
+		return this.request('PATCH', `/admin/orgs/${orgId}`, body);
+	}
+
+	getAdminUsers(): Promise<ApiResponse<import('./types').AdminUser[]>> {
+		return this.request('GET', '/admin/users');
+	}
+
+	patchAdminUser(userId: string, body: { is_superadmin?: boolean; is_suspended?: boolean }): Promise<ApiResponse<unknown>> {
+		return this.request('PATCH', `/admin/users/${userId}`, body);
+	}
+
+	getAdminNodes(): Promise<ApiResponse<import('./types').AdminNode[]>> {
+		return this.request('GET', '/admin/nodes');
+	}
+
+	getSystemConfig(): Promise<ApiResponse<Record<string, unknown>>> {
+		return this.request('GET', '/admin/config');
+	}
+
+	patchSystemConfig(key: string, value: unknown): Promise<ApiResponse<unknown>> {
+		return this.request('PATCH', `/admin/config/${key}`, { value });
+	}
+
+	getAdminAuditLogs(opts: { cursor?: string; limit?: number; org_id?: string } = {}): Promise<ApiResponse<{ items: import('./types').AuditLogEntry[]; next_cursor: string | null }>> {
+		const p = new URLSearchParams();
+		if (opts.cursor)  p.set('cursor', opts.cursor);
+		if (opts.limit)   p.set('limit', String(opts.limit));
+		if (opts.org_id)  p.set('org_id', opts.org_id);
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/admin/audit-logs${qs}`);
 	}
 }
 

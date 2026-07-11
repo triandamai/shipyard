@@ -13,6 +13,8 @@ pub struct User {
     pub id: Uuid,
     pub email: String,
     pub password_hash: String,
+    pub is_superadmin: bool,
+    pub staff_permissions: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -283,4 +285,47 @@ pub struct GitProvider {
     pub username: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+// ─── SaaS Billing & Compute ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct OrgBilling {
+    pub org_id: Uuid,
+    pub stripe_customer_id: Option<String>,
+    pub stripe_sub_id: Option<String>,
+    pub tier: String,         // subscription_tier enum as text
+    pub sub_status: String,
+    pub current_period_end: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ComputeNode {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub provider: String,
+    pub provider_vm_id: Option<String>,
+    pub region: String,
+    pub ip_address: Option<String>,
+    pub public_ip: Option<String>,
+    pub status: String,       // node_status enum as text
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub cpu_cores: i32,
+    pub ram_mb: i32,
+    pub tls_ca_cert: Option<String>,
+    pub tls_client_cert: Option<String>,
+    pub tls_client_key: Option<String>,
+    pub provision_error: Option<String>,
+    pub provision_attempts: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ServiceNodeAssignment {
+    pub service_id: Uuid,
+    pub node_id: Uuid,
+    pub assigned_at: DateTime<Utc>,
 }

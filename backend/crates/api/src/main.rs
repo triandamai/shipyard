@@ -28,6 +28,7 @@ use shipyard_mqtt::MqttPublisher;
 use middleware::rate_limit::SharedRateLimiter;
 use tokio::sync::Notify;
 
+mod admin;
 mod auth;
 mod cache;
 mod compose;
@@ -51,6 +52,10 @@ mod shorthand;
 mod dbclient;
 mod static_site;
 mod git_providers;
+mod billing;
+mod nodes;
+mod provisioning;
+mod compute;
 
 /// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
 /// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.
@@ -142,6 +147,19 @@ async fn async_main() {
         std::process::exit(1);
     }
     tracing::info!("Data directory: {}", config.data_dir);
+
+    // Write Traefik dynamic config (shipyard.yml) on every startup so Traefik
+    // always has the global routes and middleware definitions, even after a volume wipe.
+    if let Some(ref dir) = config.traefik.dynamic_config_dir {
+        write_shipyard_traefik_config(
+            &config.app_url,
+            dir,
+            &config.traefik.entrypoint_http,
+            &config.traefik.entrypoint_https,
+            &config.traefik.cert_resolver,
+        )
+        .await;
+    }
 
     // Connect to database
     let pool = shipyard_db::init_pool(&config.database.url, config.database.max_connections)
@@ -457,6 +475,30 @@ async fn async_main() {
         });
     }
 
+    // Spawn provisioning worker — monitors compute_nodes for timed-out or advancing states.
+    {
+        let provision_db = state.db.clone();
+        let provision_client = state.http_client.clone();
+        let hetzner_key = state.config.hetzner_api_key.clone();
+        let do_key = state.config.do_api_key.clone();
+        let provision_mqtt = Arc::clone(&state.mqtt);
+        let label_prefix = state.config.docker.label_prefix.clone();
+        let worker = Arc::new(provisioning::ProvisioningWorker::new(
+            provision_db,
+            provision_client,
+            hetzner_key,
+            do_key,
+            provision_mqtt,
+            label_prefix,
+        ));
+
+        let worker_clone = Arc::clone(&worker);
+        tokio::spawn(async move { worker_clone.run().await });
+
+        // Reconciliation loop: every 5 min, detect paid orgs with no live node.
+        tokio::spawn(async move { worker.run_reconciliation().await });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
@@ -708,4 +750,114 @@ async fn mqtt_auth(
 
     tracing::warn!("MQTT auth: unknown username '{}'", body.username);
     StatusCode::UNAUTHORIZED
+}
+
+// ─── Traefik startup config ───────────────────────────────────────────────────
+
+/// Writes `shipyard.yml` to the Traefik dynamic config directory on every startup.
+///
+/// install.sh also writes this file on first install, but if the volume is wiped
+/// or the container is recreated, the file disappears and all Traefik routes break.
+/// Writing it here makes startup self-healing — Traefik hot-reloads it immediately.
+async fn write_shipyard_traefik_config(
+    app_url: &str,
+    dynamic_config_dir: &str,
+    entrypoint_http: &str,
+    entrypoint_https: &str,
+    cert_resolver: &str,
+) {
+    // Extract bare hostname from app_url ("https://ship.example.com:8080/path" → "ship.example.com")
+    let domain = app_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or(app_url)
+        .split(':')
+        .next()
+        .unwrap_or(app_url);
+
+    let is_https = app_url.starts_with("https://");
+    let api_domain = format!("api-{domain}");
+    let static_entrypoints = if is_https { entrypoint_https } else { entrypoint_http };
+    let static_tls = if is_https { "      tls: {}" } else { "" };
+
+    let content = format!(
+        r#"http:
+  routers:
+    shipyard-frontend:
+      rule: "Host(`{domain}`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-frontend
+      tls:
+        certResolver: {cert_resolver}
+
+    shipyard-backend:
+      rule: "Host(`{api_domain}`) && PathPrefix(`/openapi/v1`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-backend
+      tls:
+        certResolver: {cert_resolver}
+
+    shipyard-mqtt:
+      rule: "Host(`{domain}`) && PathPrefix(`/mqtt`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-mqtt
+      middlewares:
+        - shipyard-mqtt-strip
+      tls:
+        certResolver: {cert_resolver}
+
+    static-sites:
+      rule: "HostRegexp(`.+`)"
+      priority: 1
+      entryPoints: [{static_entrypoints}]
+      service: nginx-static
+{static_tls}
+
+  services:
+    shipyard-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-frontend:3000"
+
+    shipyard-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
+    shipyard-mqtt:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-mqtt:8083"
+
+    nginx-static:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-nginx-static:80"
+
+  middlewares:
+    shipyard-mqtt-strip:
+      stripPrefix:
+        prefixes:
+          - "/mqtt"
+
+    shipyard-error-pages:
+      errors:
+        status:
+          - "404"
+        service: nginx-static
+        query: "/_errors/{{status}}.html"
+"#
+    );
+
+    if let Err(e) = tokio::fs::create_dir_all(dynamic_config_dir).await {
+        tracing::warn!("Could not create traefik dynamic config dir '{dynamic_config_dir}': {e}");
+        return;
+    }
+    let dest = format!("{dynamic_config_dir}/shipyard.yml");
+    match tokio::fs::write(&dest, content).await {
+        Ok(_) => tracing::info!("Traefik dynamic config written: {dest}"),
+        Err(e) => tracing::warn!("Could not write traefik config '{dest}': {e}"),
+    }
 }

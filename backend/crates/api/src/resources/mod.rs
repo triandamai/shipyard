@@ -222,16 +222,10 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
                     .join("\n")
             }
             None => {
-                // Conf missing — service was deployed with no domains, now the first domain
-                // is being assigned. Generate a full conf from scratch.
+                // Conf missing — generate from scratch using the canonical serve root.
+                // nginx handles a not-yet-existing root gracefully (returns 404) so we
+                // don't gate on whether the deployment directory exists yet.
                 let serve_root = format!("{sites_base}/{service_id}/current/public");
-                if !tokio::fs::try_exists(&serve_root).await.unwrap_or(false) {
-                    // Service hasn't been deployed yet; nothing to render.
-                    tracing::debug!(
-                        "sync_static_nginx_conf: skipping {slug} — no deployment yet (current/public absent)"
-                    );
-                    return;
-                }
                 shipyard_engine::static_site::render_nginx_site_conf(
                     &service_id.to_string(),
                     &domains,
@@ -242,10 +236,23 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
             }
         };
 
+        // Ensure conf.d exists (may not exist if nginx container hasn't been started yet).
+        let conf_dir = std::path::Path::new(&conf_path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !conf_dir.is_empty() {
+            if let Err(e) = tokio::fs::create_dir_all(&conf_dir).await {
+                tracing::warn!("sync_static_nginx_conf: could not create conf dir '{conf_dir}': {e}");
+                return;
+            }
+        }
+
         if let Err(e) = tokio::fs::write(&conf_path, updated.as_bytes()).await {
             tracing::warn!("sync_static_nginx_conf: could not write '{conf_path}': {e}");
             return;
         }
+        tracing::info!("sync_static_nginx_conf: wrote {conf_path}");
     }
 
     let reload = tokio::process::Command::new("docker")

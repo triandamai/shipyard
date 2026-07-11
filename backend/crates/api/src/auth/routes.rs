@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use shipyard_common::error::AppError;
+use shipyard_common::permissions::superadmin_permissions;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::models::User;
 use shipyard_db::redis as session;
@@ -78,7 +79,10 @@ pub struct LogoutRequest {
 pub struct MeResponse {
     pub id: Uuid,
     pub email: String,
+    pub is_superadmin: bool,
+    pub staff_permissions: Vec<String>,
     pub created_at: DateTime<Utc>,
+    pub permissions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,7 +160,7 @@ async fn register(
     }
 
     let existing: Option<User> = sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
+        "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE email = $1",
     )
     .bind(&body.email)
     .fetch_optional(&state.db)
@@ -179,7 +183,7 @@ async fn register(
     let user: User = sqlx::query_as::<_, User>(
         "INSERT INTO users (id, email, password_hash, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
-         RETURNING id, email, password_hash, created_at, updated_at",
+         RETURNING id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at",
     )
     .bind(Uuid::now_v7())
     .bind(&body.email)
@@ -187,6 +191,10 @@ async fn register(
     .fetch_one(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let payload = shipyard_common::types::MqttPayload::new("user.registered")
+        .with_meta(serde_json::json!({ "user_id": user.id, "email": user.email }));
+    state.mqtt.publish_status("platform/users", &payload).await.ok();
 
     Ok((
         StatusCode::CREATED,
@@ -216,7 +224,7 @@ async fn login(
     }
 
     let user: User = sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE email = $1",
+        "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE email = $1",
     )
     .bind(&body.email)
     .fetch_optional(&state.db)
@@ -231,11 +239,18 @@ async fn login(
         .verify_password(body.password.as_bytes(), &parsed_hash)
         .map_err(|_| ApiAppError(AppError::Unauthorized("Invalid email or password".to_string())))?;
 
+    let permissions = if user.is_superadmin {
+        superadmin_permissions()
+    } else {
+        vec![]
+    };
+
     let access_token = create_access_token(
         user.id,
         &user.email,
         &state.config.auth.jwt_secret,
         state.config.auth.access_token_expiry,
+        permissions,
     )
     .map_err(ApiAppError)?;
 
@@ -336,11 +351,27 @@ async fn refresh(
         }
     }
 
+    let is_superadmin: bool = sqlx::query_scalar(
+        "SELECT is_superadmin FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .unwrap_or(false);
+
+    let permissions = if is_superadmin {
+        superadmin_permissions()
+    } else {
+        vec![]
+    };
+
     let access_token = create_access_token(
         user_id,
         &claims.email,
         &state.config.auth.jwt_secret,
         state.config.auth.access_token_expiry,
+        permissions,
     )
     .map_err(ApiAppError)?;
 
@@ -385,7 +416,7 @@ async fn me(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<MeResponse>>, ApiAppError> {
     let user: User = sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(auth_user.user_id)
     .fetch_optional(&state.db)
@@ -393,10 +424,19 @@ async fn me(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound("User not found".to_string())))?;
 
+    let permissions = if user.is_superadmin {
+        superadmin_permissions()
+    } else {
+        user.staff_permissions.clone()
+    };
+
     Ok(Json(ApiResponse::ok(MeResponse {
         id: user.id,
         email: user.email,
+        is_superadmin: user.is_superadmin,
+        staff_permissions: user.staff_permissions,
         created_at: user.created_at,
+        permissions,
     })))
 }
 
@@ -413,7 +453,7 @@ async fn change_password(
     }
 
     let user: User = sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, created_at, updated_at FROM users WHERE id = $1",
+        "SELECT id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at FROM users WHERE id = $1",
     )
     .bind(auth_user.user_id)
     .fetch_optional(&state.db)

@@ -372,15 +372,17 @@ async fn stop_service(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT type::text, COALESCE(directory_path, '') FROM services WHERE id = $1",
+    let row: Option<(String, String, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT s.type::text, COALESCE(s.directory_path, ''), s.project_id, p.org_id
+         FROM services s JOIN projects p ON p.id = s.project_id
+         WHERE s.id = $1",
     )
     .bind(service_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let (svc_type, directory_path) = row.ok_or_else(|| {
+    let (svc_type, directory_path, project_id, org_id) = row.ok_or_else(|| {
         ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id)))
     })?;
 
@@ -406,6 +408,17 @@ async fn stop_service(
         .execute(&state.db)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        // Delete all container records for the service and its children — replicas = 0
+        // means no containers should exist; they'll be recreated on next deploy.
+        sqlx::query(
+            "DELETE FROM containers
+             WHERE service_id = $1
+                OR service_id IN (SELECT id FROM services WHERE service_parent_id = $1)",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     } else {
         let svc_name = docker_service_name(&state, service_id);
         state.docker.scale_service(&svc_name, 0).await.map_err(ApiAppError)?;
@@ -416,7 +429,20 @@ async fn stop_service(
         .execute(&state.db)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        // Delete all container records — replicas = 0 means no containers should exist.
+        sqlx::query("DELETE FROM containers WHERE service_id = $1")
+            .bind(service_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
+
+    // Notify the canvas so it refreshes immediately without a manual reload.
+    let topic = shipyard_mqtt::topics::topology(org_id, project_id);
+    state.mqtt.publish_status(&topic, &MqttPayload::new("service.stopped")
+        .with_meta(serde_json::json!({ "service_id": service_id, "replicas": 0 }))).await.ok();
+    state.mqtt.publish_status(&topic, &MqttPayload::new("topology.changed")
+        .with_meta(serde_json::json!({ "reason": "service_stopped", "service_id": service_id }))).await.ok();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service stopped", "replicas": 0 }))))
 }

@@ -106,6 +106,32 @@
 	let myPerms  = $derived($orgStore.myMembership?.permissions ?? []);
 	let canUpdate = $derived(can(myRole, myPerms, perm(orgId, 'system', 'update')));
 
+	interface InfraDetail {
+		cpu_cores: number;
+		memory_gb: number;
+		region: string;
+		nodes: { id: string; name: string; status: string; provider: string }[];
+	}
+	interface ComputeNodeItem {
+		id: string; name: string; provider: string; region: string;
+		status: string; cpu_cores: number; ram_mb: number;
+	}
+	let infra = $state<InfraDetail | null>(null);
+
+	interface OrgBilling {
+		tier: string;
+		sub_status: string;
+		plan?: {
+			cpu_cores: number;
+			memory_gb: number;
+			max_replicas: number;
+			node_count: number;
+			max_members: number;
+			max_projects: number;
+		};
+	}
+	let billing = $state<OrgBilling | null>(null);
+
 	let settings    = $state<PlatformSettings>({});
 	let loading     = $state(true);
 	let saving      = $state(false);
@@ -131,6 +157,24 @@
 		const vRes = await api.get<VersionInfo>('/admin/version');
 		if (vRes.data) versionInfo = vRes.data;
 		loadingVersion = false;
+
+		if (orgId) {
+			const nodesRes = await api.get<ComputeNodeItem[]>(`/orgs/${orgId}/nodes`);
+			if (nodesRes.data && Array.isArray(nodesRes.data)) {
+				const nodes = nodesRes.data;
+				infra = {
+					cpu_cores: nodes.reduce((s, n) => s + (n.cpu_cores ?? 0), 0),
+					memory_gb: Math.round(nodes.reduce((s, n) => s + (n.ram_mb ?? 0), 0) / 1024),
+					region: nodes[0]?.region ?? '—',
+					nodes: nodes.map(n => ({ id: n.id, name: n.name, status: n.status, provider: n.provider })),
+				};
+			} else {
+				infra = { cpu_cores: 0, memory_gb: 0, region: '—', nodes: [] };
+			}
+
+			const billRes = await api.get<OrgBilling>(`/orgs/${orgId}/billing`);
+			if (billRes.data) billing = billRes.data;
+		}
 	});
 </script>
 
@@ -140,6 +184,71 @@
 		<span>Loading settings…</span>
 	</div>
 {:else}
+	<!-- Plan & Infrastructure -->
+	<section class="settings-section plan-section">
+		<div class="section-header">
+			<div class="section-icon plan-icon">
+				<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+			</div>
+			<div>
+				<h2 class="section-title">Plan &amp; Architecture</h2>
+				<p class="section-desc">Your current subscription plan and allocated compute resources.</p>
+			</div>
+			{#if billing}
+				<span class="plan-tier-badge" class:tier-free={billing.tier === 'free'} class:tier-pro={billing.tier === 'pro'} class:tier-max={billing.tier === 'max'}>
+					{billing.tier.toUpperCase()}
+				</span>
+			{/if}
+		</div>
+		<div class="fields">
+			{#if infra}
+				<div class="infra-chips">
+					<div class="infra-chip">
+						<span class="infra-chip-label">Region</span>
+						<span class="infra-chip-val region-val">{infra.region}</span>
+					</div>
+					<div class="infra-chip">
+						<span class="infra-chip-label">CPU Cores</span>
+						<span class="infra-chip-val">{infra.cpu_cores}</span>
+					</div>
+					<div class="infra-chip">
+						<span class="infra-chip-label">Memory</span>
+						<span class="infra-chip-val">{infra.memory_gb} <small>GB</small></span>
+					</div>
+					<div class="infra-chip">
+						<span class="infra-chip-label">Nodes</span>
+						<span class="infra-chip-val">{infra.nodes.length}</span>
+					</div>
+					{#if billing?.plan}
+						<div class="infra-chip">
+							<span class="infra-chip-label">Max Replicas</span>
+							<span class="infra-chip-val">{billing.plan.max_replicas}</span>
+						</div>
+						<div class="infra-chip">
+							<span class="infra-chip-label">Max Members</span>
+							<span class="infra-chip-val">{billing.plan.max_members}</span>
+						</div>
+					{/if}
+				</div>
+				{#if infra.nodes.length > 0}
+					<div class="infra-nodes">
+						{#each infra.nodes as n}
+							<div class="infra-node-row">
+								<span class="infra-node-name">{n.name}</span>
+								<span class="infra-node-provider">{n.provider}</span>
+								<span class="infra-node-status" class:ns-ok={n.status === 'active'} class:ns-err={n.status !== 'active'}>{n.status}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{:else}
+				<div class="plan-loading">
+					{#each [0,1,2,3] as _}<div class="sk" style="height:60px;border-radius:var(--radius-sm);flex:1;min-width:90px"></div>{/each}
+				</div>
+			{/if}
+		</div>
+	</section>
+
 	<form class="settings-form" onsubmit={save}>
 
 		<!-- Main Domain -->
@@ -174,8 +283,8 @@
 		</div>
 	</form>
 
-	<!-- Platform Update -->
-	{#if canUpdate}
+	<!-- Platform Update (admin only — hidden from tenant view) -->
+	{#if false && canUpdate}
 	<section class="settings-section update-section">
 		<div class="section-header">
 			<div class="section-icon update-icon"><PackageOpen size={16} /></div>
@@ -498,6 +607,31 @@
 		font-size: 12px;
 		flex-wrap: wrap;
 	}
+
+	.plan-section { margin-bottom:20px; }
+	.plan-icon { background:rgba(245,158,11,0.12); color:#F59E0B; }
+	.plan-tier-badge { margin-left:auto; font-size:10px; font-weight:800; letter-spacing:.08em; padding:3px 10px; border-radius:999px; }
+	.tier-free { background:rgba(100,116,139,0.15); color:#64748B; border:1px solid rgba(100,116,139,0.3); }
+	.tier-pro  { background:rgba(37,99,235,0.12);   color:#2563EB; border:1px solid rgba(37,99,235,0.3); }
+	.tier-max  { background:rgba(139,92,246,0.12);  color:#7C3AED; border:1px solid rgba(139,92,246,0.3); }
+	.plan-loading { display:flex; gap:10px; }
+	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
+	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
+
+	.infra-chips { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+	.infra-chip { display:flex; flex-direction:column; gap:2px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; min-width:100px; }
+	.infra-chip-label { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.07em; }
+	.infra-chip-val { font-size:18px; font-weight:800; color:var(--text-primary); }
+	.infra-chip-val small { font-size:13px; font-weight:600; }
+	.region-val { font-size:14px; }
+	.infra-nodes { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; }
+	.infra-node-row { display:flex; align-items:center; gap:12px; padding:9px 14px; border-bottom:1px solid var(--border); font-size:12.5px; }
+	.infra-node-row:last-child { border-bottom:none; }
+	.infra-node-name { font-weight:500; color:var(--text-primary); flex:1; }
+	.infra-node-provider { font-size:11px; color:var(--text-dim); }
+	.infra-node-status { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
+	.infra-node-status.ns-ok  { background:rgba(16,185,129,0.1); color:#10B981; }
+	.infra-node-status.ns-err { background:rgba(239,68,68,0.1); color:#EF4444; }
 
 	/* ── Responsive ── */
 	@media (max-width: 639px) {

@@ -72,6 +72,12 @@
 		// Allow right-click on input/textarea/select so users can still paste.
 		const tag = (e.target as HTMLElement)?.tagName;
 		if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+		// Suppress context menu (and command palette) on auth/setup pages.
+		const path = page.url.pathname;
+		if (path === '/login' || path === '/admin/login' || path === '/setup' || path === '/register') {
+			e.preventDefault();
+			return;
+		}
 		e.preventDefault();
 		uiStore.openCommandPalette();
 	}

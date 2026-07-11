@@ -97,3 +97,13 @@ pub fn replicas_count(org_id: Uuid, project_id: Uuid, service_id: Uuid) -> Strin
 pub fn docker_events_raw() -> String {
     "platform/docker/events/raw".to_string()
 }
+
+/// Build MQTT topic for org member events (join, remove, update, invite).
+pub fn org_members(org_id: Uuid) -> String {
+    format!("platform/orgs/{org_id}/members")
+}
+
+/// Build MQTT topic for platform-wide user events (register).
+pub fn users() -> String {
+    "platform/users".to_string()
+}

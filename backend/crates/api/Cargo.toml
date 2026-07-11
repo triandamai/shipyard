@@ -48,3 +48,4 @@ urlencoding = { workspace = true }
 redis = { workspace = true }
 mongodb = { workspace = true }
 sysinfo = "0.32"
+async-trait = { workspace = true }

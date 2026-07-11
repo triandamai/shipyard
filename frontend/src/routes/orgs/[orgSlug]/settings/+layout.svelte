@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Settings2, Users, Server, Radio, Cpu, Container, KeyRound, Rocket, ShieldCheck, Database, Mail, GitBranch, Globe } from '@lucide/svelte';
+	import { Settings2, Users, KeyRound, Rocket, ShieldCheck, GitBranch } from '@lucide/svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { orgStore } from '$lib/stores/org.store';
-	import { isAdminRole, isOwnerRole, can, perm } from '$lib/auth/permissions';
+	import { isAdminRole, can, perm } from '$lib/auth/permissions';
 
 	let { children } = $props();
 
@@ -13,7 +13,6 @@
 	let myRole           = $derived($orgStore.myMembership?.role ?? null);
 	let permissions      = $derived($orgStore.myMembership?.permissions ?? []);
 	let isAdmin          = $derived(isAdminRole(myRole));
-	let isOwner          = $derived(isOwnerRole(myRole));
 	let membershipLoaded = $derived($orgStore.membershipLoaded);
 	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
 	const SETTINGS_SUFFIXES = [
@@ -33,29 +32,16 @@
 		)
 	);
 
-	const baseTabs = [
-		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2  },
-		{ label: 'Providers',   href: (slug: string) => `/orgs/${slug}/settings/providers`,   icon: GitBranch  },
-		{ label: 'Traefik',     href: (slug: string) => `/orgs/${slug}/settings/traefik`,     icon: Server     },
-		{ label: 'Static',      href: (slug: string) => `/orgs/${slug}/settings/static`,      icon: Globe      },
-		{ label: 'Members',     href: (slug: string) => `/orgs/${slug}/settings/members`,     icon: Users      },
-		{ label: 'MQTT',        href: (slug: string) => `/orgs/${slug}/settings/mqtt`,        icon: Radio      },
-		{ label: 'Infra',       href: (slug: string) => `/orgs/${slug}/settings/infra`,       icon: Cpu        },
-		{ label: 'Docker',      href: (slug: string) => `/orgs/${slug}/settings/docker`,      icon: Container  },
-		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,    icon: KeyRound   },
-		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`, icon: Rocket     },
-		{ label: 'SMTP',        href: (slug: string) => `/orgs/${slug}/settings/smtp`,        icon: Mail       },
-		{ label: 'Audit',       href: (slug: string) => `/orgs/${slug}/settings/audit`,       icon: ShieldCheck },
-	];
+	type TabBadge = 'admin' | null;
 
-	const ownerOnlyTabs = [
-		{ label: 'Database',    href: (slug: string) => `/orgs/${slug}/settings/database`,     icon: Database   },
+	const tabs: { label: string; href: (slug: string) => string; icon: typeof Settings2; badge: TabBadge }[] = [
+		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2,   badge: null    },
+		{ label: 'Providers',   href: (slug: string) => `/orgs/${slug}/settings/providers`,   icon: GitBranch,   badge: 'admin' },
+		{ label: 'Members',     href: (slug: string) => `/orgs/${slug}/settings/members`,     icon: Users,       badge: 'admin' },
+		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,    icon: KeyRound,    badge: 'admin' },
+		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`, icon: Rocket,      badge: null    },
+		{ label: 'Audit',       href: (slug: string) => `/orgs/${slug}/settings/audit`,       icon: ShieldCheck, badge: null    },
 	];
-
-	let tabs = $derived([
-		...baseTabs,
-		...(isOwner ? ownerOnlyTabs : []),
-	]);
 
 	function isActive(tabHref: string) {
 		return currentPath === tabHref || currentPath.startsWith(tabHref + '/');
@@ -71,13 +57,19 @@
 		<nav class="tab-bar">
 			{#each tabs as tab}
 				{@const href = tab.href(orgSlug)}
+				{@const restricted = tab.badge === 'admin' && !isAdmin}
 				<a
 					class="tab-btn"
 					class:active={isActive(href)}
+					class:tab-restricted={restricted}
 					{href}
+					title={restricted ? 'Admin or Owner only' : undefined}
 				>
 					<tab.icon size={14} />
 					{tab.label}
+					{#if tab.badge === 'admin' && !isAdmin}
+						<span class="tab-badge tab-badge--admin">Admin</span>
+					{/if}
 				</a>
 			{/each}
 		</nav>
@@ -149,6 +141,27 @@
 	}
 	.tab-btn:hover { color: var(--text-primary); }
 	.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+	/* Restricted tabs: dim but still navigable — server will enforce permissions */
+	.tab-btn.tab-restricted { opacity: 0.55; }
+	.tab-btn.tab-restricted:hover { opacity: 0.8; }
+
+	/* Role / platform badge pills inside a tab */
+	.tab-badge {
+		font-size: 9px;
+		font-weight: 700;
+		padding: 1px 5px;
+		border-radius: 999px;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		flex-shrink: 0;
+		line-height: 1.6;
+	}
+	.tab-badge--admin {
+		background: rgba(99,102,241,0.1);
+		color: #6366F1;
+		border: 1px solid rgba(99,102,241,0.25);
+	}
 
 	.settings-content {
 		flex: 1;

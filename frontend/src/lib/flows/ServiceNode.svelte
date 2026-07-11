@@ -16,24 +16,42 @@
 	let svcType  = $derived((data.type as string)     ?? '');
 	let ports    = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
 
-	type StatusKey = 'running' | 'pending' | 'failed' | 'stopped';
+	type StatusKey = 'running' | 'deploying' | 'stopping' | 'pending' | 'failed' | 'need_attention' | 'stopped';
 
 	function statusClass(s: string): StatusKey {
-		if (s === 'running')                    return 'running';
-		if (s === 'pending' || s === 'preparing') return 'pending';
-		if (s === 'failed'  || s === 'rejected')  return 'failed';
+		if (s === 'running')                              return 'running';
+		if (s === 'deploying')                            return 'deploying';
+		if (s === 'stopping')                             return 'stopping';
+		if (s === 'need_attention')                       return 'need_attention';
+		if (s === 'pending' || s === 'preparing' || s === 'queued') return 'pending';
+		if (s === 'failed'  || s === 'rejected')          return 'failed';
 		return 'stopped';
 	}
 
 	function statusLabel(s: string): string {
-		return ({ running: 'Running', pending: 'Pending', preparing: 'Preparing',
-		          failed: 'Failed', rejected: 'Rejected', stopped: 'Stopped' } as Record<string,string>)[s] ?? s;
+		return ({
+			running:        'Running',
+			deploying:      'Deploying',
+			stopping:       'Stopping',
+			queued:         'Queued',
+			need_attention: 'Need attention',
+			pending:        'Pending',
+			preparing:      'Preparing',
+			failed:         'Failed',
+			rejected:       'Rejected',
+			stopped:        'Stopped'
+		} as Record<string, string>)[s] ?? s;
 	}
 </script>
 
 <Handle type="target" position={Position.Left} />
 
-<div class="service-node" class:selected>
+<div class="service-node"
+	class:selected
+	class:deploying={status === 'deploying'}
+	class:stopping={status === 'stopping'}
+	class:need-attention={status === 'need_attention'}
+>
 	<div class="node-header">
 		<BrandLogo icon={data.icon as string | null} type={svcType} size={24} iconSize={13} class="node-icon" />
 		<div class="node-title">
@@ -93,6 +111,33 @@
 	.service-node.selected {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 2px var(--accent-muted), var(--shadow-md);
+	}
+
+	.service-node.deploying {
+		border-color: #3b82f6;
+		animation: node-deploy-pulse 1.4s ease-in-out infinite;
+	}
+
+	.service-node.stopping {
+		border-color: #f59e0b;
+		animation: node-deploy-pulse 1.8s ease-in-out infinite;
+	}
+
+	.service-node.need-attention {
+		border-color: #f97316;
+	}
+
+	@keyframes node-deploy-pulse {
+		0%, 100% { box-shadow: 0 0 0 0 transparent; }
+		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, #3b82f6 30%, transparent); }
+	}
+
+	.service-node.stopping {
+		animation-name: node-stop-pulse;
+	}
+	@keyframes node-stop-pulse {
+		0%, 100% { box-shadow: 0 0 0 0 transparent; }
+		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 30%, transparent); }
 	}
 
 	.node-header {

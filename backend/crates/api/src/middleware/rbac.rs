@@ -131,6 +131,19 @@ pub async fn require_permission(
     org_id: Uuid,
     permission: &str,
 ) -> Result<(), AppError> {
+    // Superadmin bypasses all org-level checks
+    let is_super: Option<(bool,)> = sqlx::query_as(
+        "SELECT is_superadmin FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    if matches!(is_super, Some((true,))) {
+        return Ok(());
+    }
+
     let role = get_user_org_role(db, user_id, org_id).await
         .ok_or_else(|| AppError::Forbidden(format!(
             "User '{}' is not a member of organization '{}'", user_id, org_id

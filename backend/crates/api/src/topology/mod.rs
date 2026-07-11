@@ -300,15 +300,41 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 8. Query live containers (non-terminal) for container replica nodes
+    // 8. Query live containers for container replica nodes.
+    // Use ROW_NUMBER per (service_id, replica_index) slot so that during a
+    // rolling START_FIRST update — where Docker creates the new container
+    // BEFORE stopping the old one — only the newest container per slot is
+    // returned.  Unslotted containers (replica_index IS NULL) are each
+    // unique and returned via the UNION ALL branch.
     let containers = sqlx::query_as::<_, ContainerRow>(
-        "SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
-                c.status::text AS status, c.image, c.node_id
-         FROM containers c
-         JOIN services s ON s.id = c.service_id
-         WHERE s.project_id = $1
-           AND c.status::text NOT IN ('orphan', 'complete', 'rejected')
-         ORDER BY c.service_id, c.replica_index ASC NULLS LAST",
+        "WITH ranked AS (
+             SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
+                    c.status::text AS status, c.image, c.node_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY c.service_id, c.replica_index
+                        ORDER BY c.created_at DESC
+                    ) AS rn
+             FROM containers c
+             JOIN services s ON s.id = c.service_id
+             WHERE s.project_id = $1
+               AND c.status::text IN ('running', 'pending')
+               AND c.replica_index IS NOT NULL
+         ),
+         unslotted AS (
+             SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
+                    c.status::text AS status, c.image, c.node_id
+             FROM containers c
+             JOIN services s ON s.id = c.service_id
+             WHERE s.project_id = $1
+               AND c.status::text IN ('running', 'pending')
+               AND c.replica_index IS NULL
+         )
+         SELECT id, service_id, docker_container_id, replica_index, status, image, node_id
+         FROM ranked WHERE rn = 1
+         UNION ALL
+         SELECT id, service_id, docker_container_id, replica_index, status, image, node_id
+         FROM unslotted
+         ORDER BY service_id, replica_index ASC NULLS LAST",
     )
     .bind(project_id)
     .fetch_all(db)

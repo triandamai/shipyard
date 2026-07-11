@@ -277,7 +277,7 @@ fn validate_project_permissions(perms: &[String]) -> Result<(), ApiAppError> {
     Ok(())
 }
 
-async fn require_member(
+pub async fn require_member(
     db: &sqlx::PgPool,
     org_id: Uuid,
     user_id: Uuid,
@@ -297,7 +297,7 @@ async fn require_member(
     )))
 }
 
-async fn require_admin(
+pub async fn require_admin(
     db: &sqlx::PgPool,
     org_id: Uuid,
     user_id: Uuid,
@@ -311,7 +311,7 @@ async fn require_admin(
     }
 }
 
-async fn require_owner(
+pub async fn require_owner(
     db: &sqlx::PgPool,
     org_id: Uuid,
     user_id: Uuid,
@@ -444,6 +444,16 @@ async fn create_org(
 
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.created")
+        .with_meta(serde_json::json!({
+            "org_id": org_id,
+            "name": body.name,
+            "slug": body.slug,
+            "owner_id": auth.user_id,
+        }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(OrgResponse::from(org)))))
 }
@@ -721,6 +731,15 @@ async fn invite_member(
     )
     .await;
 
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.invitation.sent")
+        .with_meta(serde_json::json!({
+            "org_id": org_id,
+            "email": body.email,
+            "role": body.role,
+        }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
+
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(InvitationResponse::from(invitation)))))
 }
 
@@ -838,6 +857,15 @@ async fn change_member_role(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound("Member not found in this organization".to_string())))?;
 
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.member.updated")
+        .with_meta(serde_json::json!({
+            "org_id": org_id,
+            "user_id": target_user_id,
+            "role": body.role,
+        }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
+
     Ok(Json(ApiResponse::ok(MemberResponse {
         id: member.id,
         org_id: member.org_id,
@@ -913,6 +941,15 @@ async fn set_member_permissions(
     )
     .await;
 
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.member.updated")
+        .with_meta(serde_json::json!({
+            "org_id": org_id,
+            "user_id": target_user_id,
+            "permissions": body.permissions,
+        }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
+
     Ok(Json(ApiResponse::ok(body.permissions)))
 }
 
@@ -971,6 +1008,14 @@ async fn remove_member(
     if result.rows_affected() == 0 {
         return Err(ApiAppError(AppError::NotFound("Member not found in this organization".to_string())));
     }
+
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.member.removed")
+        .with_meta(serde_json::json!({
+            "org_id": org_id,
+            "user_id": target_user_id,
+        }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Member removed successfully" }))))
 }
@@ -1382,7 +1427,7 @@ async fn complete_invite(
     let user: shipyard_db::models::User = sqlx::query_as::<_, shipyard_db::models::User>(
         "INSERT INTO users (id, email, password_hash, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
-         RETURNING id, email, password_hash, created_at, updated_at",
+         RETURNING id, email, password_hash, is_superadmin, staff_permissions, created_at, updated_at",
     )
     .bind(Uuid::now_v7())
     .bind(&invitation.email)
@@ -1454,6 +1499,7 @@ async fn complete_invite(
         &user.email,
         &state.config.auth.jwt_secret,
         state.config.auth.access_token_expiry,
+        vec![],
     )
     .map_err(ApiAppError)?;
 
@@ -1498,19 +1544,31 @@ async fn reject_invite(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    let result = sqlx::query(
-        "DELETE FROM invitations WHERE token = $1 AND accepted_at IS NULL",
+    // Fetch first so we have the org_id for the MQTT event.
+    let inv: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT org_id, email FROM invitations WHERE token = $1 AND accepted_at IS NULL",
     )
     .bind(&token)
-    .execute(&state.db)
+    .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if result.rows_affected() == 0 {
+    let Some((org_id, email)) = inv else {
         return Err(ApiAppError(AppError::NotFound(
             "Invitation not found or already accepted".to_string(),
         )));
-    }
+    };
+
+    sqlx::query("DELETE FROM invitations WHERE token = $1 AND accepted_at IS NULL")
+        .bind(&token)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let topic = format!("platform/orgs/{org_id}/members");
+    let payload = shipyard_common::types::MqttPayload::new("org.invitation.declined")
+        .with_meta(serde_json::json!({ "org_id": org_id, "email": email }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Invitation declined" }))))
 }

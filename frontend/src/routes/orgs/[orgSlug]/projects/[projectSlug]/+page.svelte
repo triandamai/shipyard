@@ -305,12 +305,12 @@
 		const topoTopic = `platform/orgs/${oid}/projects/${pid}/topology`;
 		eventBus.on(topoTopic, handleTopologyMqtt);
 
-		// Service status events arrive separately (after topology.changed) and carry
-		// the authoritative status/replica count.  Update the canvas node directly so
-		// the service card reflects the real state without waiting for a full re-fetch.
+		// Service runtime status — carries authoritative status + replica count.
 		const svcStatusPrefix = `platform/orgs/${oid}/projects/${pid}/services/`;
 		const handleServiceStatus = (topic: string, payload: MqttPayload) => {
 			if (!topic.startsWith(svcStatusPrefix) || !topic.endsWith('/status')) return;
+			// Skip if this is a deployment sub-topic (contains /deployments/)
+			if (topic.includes('/deployments/')) return;
 			const serviceId = topic.slice(svcStatusPrefix.length, -'/status'.length);
 			const meta = payload.meta as Record<string, unknown> | undefined;
 			if (meta?.status) {
@@ -319,12 +319,38 @@
 				});
 			}
 		};
+
+		// Deployment pipeline status — drives "Deploying" / "Need attention" overlays on nodes.
+		const deployRx = new RegExp(
+			`^platform/orgs/${oid}/projects/${pid}/services/([^/]+)/deployments/[^/]+/status$`
+		);
+		const handleDeployStatus = (topic: string, payload: MqttPayload) => {
+			const m = topic.match(deployRx);
+			if (!m) return;
+			const serviceId = m[1];
+			const dStatus = ((payload.meta as Record<string, unknown>)?.status as string) ?? payload.event;
+
+			if (dStatus === 'running' || dStatus === 'pending' || dStatus === 'queued') {
+				// Deployment in progress — show deploying on both service and static-site nodes
+				topologyStore.refreshNode(`svc_${serviceId}`, {
+					data: { status: 'deploying', deploy_status: 'running' }
+				});
+			} else if (dStatus === 'failed' || dStatus === 'cancelled') {
+				topologyStore.refreshNode(`svc_${serviceId}`, {
+					data: { status: 'need_attention', deploy_status: 'need_attention' }
+				});
+			}
+			// success → service status event will update to 'running'; topology.changed re-syncs
+		};
+
 		eventBus.on('*', handleServiceStatus);
+		eventBus.on('*', handleDeployStatus);
 
 		return () => {
 			sub?.();
 			eventBus.off(topoTopic, handleTopologyMqtt);
 			eventBus.off('*', handleServiceStatus);
+			eventBus.off('*', handleDeployStatus);
 			topologyStore.setLoading(false);
 		};
 	});

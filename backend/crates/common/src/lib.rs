@@ -1,6 +1,7 @@
 pub mod config;
 pub mod crypto;
 pub mod error;
+pub mod permissions;
 pub mod types;
 
 pub use config::AppConfig;

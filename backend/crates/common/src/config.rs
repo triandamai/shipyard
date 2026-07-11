@@ -20,11 +20,52 @@ pub struct AppConfig {
     /// Set via SHIPYARD__APP_URL. Defaults to http://localhost:5173.
     #[serde(default = "default_app_url")]
     pub app_url: String,
+    /// Stripe webhook signing secret (whsec_...). Required to verify Stripe webhook signatures.
+    /// Set via SHIPYARD__STRIPE_WEBHOOK_SECRET.
+    #[serde(default)]
+    pub stripe_webhook_secret: Option<String>,
+    /// Stripe secret API key (sk_...). Required to create Checkout Sessions.
+    /// Set via SHIPYARD__STRIPE_SECRET_KEY.
+    #[serde(default)]
+    pub stripe_secret_key: Option<String>,
+    /// Hetzner Cloud API token. Set via SHIPYARD__HETZNER_API_KEY.
+    #[serde(default)]
+    pub hetzner_api_key: Option<String>,
+    /// Hetzner server type for new tenant VMs. Default: cpx21 (2 vCPU, 4GB RAM).
+    #[serde(default = "default_hetzner_server_type")]
+    pub hetzner_server_type: String,
+    /// Hetzner datacenter region for new tenant VMs. Default: eu-central (Nuremberg).
+    #[serde(default = "default_hetzner_region")]
+    pub hetzner_region: String,
+    /// Default cloud provider for new tenant VMs. Default: hetzner.
+    #[serde(default = "default_cloud_provider")]
+    pub default_cloud_provider: String,
+    /// DigitalOcean API token. Set via SHIPYARD__DO_API_KEY.
+    #[serde(default)]
+    pub do_api_key: Option<String>,
+    /// DigitalOcean droplet size for new tenant VMs. Default: s-2vcpu-4gb.
+    #[serde(default = "default_do_size")]
+    pub do_size: String,
+    /// DigitalOcean region for new tenant VMs. Default: fra1 (Frankfurt).
+    #[serde(default = "default_do_region")]
+    pub do_region: String,
+    /// Stripe price ID for the Pro tier. Set via SHIPYARD__STRIPE_PRICE_PRO.
+    #[serde(default)]
+    pub stripe_price_pro: Option<String>,
+    /// Stripe price ID for the Max tier. Set via SHIPYARD__STRIPE_PRICE_MAX.
+    #[serde(default)]
+    pub stripe_price_max: Option<String>,
 }
 
 fn default_app_url() -> String {
     "http://localhost:5173".to_string()
 }
+
+fn default_hetzner_server_type() -> String { "cpx21".to_string() }
+fn default_hetzner_region() -> String { "eu-central".to_string() }
+fn default_cloud_provider() -> String { "hetzner".to_string() }
+fn default_do_size() -> String { "s-2vcpu-4gb".to_string() }
+fn default_do_region() -> String { "fra1".to_string() }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitOAuthConfig {
@@ -227,6 +268,17 @@ impl Default for AppConfig {
             static_server: StaticServerConfig::default(),
             data_dir: "/opt/shipyard/data".to_string(),
             app_url: default_app_url(),
+            stripe_webhook_secret: None,
+            stripe_secret_key: None,
+            hetzner_api_key: None,
+            hetzner_server_type: default_hetzner_server_type(),
+            hetzner_region: default_hetzner_region(),
+            default_cloud_provider: default_cloud_provider(),
+            do_api_key: None,
+            do_size: default_do_size(),
+            do_region: default_do_region(),
+            stripe_price_pro: None,
+            stripe_price_max: None,
         }
     }
 }
@@ -275,6 +327,11 @@ impl AppConfig {
             .set_default("git.bitbucket_client_secret", "")?
             .set_default("data_dir", "/opt/shipyard/data")?
             .set_default("app_url", "http://localhost:5173")?
+            .set_default("hetzner_server_type", "cpx21")?
+            .set_default("hetzner_region", "eu-central")?
+            .set_default("default_cloud_provider", "hetzner")?
+            .set_default("do_size", "s-2vcpu-4gb")?
+            .set_default("do_region", "fra1")?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("SHIPYARD").separator("__"))
             .build()?;

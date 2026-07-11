@@ -362,12 +362,14 @@ async fn upload_static(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     // Pre-insert deployment steps so the log panel can render them immediately.
+    // NOTE: go_live (3) must appear before write_nginx_conf (4) so that the current
+    // symlink exists when nginx reloads, avoiding a transient 404 window.
     let upload_steps = [
         (0i32, "extract_archive"),
         (1i32, "parse_shipyard_config"),
         (2i32, "publish_files"),
-        (3i32, "write_nginx_conf"),
-        (4i32, "go_live"),
+        (3i32, "go_live"),
+        (4i32, "write_nginx_conf"),
         (5i32, "finalize"),
     ];
     for (order, name) in upload_steps {

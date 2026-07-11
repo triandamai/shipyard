@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_permissions TEXT[] NOT NULL DEFAULT '{}';

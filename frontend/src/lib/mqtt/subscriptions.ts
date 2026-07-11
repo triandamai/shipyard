@@ -61,12 +61,20 @@ export function subscribeToDeploymentSteps(
 }
 
 /**
- * Subscribe to project topology updates.
+ * Subscribe to project topology updates AND all service/deployment events for
+ * the project so the canvas receives realtime status changes without relying
+ * solely on the org-level wildcard subscription from the layout.
  */
 export function subscribeToTopology(orgId: string, projectId: string): () => void {
-	const topic = `platform/orgs/${orgId}/projects/${projectId}/topology`;
-	subscribeTopic(topic);
-	return () => unsubscribeTopic(topic);
+	const prefix = `platform/orgs/${orgId}/projects/${projectId}`;
+	const topics = [
+		`${prefix}/topology`,
+		`${prefix}/services/+/status`,
+		`${prefix}/services/+/containers`,
+		`${prefix}/services/+/deployments/+/status`,
+	];
+	topics.forEach(subscribeTopic);
+	return () => topics.forEach(unsubscribeTopic);
 }
 
 /**

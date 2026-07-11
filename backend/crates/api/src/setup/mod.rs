@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use shipyard_common::error::AppError;
+use shipyard_common::permissions::superadmin_permissions;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::models::SystemConfig;
 
+use crate::auth::{create_access_token, create_refresh_token};
 use crate::error::ApiAppError;
 use crate::AppState;
 
@@ -63,6 +65,9 @@ pub struct InitResponse {
     pub message: String,
     pub admin_user_id: Uuid,
     pub org_id: Uuid,
+    pub org_slug: String,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
 // ─── Router ──────────────────────────────────────────────────────────────────
@@ -296,8 +301,8 @@ async fn init(
 
     // 1. Insert admin user
     sqlx::query(
-        "INSERT INTO users (id, email, password_hash, created_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())",
+        "INSERT INTO users (id, email, password_hash, is_superadmin, created_at, updated_at)
+         VALUES ($1, $2, $3, TRUE, NOW(), NOW())",
     )
     .bind(admin_user_id)
     .bind(&body.admin_email)
@@ -356,12 +361,32 @@ async fn init(
         "Platform initialized successfully"
     );
 
+    let access_token = create_access_token(
+        admin_user_id,
+        &body.admin_email,
+        &state.config.auth.jwt_secret,
+        state.config.auth.access_token_expiry,
+        superadmin_permissions(),
+    )
+    .map_err(ApiAppError)?;
+
+    let (refresh_token, _jti) = create_refresh_token(
+        admin_user_id,
+        &body.admin_email,
+        &state.config.auth.jwt_secret,
+        state.config.auth.refresh_token_expiry,
+    )
+    .map_err(ApiAppError)?;
+
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::ok(InitResponse {
             message: "Platform initialized successfully".to_string(),
             admin_user_id,
             org_id,
+            org_slug,
+            access_token,
+            refresh_token,
         })),
     ))
 }

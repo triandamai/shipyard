@@ -211,13 +211,59 @@
 		else if (membershipLoaded && !canViewMembers) loadingMembers = false;
 	});
 
-	// Reload member list when someone accepts an invitation (MQTT push)
+	// Live updates via MQTT — react to member/invitation changes pushed by the server.
 	$effect(() => {
 		const id = orgId;
 		if (!id) return;
-		const handler = (_topic: string, payload: MqttPayload) => {
-			if (payload.event === 'org.member.joined') loadMembers(id);
+
+		const memberTopic = `platform/orgs/${id}/members`;
+
+		const handler = (topic: string, payload: MqttPayload) => {
+			if (topic !== memberTopic) return;
+
+			switch (payload.event) {
+				case 'org.member.joined':
+					// New member accepted invite — full reload to get email etc.
+					loadMembers(id);
+					loadInvitations(id);
+					break;
+
+				case 'org.member.removed': {
+					const uid = payload.meta?.user_id as string | undefined;
+					if (uid) members = members.filter(m => m.user_id !== uid);
+					break;
+				}
+
+				case 'org.member.updated': {
+					const uid  = payload.meta?.user_id as string | undefined;
+					const role = payload.meta?.role as string | undefined;
+					const perms = payload.meta?.permissions as string[] | undefined;
+					if (!uid) break;
+					members = members.map(m => {
+						if (m.user_id !== uid) return m;
+						return {
+							...m,
+							...(role  ? { role: role as MemberRole } : {}),
+							...(perms ? { permissions: perms }       : {}),
+						};
+					});
+					break;
+				}
+
+				case 'org.invitation.sent':
+					// Someone was invited — reload the pending list.
+					if (canInvite) loadInvitations(id);
+					break;
+
+				case 'org.invitation.declined': {
+					// Invitee declined — drop it from the pending list immediately.
+					const email = payload.meta?.email as string | undefined;
+					if (email) invitations = invitations.filter(i => i.email !== email);
+					break;
+				}
+			}
 		};
+
 		eventBus.on('*', handler as any);
 		return () => eventBus.off('*', handler as any);
 	});
@@ -230,6 +276,25 @@
 />
 
 <div class="members-page">
+
+	<!-- ── Role info note ─────────────────────────────────────────── -->
+	{#if membershipLoaded && myRole}
+		<div class="role-info-note role-info-note--{myRole}">
+			<span class="role-info-label">Your role:</span>
+			<span class="role-info-badge role-badge {roleColor(myRole)}">{roleLabel(myRole)}</span>
+			<span class="role-info-desc">
+				{#if myRole === 'owner'}
+					Full access — manage all members, roles, and invitations.
+				{:else if myRole === 'admin'}
+					Can invite members and remove member-role users. Cannot remove admins or the owner.
+				{:else if myRole === 'member'}
+					Read-only view. Contact an admin to change member settings.
+				{:else}
+					Read-only view of organization members.
+				{/if}
+			</span>
+		</div>
+	{/if}
 
 	<!-- ── Invite button ───────────────────────────────────────────── -->
 	<div class="invite-bar">
@@ -460,6 +525,25 @@
 
 	.members-page { display: flex; flex-direction: column; gap: 20px; }
 
+	/* ── Role info note ── */
+	.role-info-note {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 9px 14px;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border);
+		background: var(--bg-elevated);
+		font-size: 12px;
+		flex-wrap: wrap;
+	}
+	.role-info-label {
+		font-weight: 600;
+		color: var(--text-muted);
+		flex-shrink: 0;
+	}
+	.role-info-badge { flex-shrink: 0; }
+	.role-info-desc { color: var(--text-muted); flex: 1; min-width: 180px; }
 
 	/* ── Invite bar ── */
 	.invite-bar {

@@ -42,6 +42,8 @@
 	}
 </script>
 
+<svelte:window oncontextmenu={(e) => e.preventDefault()} />
+
 <div class="login-root">
 	<!-- Left brand panel (dark navy) -->
 	<div class="brand-panel">
@@ -131,6 +133,9 @@
 			<p class="register-link">
 				Don't have an account?&nbsp;
 				<a href="/register">Create one</a>
+			</p>
+			<p class="admin-link">
+				<a href="/admin/login">Admin login</a>
 			</p>
 		</div>
 	</div>
@@ -322,6 +327,22 @@
 
 	.register-link a:hover {
 		color: var(--accent-hover);
+	}
+
+	.admin-link {
+		text-align: center;
+		font-size: 11.5px;
+		margin-top: 4px;
+	}
+
+	.admin-link a {
+		color: var(--text-dim, #9ca3af);
+		text-decoration: none;
+	}
+
+	.admin-link a:hover {
+		color: var(--text-muted, #6b7280);
+		text-decoration: underline;
 	}
 
 	/* Spinner */

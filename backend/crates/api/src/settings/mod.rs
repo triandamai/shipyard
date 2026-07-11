@@ -283,18 +283,20 @@ async fn update_settings(
     State(state): State<AppState>,
     Json(body): Json<PlatformSettings>,
 ) -> Result<Json<ApiResponse<PlatformSettings>>, ApiAppError> {
-    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    if !superadmin_bypass(&state.db, auth.user_id).await {
+        let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+            "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+        )
+        .bind(auth.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if is_owner.is_none() {
-        return Err(ApiAppError(AppError::Forbidden(
-            "Only platform owners can update settings".to_string(),
-        )));
+        if is_owner.is_none() {
+            return Err(ApiAppError(AppError::Forbidden(
+                "Only platform owners or superadmins can update settings".to_string(),
+            )));
+        }
     }
 
     let pairs: Vec<(&str, Option<String>)> = vec![
@@ -358,6 +360,7 @@ async fn require_deployments_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Op
 }
 
 async fn require_smtp_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let suffix = if write { "smtp:write" } else { "smtp:read" };
     let perm = format!("shipyard:{org_id}:{suffix}");
@@ -942,6 +945,7 @@ struct SystemInfo {
     uptime_secs: u64,
     disks: Vec<DiskInfo>,
     networks: Vec<NetInfo>,
+    container_stats: std::collections::HashMap<String, shipyard_docker::ContainerResourceStats>,
 }
 
 async fn system_info(
@@ -1004,6 +1008,7 @@ async fn system_info(
             uptime_secs:     System::uptime(),
             disks,
             networks,
+            container_stats: std::collections::HashMap::new(),
         }
     })
     .await
@@ -1019,8 +1024,10 @@ async fn system_info(
 /// which Axum does when the TCP connection closes.
 async fn system_info_stream(
     _auth: AuthUser,
+    State(state): State<AppState>,
 ) -> Sse<ReceiverStream<Result<Event, Infallible>>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(2);
+    let docker = state.docker.clone();
 
     tokio::spawn(async move {
         use sysinfo::{Disks, Networks, System};
@@ -1069,7 +1076,7 @@ async fn system_info_stream(
                     })
                     .collect();
 
-                let info = SystemInfo {
+                let partial = SystemInfo {
                     cpu_usage_pct,
                     memory_total_mb: mem_total / 1_048_576,
                     memory_used_mb:  mem_used  / 1_048_576,
@@ -1079,8 +1086,9 @@ async fn system_info_stream(
                     uptime_secs:     System::uptime(),
                     disks,
                     networks,
+                    container_stats: std::collections::HashMap::new(),
                 };
-                (sys, info)
+                (sys, partial)
             })
             .await
             {
@@ -1094,10 +1102,37 @@ async fn system_info_stream(
             sys = new_sys;
 
             match snapshot {
-                Ok(info) => {
+                Ok(mut info) => {
+                    // Collect per-container resource stats for core services.
+                    if let Ok(containers) = docker.list_all_containers().await {
+                        let core_containers: Vec<String> = containers.into_iter()
+                            .filter_map(|c| c.names.into_iter().next())
+                            .filter(|n| {
+                                let t = n.to_lowercase();
+                                let t = t.trim_start_matches('/');
+                                t.starts_with("shipyard-") || t.starts_with("shipyard_")
+                            })
+                            .map(|n| n.trim_start_matches('/').to_string())
+                            .collect();
+
+                        let futs: Vec<_> = core_containers.iter().map(|name| {
+                            let docker = docker.clone();
+                            let name = name.clone();
+                            async move {
+                                let stats = docker.container_resource_stats(&name).await;
+                                (name, stats)
+                            }
+                        }).collect();
+
+                        for (name, result) in futures::future::join_all(futs).await {
+                            if let Ok(Some(s)) = result {
+                                info.container_stats.insert(name, s);
+                            }
+                        }
+                    }
+
                     let data = serde_json::to_string(&info).unwrap_or_default();
                     if tx.send(Ok(Event::default().data(data))).await.is_err() {
-                        // Receiver dropped — client disconnected, stop the loop.
                         break;
                     }
                 }
@@ -1118,7 +1153,18 @@ async fn system_info_stream(
 
 // ── Docker engine routes ──────────────────────────────────────────────────────
 
+async fn superadmin_bypass(db: &sqlx::PgPool, user_id: uuid::Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT is_superadmin FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
 async fn require_docker_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let perm = format!("shipyard:{org_id}:docker:read");
     crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
@@ -1127,6 +1173,7 @@ async fn require_docker_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<
 }
 
 async fn require_docker_write(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let perm = format!("shipyard:{org_id}:docker:write");
     crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
@@ -1135,6 +1182,7 @@ async fn require_docker_write(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option
 }
 
 async fn require_infra_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let perm = format!("shipyard:{org_id}:infra:read");
     crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
@@ -1144,6 +1192,7 @@ async fn require_infra_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<u
 
 /// Accepts `static:read` (dedicated permission) or falls back to `infra:read`.
 async fn require_static_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let static_perm = format!("shipyard:{org_id}:static:read");
     if crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &static_perm).await.is_ok() {
@@ -1654,6 +1703,7 @@ async fn update_deployments_settings(
 }
 
 async fn require_owner(user_id: uuid::Uuid, db: &sqlx::PgPool) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, user_id).await { return Ok(()); }
     let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
         "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
     )

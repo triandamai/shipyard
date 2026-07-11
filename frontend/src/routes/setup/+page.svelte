@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { authStore } from '$lib/stores/auth.store';
+	import { setAuthCookies } from '$lib/auth/cookies';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -58,6 +60,19 @@
 
 			if (res.error) {
 				submitError = res.error.message;
+				return;
+			}
+
+			// Auto sign-in: store tokens and redirect to admin panel.
+			if (res.data?.access_token) {
+				setAuthCookies(res.data.access_token);
+				// Fetch the full user object to populate the auth store.
+				const meRes = await api.getMe();
+				if (meRes.data) {
+					authStore.setUser(meRes.data as any, { access_token: res.data.access_token });
+				}
+				// Redirect to admin panel — superadmin lands there first.
+				goto('/admin');
 				return;
 			}
 
@@ -450,15 +465,15 @@
 							Shipyard is ready!
 						</h2>
 						<p style="color: var(--text-muted); font-size: 14px; line-height: 1.6;">
-							Your admin account and organization have been created. You can now sign in.
+							Your super admin account and organization have been created.
 						</p>
 					</div>
 					<button
 						class="btn btn-primary"
 						style="margin-top: 8px;"
-						onclick={() => goto('/login')}
+						onclick={() => goto('/admin')}
 					>
-						Go to Login
+						Go to Admin Panel
 					</button>
 				</div>
 			{/if}

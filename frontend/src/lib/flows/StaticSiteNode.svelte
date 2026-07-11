@@ -17,14 +17,24 @@
 
 	function deployStatusClass(s: string): string {
 		if (s === 'success')                             return 'running';
-		if (s === 'running' || s === 'pending')          return 'pending';
+		if (s === 'running')                             return 'deploying';
+		if (s === 'pending' || s === 'queued')           return 'pending';
+		if (s === 'need_attention')                      return 'need_attention';
 		if (s === 'failed')                              return 'failed';
 		return 'stopped';
 	}
 
 	function deployStatusLabel(s: string): string {
-		return ({ success: 'Live', running: 'Deploying', pending: 'Queued',
-		          failed: 'Failed', none: 'Not deployed' } as Record<string, string>)[s] ?? s;
+		return ({
+			success:        'Live',
+			running:        'Deploying',
+			deploying:      'Deploying',
+			pending:        'Queued',
+			queued:         'Queued',
+			need_attention: 'Need attention',
+			failed:         'Failed',
+			none:           'Not deployed'
+		} as Record<string, string>)[s] ?? s;
 	}
 </script>
 

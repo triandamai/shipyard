@@ -306,6 +306,32 @@ async fn create_service(
     let webhook_token = Uuid::now_v7().to_string().replace('-', "");
     upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &webhook_token).await.ok();
 
+    // Auto-assign to the org's active node if one exists.
+    if let Ok(Some((_, node_id))) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        r#"SELECT p.org_id, cn.id
+           FROM projects p
+           JOIN compute_nodes cn ON cn.org_id = p.org_id
+           WHERE p.id = $1
+             AND cn.status = 'active'::node_status
+           ORDER BY cn.created_at ASC
+           LIMIT 1"#,
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        let _ = sqlx::query(
+            r#"INSERT INTO service_node_assignments (service_id, node_id, assigned_at)
+               VALUES ($1, $2, NOW())
+               ON CONFLICT (service_id) DO NOTHING"#,
+        )
+        .bind(service.id)
+        .bind(node_id)
+        .execute(&state.db)
+        .await;
+        tracing::debug!(service_id = %service.id, node_id = %node_id, "auto-assigned new service to active node");
+    }
+
     crate::middleware::audit::write_audit_log(
         &state.db,
         &auth_user,
@@ -1563,6 +1589,7 @@ async fn exec_token(
         &auth.email,
         &state.config.auth.jwt_secret,
         300, // 5 minutes
+        vec![],
     )
     .map_err(|e| ApiAppError(e))?;
 

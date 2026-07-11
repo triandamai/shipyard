@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command } from '@lucide/svelte';
+	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command, CreditCard, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -40,8 +40,9 @@
 	// ── Avatar menu ──────────────────────────────────────────────────────────────
 	let menuOpen = $state(false);
 
-	let userEmail  = $derived($authStore.user?.email ?? '');
-	let myRole    = $derived($orgStore.myMembership?.role ?? '');
+	let userEmail     = $derived($authStore.user?.email ?? '');
+	let isSuperadmin  = $derived($authStore.user?.is_superadmin === true);
+	let myRole        = $derived($orgStore.myMembership?.role ?? '');
 	let myPerms   = $derived($orgStore.myMembership?.permissions ?? []);
 	let orgId     = $derived($orgStore.activeOrg?.id ?? '');
 	let initials  = $derived(userEmail ? userEmail.slice(0, 1).toUpperCase() : 'U');
@@ -59,6 +60,11 @@
 	function openProfile() {
 		closeMenu();
 		goto(`/orgs/${orgSlug}/profile`);
+	}
+
+	function openBilling() {
+		closeMenu();
+		goto(`/orgs/${orgSlug}/billing`);
 	}
 
 	async function logout() {
@@ -238,7 +244,20 @@
 						Profile settings
 					</button>
 
+					<button class="menu-item" onclick={openBilling} role="menuitem">
+						<CreditCard size={13} />
+						Billing & Plan
+					</button>
+
 					<div class="menu-divider"></div>
+
+					{#if isSuperadmin}
+						<a href="/admin" class="menu-item menu-item--superadmin" role="menuitem" onclick={closeMenu}>
+							<ShieldAlert size={13} />
+							Admin Panel
+						</a>
+						<div class="menu-divider"></div>
+					{/if}
 
 					<button class="menu-item menu-item--danger" onclick={logout} role="menuitem">
 						<LogOut size={13} />
@@ -516,6 +535,9 @@
 
 	.menu-item--danger { color: #f87171; }
 	.menu-item--danger:hover { background: rgba(239,68,68,0.12); color: #fca5a5; }
+
+	.menu-item--superadmin { color: #f97316; text-decoration: none; }
+	.menu-item--superadmin:hover { background: rgba(249,115,22,0.12); color: #fdba74; }
 
 	.menu-item--update {
 		color: #34d399;
