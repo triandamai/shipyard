@@ -856,8 +856,15 @@ async fn write_shipyard_traefik_config(
         return;
     }
     let dest = format!("{dynamic_config_dir}/shipyard.yml");
+    // Only write if the file is absent — install.sh writes the authoritative version
+    // with the real domain. Overwriting it would replace the domain with whatever
+    // app_url is set to (which may be localhost in container-internal configs).
+    if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        tracing::info!("Traefik dynamic config already exists, skipping write: {dest}");
+        return;
+    }
     match tokio::fs::write(&dest, content).await {
-        Ok(_) => tracing::info!("Traefik dynamic config written: {dest}"),
+        Ok(_) => tracing::info!("Traefik dynamic config written (bootstrap): {dest}"),
         Err(e) => tracing::warn!("Could not write traefik config '{dest}': {e}"),
     }
 }
