@@ -74,6 +74,32 @@ async fn require_org_member(
     Ok(())
 }
 
+/// Check a frozen org quota limit; returns 403 with an upgrade message when over limit.
+/// quota_col must be a valid column name in org_quota (validated by caller).
+/// -1 means unlimited.
+async fn check_project_quota(db: &sqlx::PgPool, org_id: Uuid) -> Result<(), ApiAppError> {
+    let current: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM projects WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_one(db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let limit: Option<i32> = sqlx::query_scalar("SELECT max_projects FROM org_quota WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some(max) = limit {
+        if max != -1 && current.0 >= max as i64 {
+            return Err(ApiAppError(AppError::Forbidden(format!(
+                "Plan limit reached: your plan allows {max} project(s). Upgrade your plan to add more."
+            ))));
+        }
+    }
+    Ok(())
+}
+
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// GET /orgs/:org_id/projects
@@ -113,6 +139,7 @@ async fn create_project(
     }
 
     require_org_member(&state.db, auth_user.user_id, org_id).await?;
+    check_project_quota(&state.db, org_id).await?;
 
     // Verify org exists
     let org_exists: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(

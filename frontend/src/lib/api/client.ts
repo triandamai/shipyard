@@ -4,6 +4,7 @@ import type {
 	Organization,
 	Plan,
 	PaymentRecord,
+	OrgQuota,
 	OrgMember,
 	Invitation,
 	PublicInvite,
@@ -712,6 +713,10 @@ class ApiClient {
 
 	getBillingHistory(orgId: string): Promise<ApiResponse<PaymentRecord[]>> {
 		return this.request<PaymentRecord[]>('GET', `/orgs/${orgId}/billing/history`);
+	}
+
+	getOrgQuota(orgId: string): Promise<ApiResponse<OrgQuota>> {
+		return this.request<OrgQuota>('GET', `/orgs/${orgId}/quota`);
 	}
 
 	createCheckoutSession(orgId: string, tier: 'pro' | 'max', successUrl: string, cancelUrl: string): Promise<ApiResponse<{ url: string }>> {

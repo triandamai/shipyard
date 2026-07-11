@@ -279,6 +279,40 @@ async fn stripe_webhook(
                 .execute(&state.db)
                 .await
                 .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+                // 4. Snapshot plan limits into org_quota for this org.
+                // This is an explicit plan upgrade — overwrite with new limits.
+                sqlx::query(
+                    r#"INSERT INTO org_quota (
+                           org_id, plan_id,
+                           max_projects, max_members, max_replicas, max_parallel_deployments,
+                           max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+                           applied_at, updated_at
+                       )
+                       SELECT $1, id,
+                           max_projects, max_members, max_replicas, max_parallel_deployments,
+                           max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+                           NOW(), NOW()
+                       FROM plans WHERE id = $2
+                       ON CONFLICT (org_id) DO UPDATE
+                           SET plan_id = EXCLUDED.plan_id,
+                               max_projects = EXCLUDED.max_projects,
+                               max_members = EXCLUDED.max_members,
+                               max_replicas = EXCLUDED.max_replicas,
+                               max_parallel_deployments = EXCLUDED.max_parallel_deployments,
+                               max_git_providers = EXCLUDED.max_git_providers,
+                               max_orgs = EXCLUDED.max_orgs,
+                               node_count = EXCLUDED.node_count,
+                               cpu_cores = EXCLUDED.cpu_cores,
+                               memory_gb = EXCLUDED.memory_gb,
+                               applied_at = NOW(),
+                               updated_at = NOW()"#,
+                )
+                .bind(org_id)
+                .bind(pid)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
             }
 
             // 4. Record the payment.

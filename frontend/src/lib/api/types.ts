@@ -137,6 +137,22 @@ export interface PaymentRecord {
 	created_at: string;
 }
 
+export interface OrgQuota {
+	org_id: string;
+	plan_id: string | null;
+	max_projects: number;
+	max_members: number;
+	max_replicas: number;
+	max_parallel_deployments: number;
+	max_git_providers: number;
+	max_orgs: number;
+	node_count: number;
+	cpu_cores: number;
+	memory_gb: number;
+	projects_used: number;
+	members_used: number;
+}
+
 export interface OrgMember {
 	id: string;
 	org_id: string;

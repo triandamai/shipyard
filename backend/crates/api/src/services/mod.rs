@@ -256,6 +256,31 @@ async fn create_service(
         ))));
     }
 
+    // Check max_replicas quota for the owning org.
+    let requested = body.replicas.max(1) as i64;
+    let org_id: Option<Uuid> = sqlx::query_scalar("SELECT org_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        .flatten();
+    if let Some(oid) = org_id {
+        let max_replicas: Option<i32> = sqlx::query_scalar(
+            "SELECT max_replicas FROM org_quota WHERE org_id = $1",
+        )
+        .bind(oid)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+        if let Some(max) = max_replicas {
+            if max != -1 && requested > max as i64 {
+                return Err(ApiAppError(AppError::Forbidden(format!(
+                    "Plan limit reached: your plan allows {max} replica(s) per service. Upgrade your plan to add more."
+                ))));
+            }
+        }
+    }
+
     let service_id = Uuid::now_v7();
     let directory_path = format!(
         "{}/{}/{}/{}",
@@ -401,9 +426,36 @@ async fn update_service(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
 
+    let new_replicas   = body.replicas.unwrap_or(current.replicas).max(0);
+
+    // Only enforce quota when the caller is actually increasing replicas.
+    if body.replicas.is_some() && new_replicas > current.replicas {
+        let org_id: Option<Uuid> = sqlx::query_scalar("SELECT org_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+            .flatten();
+        if let Some(oid) = org_id {
+            let max_replicas: Option<i32> = sqlx::query_scalar(
+                "SELECT max_replicas FROM org_quota WHERE org_id = $1",
+            )
+            .bind(oid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            if let Some(max) = max_replicas {
+                if max != -1 && new_replicas as i64 > max as i64 {
+                    return Err(ApiAppError(AppError::Forbidden(format!(
+                        "Plan limit reached: your plan allows {max} replica(s) per service. Upgrade your plan to add more."
+                    ))));
+                }
+            }
+        }
+    }
+
     let new_name       = body.name.unwrap_or(current.name);
     let new_status     = body.status.unwrap_or(current.status);
-    let new_replicas   = body.replicas.unwrap_or(current.replicas).max(0);
     let new_ports      = body.ports.map(|p| serde_json::to_value(p).unwrap_or(current.ports.clone())).unwrap_or(current.ports);
     let new_image      = body.image.unwrap_or(current.image);
     let new_cpu        = body.cpu_limit.or(current.cpu_limit);

@@ -187,6 +187,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:org_id/invitations/:invitation_id", delete(cancel_invitation))
         .route("/:org_id/invitations/:token/accept", post(accept_invitation))
         .route("/:org_id/audit-logs", get(list_audit_logs))
+        .route("/:org_id/quota", get(get_org_quota))
 }
 
 /// Public routes — no JWT required.  Mounted under /invite at the root level.
@@ -327,6 +328,42 @@ pub async fn require_owner(
         )));
     }
     Ok(member)
+}
+
+/// Check an org's frozen quota against a current usage count.
+/// Returns Err(402 Payment Required) with a clear message when over limit.
+/// -1 in the quota column means unlimited.
+pub async fn check_quota(
+    db: &sqlx::PgPool,
+    org_id: Uuid,
+    limit_col: &str,
+    current_count: i64,
+    resource_label: &str,
+) -> Result<(), ApiAppError> {
+    let limit: Option<i32> = sqlx::query_scalar(&format!(
+        "SELECT {limit_col} FROM org_quota WHERE org_id = $1"
+    ))
+    .bind(org_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let Some(limit) = limit else {
+        // No quota row means no plan was applied — allow (free defaults).
+        return Ok(());
+    };
+
+    if limit == -1 {
+        return Ok(()); // unlimited
+    }
+
+    if current_count >= limit as i64 {
+        return Err(ApiAppError(AppError::Forbidden(format!(
+            "Plan limit reached: your plan allows {limit} {resource_label}. Upgrade your plan to add more."
+        ))));
+    }
+
+    Ok(())
 }
 
 fn set_refresh_cookie(token: &str, max_age: u64) -> axum::http::HeaderValue {
@@ -488,6 +525,40 @@ async fn create_org(
     .bind(org_id)
     .bind(plan_id)
     .bind(tier)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    // Snapshot plan limits into org_quota — frozen at this point in time.
+    // Future changes to the plan's limits do NOT affect this row.
+    sqlx::query(
+        r#"INSERT INTO org_quota (
+               org_id, plan_id,
+               max_projects, max_members, max_replicas, max_parallel_deployments,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+               applied_at, updated_at
+           )
+           SELECT $1, id,
+               max_projects, max_members, max_replicas, max_parallel_deployments,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+               NOW(), NOW()
+           FROM plans WHERE id = $2
+           ON CONFLICT (org_id) DO UPDATE
+               SET plan_id = EXCLUDED.plan_id,
+                   max_projects = EXCLUDED.max_projects,
+                   max_members = EXCLUDED.max_members,
+                   max_replicas = EXCLUDED.max_replicas,
+                   max_parallel_deployments = EXCLUDED.max_parallel_deployments,
+                   max_git_providers = EXCLUDED.max_git_providers,
+                   max_orgs = EXCLUDED.max_orgs,
+                   node_count = EXCLUDED.node_count,
+                   cpu_cores = EXCLUDED.cpu_cores,
+                   memory_gb = EXCLUDED.memory_gb,
+                   applied_at = NOW(),
+                   updated_at = NOW()"#,
+    )
+    .bind(org_id)
+    .bind(plan_id)
     .execute(&mut *tx)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -704,6 +775,14 @@ async fn invite_member(
     Json(body): Json<InviteMemberRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<InvitationResponse>>), ApiAppError> {
     require_admin(&state.db, org_id, auth.user_id).await?;
+
+    // Check member quota before issuing invitation.
+    let member_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    check_quota(&state.db, org_id, "max_members", member_count.0, "member(s)").await?;
 
     if body.email.is_empty() || !body.email.contains('@') {
         return Err(ApiAppError(AppError::Validation("A valid email address is required".to_string())));
@@ -1621,4 +1700,82 @@ async fn reject_invite(
     state.mqtt.publish_status(&topic, &payload).await.ok();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Invitation declined" }))))
+}
+
+// ─── Quota ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct OrgQuotaResponse {
+    pub org_id: Uuid,
+    pub plan_id: Option<Uuid>,
+    // Frozen limits
+    pub max_projects: i32,
+    pub max_members: i32,
+    pub max_replicas: i32,
+    pub max_parallel_deployments: i32,
+    pub max_git_providers: i32,
+    pub max_orgs: i32,
+    pub node_count: i32,
+    pub cpu_cores: i32,
+    pub memory_gb: i32,
+    // Current usage
+    pub projects_used: i64,
+    pub members_used: i64,
+}
+
+/// GET /orgs/:org_id/quota
+async fn get_org_quota(
+    auth: AuthUser,
+    Path(org_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<OrgQuotaResponse>>, ApiAppError> {
+    require_member(&state.db, org_id, auth.user_id).await?;
+
+    let row: Option<(Uuid, Option<Uuid>, i32, i32, i32, i32, i32, i32, i32, i32, i32)> =
+        sqlx::query_as(
+            "SELECT org_id, plan_id,
+                    max_projects, max_members, max_replicas, max_parallel_deployments,
+                    max_git_providers, max_orgs, node_count, cpu_cores, memory_gb
+             FROM org_quota WHERE org_id = $1",
+        )
+        .bind(org_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (plan_id, max_projects, max_members, max_replicas, max_parallel_deployments,
+         max_git_providers, max_orgs, node_count, cpu_cores, memory_gb) = match row {
+        Some((_, p, a, b, c, d, e, f, g, h, i)) => (p, a, b, c, d, e, f, g, h, i),
+        None => (None, 3, 5, 1, 1, 1, 1, 1, 1, 2), // free defaults
+    };
+
+    let (projects_used,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM projects WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (members_used,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM org_members WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(OrgQuotaResponse {
+        org_id,
+        plan_id,
+        max_projects,
+        max_members,
+        max_replicas,
+        max_parallel_deployments,
+        max_git_providers,
+        max_orgs,
+        node_count,
+        cpu_cores,
+        memory_gb,
+        projects_used,
+        members_used,
+    })))
 }
