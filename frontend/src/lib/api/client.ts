@@ -2,6 +2,8 @@ import type {
 	ApiResponse,
 	User,
 	Organization,
+	Plan,
+	PaymentRecord,
 	OrgMember,
 	Invitation,
 	PublicInvite,
@@ -243,8 +245,12 @@ class ApiClient {
 		return this.get('/orgs');
 	}
 
-	async createOrg(name: string, slug: string): Promise<ApiResponse<Organization>> {
-		return this.post('/orgs', { name, slug });
+	async createOrg(name: string, slug: string, planId?: string): Promise<ApiResponse<Organization>> {
+		return this.post('/orgs', { name, slug, ...(planId ? { plan_id: planId } : {}) });
+	}
+
+	async getPlans(): Promise<ApiResponse<Plan[]>> {
+		return this.get('/plans');
 	}
 
 	// ─── Projects ────────────────────────────────────────────────────
@@ -702,6 +708,10 @@ class ApiClient {
 	// ─── Billing ────────────────────────────────────────────────────────────────
 	getBilling(orgId: string): Promise<ApiResponse<OrgBilling>> {
 		return this.request<OrgBilling>('GET', `/orgs/${orgId}/billing`);
+	}
+
+	getBillingHistory(orgId: string): Promise<ApiResponse<PaymentRecord[]>> {
+		return this.request<PaymentRecord[]>('GET', `/orgs/${orgId}/billing/history`);
 	}
 
 	createCheckoutSession(orgId: string, tier: 'pro' | 'max', successUrl: string, cancelUrl: string): Promise<ApiResponse<{ url: string }>> {

@@ -26,6 +26,7 @@ use crate::static_site;
 use crate::git_providers;
 use crate::billing;
 use crate::nodes;
+use crate::plans;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -85,6 +86,8 @@ pub fn api_router() -> Router<AppState> {
         .nest("/orgs/:org_id", billing::org_routes())
         // Nodes — /orgs/:org_id/nodes
         .nest("/orgs/:org_id", nodes::routes())
+        // Plans — GET /plans (public, no auth)
+        .merge(plans::routes())
         // Admin — /admin/...
         .nest("/admin", admin::routes())
 }

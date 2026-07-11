@@ -24,6 +24,7 @@ pub struct Organization {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub plan_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -1,9 +1,14 @@
+use std::time::Duration;
 use lettre::{
     message::header::ContentType,
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use shipyard_common::config::SmtpConfig;
+
+/// Hard limit for a single SMTP send — keeps us well inside Cloudflare's
+/// 100-second gateway timeout and prevents hung connections.
+const SMTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build an async SMTP transport respecting the configured security mode.
 ///
@@ -17,15 +22,18 @@ fn build_mailer(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor
             .map_err(|e| e.to_string())?
             .port(config.port)
             .credentials(creds)
+            .timeout(Some(SMTP_TIMEOUT))
             .build(),
         "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
             .port(config.port)
             .credentials(creds)
+            .timeout(Some(SMTP_TIMEOUT))
             .build(),
         _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
             .map_err(|e| e.to_string())?
             .port(config.port)
             .credentials(creds)
+            .timeout(Some(SMTP_TIMEOUT))
             .build(),
     };
     Ok(mailer)
@@ -95,8 +103,10 @@ pub async fn send_test_email(
         .body(body.to_string())
         .map_err(|e| e.to_string())?;
 
-    build_mailer(config)?
-        .send(email).await.map_err(|e| e.to_string())?;
+    tokio::time::timeout(SMTP_TIMEOUT, build_mailer(config)?.send(email))
+        .await
+        .map_err(|_| "SMTP timed out after 30s — check host/port/firewall".to_string())?
+        .map_err(|e| e.to_string())?;
     tracing::info!("Test email sent to {to}");
     Ok(())
 }
@@ -138,8 +148,10 @@ pub async fn send_invitation_email(
         .body(body)
         .map_err(|e| e.to_string())?;
 
-    build_mailer(config)?
-        .send(email).await.map_err(|e| e.to_string())?;
+    tokio::time::timeout(SMTP_TIMEOUT, build_mailer(config)?.send(email))
+        .await
+        .map_err(|_| "SMTP timed out after 30s — check host/port/firewall".to_string())?
+        .map_err(|e| e.to_string())?;
     tracing::info!("Invitation email sent to {to_email}");
     Ok(())
 }

@@ -43,6 +43,7 @@ pub fn org_routes() -> Router<AppState> {
     Router::new()
         .route("/billing", get(get_org_billing))
         .route("/billing/checkout", post(create_checkout_session))
+        .route("/billing/history", get(get_billing_history))
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -155,6 +156,47 @@ async fn create_checkout_session(
     Ok(Json(ApiResponse::ok(CheckoutResponse { url })))
 }
 
+// ─── Billing history ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PaymentRecord {
+    pub id: Uuid,
+    pub org_id: Option<Uuid>,
+    pub plan_id: Option<Uuid>,
+    pub plan_name: Option<String>,
+    pub stripe_payment_intent_id: Option<String>,
+    pub amount: i32,
+    pub currency: String,
+    pub status: String,
+    pub description: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn get_billing_history(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(org_id): Path<Uuid>,
+) -> Result<Json<ApiResponse<Vec<PaymentRecord>>>, ApiAppError> {
+    crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
+
+    let records: Vec<PaymentRecord> = sqlx::query_as::<_, PaymentRecord>(
+        r#"SELECT p.id, p.org_id, p.plan_id, pl.name AS plan_name,
+                  p.stripe_payment_intent_id, p.amount, p.currency,
+                  p.status, p.description, p.created_at
+           FROM payments p
+           LEFT JOIN plans pl ON pl.id = p.plan_id
+           WHERE p.org_id = $1
+           ORDER BY p.created_at DESC
+           LIMIT 100"#,
+    )
+    .bind(org_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(records)))
+}
+
 async fn stripe_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -197,14 +239,24 @@ async fn stripe_webhook(
                 }
             };
 
-            // 1. Upsert org_billing with the correct tier.
+            // 1. Resolve plan_id for this tier.
+            let plan_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM plans WHERE name = $1 LIMIT 1",
+            )
+            .bind(tier)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+
+            // 2. Upsert org_billing with the correct tier and plan_id.
             sqlx::query(
-                r#"INSERT INTO org_billing (org_id, stripe_customer_id, stripe_sub_id, tier, sub_status, updated_at)
-                   VALUES ($1, $2, $3, $4::subscription_tier, 'active', NOW())
+                r#"INSERT INTO org_billing (org_id, stripe_customer_id, stripe_sub_id, tier, plan_id, sub_status, updated_at)
+                   VALUES ($1, $2, $3, $4::subscription_tier, $5, 'active', NOW())
                    ON CONFLICT (org_id) DO UPDATE
                        SET stripe_customer_id = EXCLUDED.stripe_customer_id,
                            stripe_sub_id      = EXCLUDED.stripe_sub_id,
                            tier               = EXCLUDED.tier,
+                           plan_id            = EXCLUDED.plan_id,
                            sub_status         = 'active',
                            updated_at         = NOW()"#,
             )
@@ -212,6 +264,38 @@ async fn stripe_webhook(
             .bind(customer_id)
             .bind(sub_id)
             .bind(tier)
+            .bind(plan_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            // 3. Sync organizations.plan_id to match.
+            if let Some(pid) = plan_id {
+                sqlx::query(
+                    "UPDATE organizations SET plan_id = $2 WHERE id = $1",
+                )
+                .bind(org_id)
+                .bind(pid)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            }
+
+            // 4. Record the payment.
+            let amount_total = obj["amount_total"].as_i64().unwrap_or(0) as i32;
+            let currency = obj["currency"].as_str().unwrap_or("usd").to_string();
+            let payment_intent = obj["payment_intent"].as_str();
+            sqlx::query(
+                r#"INSERT INTO payments (id, org_id, plan_id, stripe_payment_intent_id, amount, currency, status, description, created_at)
+                   VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'succeeded', $6, NOW())
+                   ON CONFLICT (stripe_payment_intent_id) DO NOTHING"#,
+            )
+            .bind(org_id)
+            .bind(plan_id)
+            .bind(payment_intent)
+            .bind(amount_total)
+            .bind(&currency)
+            .bind(format!("Subscription checkout — {tier} plan"))
             .execute(&state.db)
             .await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -344,8 +428,65 @@ async fn stripe_webhook(
             .await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
         }
+        "invoice.paid" => {
+            // Recurring invoice paid — record in payments and keep org_billing current.
+            let customer_id = obj["customer"].as_str().unwrap_or_default();
+            let payment_intent = obj["payment_intent"].as_str();
+            let amount = obj["amount_paid"].as_i64().unwrap_or(0) as i32;
+            let currency = obj["currency"].as_str().unwrap_or("usd").to_string();
+
+            // Look up the org for this customer.
+            let org_id_opt: Option<Uuid> = sqlx::query_scalar(
+                "SELECT org_id FROM org_billing WHERE stripe_customer_id = $1",
+            )
+            .bind(customer_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+
+            if let Some(org_id) = org_id_opt {
+                let plan_id: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT plan_id FROM org_billing WHERE org_id = $1",
+                )
+                .bind(org_id)
+                .fetch_optional(&state.db)
+                .await
+                .unwrap_or(None)
+                .flatten();
+
+                sqlx::query(
+                    r#"INSERT INTO payments (id, org_id, plan_id, stripe_payment_intent_id, amount, currency, status, description, created_at)
+                       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'succeeded', 'Recurring subscription payment', NOW())
+                       ON CONFLICT (stripe_payment_intent_id) DO NOTHING"#,
+                )
+                .bind(org_id)
+                .bind(plan_id)
+                .bind(payment_intent)
+                .bind(amount)
+                .bind(&currency)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+                sqlx::query(
+                    "UPDATE org_billing SET sub_status = 'active', updated_at = NOW() WHERE org_id = $1",
+                )
+                .bind(org_id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            }
+        }
         "invoice.payment_failed" => {
             let customer_id = obj["customer"].as_str().unwrap_or_default();
+
+            let org_id_opt: Option<Uuid> = sqlx::query_scalar(
+                "SELECT org_id FROM org_billing WHERE stripe_customer_id = $1",
+            )
+            .bind(customer_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
 
             sqlx::query(
                 r#"UPDATE org_billing
@@ -356,6 +497,35 @@ async fn stripe_webhook(
             .execute(&state.db)
             .await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            // Record the failed payment attempt.
+            if let Some(org_id) = org_id_opt {
+                let payment_intent = obj["payment_intent"].as_str();
+                let amount = obj["amount_due"].as_i64().unwrap_or(0) as i32;
+                let currency = obj["currency"].as_str().unwrap_or("usd").to_string();
+                let plan_id: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT plan_id FROM org_billing WHERE org_id = $1",
+                )
+                .bind(org_id)
+                .fetch_optional(&state.db)
+                .await
+                .unwrap_or(None)
+                .flatten();
+
+                sqlx::query(
+                    r#"INSERT INTO payments (id, org_id, plan_id, stripe_payment_intent_id, amount, currency, status, description, created_at)
+                       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'failed', 'Subscription payment failed', NOW())
+                       ON CONFLICT (stripe_payment_intent_id) DO NOTHING"#,
+                )
+                .bind(org_id)
+                .bind(plan_id)
+                .bind(payment_intent)
+                .bind(amount)
+                .bind(&currency)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            }
         }
         _ => {
             tracing::debug!("stripe: unhandled event type '{event_type}'");

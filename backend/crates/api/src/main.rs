@@ -54,6 +54,7 @@ mod static_site;
 mod git_providers;
 mod billing;
 mod nodes;
+mod plans;
 mod provisioning;
 mod compute;
 

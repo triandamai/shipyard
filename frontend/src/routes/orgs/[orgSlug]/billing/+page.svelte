@@ -131,6 +131,31 @@
 		return `${mb} MB`;
 	}
 
+	// ─── Billing history ─────────────────────────────────────────────
+	import type { PaymentRecord } from '$lib/api/types';
+	let history = $state<PaymentRecord[]>([]);
+	let historyLoading = $state(false);
+
+	$effect(() => {
+		if (orgId) {
+			historyLoading = true;
+			api.getBillingHistory(orgId).then(res => {
+				if (res.data) history = res.data;
+				historyLoading = false;
+			});
+		}
+	});
+
+	function fmtAmount(amount: number, currency: string): string {
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(amount / 100);
+	}
+
+	function paymentStatusClass(status: string): string {
+		if (status === 'succeeded') return 'pay-success';
+		if (status === 'failed') return 'pay-failed';
+		return 'pay-pending';
+	}
+
 	// ─── Active-transition notification ─────────────────────────────
 	let prevNodeStatuses = $state(new Map<string, string>());
 
@@ -447,6 +472,38 @@
 		{/if}
 
 	{/if}
+
+	<!-- Billing History -->
+	<section class="section">
+		<h2 class="section-title">Billing History</h2>
+		{#if historyLoading}
+			<div class="hist-empty">Loading…</div>
+		{:else if history.length === 0}
+			<div class="hist-empty">No payments recorded yet.</div>
+		{:else}
+			<div class="hist-table">
+				<div class="hist-head">
+					<span style="flex:2">Date</span>
+					<span style="flex:2">Plan</span>
+					<span style="flex:2">Description</span>
+					<span style="flex:1">Amount</span>
+					<span style="flex:1">Status</span>
+				</div>
+				{#each history as row (row.id)}
+					<div class="hist-row">
+						<span style="flex:2" class="hist-date">{formatDate(row.created_at)}</span>
+						<span style="flex:2">{row.plan_name ?? '—'}</span>
+						<span style="flex:2" class="hist-desc">{row.description ?? '—'}</span>
+						<span style="flex:1" class="hist-amount">{fmtAmount(row.amount, row.currency)}</span>
+						<span style="flex:1">
+							<span class="pay-badge {paymentStatusClass(row.status)}">{row.status}</span>
+						</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</section>
+
 </div>
 
 <style>
@@ -876,4 +933,18 @@
 		.node-card { padding: 14px 16px; }
 		.plan-detail-row { padding: 10px 16px; }
 	}
+
+	/* ── Billing history ── */
+	.hist-empty { padding: 24px 20px; color: var(--text-muted); font-size: 13px; text-align: center; }
+	.hist-table { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+	.hist-head { display: flex; gap: 8px; padding: 9px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+	.hist-row { display: flex; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; align-items: center; }
+	.hist-row:last-child { border-bottom: none; }
+	.hist-date { color: var(--text-secondary); font-size: 12px; }
+	.hist-desc { color: var(--text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.hist-amount { font-weight: 600; color: var(--text-primary); }
+	.pay-badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+	.pay-success { background: var(--accent-green-muted, rgba(34,197,94,.12)); color: var(--accent-green, #22c55e); border: 1px solid rgba(34,197,94,.2); }
+	.pay-failed  { background: var(--accent-red-muted); color: var(--accent-red); border: 1px solid rgba(220,38,38,.2); }
+	.pay-pending { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border); }
 </style>

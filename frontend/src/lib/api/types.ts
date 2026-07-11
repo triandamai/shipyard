@@ -104,6 +104,36 @@ export interface Organization {
 	id: string;
 	name: string;
 	slug: string;
+	plan_id: string | null;
+	created_at: string;
+}
+
+export interface Plan {
+	id: string;
+	name: string;
+	enabled: boolean;
+	cpu_cores: number;
+	memory_gb: number;
+	max_replicas: number;
+	node_count: number;
+	max_members: number;
+	max_projects: number;
+	max_orgs: number;
+	max_parallel_deployments: number;
+	max_git_providers: number;
+	price_monthly: number;
+}
+
+export interface PaymentRecord {
+	id: string;
+	org_id: string | null;
+	plan_id: string | null;
+	plan_name: string | null;
+	stripe_payment_intent_id: string | null;
+	amount: number;
+	currency: string;
+	status: string;
+	description: string | null;
 	created_at: string;
 }
 

@@ -27,6 +27,8 @@ use crate::AppState;
 pub struct CreateOrgRequest {
     pub name: String,
     pub slug: String,
+    /// Plan to assign. Defaults to the free plan if omitted.
+    pub plan_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +68,7 @@ pub struct OrgResponse {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub plan_id: Option<Uuid>,
     pub created_at: chrono::DateTime<Utc>,
 }
 
@@ -75,6 +78,7 @@ impl From<Organization> for OrgResponse {
             id: o.id,
             name: o.name,
             slug: o.slug,
+            plan_id: o.plan_id,
             created_at: o.created_at,
         }
     }
@@ -376,7 +380,7 @@ async fn list_orgs(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<OrgResponse>>>, ApiAppError> {
     let orgs: Vec<Organization> = sqlx::query_as::<_, Organization>(
-        "SELECT o.id, o.name, o.slug, o.created_at
+        "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
          FROM organizations o
          INNER JOIN org_members m ON m.org_id = o.id
          WHERE m.user_id = $1
@@ -415,18 +419,45 @@ async fn create_org(
         return Err(ApiAppError(AppError::Conflict(format!("Slug '{}' is already taken", body.slug))));
     }
 
+    // Resolve plan — use provided plan_id or fall back to the free plan.
+    let plan_id: Uuid = match body.plan_id {
+        Some(id) => {
+            let exists: Option<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM plans WHERE id = $1 AND enabled = true",
+            )
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+            exists.map(|(id,)| id).ok_or_else(|| ApiAppError(AppError::NotFound("Plan not found".to_string())))?
+        }
+        None => sqlx::query_scalar("SELECT id FROM plans WHERE name = 'free' LIMIT 1")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+            .ok_or_else(|| ApiAppError(AppError::Internal("Free plan not configured".to_string())))?,
+    };
+
+    // Fetch plan name for tier mapping
+    let plan_name: String = sqlx::query_scalar("SELECT name FROM plans WHERE id = $1")
+        .bind(plan_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
     let org_id = Uuid::now_v7();
     let mut tx = state.db.begin().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     let org: Organization = sqlx::query_as::<_, Organization>(
-        "INSERT INTO organizations (id, name, slug, created_at)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id, name, slug, created_at",
+        "INSERT INTO organizations (id, name, slug, plan_id, created_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         RETURNING id, name, slug, plan_id, created_at",
     )
     .bind(org_id)
     .bind(&body.name)
     .bind(&body.slug)
+    .bind(plan_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -438,6 +469,25 @@ async fn create_org(
     .bind(Uuid::now_v7())
     .bind(org_id)
     .bind(auth.user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    // Determine tier enum value — map to subscription_tier or default 'free'.
+    let tier = match plan_name.as_str() {
+        "pro" => "pro",
+        "max" => "max",
+        _ => "free",
+    };
+    sqlx::query(
+        "INSERT INTO org_billing (org_id, plan_id, tier, sub_status, updated_at)
+         VALUES ($1, $2, $3::subscription_tier, 'active', NOW())
+         ON CONFLICT (org_id) DO UPDATE
+           SET plan_id = EXCLUDED.plan_id, tier = EXCLUDED.tier, updated_at = NOW()",
+    )
+    .bind(org_id)
+    .bind(plan_id)
+    .bind(tier)
     .execute(&mut *tx)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -466,7 +516,7 @@ async fn get_org(
     require_member(&state.db, org_id, auth.user_id).await?;
 
     let org: Organization = sqlx::query_as::<_, Organization>(
-        "SELECT id, name, slug, created_at FROM organizations WHERE id = $1",
+        "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE id = $1",
     )
     .bind(org_id)
     .fetch_optional(&state.db)
@@ -490,7 +540,7 @@ async fn update_org(
 
     let org: Organization = sqlx::query_as::<_, Organization>(
         "UPDATE organizations SET name = $2 WHERE id = $1
-         RETURNING id, name, slug, created_at",
+         RETURNING id, name, slug, plan_id, created_at",
     )
     .bind(org_id)
     .bind(&body.name)
@@ -692,7 +742,7 @@ async fn invite_member(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     let org: Option<Organization> = sqlx::query_as::<_, Organization>(
-        "SELECT id, name, slug, created_at FROM organizations WHERE id = $1",
+        "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE id = $1",
     )
     .bind(org_id)
     .fetch_optional(&state.db)
