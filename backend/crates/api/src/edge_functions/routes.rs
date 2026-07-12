@@ -9,7 +9,7 @@ use uuid::Uuid;
 use std::fmt::Write as FmtWrite;
 
 use shipyard_common::error::AppError;
-use shipyard_common::types::ApiResponse;
+use shipyard_common::types::{ApiResponse, MqttPayload};
 
 use crate::auth::AuthUser;
 use crate::error::ApiAppError;
@@ -840,6 +840,7 @@ async fn trigger_group_deploy(
     .ok_or_else(|| AppError::NotFound("group not found".into()))?;
 
     let report = manager::deploy_from_git(&state, &group, "unknown", Some(auth.user_id)).await?;
+    publish_topology_changed(&state, org_id, group_id).await;
     Ok(Json(ApiResponse::ok(report)))
 }
 
@@ -951,6 +952,27 @@ fn hostname_to_router_name(hostname: &str) -> String {
 
 /// Writes a Traefik file-provider config for an edge function group's domains.
 /// Routes all hostnames to the org's edge runtime Swarm service on port 8000.
+/// Publish a topology.changed MQTT event for the project that owns this group.
+/// The frontend debounces this and re-fetches the topology via REST.
+async fn publish_topology_changed(state: &AppState, org_id: Uuid, group_id: Uuid) {
+    let project_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT project_id FROM edge_function_groups WHERE id = $1 AND org_id = $2",
+    )
+    .bind(group_id)
+    .bind(org_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .flatten();
+
+    if let Some(pid) = project_id {
+        let topic = shipyard_mqtt::topics::topology(org_id, pid);
+        let payload = MqttPayload::new("topology.changed");
+        state.mqtt.publish_status(&topic, &payload).await.ok();
+    }
+}
+
 async fn sync_edge_traefik_config(
     db: &sqlx::PgPool,
     group_id: Uuid,
@@ -1124,6 +1146,7 @@ async fn create_group_domain(
         &state.config.traefik.entrypoint_https,
         state.config.traefik.dynamic_config_dir.as_deref(),
     ).await;
+    publish_topology_changed(&state, org_id, group_id).await;
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(domain))))
 }
@@ -1162,6 +1185,7 @@ async fn delete_group_domain(
         &state.config.traefik.entrypoint_https,
         state.config.traefik.dynamic_config_dir.as_deref(),
     ).await;
+    publish_topology_changed(&state, org_id, group_id).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": true }))))
 }
