@@ -686,45 +686,36 @@ fn parse_image_ref(val: &str) -> Option<(String, String)> {
 ///    service definition includes `env_file: .env`).
 /// 2. Reads `/opt/shipyard/.env` directly — the file is always mounted and is the
 ///    authoritative source regardless of how env vars are forwarded.
-fn images_to_pull() -> Vec<(String, String)> {
-    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
-
-    // 1. Process env vars
-    let from_env: Vec<(String, String)> = KEYS
-        .iter()
-        .filter_map(|k| parse_image_ref(&std::env::var(k).unwrap_or_default()))
-        .collect();
-    if !from_env.is_empty() {
-        return from_env;
-    }
-
-    // 2. Fall back to reading the .env file directly
-    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
-    KEYS.iter()
-        .filter_map(|key| {
-            let prefix = format!("{key}=");
-            let val = content
-                .lines()
-                .find(|l| l.starts_with(prefix.as_str()))?
-                .strip_prefix(prefix.as_str())?;
-            parse_image_ref(val)
-        })
-        .collect()
-}
-
-/// Resolve the edge runtime image ref from env or .env file.
-fn edge_runtime_image() -> Option<String> {
-    let from_env = std::env::var("EDGE_RUNTIME_IMAGE").unwrap_or_default();
-    if !from_env.trim().is_empty() {
-        return Some(from_env.trim().to_string());
-    }
-    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
+fn read_dotenv_key(content: &str, key: &str) -> String {
+    let prefix = format!("{key}=");
     content
         .lines()
-        .find(|l| l.starts_with("EDGE_RUNTIME_IMAGE="))
-        .and_then(|l| l.strip_prefix("EDGE_RUNTIME_IMAGE="))
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .find(|l| l.starts_with(prefix.as_str()))
+        .and_then(|l| l.strip_prefix(prefix.as_str()))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn resolve_image_key(content: &str, key: &str) -> Option<(String, String)> {
+    // Env var takes priority; fall back to .env file.
+    let val = std::env::var(key)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let val = if val.is_empty() { read_dotenv_key(content, key) } else { val };
+    parse_image_ref(&val)
+}
+
+fn images_to_pull() -> Vec<(String, String)> {
+    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
+    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
+    KEYS.iter().filter_map(|k| resolve_image_key(&content, k)).collect()
+}
+
+fn edge_runtime_image() -> Option<String> {
+    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
+    resolve_image_key(&content, "EDGE_RUNTIME_IMAGE").map(|(img, tag)| format!("{img}:{tag}"))
 }
 
 /// Core update logic shared by the streaming and one-shot handlers.
