@@ -3461,6 +3461,7 @@ dependencies = [
  "shipyard-traefik",
  "sqlx",
  "sysinfo",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -3470,6 +3471,7 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "uuid",
+ "zip",
 ]
 
 [[package]]

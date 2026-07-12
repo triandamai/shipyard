@@ -406,6 +406,10 @@ SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR=/etc/traefik/dynamic
 # Data
 SHIPYARD__DATA_DIR=/opt/shipyard/data
 
+# Edge Functions (Deno-based serverless)
+SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=ghcr.io/shipyard/edge-runtime:v1
+
 RUST_LOG=shipyard=info,tower_http=warn
 ENV
 chmod 600 "${INSTALL_DIR}/.env"

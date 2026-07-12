@@ -27,6 +27,7 @@ use crate::git_providers;
 use crate::billing;
 use crate::nodes;
 use crate::plans;
+use crate::edge_functions;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -86,6 +87,10 @@ pub fn api_router() -> Router<AppState> {
         .nest("/orgs/:org_id", billing::org_routes())
         // Nodes — /orgs/:org_id/nodes
         .nest("/orgs/:org_id", nodes::routes())
+        // Edge functions — /orgs/:org_id/edge-functions
+        .nest("/orgs/:org_id/edge-functions", edge_functions::routes())
+        // Internal: runtime container endpoints — /internal/...
+        .nest("/internal", edge_functions::internal_routes())
         // Plans — GET /plans (public, no auth)
         .merge(plans::routes())
         // Admin — /admin/...

@@ -102,6 +102,19 @@ struct VolumeServiceRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+struct EdgeFunctionGroupRow {
+    id: Uuid,
+    service_id: Option<Uuid>,
+    org_id: Uuid,
+    provider: String,
+    repo_url: String,
+    branch: String,
+    function_count: i64,
+    active_count: i64,
+    last_deployed_sha: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 struct EnvRefRow {
     service_id: Uuid,
     env_key: String,
@@ -151,6 +164,8 @@ async fn get_topology(
     }
 
     // 1. Query all services in the project, joining live running-container count.
+    // Exclude 'edge_functions' — those synthetic rows are handled by the edge
+    // function group query (query 9) which emits richer node data.
     let services = sqlx::query_as::<_, ServiceRow>(
         "SELECT s.id, s.name, s.slug, s.status, s.replicas, s.type::text AS type,
                 s.ports, s.service_parent_id, s.icon,
@@ -158,6 +173,7 @@ async fn get_topology(
          FROM services s
          LEFT JOIN containers c ON c.service_id = s.id
          WHERE s.project_id = $1
+           AND s.type::text != 'edge_functions'
          GROUP BY s.id
          ORDER BY s.created_at ASC",
     )
@@ -192,7 +208,9 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 4. Query all domains in the project (via service -> project join)
+    // 4. Query all domains in the project (via service → project join).
+    // Edge function group domains are included automatically because each group
+    // now has a synthetic services row (type='edge_functions').
     let domains = sqlx::query_as::<_, DomainRow>(
         "SELECT d.id, d.service_id, d.hostname, d.tls_enabled, d.port
          FROM domains d
@@ -268,7 +286,6 @@ async fn get_topology(
     // Build per-static-service domain list from already-fetched domains
     let mut static_domain_map: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
     for dom in &domains {
-        // We'll populate this only for static services
         static_domain_map.entry(dom.service_id).or_default().push(dom.hostname.clone());
     }
 
@@ -340,6 +357,37 @@ async fn get_topology(
     .fetch_all(db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    // 9. Edge function groups associated with this project
+    let org_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .flatten();
+
+    let edge_fn_groups: Vec<EdgeFunctionGroupRow> = if let Some(oid) = org_id {
+        sqlx::query_as::<_, EdgeFunctionGroupRow>(
+            "SELECT g.id, g.service_id, g.org_id, g.provider, g.repo_url, g.branch,
+                    g.last_deployed_sha,
+                    COUNT(f.id) AS function_count,
+                    COUNT(f.id) FILTER (WHERE f.status = 'active') AS active_count
+             FROM edge_function_groups g
+             LEFT JOIN edge_functions f ON f.group_id = g.id
+             WHERE g.project_id = $1 AND g.org_id = $2
+             GROUP BY g.id
+             ORDER BY g.created_at ASC",
+        )
+        .bind(project_id)
+        .bind(oid)
+        .fetch_all(db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        vec![]
+    };
 
     // ── Build nodes ───────────────────────────────────────────────────────────
 
@@ -414,10 +462,10 @@ async fn get_topology(
             id: format!("dom_{}", dom.id),
             node_type: "domain".to_string(),
             data: serde_json::json!({
-                "hostname":   dom.hostname,
+                "hostname":    dom.hostname,
                 "tls_enabled": dom.tls_enabled,
-                "port":       dom.port,
-                "service_id": format!("svc_{}", dom.service_id),
+                "port":        dom.port,
+                "service_id":  format!("svc_{}", dom.service_id),
             }),
         });
     }
@@ -438,6 +486,41 @@ async fn get_topology(
                 "image": ctr.image,
                 "node_id": ctr.node_id,
                 "service_id": format!("svc_{}", ctr.service_id),
+            }),
+        });
+    }
+
+    for grp in &edge_fn_groups {
+        let repo_name = grp.repo_url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(&grp.repo_url)
+            .trim_end_matches(".git")
+            .to_string();
+
+        // Use the synthetic service row's ID as the node ID so domain edges
+        // (dom_* → svc_*) connect correctly.  Fall back to efg_ for groups
+        // that pre-date the service_id column.
+        let node_id = match grp.service_id {
+            Some(sid) => format!("svc_{sid}"),
+            None      => format!("efg_{}", grp.id),
+        };
+
+        nodes.push(TopologyNode {
+            id: node_id,
+            node_type: "edge_function".to_string(),
+            data: serde_json::json!({
+                "group_id":          grp.id,
+                "service_id":        grp.service_id,
+                "org_id":            grp.org_id,
+                "provider":          grp.provider,
+                "repo_url":          grp.repo_url,
+                "repo_name":         repo_name,
+                "branch":            grp.branch,
+                "function_count":    grp.function_count,
+                "active_count":      grp.active_count,
+                "last_deployed_sha": grp.last_deployed_sha,
             }),
         });
     }
@@ -480,7 +563,8 @@ async fn get_topology(
         });
     }
 
-    // domain → service edges
+    // domain → service edges (includes edge function group domains since they
+    // now have a real service_id pointing to their synthetic service row)
     for dom in &domains {
         stable_edges.push(TopologyEdge {
             id: format!("e_{}", Uuid::now_v7()),

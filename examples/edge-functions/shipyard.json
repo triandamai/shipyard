@@ -1,0 +1,25 @@
+{
+  "functions": {
+    "dir": "functions",
+    "entries": {
+      "hello": {
+        "file": "functions/hello.ts",
+        "timeout": 5
+      },
+      "send-email": {
+        "file": "functions/send-email.ts",
+        "timeout": 10,
+        "env": ["RESEND_API_KEY", "FROM_ADDRESS"]
+      },
+      "stripe-webhook": {
+        "file": "functions/stripe-webhook.ts",
+        "timeout": 10,
+        "env": ["STRIPE_WEBHOOK_SECRET", "BACKEND_URL"]
+      },
+      "image-resize": {
+        "file": "functions/image-resize.ts",
+        "timeout": 15
+      }
+    }
+  }
+}

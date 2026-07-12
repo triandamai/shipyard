@@ -57,6 +57,7 @@ mod nodes;
 mod plans;
 mod provisioning;
 mod compute;
+mod edge_functions;
 
 /// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
 /// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.
@@ -271,6 +272,28 @@ async fn async_main() {
         });
     }
 
+
+    // Spawn edge function invocation log retention — purge logs older than 7 days, runs daily.
+    {
+        let cleanup_db = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                match sqlx::query(
+                    "DELETE FROM edge_function_invocation_logs WHERE logged_at < NOW() - INTERVAL '7 days'",
+                )
+                .execute(&cleanup_db)
+                .await
+                {
+                    Ok(r) => tracing::info!(
+                        "edge_fn_logs cleanup: {} rows deleted",
+                        r.rows_affected()
+                    ),
+                    Err(e) => tracing::warn!("edge_fn_logs cleanup failed: {e}"),
+                }
+                tokio::time::sleep(Duration::from_secs(86400)).await;
+            }
+        });
+    }
 
     // Spawn docker_events retention task — purge events older than 7 days, runs daily.
     {
@@ -500,6 +523,14 @@ async fn async_main() {
         tokio::spawn(async move { worker.run_reconciliation().await });
     }
 
+    // Edge runtime worker: ensures Deno containers exist per org with active functions.
+    if state.config.edge_functions.enabled {
+        let edge_state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            edge_functions::runtime_worker::run(edge_state).await;
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
@@ -581,6 +612,9 @@ async fn async_main() {
         // Lives outside /api so it bypasses the init gate and rate limiter.
         .route("/internal/mqtt/auth", post(mqtt_auth))
         .nest("/api", api)
+        // Edge function invocations — public, no auth, routed to per-org runtime.
+        // Must be outside /api so it's not behind the init gate.
+        .nest("/fn", edge_functions::invoke_routes())
         // Public Open API — mounted separately so it can use its own state/auth.
         .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
@@ -795,6 +829,13 @@ async fn write_shipyard_traefik_config(
 
     shipyard-backend:
       rule: "Host(`{api_domain}`) && PathPrefix(`/openapi/v1`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-backend
+      tls:
+        certResolver: {cert_resolver}
+
+    shipyard-fn-invoke:
+      rule: "Host(`{domain}`) && PathPrefix(`/fn/`)"
       entryPoints: [{entrypoint_https}]
       service: shipyard-backend
       tls:

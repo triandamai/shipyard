@@ -35,6 +35,9 @@ pub fn routes() -> Router<AppState> {
         .route("/github/:service_id/:token", post(github_webhook))
         .route("/gitlab/:service_id/:token", post(gitlab_webhook))
         .route("/gitea/:service_id/:token", post(gitea_webhook))
+        // Edge function group webhooks
+        .route("/github/fn/:group_id/:token", post(github_fn_webhook))
+        .route("/gitlab/fn/:group_id/:token", post(gitlab_fn_webhook))
 }
 
 // ─── Simple Glob Matcher ───────────────────────────────────────────────────────
@@ -540,6 +543,112 @@ pub fn verify_github_signature(secret: &str, body: &[u8], signature: Option<&str
     mac.update(body);
 
     mac.verify_slice(&expected_bytes).is_ok()
+}
+
+// ─── Edge function group webhooks ─────────────────────────────────────────────
+
+/// POST /webhooks/github/fn/:group_id/:token
+async fn github_fn_webhook(
+    Path((group_id, token)): Path<(Uuid, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let group = load_fn_group(&state, group_id, &token).await?;
+
+    let sig = headers.get("x-hub-signature-256").and_then(|v| v.to_str().ok());
+    if !verify_github_signature(&group.webhook_secret, &body, sig) {
+        return Err(ApiAppError(AppError::Unauthorized("signature mismatch".into())));
+    }
+
+    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if event != "push" {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored" }))));
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {e}"))))?;
+
+    let pushed_branch = payload["ref"]
+        .as_str()
+        .and_then(|r| r.strip_prefix("refs/heads/"))
+        .unwrap_or("");
+
+    if pushed_branch != group.branch {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+    }
+
+    let commit_sha = payload["after"].as_str().unwrap_or("").to_string();
+
+    tokio::spawn(async move {
+        if let Err(e) = crate::edge_functions::manager::deploy_from_git(&state, &group, &commit_sha, None).await {
+            tracing::error!(group_id = %group.id, "edge fn deploy failed: {e}");
+        }
+    });
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "deploy triggered" }))))
+}
+
+/// POST /webhooks/gitlab/fn/:group_id/:token
+async fn gitlab_fn_webhook(
+    Path((group_id, token)): Path<(Uuid, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let group = load_fn_group(&state, group_id, &token).await?;
+
+    // GitLab sends the secret as X-Gitlab-Token header
+    let provided = headers.get("x-gitlab-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if provided != group.webhook_secret {
+        return Err(ApiAppError(AppError::Unauthorized("token mismatch".into())));
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {e}"))))?;
+
+    let pushed_branch = payload["ref"]
+        .as_str()
+        .and_then(|r| r.strip_prefix("refs/heads/"))
+        .unwrap_or("");
+
+    if pushed_branch != group.branch {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+    }
+
+    let commit_sha = payload["checkout_sha"].as_str().unwrap_or("").to_string();
+
+    tokio::spawn(async move {
+        if let Err(e) = crate::edge_functions::manager::deploy_from_git(&state, &group, &commit_sha, None).await {
+            tracing::error!(group_id = %group.id, "edge fn deploy failed: {e}");
+        }
+    });
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "deploy triggered" }))))
+}
+
+async fn load_fn_group(
+    state: &AppState,
+    group_id: Uuid,
+    token: &str,
+) -> Result<crate::edge_functions::models::EdgeFunctionGroup, ApiAppError> {
+    let group: Option<crate::edge_functions::models::EdgeFunctionGroup> = sqlx::query_as(
+        "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
+                last_deployed_sha, service_id, created_at
+         FROM edge_function_groups WHERE id = $1"
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let group = group.ok_or_else(|| ApiAppError(AppError::NotFound("group not found".into())))?;
+
+    if token != group.webhook_secret {
+        return Err(ApiAppError(AppError::Unauthorized("invalid token".into())));
+    }
+
+    Ok(group)
 }
 
 impl From<(StatusCode, Json<ApiResponse<serde_json::Value>>)> for ApiAppError {

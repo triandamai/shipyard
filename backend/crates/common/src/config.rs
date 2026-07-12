@@ -55,6 +55,8 @@ pub struct AppConfig {
     /// Stripe price ID for the Max tier. Set via SHIPYARD__STRIPE_PRICE_MAX.
     #[serde(default)]
     pub stripe_price_max: Option<String>,
+    #[serde(default)]
+    pub edge_functions: EdgeFunctionsConfig,
 }
 
 fn default_app_url() -> String {
@@ -187,6 +189,57 @@ pub struct StaticServerConfig {
     pub retention_versions: usize,
 }
 
+/// Edge functions feature configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeFunctionsConfig {
+    /// Set true to enable edge function support.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Docker image for the per-org Deno runtime container.
+    #[serde(default = "default_edge_runtime_image")]
+    pub runtime_image: String,
+    /// Shared secret used by the runtime container to authenticate internal API calls.
+    #[serde(default)]
+    pub runtime_secret: Option<String>,
+    /// Max bundle size (KB) for free tier. Default 128 KB.
+    #[serde(default = "default_edge_bundle_kb_free")]
+    pub max_bundle_kb_free: u64,
+    /// Max bundle size (KB) for pro tier. Default 512 KB.
+    #[serde(default = "default_edge_bundle_kb_pro")]
+    pub max_bundle_kb_pro: u64,
+    /// Max bundle size (KB) for max tier. Default 2048 KB.
+    #[serde(default = "default_edge_bundle_kb_max")]
+    pub max_bundle_kb_max: u64,
+    /// Max daily invocations for free tier. Default 10 000.
+    #[serde(default = "default_edge_invocations_free")]
+    pub max_invocations_free: u64,
+    /// Max daily invocations for pro tier. Default 500 000.
+    #[serde(default = "default_edge_invocations_pro")]
+    pub max_invocations_pro: u64,
+}
+
+fn default_edge_runtime_image() -> String { "ghcr.io/shipyard/edge-runtime:v1".to_string() }
+fn default_edge_bundle_kb_free() -> u64 { 128 }
+fn default_edge_bundle_kb_pro() -> u64 { 512 }
+fn default_edge_bundle_kb_max() -> u64 { 2048 }
+fn default_edge_invocations_free() -> u64 { 10_000 }
+fn default_edge_invocations_pro() -> u64 { 500_000 }
+
+impl Default for EdgeFunctionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            runtime_image: default_edge_runtime_image(),
+            runtime_secret: None,
+            max_bundle_kb_free: default_edge_bundle_kb_free(),
+            max_bundle_kb_pro: default_edge_bundle_kb_pro(),
+            max_bundle_kb_max: default_edge_bundle_kb_max(),
+            max_invocations_free: default_edge_invocations_free(),
+            max_invocations_pro: default_edge_invocations_pro(),
+        }
+    }
+}
+
 fn default_static_service_name() -> String { "shipyard-static".to_string() }
 fn default_max_upload_mb() -> u64 { 256 }
 fn default_retention_versions() -> usize { 5 }
@@ -279,6 +332,7 @@ impl Default for AppConfig {
             do_region: default_do_region(),
             stripe_price_pro: None,
             stripe_price_max: None,
+            edge_functions: EdgeFunctionsConfig::default(),
         }
     }
 }
@@ -332,6 +386,13 @@ impl AppConfig {
             .set_default("default_cloud_provider", "hetzner")?
             .set_default("do_size", "s-2vcpu-4gb")?
             .set_default("do_region", "fra1")?
+            .set_default("edge_functions.enabled", false)?
+            .set_default("edge_functions.runtime_image", "ghcr.io/shipyard/edge-runtime:v1")?
+            .set_default("edge_functions.max_bundle_kb_free", 128)?
+            .set_default("edge_functions.max_bundle_kb_pro", 512)?
+            .set_default("edge_functions.max_bundle_kb_max", 2048)?
+            .set_default("edge_functions.max_invocations_free", 10_000)?
+            .set_default("edge_functions.max_invocations_pro", 500_000)?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("SHIPYARD").separator("__"))
             .build()?;

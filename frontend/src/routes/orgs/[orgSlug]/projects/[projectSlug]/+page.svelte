@@ -23,6 +23,7 @@
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
+	import EdgeFunctionNode from '$lib/flows/EdgeFunctionNode.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
@@ -30,6 +31,7 @@
 	import DomainDetailPanel from '$lib/panels/DomainDetailPanel.svelte';
 	import StaticSiteDetailPanel from '$lib/panels/StaticSiteDetailPanel.svelte';
 	import AddResourcePanel from '$lib/panels/AddResourcePanel.svelte';
+	import EdgeFunctionDetailPanel from '$lib/panels/EdgeFunctionDetailPanel.svelte';
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
 	let projectSlug = $derived(page.params.projectSlug ?? '');
@@ -83,14 +85,15 @@
 	});
 
 	const nodeTypes: NodeTypes = {
-		service:     ServiceNode as any,
-		network:     NetworkNode as any,
-		volume:      VolumeNode as any,
-		domain:      DomainNode as any,
-		container:   ContainerNode as any,
-		static_site: StaticSiteNode as any,
-		portal:      PortalNode as any,
-		add_resource: AddResourceNode as any,
+		service:       ServiceNode as any,
+		network:       NetworkNode as any,
+		volume:        VolumeNode as any,
+		domain:        DomainNode as any,
+		container:     ContainerNode as any,
+		static_site:   StaticSiteNode as any,
+		portal:        PortalNode as any,
+		add_resource:  AddResourceNode as any,
+		edge_function: EdgeFunctionNode as any,
 	};
 
 	function openAddResource() {
@@ -186,6 +189,22 @@
 				},
 				title: (node.data?.name as string) || 'Static Site'
 			});
+		} else if (node.type === 'edge_function') {
+			const groupId = (node.data?.group_id as string) ?? node.id.replace(/^efg_/, '');
+			uiStore.pushPanel({
+				key: `edge_fn:${groupId}`,
+				component: EdgeFunctionDetailPanel,
+				props: {
+					groupId,
+					orgId,
+					projectId,
+					onDeleted: () => {
+						uiStore.popPanel();
+						syncTopology(orgId, projectId);
+					},
+				},
+				title: (node.data?.repo_name as string) || 'Edge Functions',
+			});
 		} else if (node.type === 'portal') {
 			// Portal nodes are read-only info — no panel needed
 		}
@@ -220,6 +239,17 @@
 
 	let unsubscribeTopology: (() => void) | null = null;
 
+	// Debounce MQTT-triggered topology syncs: rapid-fire events (deployment steps,
+	// container status flips) collapse into a single fetch after 400 ms of quiet.
+	let _topoDebounce: ReturnType<typeof setTimeout> | null = null;
+	function debouncedSyncTopology(oid: string, pid: string) {
+		if (_topoDebounce) clearTimeout(_topoDebounce);
+		_topoDebounce = setTimeout(() => {
+			_topoDebounce = null;
+			syncTopology(oid, pid);
+		}, 400);
+	}
+
 	function handleTopologyMqtt(payload: MqttPayload) {
 		if (payload.event === 'service.deleted') {
 			// Optimistically remove the deleted service node and its container replicas
@@ -228,12 +258,12 @@
 			if (serviceId) {
 				topologyStore.removeNode(`svc_${serviceId}`);
 			}
-			syncTopology(orgId, projectId);
+			debouncedSyncTopology(orgId, projectId);
 			return;
 		}
 		if (payload.event === 'topology.changed') {
 			// Silent background sync — no loading state, no node movement.
-			syncTopology(orgId, projectId);
+			debouncedSyncTopology(orgId, projectId);
 			return;
 		}
 	}
@@ -351,6 +381,7 @@
 			eventBus.off(topoTopic, handleTopologyMqtt);
 			eventBus.off('*', handleServiceStatus);
 			eventBus.off('*', handleDeployStatus);
+			if (_topoDebounce) { clearTimeout(_topoDebounce); _topoDebounce = null; }
 			topologyStore.setLoading(false);
 		};
 	});

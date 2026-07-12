@@ -75,8 +75,38 @@ async function serverRefresh(refreshToken: string): Promise<string | null> {
 // ── Handle ────────────────────────────────────────────────────────────────────
 
 export const handle: Handle = async ({ event, resolve }) => {
-    if (!event.url.pathname.startsWith('/api')) {
+    const isFnInvoke = event.url.pathname.startsWith('/fn/');
+
+    if (!event.url.pathname.startsWith('/api') && !isFnInvoke) {
         return resolve(event);
+    }
+
+    // /fn/{org_slug}/... → backend /fn/{org_slug}/... (no auth injection)
+    if (isFnInvoke) {
+        const method = event.request.method;
+        const targetUrl = `${BACKEND_URL}${event.url.pathname}${event.url.search}`;
+        const forwardHeaders = new Headers();
+        event.request.headers.forEach((value, key) => {
+            if (!STRIP_REQUEST_HEADERS.has(key.toLowerCase())) {
+                forwardHeaders.set(key, value);
+            }
+        });
+        let body: ArrayBuffer | undefined;
+        if (!['GET', 'HEAD'].includes(method)) {
+            body = await event.request.arrayBuffer();
+            if (body.byteLength === 0) body = undefined;
+        }
+        try {
+            const res = await buildProxiedRequest(targetUrl, method, forwardHeaders, body);
+            return new Response(res.body, {
+                status: res.status,
+                statusText: res.statusText,
+                headers: buildResponseHeaders(res),
+            });
+        } catch (err) {
+            console.error('[fn-proxy] runtime unreachable at', targetUrl, err);
+            return new Response('edge runtime unavailable', { status: 502 });
+        }
     }
 
     const method   = event.request.method;

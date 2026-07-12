@@ -49,3 +49,5 @@ redis = { workspace = true }
 mongodb = { workspace = true }
 sysinfo = "0.32"
 async-trait = { workspace = true }
+zip = { workspace = true }
+tempfile = "3.27.0"
