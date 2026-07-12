@@ -1027,8 +1027,6 @@ async fn sync_edge_traefik_config(
         let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
         let _ = write!(out, "      entryPoints:\n");
         let _ = write!(out, "        - {entrypoint_https}\n");
-        let _ = write!(out, "      middlewares:\n");
-        let _ = write!(out, "        - shipyard-error-pages@file\n");
         if convenience || !*tls_enabled {
             let _ = write!(out, "      tls: {{}}\n");
         } else {
