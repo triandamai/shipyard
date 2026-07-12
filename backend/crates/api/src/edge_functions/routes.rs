@@ -58,6 +58,7 @@ async fn list_functions(
     Path(org_id): Path<Uuid>,
     Query(q): Query<ListFunctionsQuery>,
     auth: AuthUser,
+    headers: HeaderMap,
 ) -> Result<Json<ApiResponse<Vec<EdgeFunctionResponse>>>, ApiAppError> {
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
@@ -97,7 +98,7 @@ async fn list_functions(
         .map_err(|e| AppError::Database(e.to_string()))?
     };
 
-    let app_domain = &state.config.app_url;
+    let app_domain = resolve_base_url(&state.config, &headers);
     let org_slug: String = sqlx::query_scalar(
         "SELECT slug FROM organizations WHERE id = $1"
     )
@@ -109,7 +110,7 @@ async fn list_functions(
     let items: Vec<EdgeFunctionResponse> = rows
         .into_iter()
         .map(|r| EdgeFunctionResponse {
-            public_url: format!("{app_domain}/fn/{org_slug}/{}", r.name),
+            public_url: format!("{}/fn/{}/{}", app_domain, org_slug, r.name),
             id: r.id,
             org_id: r.org_id,
             name: r.name,
@@ -811,7 +812,7 @@ async fn trigger_group_deploy(
     .map_err(|e| AppError::Database(e.to_string()))?
     .ok_or_else(|| AppError::NotFound("group not found".into()))?;
 
-    let report = manager::deploy_from_git(&state, &group, "manual", Some(auth.user_id)).await?;
+    let report = manager::deploy_from_git(&state, &group, "unknown", Some(auth.user_id)).await?;
     Ok(Json(ApiResponse::ok(report)))
 }
 

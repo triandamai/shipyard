@@ -158,6 +158,16 @@
 	async function switchTab(tab: Tab) {
 		activeTab = tab;
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
+		if (tab === 'functions') {
+			// Preload deployment history for all functions in parallel
+			for (const fn of functions) {
+				if (!fnDeployments[fn.id]) loadFnDeployments(fn.id);
+			}
+			// Auto-expand the first function so history is immediately visible
+			if (functions.length > 0 && !expandedFnId) {
+				expandedFnId = functions[0].id;
+			}
+		}
 	}
 
 	// ── Deployment history ─────────────────────────────────────────────────────

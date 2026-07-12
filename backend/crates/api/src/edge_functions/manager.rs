@@ -138,7 +138,9 @@ pub async fn deploy_function(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    // Reload runtime (best-effort)
+    // Ensure the runtime container exists (creates it if missing), then reload.
+    // Both are best-effort — a deploy succeeds even if the runtime is temporarily unavailable.
+    let _ = crate::edge_functions::runtime_worker::ensure_runtime_exists(state, org_id).await;
     let _ = reload_runtime(state, org_id).await;
 
     Ok(())
@@ -194,10 +196,12 @@ pub async fn deploy_from_path(
 }
 
 /// Deploy from a linked git group: clone, detect, deploy.
+/// Always resolves the actual HEAD commit SHA from the cloned repo so the
+/// canvas never shows the literal string "manual".
 pub async fn deploy_from_git(
     state: &AppState,
     group: &EdgeFunctionGroup,
-    new_sha: &str,
+    fallback_sha: &str,
     deployed_by: Option<Uuid>,
 ) -> Result<DeployReport, AppError> {
     use shipyard_git::GitService;
@@ -208,27 +212,35 @@ pub async fn deploy_from_git(
     let tmp_path = tmp.path().to_string_lossy().to_string();
     let repo_url = group.repo_url.clone();
     let branch = group.branch.clone();
+    let tmp_path2 = tmp_path.clone();
+    let fallback_sha_owned = fallback_sha.to_string();
 
-    tokio::task::spawn_blocking(move || {
+    // Clone and read the HEAD SHA in the same blocking task.
+    let actual_sha = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
         let git = GitService::new(&tmp_path);
         git.clone_repo(&repo_url, &tmp_path, Some(&branch), |_| {})
+            .map_err(|e| AppError::Git(e.to_string()))?;
+        let sha = git
+            .head_commit(&tmp_path2)
+            .map(|c| c.sha)
+            .unwrap_or(fallback_sha_owned);
+        Ok(sha)
     })
     .await
-    .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))?
-    .map_err(|e| AppError::Git(e.to_string()))?;
+    .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))??;
 
     let report = deploy_from_path(
         state,
         group.org_id,
         tmp.path(),
         Some(group.id),
-        Some(new_sha),
+        Some(&actual_sha),
         deployed_by,
     )
     .await?;
 
     sqlx::query("UPDATE edge_function_groups SET last_deployed_sha = $1 WHERE id = $2")
-        .bind(new_sha)
+        .bind(&actual_sha)
         .bind(group.id)
         .execute(&state.db)
         .await

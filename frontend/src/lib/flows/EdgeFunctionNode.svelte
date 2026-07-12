@@ -25,25 +25,29 @@
 	};
 
 	let providerColor = $derived(PROVIDER_COLOR[provider] ?? '#6b7280');
+	let isLive = $derived(activeCount > 0);
 </script>
 
 <Handle type="target" position={Position.Left} />
 
-<div class="efn-node" class:selected>
+<div class="efn-node" class:selected class:live={isLive}>
 	<div class="node-header">
-		<div class="node-icon">
+		<div class="node-icon" class:icon-live={isLive}>
 			<Zap size={13} />
 		</div>
 		<div class="node-title">
 			<span class="node-name" title={repoName}>{repoName}</span>
 			<span class="node-branch">{branch}</span>
 		</div>
+		{#if isLive}
+			<span class="live-badge">live</span>
+		{/if}
 	</div>
 
 	<div class="node-body">
 		<div class="fn-stats">
 			<span class="stat">
-				<span class="stat-val">{activeCount}</span>
+				<span class="stat-val" class:val-live={isLive}>{activeCount}</span>
 				<span class="stat-label">active</span>
 			</span>
 			<span class="stat-sep">/</span>
@@ -93,6 +97,24 @@
 		border-color: var(--accent);
 		box-shadow: 0 0 0 2px var(--accent-muted), var(--shadow-md);
 	}
+
+	.efn-node.live {
+		border-color: color-mix(in srgb, #22c55e 40%, transparent);
+	}
+	.efn-node.live:hover {
+		border-color: #22c55e;
+	}
+
+	.live-badge {
+		font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+		text-transform: uppercase; padding: 1px 6px; border-radius: 99px;
+		background: color-mix(in srgb, #22c55e 15%, transparent);
+		color: #22c55e; border: 1px solid color-mix(in srgb, #22c55e 30%, transparent);
+		flex-shrink: 0;
+	}
+
+	.icon-live { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
+	.val-live { color: #22c55e; }
 
 	.node-header {
 		display: flex;
