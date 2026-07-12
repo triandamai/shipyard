@@ -50,6 +50,17 @@ append_if_missing "EDGE_RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:
 append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET" "$(openssl rand -hex 24)"
 append_if_missing "SCRIPTS_URL" ""
 
+# API URL used by edge runtime Swarm services on worker nodes to reach the backend.
+# Worker nodes can't resolve the container name 'shipyard-backend' — must use Traefik.
+DETECTED_PROTOCOL="${PROTOCOL:-https}"
+DETECTED_DOMAIN="${DOMAIN:-}"
+if [[ -n "${DETECTED_DOMAIN}" ]]; then
+    append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL" "${DETECTED_PROTOCOL}://api-${DETECTED_DOMAIN}"
+else
+    warn "DOMAIN not set in .env — skipping SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL"
+    warn "Add it manually: SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL=https://api-<your-domain>"
+fi
+
 # Re-source so new vars are available below.
 set -a; source "${ENV_FILE}"; set +a
 
@@ -121,6 +132,19 @@ UPDATE
 fi
 
 chmod +x "${UPDATE_SCRIPT}"
+
+# ── Fix Traefik backend router (remove PathPrefix restriction) ─────────────────
+# Old installs had: rule: "Host(`api-<domain>`) && PathPrefix(`/openapi/v1`)"
+# Worker nodes need full backend access via Traefik, so remove the PathPrefix.
+TRAEFIK_DYNAMIC="${INSTALL_DIR}/traefik/dynamic/shipyard.yml"
+if [[ -f "${TRAEFIK_DYNAMIC}" ]] && [[ -n "${DETECTED_DOMAIN}" ]]; then
+    if grep -q "PathPrefix" "${TRAEFIK_DYNAMIC}"; then
+        sed -i "s|rule: \"Host(\`api-${DETECTED_DOMAIN}\`) && PathPrefix(\`/openapi/v1\`)\"|rule: \"Host(\`api-${DETECTED_DOMAIN}\`)\"|g" "${TRAEFIK_DYNAMIC}"
+        success "Removed PathPrefix restriction from shipyard-backend Traefik router"
+    else
+        info "Traefik backend router already updated — skipping"
+    fi
+fi
 
 # ── Pull edge runtime image now so it's ready for first deploy ─────────────────
 if [[ -n "${EDGE_RUNTIME_IMAGE:-}" ]]; then

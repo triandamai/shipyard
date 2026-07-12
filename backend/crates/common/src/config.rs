@@ -201,6 +201,12 @@ pub struct EdgeFunctionsConfig {
     /// Shared secret used by the runtime container to authenticate internal API calls.
     #[serde(default)]
     pub runtime_secret: Option<String>,
+    /// Base URL of the Shipyard API reachable from every Swarm node.
+    /// Required for multi-node Swarm: set to https://api-<domain> so worker nodes
+    /// can reach the backend through Traefik. Defaults to http://shipyard-backend:3001
+    /// (manager-only, single-node).
+    #[serde(default)]
+    pub runtime_api_url: Option<String>,
     /// Max bundle size (KB) for free tier. Default 128 KB.
     #[serde(default = "default_edge_bundle_kb_free")]
     pub max_bundle_kb_free: u64,
@@ -231,6 +237,7 @@ impl Default for EdgeFunctionsConfig {
             enabled: false,
             runtime_image: default_edge_runtime_image(),
             runtime_secret: None,
+            runtime_api_url: None,
             max_bundle_kb_free: default_edge_bundle_kb_free(),
             max_bundle_kb_pro: default_edge_bundle_kb_pro(),
             max_bundle_kb_max: default_edge_bundle_kb_max(),

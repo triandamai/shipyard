@@ -419,6 +419,9 @@ SHIPYARD__DATA_DIR=/opt/shipyard/data
 SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
 SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
 SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=${EDGE_RUNTIME_SECRET}
+# API URL reachable from every Swarm node (via Traefik). Worker nodes cannot
+# resolve the container name 'shipyard-backend' via DNS — use the public subdomain.
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL=${PROTOCOL}://api-${DOMAIN}
 
 # Scripts base URL — used by update.sh to self-update from the landing site.
 # Set this to the public URL of your Shipyard landing (e.g. https://shipyard.example.com).
@@ -556,7 +559,7 @@ http:
         certResolver: letsencrypt
 
     shipyard-backend:
-      rule: "Host(\`api-${DOMAIN}\`) && PathPrefix(\`/openapi/v1\`)"
+      rule: "Host(\`api-${DOMAIN}\`)"
       entryPoints: [websecure]
       service: shipyard-backend
       tls:

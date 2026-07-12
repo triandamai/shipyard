@@ -85,8 +85,15 @@ async fn create_runtime_service(
         .clone()
         .unwrap_or_default();
 
-    // shipyard-backend is the container_name in docker-compose.yml.
-    let api_url = "http://shipyard-backend:3001";
+    // Use configured runtime_api_url so worker nodes in a multi-node Swarm can
+    // reach the backend via Traefik (e.g. https://api-<domain>).
+    // Falls back to the container name which only works on the manager node.
+    let api_url = state
+        .config
+        .edge_functions
+        .runtime_api_url
+        .as_deref()
+        .unwrap_or("http://shipyard-backend:3001");
 
     let mut labels = HashMap::new();
     labels.insert("traefik.enable".to_string(), "true".to_string());
