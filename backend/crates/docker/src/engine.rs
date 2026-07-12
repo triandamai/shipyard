@@ -119,6 +119,11 @@ pub trait DockerEngine: Send + Sync {
     /// List all swarm services, each summarised as a `TaskInfo`.
     async fn list_services(&self) -> AppResult<Vec<TaskInfo>>;
 
+    /// Update only the image of an existing service, preserving all other spec
+    /// fields (networks, labels, mounts, resources). Increments force_update so
+    /// Swarm always restarts tasks even when the digest is unchanged.
+    async fn update_service_image(&self, id: &str, image: &str) -> AppResult<()>;
+
     /// Remove all stopped containers. Returns the number removed.
     async fn prune_containers(&self) -> AppResult<u64>;
 
@@ -656,6 +661,39 @@ impl DockerEngine for BollardDockerEngine {
             )
             .await
             .map_err(|e| AppError::Docker(format!("apply_envs_to_service failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn update_service_image(&self, id: &str, image: &str) -> AppResult<()> {
+        let current = self
+            .client
+            .inspect_service(id, None::<InspectServiceOptions>)
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_service failed: {e}")))?;
+
+        let version = current
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| AppError::Docker("Could not read service version".into()))?;
+
+        let mut bollard_spec: BollardServiceSpec = current.spec.unwrap_or_default();
+
+        let tt = bollard_spec.task_template.get_or_insert_with(Default::default);
+        let current_force = tt.force_update.unwrap_or(0);
+        tt.force_update = Some(current_force + 1);
+        let cs = tt.container_spec.get_or_insert_with(Default::default);
+        cs.image = Some(image.to_string());
+
+        self.client
+            .update_service(
+                id,
+                bollard_spec,
+                UpdateServiceOptions { version, ..Default::default() },
+                None,
+            )
+            .await
+            .map_err(|e| AppError::Docker(format!("update_service_image failed: {e}")))?;
 
         Ok(())
     }

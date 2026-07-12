@@ -687,7 +687,7 @@ fn parse_image_ref(val: &str) -> Option<(String, String)> {
 /// 2. Reads `/opt/shipyard/.env` directly — the file is always mounted and is the
 ///    authoritative source regardless of how env vars are forwarded.
 fn images_to_pull() -> Vec<(String, String)> {
-    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE"];
+    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
 
     // 1. Process env vars
     let from_env: Vec<(String, String)> = KEYS
@@ -710,6 +710,21 @@ fn images_to_pull() -> Vec<(String, String)> {
             parse_image_ref(val)
         })
         .collect()
+}
+
+/// Resolve the edge runtime image ref from env or .env file.
+fn edge_runtime_image() -> Option<String> {
+    let from_env = std::env::var("EDGE_RUNTIME_IMAGE").unwrap_or_default();
+    if !from_env.trim().is_empty() {
+        return Some(from_env.trim().to_string());
+    }
+    let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
+    content
+        .lines()
+        .find(|l| l.starts_with("EDGE_RUNTIME_IMAGE="))
+        .and_then(|l| l.strip_prefix("EDGE_RUNTIME_IMAGE="))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Core update logic shared by the streaming and one-shot handlers.
@@ -765,20 +780,53 @@ async fn run_platform_update(
     }
 
     match state.docker.spawn_compose_restart(COMPOSE_DIR).await {
-        Ok(_) => {
-            let _ = tx.send(Ok(Event::default().event("done").data(
-                "Update complete. Services will restart in ~5 seconds."
-            ))).await;
-            *version_cache().lock().await = None;
-            true
-        }
+        Ok(_) => {}
         Err(e) => {
             let _ = tx.send(Ok(Event::default().event("error").data(
                 format!("Failed to start updater container: {e}")
             ))).await;
-            false
+            return false;
         }
     }
+
+    // Roll-update any running shipyard-edge-* Swarm services to the new image.
+    if let Some(edge_image) = edge_runtime_image() {
+        match state.docker.list_services().await {
+            Ok(services) => {
+                // list_services() stores the service name in the .id field.
+                let edge_svcs: Vec<String> = services
+                    .into_iter()
+                    .filter(|s| s.id.starts_with("shipyard-edge-"))
+                    .map(|s| s.id)
+                    .collect();
+
+                for svc in &edge_svcs {
+                    let msg = format!("[shipyard] Updating edge runtime {svc}…");
+                    if tx.send(Ok(Event::default().data(msg))).await.is_err() {
+                        return false;
+                    }
+                    if let Err(e) = state.docker.update_service_image(svc, &edge_image).await {
+                        tracing::warn!("Failed to update edge service {svc}: {e}");
+                    }
+                }
+
+                if !edge_svcs.is_empty() {
+                    let _ = tx.send(Ok(Event::default().data(
+                        format!("[shipyard] ✓ {} edge runtime(s) updated", edge_svcs.len())
+                    ))).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Could not list services for edge runtime update: {e}");
+            }
+        }
+    }
+
+    let _ = tx.send(Ok(Event::default().event("done").data(
+        "Update complete. Services will restart in ~5 seconds."
+    ))).await;
+    *version_cache().lock().await = None;
+    true
 }
 
 /// POST /admin/update — one-shot update (kept for backwards compat).
