@@ -394,7 +394,7 @@ impl AppConfig {
             .set_default("do_size", "s-2vcpu-4gb")?
             .set_default("do_region", "fra1")?
             .set_default("edge_functions.enabled", false)?
-            .set_default("edge_functions.runtime_image", "ghcr.io/shipyard/edge-runtime:v1")?
+            .set_default("edge_functions.runtime_image", "triandamai827/shipyard-edge-runtime:latest")?
             .set_default("edge_functions.max_bundle_kb_free", 128)?
             .set_default("edge_functions.max_bundle_kb_pro", 512)?
             .set_default("edge_functions.max_bundle_kb_max", 2048)?

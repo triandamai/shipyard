@@ -48,6 +48,9 @@ TAG_VALUE="${TAG:-latest}"
 
 append_if_missing "SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR" "/etc/traefik/dynamic"
 append_if_missing "EDGE_RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:${TAG_VALUE}"
+# SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE is what the backend reads for create_runtime_service.
+# EDGE_RUNTIME_IMAGE (no prefix) is only used by update.sh for docker pull / swarm update.
+append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:${TAG_VALUE}"
 append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET" "$(openssl rand -hex 24)"
 append_if_missing "SCRIPTS_URL" ""
 
