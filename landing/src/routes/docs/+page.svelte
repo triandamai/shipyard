@@ -111,6 +111,7 @@
 			<a href="/" class="topbar-link">Home</a>
 			<a href="/docs" class="topbar-link active">Docs</a>
 			<a href="/docs/api" class="topbar-link">API Reference</a>
+			<a href="/docs/edge-functions" class="topbar-link">Edge Functions</a>
 			<a href="https://github.com/triandamai/shipyard" target="_blank" rel="noopener noreferrer" class="topbar-link">GitHub</a>
 		</div>
 		<button class="mobile-menu-btn" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Toggle menu">
@@ -140,6 +141,17 @@
 					{/each}
 				</div>
 			{/each}
+			<div class="nav-group">
+				<div class="nav-group-label">Reference</div>
+				<a href="/docs/api" class="nav-item">
+					<ChevronRight size={12} />
+					API Reference
+				</a>
+				<a href="/docs/edge-functions" class="nav-item">
+					<ChevronRight size={12} />
+					Edge Functions
+				</a>
+			</div>
 		</nav>
 	</aside>
 
@@ -986,7 +998,7 @@ docker compose up -d</pre>
 		padding: 6px 8px; font-size: 13px; font-weight: 500;
 		color: rgba(255,255,255,0.45); background: transparent;
 		border: none; border-radius: 6px; cursor: pointer;
-		text-align: left; width: 100%;
+		text-align: left; width: 100%; text-decoration: none;
 		transition: color 0.15s, background 0.15s;
 	}
 	.nav-item :global(svg) { flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
