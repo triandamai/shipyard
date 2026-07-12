@@ -107,17 +107,44 @@ async fn list_functions(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
+    // If a group_id is specified, check whether it has a custom domain.
+    // If yes, use `https://{hostname}/{fn-name}` as the public URL.
+    let custom_base: Option<String> = if let Some(gid) = q.group_id {
+        sqlx::query_scalar::<_, String>(
+            "SELECT CASE WHEN d.tls_enabled THEN 'https://' ELSE 'http://' END || d.hostname
+             FROM domains d
+             JOIN edge_function_groups g ON g.service_id = d.service_id
+             WHERE g.id = $1 AND g.org_id = $2
+             ORDER BY d.created_at ASC
+             LIMIT 1",
+        )
+        .bind(gid)
+        .bind(org_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None)
+    } else {
+        None
+    };
+
     let items: Vec<EdgeFunctionResponse> = rows
         .into_iter()
-        .map(|r| EdgeFunctionResponse {
-            public_url: format!("{}/fn/{}/{}", app_domain, org_slug, r.name),
-            id: r.id,
-            org_id: r.org_id,
-            name: r.name,
-            runtime: r.runtime,
-            status: r.status,
-            last_deployed_at: r.last_deployed_at,
-            created_at: r.created_at,
+        .map(|r| {
+            let public_url = if let Some(ref base) = custom_base {
+                format!("{}/{}", base, r.name)
+            } else {
+                format!("{}/fn/{}/{}", app_domain, org_slug, r.name)
+            };
+            EdgeFunctionResponse {
+                public_url,
+                id: r.id,
+                org_id: r.org_id,
+                name: r.name,
+                runtime: r.runtime,
+                status: r.status,
+                last_deployed_at: r.last_deployed_at,
+                created_at: r.created_at,
+            }
         })
         .collect();
 

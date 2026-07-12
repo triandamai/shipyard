@@ -138,15 +138,12 @@ pub async fn deploy_function(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    // Ensure the runtime container exists (creates it if missing), then reload.
-    // Both are best-effort — a deploy succeeds even if the runtime is temporarily unavailable.
-    let _ = crate::edge_functions::runtime_worker::ensure_runtime_exists(state, org_id).await;
-    let _ = reload_runtime(state, org_id).await;
-
     Ok(())
 }
 
 /// Deploy all functions detected from a directory on disk.
+/// Starts/reloads the runtime ONCE after all functions are written — avoids
+/// concurrent Docker "create service" conflicts when there are multiple functions.
 pub async fn deploy_from_path(
     state: &AppState,
     org_id: Uuid,
@@ -190,6 +187,14 @@ pub async fn deploy_from_path(
             Ok(_) => report.deployed.push(f.name),
             Err(e) => report.failed.push((f.name, e.to_string())),
         }
+    }
+
+    // Ensure the runtime exists once for the whole batch, then reload it.
+    if !report.deployed.is_empty() {
+        if let Err(e) = crate::edge_functions::runtime_worker::ensure_runtime_exists(state, org_id).await {
+            tracing::warn!("edge runtime start failed for org {org_id}: {e}");
+        }
+        let _ = reload_runtime(state, org_id).await;
     }
 
     Ok(report)

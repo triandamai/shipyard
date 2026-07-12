@@ -41,6 +41,7 @@ read_input() {
 INSTALL_DIR="/opt/shipyard"
 BACKEND_IMAGE="triandamai827/shipyard-backend"
 FRONTEND_IMAGE="triandamai827/shipyard-frontend"
+EDGE_RUNTIME_IMAGE="triandamai827/shipyard-edge-runtime"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
@@ -242,11 +243,15 @@ ACME_EMAIL=""
 read_input "  Email for Let's Encrypt certificates: " ACME_EMAIL ""
 [[ -n "${ACME_EMAIL}" ]] || error "Email is required for Let's Encrypt."
 
+SCRIPTS_URL=""
+read_input "  Landing/scripts base URL (e.g. https://shipyard.example.com) [leave blank to skip auto-update]: " SCRIPTS_URL ""
+
 TAG=""
 read_input "  Image tag [latest]: " TAG "latest"
 
 BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
 FRONTEND_IMAGE_FULL="${FRONTEND_IMAGE}:${TAG}"
+EDGE_RUNTIME_IMAGE_FULL="${EDGE_RUNTIME_IMAGE}:${TAG}"
 
 USE_HTTPS=""
 read_input "  Enable HTTPS / TLS? [Y/n]: " USE_HTTPS "y"
@@ -366,6 +371,7 @@ ACME_EMAIL=${ACME_EMAIL}
 TAG=${TAG}
 BACKEND_IMAGE=${BACKEND_IMAGE_FULL}
 FRONTEND_IMAGE=${FRONTEND_IMAGE_FULL}
+EDGE_RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
 PROTOCOL=${PROTOCOL}
 
 # Database
@@ -408,7 +414,11 @@ SHIPYARD__DATA_DIR=/opt/shipyard/data
 
 # Edge Functions (Deno-based serverless)
 SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
-SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=ghcr.io/shipyard/edge-runtime:v1
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
+
+# Scripts base URL — used by update.sh to self-update from the landing site.
+# Set this to the public URL of your Shipyard landing (e.g. https://shipyard.example.com).
+SCRIPTS_URL=${SCRIPTS_URL}
 
 RUST_LOG=shipyard=info,tower_http=warn
 ENV
@@ -760,34 +770,69 @@ success "docker-compose.yml written"
 
 # ── update.sh ─────────────────────────────────────────────────────────────────
 info "Writing ${INSTALL_DIR}/update.sh..."
-cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
+# Try to download the canonical update.sh from the landing site so we always
+# install the latest version. Fall back to the copy bundled inside install.sh.
+DOWNLOADED_UPDATE=""
+if [[ -n "${SCRIPTS_URL}" ]]; then
+    DOWNLOADED_UPDATE=$(curl -fsSL "${SCRIPTS_URL}/update.sh" 2>/dev/null || true)
+fi
+
+if [[ -n "${DOWNLOADED_UPDATE}" ]]; then
+    echo "${DOWNLOADED_UPDATE}" > "${INSTALL_DIR}/update.sh"
+    info "update.sh fetched from ${SCRIPTS_URL}"
+else
+    # Bundled fallback — kept in sync with scripts/update.sh in the repo.
+    cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
-# Shipyard self-update script — run by the backend when a user triggers an update.
-#
-# This script runs inside the shipyard-backend container (Docker socket is mounted).
-# Calling "docker compose up -d" directly would stop this container mid-execution.
-# Instead, we spawn a detached docker:cli container that runs the restart after we exit.
-# docker:cli is a tiny (~10 MB) official image that has docker + compose — unlike the
-# backend image which is just a compiled Rust binary with no shell or docker CLI.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
+set -a; source "${INSTALL_DIR}/.env"; set +a
+
+if [[ -n "${SCRIPTS_URL:-}" ]]; then
+    FRESH=$(curl -fsSL "${SCRIPTS_URL}/update.sh" 2>/dev/null || true)
+    if [[ -n "${FRESH}" && "${FRESH}" != "$(cat "${INSTALL_DIR}/update.sh")" ]]; then
+        echo "[shipyard] Updating update.sh from ${SCRIPTS_URL}..."
+        echo "${FRESH}" > "${INSTALL_DIR}/update.sh.new"
+        chmod +x "${INSTALL_DIR}/update.sh.new"
+        mv "${INSTALL_DIR}/update.sh.new" "${INSTALL_DIR}/update.sh"
+        exec "${INSTALL_DIR}/update.sh"
+    fi
+fi
 
 echo "[shipyard] Pulling latest images..."
 docker compose pull
+
+if [[ -n "${EDGE_RUNTIME_IMAGE:-}" ]]; then
+    echo "[shipyard] Pulling edge runtime image: ${EDGE_RUNTIME_IMAGE}..."
+    docker pull "${EDGE_RUNTIME_IMAGE}" || true
+fi
 
 echo "[shipyard] Spawning detached updater to apply new images..."
 docker rm -f shipyard-updater 2>/dev/null || true
 docker run --rm -d \
     --name shipyard-updater \
+    -e EDGE_RUNTIME_IMAGE="${EDGE_RUNTIME_IMAGE:-}" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${INSTALL_DIR}:${INSTALL_DIR}" \
     -w "${INSTALL_DIR}" \
     docker:cli \
-    sh -c 'sleep 5 && docker compose up -d --remove-orphans'
+    sh -c 'sleep 5 \
+        && docker compose up -d --remove-orphans \
+        && if [ -n "${EDGE_RUNTIME_IMAGE}" ]; then \
+               docker service ls --filter name=shipyard-edge- --format "{{.Name}}" \
+               | while read -r svc; do \
+                   [ -n "$svc" ] && docker service update \
+                       --image "${EDGE_RUNTIME_IMAGE}" \
+                       --with-registry-auth \
+                       "${svc}" \
+                       && echo "[shipyard] updated ${svc}"; \
+               done; \
+           fi'
 
 echo "[shipyard] Images pulled. All services will restart with new images in ~5 seconds."
 UPDATE
+fi
 chmod +x "${INSTALL_DIR}/update.sh"
 success "update.sh written"
 

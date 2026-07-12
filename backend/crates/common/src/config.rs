@@ -218,7 +218,7 @@ pub struct EdgeFunctionsConfig {
     pub max_invocations_pro: u64,
 }
 
-fn default_edge_runtime_image() -> String { "ghcr.io/shipyard/edge-runtime:v1".to_string() }
+fn default_edge_runtime_image() -> String { "triandamai827/shipyard-edge-runtime:latest".to_string() }
 fn default_edge_bundle_kb_free() -> u64 { 128 }
 fn default_edge_bundle_kb_pro() -> u64 { 512 }
 fn default_edge_bundle_kb_max() -> u64 { 2048 }
