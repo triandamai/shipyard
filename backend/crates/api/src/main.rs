@@ -39,7 +39,7 @@ mod setup;
 mod orgs;
 mod projects;
 mod services;
-mod resources;
+pub(crate) mod resources;
 mod containers;
 mod deployments;
 mod topology;

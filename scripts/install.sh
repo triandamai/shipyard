@@ -530,8 +530,7 @@ certificatesResolvers:
     acme:
       email: ${ACME_EMAIL}
       storage: /letsencrypt/acme.json
-      httpChallenge:
-        entryPoint: web
+      tlsChallenge: {}
 
 api:
   dashboard: false

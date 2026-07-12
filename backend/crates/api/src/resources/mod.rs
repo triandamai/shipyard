@@ -41,14 +41,25 @@ fn hostname_to_router_name(hostname: &str) -> String {
 /// Regenerates the Traefik file-provider dynamic config for a service's domains.
 ///
 /// Writes `{dir}/{slug}.yml`. If there are no domains the file is removed.
+/// Regenerates (or removes) the Traefik file-provider config for a service.
+///
+/// Reads all current domains for `service_id` from the DB and writes a YAML
+/// file to `dynamic_config_dir`. If no domains remain the file is deleted.
 /// Silently skips if `dynamic_config_dir` is not configured.
-async fn sync_traefik_dynamic_config(
+///
+/// * `upstream_override` — when `Some`, bypasses the service-derived upstream
+///   host (use for edge functions: `"shipyard-edge-{short}"`).
+/// * `include_error_pages` — set `false` for services whose 404 responses
+///   must not be intercepted by the branded error-page middleware (edge fns).
+pub async fn sync_traefik_dynamic_config(
     db: &sqlx::PgPool,
     service_id: Uuid,
     label_prefix: &str,
     entrypoint_http: &str,
     entrypoint_https: &str,
     dynamic_config_dir: Option<&str>,
+    upstream_override: Option<&str>,
+    include_error_pages: bool,
 ) {
     let Some(dir) = dynamic_config_dir else { return };
 
@@ -87,9 +98,9 @@ async fn sync_traefik_dynamic_config(
         return;
     }
 
-    // Static sites are all served by the shared nginx container, not by a per-service
-    // Docker Swarm service. Everything else routes to its own Swarm service.
-    let upstream_host = if svc_type == "static" {
+    let upstream_host = if let Some(ov) = upstream_override {
+        ov.to_string()
+    } else if svc_type == "static" {
         "shipyard-nginx-static".to_string()
     } else {
         format!("{label_prefix}-{service_id}")
@@ -119,9 +130,10 @@ async fn sync_traefik_dynamic_config(
         let _ = write!(out, "      rule: \"Host(`{hostname}`)\"\n");
         let _ = write!(out, "      entryPoints:\n");
         let _ = write!(out, "        - {entrypoint_https}\n");
-        // shipyard-error-pages replaces 404 responses with the branded Shipyard HTML page.
-        let _ = write!(out, "      middlewares:\n");
-        let _ = write!(out, "        - shipyard-error-pages@file\n");
+        if include_error_pages {
+            let _ = write!(out, "      middlewares:\n");
+            let _ = write!(out, "        - shipyard-error-pages@file\n");
+        }
         if convenience || !*tls_enabled {
             // nip.io / traefik.me / tls_enabled=false: self-signed cert (no LE slot consumed).
             let _ = write!(out, "      tls: {{}}\n");
@@ -468,6 +480,8 @@ async fn create_domain(
         &state.config.traefik.entrypoint_http,
         &state.config.traefik.entrypoint_https,
         state.config.traefik.dynamic_config_dir.as_deref(),
+        None,
+        true,
     ).await;
 
     // For static sites: update the nginx server_name so the site responds on the new domain immediately.
@@ -525,6 +539,8 @@ async fn delete_domain(
         &state.config.traefik.entrypoint_http,
         &state.config.traefik.entrypoint_https,
         state.config.traefik.dynamic_config_dir.as_deref(),
+        None,
+        true,
     ).await;
 
     // For static sites: update nginx server_name after the domain is removed.
