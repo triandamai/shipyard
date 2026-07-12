@@ -85,9 +85,8 @@ async fn create_runtime_service(
         .clone()
         .unwrap_or_default();
 
-    // Derive an API URL reachable from inside the Docker network.
-    // shipyard-api is the service name of the Manager on the platform_proxy network.
-    let api_url = "http://shipyard-api:3001";
+    // shipyard-backend is the container_name in docker-compose.yml.
+    let api_url = "http://shipyard-backend:3001";
 
     let mut labels = HashMap::new();
     labels.insert("traefik.enable".to_string(), "true".to_string());
