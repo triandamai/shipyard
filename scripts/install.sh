@@ -268,6 +268,7 @@ JWT_SECRET="$(openssl rand -hex 32)"
 SECRET_KEY="$(openssl rand -hex 32)"
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 MQTT_PASSWORD="$(openssl rand -hex 24)"
+EDGE_RUNTIME_SECRET="$(openssl rand -hex 24)"
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info "Preserving existing secrets from ${INSTALL_DIR}/.env..."
@@ -275,11 +276,13 @@ if [[ -f "${INSTALL_DIR}/.env" ]]; then
     EXISTING_SECRET_KEY=$(grep -E "^SHIPYARD__AUTH__SECRET_KEY=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_POSTGRES_PASSWORD=$(grep -E "^POSTGRES_PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_MQTT_PASSWORD=$(grep -E "^SHIPYARD__MQTT__PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+    EXISTING_EDGE_RUNTIME_SECRET=$(grep -E "^SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
 
     JWT_SECRET="${EXISTING_JWT_SECRET:-$JWT_SECRET}"
     SECRET_KEY="${EXISTING_SECRET_KEY:-$SECRET_KEY}"
     POSTGRES_PASSWORD="${EXISTING_POSTGRES_PASSWORD:-$POSTGRES_PASSWORD}"
     MQTT_PASSWORD="${EXISTING_MQTT_PASSWORD:-$MQTT_PASSWORD}"
+    EDGE_RUNTIME_SECRET="${EXISTING_EDGE_RUNTIME_SECRET:-$EDGE_RUNTIME_SECRET}"
 fi
 success "Secrets ready"
 
@@ -415,6 +418,7 @@ SHIPYARD__DATA_DIR=/opt/shipyard/data
 # Edge Functions (Deno-based serverless)
 SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
 SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=${EDGE_RUNTIME_SECRET}
 
 # Scripts base URL — used by update.sh to self-update from the landing site.
 # Set this to the public URL of your Shipyard landing (e.g. https://shipyard.example.com).

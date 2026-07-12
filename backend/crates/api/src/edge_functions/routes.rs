@@ -918,13 +918,18 @@ fn verify_runtime_secret(state: &AppState, headers: &HeaderMap) -> Result<(), Ap
         .as_deref()
         .unwrap_or("");
 
+    // No secret configured → internal network is trusted, skip auth.
+    if expected.is_empty() {
+        return Ok(());
+    }
+
     let provided = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    if expected.is_empty() || provided != expected {
+    if provided != expected {
         return Err(AppError::Unauthorized("invalid runtime secret".into()).into());
     }
     Ok(())

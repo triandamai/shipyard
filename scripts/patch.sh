@@ -47,6 +47,7 @@ DOCKERHUB_USER="${DOCKERHUB_USER:-triandamai827}"
 TAG_VALUE="${TAG:-latest}"
 
 append_if_missing "EDGE_RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:${TAG_VALUE}"
+append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET" "$(openssl rand -hex 24)"
 append_if_missing "SCRIPTS_URL" ""
 
 # Re-source so new vars are available below.
