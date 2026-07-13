@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use std::collections::HashMap;
-use shipyard_docker::types::{ResourceSpec, ServiceSpec};
+use shipyard_docker::types::{MountSpec, MountType, ResourceSpec, ServiceSpec};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -98,6 +98,19 @@ async fn create_runtime_service(
     let mut labels = HashMap::new();
     labels.insert("traefik.enable".to_string(), "true".to_string());
 
+    // Mount the shared data volume so the runtime can read artifact files written
+    // by the backend. Uses the same host path as the target so that artifact_path
+    // values are valid inside the container without any path translation.
+    // On a multi-node Swarm this directory must live on a shared/NFS-backed volume
+    // accessible from all worker nodes at the same path.
+    let edge_data_path = format!("{}/edge", state.config.data_dir);
+    let mounts = vec![MountSpec {
+        source: edge_data_path.clone(),
+        target: edge_data_path,
+        mount_type: MountType::Bind,
+        readonly: true,
+    }];
+
     let spec = ServiceSpec {
         name: service_name.to_string(),
         image: state.config.edge_functions.runtime_image.clone(),
@@ -108,7 +121,7 @@ async fn create_runtime_service(
             format!("SHIPYARD_RUNTIME_SECRET={runtime_secret}"),
         ],
         labels,
-        mounts: vec![],
+        mounts,
         networks: vec![state.config.traefik.network.clone()],
         ports: vec![],
         resources: Some(ResourceSpec {

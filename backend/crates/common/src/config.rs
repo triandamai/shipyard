@@ -222,6 +222,9 @@ pub struct EdgeFunctionsConfig {
     /// Max daily invocations for pro tier. Default 500 000.
     #[serde(default = "default_edge_invocations_pro")]
     pub max_invocations_pro: u64,
+    /// Number of past artifact versions to retain per function for rollback.
+    #[serde(default = "default_retention_versions")]
+    pub retention_versions: usize,
 }
 
 fn default_edge_runtime_image() -> String { "triandamai827/shipyard-edge-runtime:latest".to_string() }
@@ -243,6 +246,7 @@ impl Default for EdgeFunctionsConfig {
             max_bundle_kb_max: default_edge_bundle_kb_max(),
             max_invocations_free: default_edge_invocations_free(),
             max_invocations_pro: default_edge_invocations_pro(),
+            retention_versions: default_retention_versions(),
         }
     }
 }

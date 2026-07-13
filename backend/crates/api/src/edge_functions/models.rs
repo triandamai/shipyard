@@ -125,10 +125,16 @@ fn default_true() -> bool { true }
 fn default_cert_provider() -> String { "letsencrypt".to_string() }
 
 /// Used by the runtime container to load all live functions.
+/// `artifact_path` points to the `current/` symlink dir on the shared volume;
+/// the runtime reads source files from disk rather than receiving code as payload.
+/// `code` is kept as fallback for pre-migration rows where `artifact_path` is NULL.
 #[derive(Debug, Serialize)]
 pub struct FunctionManifestEntry {
     pub name: String,
-    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub env: std::collections::HashMap<String, String>,
     pub timeout_secs: i32,
 }

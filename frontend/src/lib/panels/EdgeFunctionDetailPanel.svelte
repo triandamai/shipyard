@@ -47,10 +47,13 @@
 	}
 	interface Deployment {
 		id: string;
+		version: string;
 		commit_sha: string | null;
 		deployed_by: string | null;
 		status: string;
 		error: string | null;
+		artifact_path: string | null;
+		files: string[];
 		created_at: string;
 	}
 	interface DeployReport {
@@ -610,12 +613,13 @@
 													<div class="dep-row">
 														<div class="dep-meta">
 															<span class="dep-dot" class:dep-dot-live={dep.status === 'live'}></span>
+															<span class="dep-version mono">{dep.version}</span>
 															<span class="dep-status-label" class:dep-live-label={dep.status === 'live'}>
 																{dep.status}
 															</span>
-															<span class="dep-sha mono">
-																{dep.commit_sha ? dep.commit_sha.slice(0, 7) : 'upload'}
-															</span>
+															{#if dep.commit_sha}
+																<span class="dep-sha mono">{dep.commit_sha.slice(0, 7)}</span>
+															{/if}
 															<span class="dep-time">{formatTime(dep.created_at)}</span>
 														</div>
 														<div class="dep-btns">
@@ -637,6 +641,13 @@
 															{/if}
 														</div>
 													</div>
+													{#if dep.files && dep.files.length > 0}
+														<div class="dep-files">
+															{#each dep.files as file}
+																<span class="dep-file mono">{file}</span>
+															{/each}
+														</div>
+													{/if}
 												{/each}
 											</div>
 										{/if}
@@ -939,8 +950,20 @@
 		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
 	}
 	.dep-live-label { color: #22c55e; }
+	.dep-version { font-size: 10px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
 	.dep-sha { font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
 	.dep-time { font-size: 10px; color: var(--text-dim); }
+	.dep-files {
+		display: flex; flex-wrap: wrap; gap: 4px;
+		padding: 4px 12px 8px 26px;
+		border-bottom: 1px solid var(--border);
+	}
+	.dep-files:last-child { border-bottom: none; }
+	.dep-file {
+		font-size: 10px; color: var(--text-dim);
+		background: var(--bg-elevated); border: 1px solid var(--border);
+		padding: 1px 6px; border-radius: 3px;
+	}
 	.dep-btns { display: flex; gap: 4px; flex-shrink: 0; }
 	.dep-btn {
 		display: inline-flex; align-items: center; gap: 4px;

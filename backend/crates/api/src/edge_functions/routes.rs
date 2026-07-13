@@ -351,21 +351,59 @@ async fn rollback(
     Path((org_id, fn_id, dep_id)): Path<(Uuid, Uuid, Uuid)>,
     auth: AuthUser,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    use shipyard_engine::edge_artifact::{ArtifactStore, EdgeArtifact};
+
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
-    let code: String = sqlx::query_scalar(
-        "SELECT efd.code_bundle FROM edge_function_deployments efd
-         JOIN edge_functions ef ON ef.id = efd.function_id
-         WHERE efd.id = $1 AND ef.org_id = $2"
+    // Verify the deployment belongs to this org and function.
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM edge_function_deployments efd
+            JOIN edge_functions ef ON ef.id = efd.function_id
+            WHERE efd.id = $1 AND efd.function_id = $2 AND ef.org_id = $3
+        )"
     )
     .bind(dep_id)
+    .bind(fn_id)
     .bind(org_id)
-    .fetch_optional(&state.db)
+    .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?
-    .ok_or_else(|| AppError::NotFound("deployment not found".into()))?;
+    .map_err(|e| AppError::Database(e.to_string()))?;
 
-    manager::deploy_function(&state, fn_id, &code, None, Some(auth.user_id)).await?;
+    if !exists {
+        return Err(ApiAppError(AppError::NotFound("deployment not found".into())));
+    }
+
+    // Swap the `current` symlink to point at this deployment's version dir.
+    let data_dir = state.config.data_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        EdgeArtifact::new(&data_dir).rollback(fn_id, dep_id)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))?
+    .map_err(ApiAppError)?;
+
+    // Update deployment status rows: target → live, previous live → rolled_back.
+    sqlx::query(
+        "UPDATE edge_function_deployments SET status = 'rolled_back'
+         WHERE function_id = $1 AND status = 'live'"
+    )
+    .bind(fn_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    sqlx::query(
+        "UPDATE edge_function_deployments SET status = 'live'
+         WHERE id = $1"
+    )
+    .bind(dep_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    // Reload the runtime so it picks up the restored version immediately.
+    let _ = manager::reload_runtime(&state, org_id).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "rolled_back": true }))))
 }
@@ -386,15 +424,17 @@ async fn list_deployments(
         deployed_by: Option<Uuid>,
         status: String,
         error: Option<String>,
+        artifact_path: Option<String>,
         created_at: chrono::DateTime<chrono::Utc>,
     }
 
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT efd.id, efd.commit_sha, efd.deployed_by, efd.status, efd.error, efd.created_at
+        "SELECT efd.id, efd.commit_sha, efd.deployed_by, efd.status, efd.error,
+                efd.artifact_path, efd.created_at
          FROM edge_function_deployments efd
          JOIN edge_functions ef ON ef.id = efd.function_id
          WHERE efd.function_id = $1 AND ef.org_id = $2
-         ORDER BY efd.created_at DESC
+         ORDER BY efd.created_at ASC
          LIMIT 50"
     )
     .bind(fn_id)
@@ -403,17 +443,42 @@ async fn list_deployments(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
+    // For each deployment, list files present in its version directory on disk.
+    // The version dir is the parent of artifact_path (which points to `current`),
+    // but individual versions live at <data_dir>/edge/<fn_id>/<deploy_id>/.
+    let data_dir = state.config.data_dir.clone();
     let items: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|r| serde_json::json!({
-            "id": r.id,
-            "commit_sha": r.commit_sha,
-            "deployed_by": r.deployed_by,
-            "status": r.status,
-            "error": r.error,
-            "created_at": r.created_at,
-        }))
+        .enumerate()
+        .map(|(i, r)| {
+            let version_label = format!("v{}", i + 1);
+            let version_dir = format!("{}/edge/{}/{}", data_dir, fn_id, r.id);
+            let files: Vec<String> = std::fs::read_dir(&version_dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            serde_json::json!({
+                "id": r.id,
+                "version": version_label,
+                "commit_sha": r.commit_sha,
+                "deployed_by": r.deployed_by,
+                "status": r.status,
+                "error": r.error,
+                "artifact_path": r.artifact_path,
+                "files": files,
+                "created_at": r.created_at,
+            })
+        })
         .collect();
+
+    // Return newest-first for display (was collected oldest-first for version numbering).
+    let mut items = items;
+    items.reverse();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "items": items }))))
 }

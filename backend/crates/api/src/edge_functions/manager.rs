@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use shipyard_common::crypto::decrypt_or_passthrough;
 use shipyard_common::error::AppError;
+use shipyard_engine::edge_artifact::{ArtifactStore, EdgeArtifact};
 use shipyard_engine::edge_fn_detector;
 
 use crate::AppState;
@@ -77,10 +78,11 @@ pub async fn check_function_quota(state: &AppState, org_id: Uuid) -> Result<(), 
     Ok(())
 }
 
-/// Deploy a single function: write deployment row, activate, reload runtime.
+/// Deploy a single function: write artifact to disk, update symlink, record deployment row.
 pub async fn deploy_function(
     state: &AppState,
     fn_id: Uuid,
+    filename: &str,
     code: &str,
     commit_sha: Option<&str>,
     deployed_by: Option<Uuid>,
@@ -102,7 +104,24 @@ pub async fn deploy_function(
         )));
     }
 
-    // Mark previous live deployment as rolled_back
+    // Pre-generate deploy_id so we can use it for both the version dir and the DB row.
+    let deploy_id = Uuid::new_v4();
+
+    // Write files to disk and swap the `current` symlink (blocking IO → spawn_blocking).
+    let data_dir = state.config.data_dir.clone();
+    let filename_owned = filename.to_string();
+    let code_owned = code.to_string();
+    let artifact_path = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+        let store = EdgeArtifact::new(&data_dir);
+        let files = vec![(filename_owned, code_owned)];
+        let version_dir = store.write_version(fn_id, deploy_id, &files)?;
+        store.update_current(fn_id, &version_dir)?;
+        Ok(store.current_path(fn_id).to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))??;
+
+    // Mark previous live deployment as rolled_back.
     sqlx::query(
         "UPDATE edge_function_deployments SET status = 'rolled_back'
          WHERE function_id = $1 AND status = 'live'"
@@ -112,22 +131,22 @@ pub async fn deploy_function(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    // Insert new live deployment
+    // Insert new deployment row — code_bundle left NULL, artifact_path points to current symlink.
     sqlx::query(
         "INSERT INTO edge_function_deployments
-         (id, function_id, commit_sha, code_bundle, deployed_by, status)
+         (id, function_id, commit_sha, artifact_path, deployed_by, status)
          VALUES ($1, $2, $3, $4, $5, 'live')"
     )
-    .bind(Uuid::new_v4())
+    .bind(deploy_id)
     .bind(fn_id)
     .bind(commit_sha)
-    .bind(code)
+    .bind(&artifact_path)
     .bind(deployed_by)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    // Activate function
+    // Activate function.
     sqlx::query(
         "UPDATE edge_functions
          SET status = 'active', last_deployed_at = NOW(), updated_at = NOW()
@@ -137,6 +156,16 @@ pub async fn deploy_function(
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
+
+    // Prune old version dirs (non-fatal — keep the configured retention count).
+    let data_dir_prune = state.config.data_dir.clone();
+    let retention = state.config.edge_functions.retention_versions;
+    tokio::task::spawn_blocking(move || {
+        let store = EdgeArtifact::new(&data_dir_prune);
+        let _ = store.prune(fn_id, retention);
+    })
+    .await
+    .ok();
 
     Ok(())
 }
@@ -183,7 +212,11 @@ pub async fn deploy_from_path(
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        match deploy_function(state, fn_id, &f.code, commit_sha, deployed_by).await {
+        let filename = Path::new(&f.file_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{}.ts", f.name));
+        match deploy_function(state, fn_id, &filename, &f.code, commit_sha, deployed_by).await {
             Ok(_) => report.deployed.push(f.name),
             Err(e) => report.failed.push((f.name, e.to_string())),
         }
@@ -264,6 +297,7 @@ pub async fn build_manifest(
     #[derive(sqlx::FromRow)]
     struct Row {
         name: String,
+        artifact_path: Option<String>,
         code_bundle: Option<String>,
         env_vars: serde_json::Value,
         env_whitelist: Vec<String>,
@@ -272,6 +306,7 @@ pub async fn build_manifest(
 
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT ef.name,
+                  efd.artifact_path,
                   efd.code_bundle,
                   ef.env_vars,
                   ef.env_whitelist,
@@ -288,7 +323,10 @@ pub async fn build_manifest(
 
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
-        let Some(code) = row.code_bundle else { continue };
+        // Skip rows with neither artifact_path nor code_bundle (undeployed).
+        if row.artifact_path.is_none() && row.code_bundle.is_none() {
+            continue;
+        }
 
         let all_env: HashMap<String, String> = row
             .env_vars
@@ -314,7 +352,8 @@ pub async fn build_manifest(
 
         entries.push(FunctionManifestEntry {
             name: row.name,
-            code,
+            artifact_path: row.artifact_path,
+            code: row.code_bundle,
             env,
             timeout_secs: row.timeout_secs,
         });

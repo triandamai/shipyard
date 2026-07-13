@@ -4,6 +4,7 @@ pub mod static_site;
 pub mod ssr;
 pub mod edge_fn_config;
 pub mod edge_fn_detector;
+pub mod edge_artifact;
 
 use std::collections::HashMap;
 use std::sync::Arc;
