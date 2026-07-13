@@ -3,7 +3,7 @@
 	import {
 		Zap, Globe, Plus, Trash2, RefreshCw, CheckCircle, XCircle,
 		GitBranch, AlertTriangle, ExternalLink, Code2, FileText,
-		Terminal, Copy, ChevronRight, X, RotateCcw, BookOpen
+		Terminal, Copy, ChevronRight, X, RotateCcw, BookOpen, Settings, Key
 	} from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -25,16 +25,21 @@
 
 	// ── Types ──────────────────────────────────────────────────────────────────
 
-	type Tab = 'overview' | 'functions' | 'domains' | 'danger';
+	type Tab = 'overview' | 'functions' | 'git' | 'domains' | 'danger';
 
 	interface Group {
 		id: string; org_id: string; project_id: string | null;
 		provider: string; repo_url: string; branch: string;
+		webhook_secret: string;
+		auto_deploy: boolean; deploy_strategy: string; deploy_tag_pattern: string | null;
 		last_deployed_sha: string | null; created_at: string;
 	}
 	interface EFn {
 		id: string; name: string; runtime: string; status: string;
 		last_deployed_at: string | null; public_url: string;
+	}
+	interface EFnDetail extends EFn {
+		env_vars: Record<string, string>;
 	}
 	interface EFnDomain {
 		id: string; service_id: string; hostname: string;
@@ -117,6 +122,24 @@
 	let deleteError     = $state('');
 	let deleteValid     = $derived(deleteInput.trim() === (group?.branch ?? '') && deleteInput !== '');
 
+	// Git tab
+	let autoDeployEnabled  = $state(true);
+	let deployStrategy     = $state('push');
+	let deployTagPattern   = $state('');
+	let deployBranch       = $state('');
+	let gitSaving          = $state(false);
+	let gitSaveOk          = $state(false);
+	let gitSaveError       = $state('');
+	let webhookCopied      = $state(false);
+
+	// Per-function env vars
+	let fnDetails    = $state<Record<string, EFnDetail>>({});
+	let fnEnvLoading = $state<Record<string, boolean>>({});
+	let fnEnvEditing = $state<Record<string, Record<string, string>>>({});
+	let fnEnvSaving  = $state<Record<string, boolean>>({});
+	let fnEnvOk      = $state<Record<string, boolean>>({});
+	let fnEnvError   = $state<Record<string, string>>({});
+
 	// ── Helpers ────────────────────────────────────────────────────────────────
 
 	function formatTime(ts: string | null | undefined): string {
@@ -171,6 +194,92 @@
 				expandedFnId = functions[0].id;
 			}
 		}
+		if (tab === 'git' && group) {
+			autoDeployEnabled = group.auto_deploy;
+			deployStrategy    = group.deploy_strategy;
+			deployTagPattern  = group.deploy_tag_pattern ?? '';
+			deployBranch      = group.branch;
+			gitSaveOk = false; gitSaveError = '';
+		}
+	}
+
+	// ── Git tab ────────────────────────────────────────────────────────────────
+
+	async function saveGitSettings() {
+		gitSaving = true; gitSaveOk = false; gitSaveError = '';
+		const res = await api.put(`/orgs/${orgId}/edge-functions/groups/${groupId}`, {
+			auto_deploy:        autoDeployEnabled,
+			deploy_strategy:    deployStrategy,
+			deploy_tag_pattern: deployStrategy === 'tag' ? (deployTagPattern || null) : null,
+			branch:             deployBranch || undefined,
+		});
+		gitSaving = false;
+		if (res.error) { gitSaveError = res.error.message; return; }
+		gitSaveOk = true;
+		setTimeout(() => { gitSaveOk = false; }, 3000);
+		await load();
+	}
+
+	async function copyWebhookUrl() {
+		if (!group) return;
+		const origin = window.location.origin;
+		const url = `${origin}/api/webhooks/${group.provider}/fn/${group.id}/${group.webhook_secret}`;
+		await navigator.clipboard.writeText(url);
+		webhookCopied = true;
+		setTimeout(() => { webhookCopied = false; }, 1500);
+	}
+
+	// ── Per-function env vars ─────────────────────────────────────────────────
+
+	async function loadFnDetail(fnId: string) {
+		if (fnDetails[fnId]) return;
+		fnEnvLoading = { ...fnEnvLoading, [fnId]: true };
+		const res = await api.get<EFnDetail>(`/orgs/${orgId}/edge-functions/${fnId}`);
+		fnEnvLoading = { ...fnEnvLoading, [fnId]: false };
+		if (res.data) {
+			fnDetails = { ...fnDetails, [fnId]: res.data };
+			fnEnvEditing = { ...fnEnvEditing, [fnId]: { ...res.data.env_vars } };
+		}
+	}
+
+	function addEnvVar(fnId: string) {
+		const env = { ...(fnEnvEditing[fnId] ?? {}) };
+		env[''] = '';
+		fnEnvEditing = { ...fnEnvEditing, [fnId]: env };
+	}
+
+	function removeEnvVar(fnId: string, key: string) {
+		const env = { ...(fnEnvEditing[fnId] ?? {}) };
+		delete env[key];
+		fnEnvEditing = { ...fnEnvEditing, [fnId]: env };
+	}
+
+	function updateEnvKey(fnId: string, oldKey: string, newKey: string) {
+		const env = { ...(fnEnvEditing[fnId] ?? {}) };
+		const val = env[oldKey] ?? '';
+		delete env[oldKey];
+		env[newKey] = val;
+		fnEnvEditing = { ...fnEnvEditing, [fnId]: env };
+	}
+
+	function updateEnvVal(fnId: string, key: string, val: string) {
+		fnEnvEditing = { ...fnEnvEditing, [fnId]: { ...(fnEnvEditing[fnId] ?? {}), [key]: val } };
+	}
+
+	async function saveFnEnvVars(fnId: string) {
+		fnEnvSaving = { ...fnEnvSaving, [fnId]: true };
+		fnEnvError  = { ...fnEnvError,  [fnId]: '' };
+		const res = await api.put(`/orgs/${orgId}/edge-functions/${fnId}`, {
+			env_vars: fnEnvEditing[fnId] ?? {},
+		});
+		fnEnvSaving = { ...fnEnvSaving, [fnId]: false };
+		if (res.error) { fnEnvError = { ...fnEnvError, [fnId]: res.error.message }; return; }
+		fnEnvOk = { ...fnEnvOk, [fnId]: true };
+		// Invalidate cached detail so it re-fetches on next expand
+		const updated = { ...fnDetails };
+		delete updated[fnId];
+		fnDetails = updated;
+		setTimeout(() => { fnEnvOk = { ...fnEnvOk, [fnId]: false }; }, 2500);
 	}
 
 	// ── Deployment history ─────────────────────────────────────────────────────
@@ -188,6 +297,7 @@
 		} else {
 			expandedFnId = fnId;
 			if (!fnDeployments[fnId]) loadFnDeployments(fnId);
+			loadFnDetail(fnId);
 		}
 	}
 
@@ -466,7 +576,7 @@
 	{:else if group}
 
 		<div class="tabs">
-			{#each [['overview','Overview'],['functions','Functions'],['domains','Domains'],['danger','Danger']] as [id, label]}
+			{#each [['overview','Overview'],['functions','Functions'],['git','Git'],['domains','Domains'],['danger','Danger']] as [id, label]}
 				<button class="tab" class:active={activeTab === id}
 					class:tab-danger={id === 'danger'}
 					onclick={() => switchTab(id as Tab)}>{label}
@@ -658,6 +768,46 @@
 										{/if}
 									</div>
 
+									<!-- Env vars -->
+									<div class="env-section">
+										<div class="env-section-header">
+											<div class="env-section-title"><Key size={11} /> Environment Variables</div>
+											<button class="dep-btn" onclick={() => addEnvVar(fn.id)}><Plus size={10} /> Add</button>
+										</div>
+										{#if fnEnvLoading[fn.id]}
+											<div class="dep-loading"><div class="spin-xs-inline"></div> Loading…</div>
+										{:else}
+											{@const envEntries = Object.entries(fnEnvEditing[fn.id] ?? {})}
+											{#if envEntries.length === 0}
+												<div class="env-empty">No env vars. Click Add to set one.</div>
+											{:else}
+												<div class="env-rows">
+													{#each envEntries as [k, v] (k)}
+														<div class="env-row">
+															<input class="env-input env-key mono" placeholder="KEY"
+																value={k}
+																onchange={(e) => updateEnvKey(fn.id, k, (e.target as HTMLInputElement).value)} />
+															<span class="env-eq">=</span>
+															<input class="env-input env-val mono" placeholder="value"
+																value={v}
+																oninput={(e) => updateEnvVal(fn.id, k, (e.target as HTMLInputElement).value)} />
+															<button class="env-rm" onclick={() => removeEnvVar(fn.id, k)}>
+																<X size={10} />
+															</button>
+														</div>
+													{/each}
+												</div>
+											{/if}
+											{#if fnEnvError[fn.id]}<div class="err-msg" style="margin-top:6px">{fnEnvError[fn.id]}</div>{/if}
+											{#if fnEnvOk[fn.id]}<div class="ok-msg" style="margin-top:6px">Saved.</div>{/if}
+											<div style="display:flex;justify-content:flex-end;margin-top:6px">
+												<button class="btn-action" disabled={fnEnvSaving[fn.id]} onclick={() => saveFnEnvVars(fn.id)}>
+													{#if fnEnvSaving[fn.id]}<div class="spin-xs-inline"></div> Saving…{:else}<CheckCircle size={11} /> Save Env Vars{/if}
+												</button>
+											</div>
+										{/if}
+									</div>
+
 									<!-- How to invoke -->
 									<div class="invoke-section">
 										<div class="invoke-title"><Terminal size={11} /> How to invoke</div>
@@ -687,6 +837,70 @@
 					{/each}
 				</div>
 			{/if}
+		{/if}
+
+		<!-- ── Git ── -->
+		{#if activeTab === 'git'}
+			<section class="section">
+				<div class="kv-grid">
+					<div class="kv-row"><span class="kv-k">Provider</span><span class="kv-v">{group.provider}</span></div>
+					<div class="kv-row"><span class="kv-k">Repo</span><span class="kv-v mono">{group.repo_url}</span></div>
+					<div class="kv-row"><span class="kv-k">SHA</span>
+						<span class="kv-v mono">{group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : '—'}</span>
+					</div>
+				</div>
+			</section>
+
+			<section class="section">
+				<div class="section-title">Deploy Settings</div>
+
+				<label class="toggle-row">
+					<span class="toggle-label">Auto-deploy</span>
+					<input type="checkbox" bind:checked={autoDeployEnabled} />
+					<span class="toggle-desc">Trigger deployment automatically on webhook events</span>
+				</label>
+
+				<div class="form-row">
+					<label class="form-label">Branch</label>
+					<input class="form-input mono" type="text" bind:value={deployBranch} placeholder="main" />
+				</div>
+
+				<div class="form-row">
+					<label class="form-label">Strategy</label>
+					<select class="form-select" bind:value={deployStrategy}>
+						<option value="push">Branch push</option>
+						<option value="tag">Tag push</option>
+						<option value="pull_request">PR / MR merge</option>
+					</select>
+				</div>
+
+				{#if deployStrategy === 'tag'}
+					<div class="form-row">
+						<label class="form-label">Tag pattern</label>
+						<input class="form-input mono" type="text" bind:value={deployTagPattern} placeholder="v*" />
+					</div>
+				{/if}
+
+				{#if gitSaveError}<div class="err-msg">{gitSaveError}</div>{/if}
+				{#if gitSaveOk}<div class="ok-msg">Settings saved.</div>{/if}
+
+				<button class="btn-primary" onclick={saveGitSettings} disabled={gitSaving}>
+					{#if gitSaving}<div class="spin-xs-w"></div> Saving…{:else}<Settings size={12} /> Save Settings{/if}
+				</button>
+			</section>
+
+			<section class="section">
+				<div class="section-title">Webhook URL</div>
+				<p class="section-desc">
+					Register this URL as a webhook in your {group.provider} repository. Shipyard will verify the signature automatically.
+				</p>
+				<div class="webhook-row">
+					<code class="webhook-url mono">{window.location.origin}/api/webhooks/{group.provider}/fn/{group.id}/{group.webhook_secret}</code>
+					<button class="btn-icon" onclick={copyWebhookUrl} title="Copy URL">
+						{#if webhookCopied}<CheckCircle size={13} style="color:#22c55e" />{:else}<Copy size={13} />{/if}
+					</button>
+				</div>
+			</section>
 		{/if}
 
 		<!-- ── Domains ── -->
@@ -1300,6 +1514,87 @@
 		background: var(--bg-elevated); color: var(--text-primary); outline: none;
 	}
 	.modal-input:focus { border-color: #ef4444; }
+
+	/* ── Git tab ── */
+	.toggle-row {
+		display: flex; align-items: center; gap: 8px;
+		padding: 9px 12px; border: 1px solid var(--border);
+		border-radius: var(--radius-sm); background: var(--bg-elevated);
+		cursor: pointer; font-size: 12px;
+	}
+	.toggle-label { font-weight: 600; color: var(--text-primary); }
+	.toggle-row input[type="checkbox"] { accent-color: var(--accent); }
+	.toggle-desc { font-size: 11px; color: var(--text-muted); flex: 1; }
+
+	.form-row { display: flex; flex-direction: column; gap: 4px; }
+	.form-label { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+	.form-input {
+		padding: 7px 9px; font-size: 12px;
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		background: var(--bg-elevated); color: var(--text-primary); outline: none;
+		transition: border-color var(--transition-fast);
+	}
+	.form-input:focus { border-color: var(--accent); }
+	.form-select {
+		padding: 7px 9px; font-size: 12px;
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		background: var(--bg-elevated); color: var(--text-primary); outline: none;
+		cursor: pointer; appearance: auto;
+	}
+	.form-select:focus { border-color: var(--accent); }
+
+	.webhook-row {
+		display: flex; align-items: center; gap: 8px;
+		padding: 9px 12px; border: 1px solid var(--border);
+		border-radius: var(--radius-sm); background: var(--bg-elevated);
+	}
+	.webhook-url {
+		flex: 1; font-size: 11px; color: var(--text-muted);
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+
+	/* ── Env vars ── */
+	.env-section {
+		background: var(--bg-base); border: 1px solid var(--border);
+		border-radius: var(--radius-sm); overflow: hidden;
+	}
+	.env-section-header {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 7px 12px;
+		border-bottom: 1px solid var(--border); background: var(--bg-elevated);
+	}
+	.env-section-title {
+		display: flex; align-items: center; gap: 6px;
+		font-size: 10px; font-weight: 700; color: var(--text-dim);
+		text-transform: uppercase; letter-spacing: 0.07em;
+	}
+	.env-empty {
+		padding: 10px 12px; font-size: 11px; color: var(--text-dim); font-style: italic;
+	}
+	.env-rows { display: flex; flex-direction: column; }
+	.env-row {
+		display: flex; align-items: center; gap: 4px; padding: 5px 10px;
+		border-bottom: 1px solid var(--border);
+	}
+	.env-row:last-child { border-bottom: none; }
+	.env-input {
+		padding: 4px 7px; font-size: 11px;
+		border: 1px solid var(--border); border-radius: 4px;
+		background: var(--bg-surface); color: var(--text-primary); outline: none;
+		transition: border-color var(--transition-fast);
+	}
+	.env-input:focus { border-color: var(--accent); }
+	.env-key { width: 120px; flex-shrink: 0; }
+	.env-val { flex: 1; min-width: 0; }
+	.env-eq { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
+	.env-rm {
+		display: flex; align-items: center; justify-content: center;
+		width: 22px; height: 22px; border-radius: 4px;
+		background: none; border: none; cursor: pointer;
+		color: var(--text-dim); flex-shrink: 0;
+		transition: all var(--transition-fast);
+	}
+	.env-rm:hover { color: #ef4444; background: color-mix(in srgb, #ef4444 10%, transparent); }
 
 	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

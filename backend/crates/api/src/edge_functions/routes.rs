@@ -18,6 +18,7 @@ use super::manager;
 use super::models::{
     CreateEdgeFunctionDomainRequest, CreateFunctionGroupRequest, DeployReport, EdgeFunctionDomain,
     EdgeFunctionGroup, EdgeFunctionResponse, FunctionManifestEntry, UpdateFunctionRequest,
+    UpdateGroupRequest,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -33,7 +34,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:fn_id/code", get(get_function_code))
         .route("/groups", get(list_groups))
         .route("/groups", post(create_group))
-        .route("/groups/:group_id", delete(delete_group))
+        .route("/groups/:group_id", put(update_group).delete(delete_group))
         .route("/groups/:group_id/deploy", post(trigger_group_deploy))
         .route("/groups/:group_id/domains", get(list_group_domains).post(create_group_domain))
         .route("/groups/:group_id/domains/:domain_id", delete(delete_group_domain))
@@ -165,6 +166,7 @@ async fn get_function(
         name: String,
         runtime: String,
         file_path: String,
+        env_vars: serde_json::Value,
         timeout_secs: i32,
         status: String,
         last_deployed_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -177,7 +179,7 @@ async fn get_function(
 
     let row: Row = sqlx::query_as(
         r#"SELECT ef.id, ef.name, ef.runtime, ef.file_path,
-                  ef.timeout_secs, ef.status::text as status,
+                  ef.env_vars, ef.timeout_secs, ef.status::text as status,
                   ef.last_deployed_at, ef.created_at, ef.updated_at,
                   efd.id as dep_id, efd.commit_sha,
                   efd.created_at as dep_created_at
@@ -193,11 +195,28 @@ async fn get_function(
     .map_err(|e| AppError::Database(e.to_string()))?
     .ok_or_else(|| AppError::NotFound("edge function not found".into()))?;
 
+    // Decrypt env var values before sending to client.
+    let secret_key = &state.config.auth.secret_key;
+    let decrypted_env: serde_json::Map<String, serde_json::Value> = row.env_vars
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| {
+                    let plain = v.as_str().map(|enc| {
+                        shipyard_common::crypto::decrypt_or_passthrough(secret_key, enc)
+                    }).unwrap_or_default();
+                    (k.clone(), serde_json::Value::String(plain))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "id": row.id,
         "name": row.name,
         "runtime": row.runtime,
         "file_path": row.file_path,
+        "env_vars": decrypted_env,
         "timeout_secs": row.timeout_secs,
         "status": row.status,
         "last_deployed_at": row.last_deployed_at,
@@ -649,7 +668,7 @@ async fn list_groups(
 
     let groups: Vec<EdgeFunctionGroup> = sqlx::query_as(
         "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                last_deployed_sha, service_id, created_at
+                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at
          FROM edge_function_groups WHERE org_id = $1 ORDER BY created_at DESC"
     )
     .bind(org_id)
@@ -709,7 +728,7 @@ async fn create_group(
              (id, org_id, project_id, provider, repo_url, branch, webhook_secret, service_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                   last_deployed_sha, service_id, created_at",
+                   last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at",
     )
     .bind(group_id)
     .bind(org_id)
@@ -899,6 +918,35 @@ fn resolve_base_url(config: &shipyard_common::config::AppConfig, headers: &Heade
     configured.to_string()
 }
 
+async fn update_group(
+    State(state): State<AppState>,
+    Path((org_id, group_id)): Path<(Uuid, Uuid)>,
+    auth: AuthUser,
+    Json(body): Json<UpdateGroupRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
+
+    sqlx::query(
+        "UPDATE edge_function_groups
+         SET auto_deploy        = COALESCE($1, auto_deploy),
+             deploy_strategy    = COALESCE($2, deploy_strategy),
+             deploy_tag_pattern = COALESCE($3, deploy_tag_pattern),
+             branch             = COALESCE($4, branch)
+         WHERE id = $5 AND org_id = $6",
+    )
+    .bind(body.auto_deploy)
+    .bind(body.deploy_strategy)
+    .bind(body.deploy_tag_pattern)
+    .bind(body.branch)
+    .bind(group_id)
+    .bind(org_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "updated": true }))))
+}
+
 async fn delete_group(
     State(state): State<AppState>,
     Path((org_id, group_id)): Path<(Uuid, Uuid)>,
@@ -1020,7 +1068,7 @@ async fn trigger_group_deploy(
 
     let group: EdgeFunctionGroup = sqlx::query_as(
         "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                last_deployed_sha, service_id, created_at
+                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at
          FROM edge_function_groups WHERE id = $1 AND org_id = $2"
     )
     .bind(group_id)

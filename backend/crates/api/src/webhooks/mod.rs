@@ -561,24 +561,72 @@ async fn github_fn_webhook(
         return Err(ApiAppError(AppError::Unauthorized("signature mismatch".into())));
     }
 
-    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok()).unwrap_or("");
-    if event != "push" {
-        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored" }))));
+    if !group.auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "auto-deploy disabled" }))));
     }
+
+    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok()).unwrap_or("");
 
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {e}"))))?;
 
-    let pushed_branch = payload["ref"]
-        .as_str()
-        .and_then(|r| r.strip_prefix("refs/heads/"))
-        .unwrap_or("");
-
-    if pushed_branch != group.branch {
-        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
-    }
-
-    let commit_sha = payload["after"].as_str().unwrap_or("").to_string();
+    let commit_sha = match group.deploy_strategy.as_str() {
+        "push" => {
+            if event != "push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected push)" }))));
+            }
+            let pushed_ref = payload["ref"].as_str().unwrap_or("");
+            if pushed_ref.starts_with("refs/tags/") {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored tag push" }))));
+            }
+            let pushed_branch = pushed_ref.strip_prefix("refs/heads/").unwrap_or(pushed_ref);
+            if pushed_branch != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+            }
+            payload["after"].as_str().unwrap_or("").to_string()
+        }
+        "tag" => {
+            if event != "push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected push for tag)" }))));
+            }
+            let pushed_ref = payload["ref"].as_str().unwrap_or("");
+            if !pushed_ref.starts_with("refs/tags/") {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored non-tag push" }))));
+            }
+            let tag = pushed_ref.strip_prefix("refs/tags/").unwrap_or(pushed_ref);
+            if let Some(pattern) = &group.deploy_tag_pattern {
+                if !matches_pattern(pattern, tag) {
+                    return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "tag pattern mismatch" }))));
+                }
+            }
+            payload["after"].as_str().unwrap_or("").to_string()
+        }
+        "pull_request" => {
+            if event != "pull_request" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected pull_request)" }))));
+            }
+            let action = payload["action"].as_str().unwrap_or("");
+            let merged = payload["pull_request"]["merged"].as_bool().unwrap_or(false);
+            if action != "closed" || !merged {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored (must be closed+merged)" }))));
+            }
+            let base_ref = payload["pull_request"]["base"]["ref"].as_str().unwrap_or("");
+            if base_ref != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "PR target branch mismatch" }))));
+            }
+            payload["pull_request"]["merge_commit_sha"].as_str().unwrap_or("").to_string()
+        }
+        _ => {
+            // Unknown strategy — fall back to push behaviour.
+            let pushed_branch = payload["ref"].as_str()
+                .and_then(|r| r.strip_prefix("refs/heads/"))
+                .unwrap_or("");
+            if pushed_branch != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+            }
+            payload["after"].as_str().unwrap_or("").to_string()
+        }
+    };
 
     tokio::spawn(async move {
         if let Err(e) = crate::edge_functions::manager::deploy_from_git(&state, &group, &commit_sha, None).await {
@@ -604,19 +652,70 @@ async fn gitlab_fn_webhook(
         return Err(ApiAppError(AppError::Unauthorized("token mismatch".into())));
     }
 
+    if !group.auto_deploy {
+        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "auto-deploy disabled" }))));
+    }
+
     let payload: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("invalid JSON: {e}"))))?;
 
-    let pushed_branch = payload["ref"]
-        .as_str()
-        .and_then(|r| r.strip_prefix("refs/heads/"))
-        .unwrap_or("");
+    let object_kind = payload["object_kind"].as_str().unwrap_or("");
 
-    if pushed_branch != group.branch {
-        return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
-    }
-
-    let commit_sha = payload["checkout_sha"].as_str().unwrap_or("").to_string();
+    let commit_sha = match group.deploy_strategy.as_str() {
+        "push" => {
+            if object_kind != "push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected push)" }))));
+            }
+            let pushed_ref = payload["ref"].as_str().unwrap_or("");
+            if pushed_ref.starts_with("refs/tags/") {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored tag push" }))));
+            }
+            let pushed_branch = pushed_ref.strip_prefix("refs/heads/").unwrap_or(pushed_ref);
+            if pushed_branch != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+            }
+            payload["checkout_sha"].as_str().unwrap_or("").to_string()
+        }
+        "tag" => {
+            if object_kind != "tag_push" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected tag_push)" }))));
+            }
+            let tag = payload["ref"].as_str()
+                .and_then(|r| r.strip_prefix("refs/tags/"))
+                .unwrap_or("");
+            if let Some(pattern) = &group.deploy_tag_pattern {
+                if !matches_pattern(pattern, tag) {
+                    return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "tag pattern mismatch" }))));
+                }
+            }
+            payload["checkout_sha"].as_str().unwrap_or("").to_string()
+        }
+        "pull_request" => {
+            // GitLab calls these merge requests; object_kind = "merge_request"
+            if object_kind != "merge_request" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored event (expected merge_request)" }))));
+            }
+            let action = payload["object_attributes"]["action"].as_str().unwrap_or("");
+            let state_val = payload["object_attributes"]["state"].as_str().unwrap_or("");
+            if action != "merge" && state_val != "merged" {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "ignored (must be merged)" }))));
+            }
+            let target_branch = payload["object_attributes"]["target_branch"].as_str().unwrap_or("");
+            if target_branch != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "MR target branch mismatch" }))));
+            }
+            payload["object_attributes"]["merge_commit_sha"].as_str().unwrap_or("").to_string()
+        }
+        _ => {
+            let pushed_branch = payload["ref"].as_str()
+                .and_then(|r| r.strip_prefix("refs/heads/"))
+                .unwrap_or("");
+            if pushed_branch != group.branch {
+                return Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "branch not tracked" }))));
+            }
+            payload["checkout_sha"].as_str().unwrap_or("").to_string()
+        }
+    };
 
     tokio::spawn(async move {
         if let Err(e) = crate::edge_functions::manager::deploy_from_git(&state, &group, &commit_sha, None).await {
@@ -634,7 +733,9 @@ async fn load_fn_group(
 ) -> Result<crate::edge_functions::models::EdgeFunctionGroup, ApiAppError> {
     let group: Option<crate::edge_functions::models::EdgeFunctionGroup> = sqlx::query_as(
         "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                last_deployed_sha, service_id, created_at
+                last_deployed_sha, service_id,
+                auto_deploy, deploy_strategy, deploy_tag_pattern,
+                created_at
          FROM edge_function_groups WHERE id = $1"
     )
     .bind(group_id)

@@ -41,6 +41,9 @@ pub struct EdgeFunctionGroup {
     pub webhook_secret: String,
     pub last_deployed_sha: Option<String>,
     pub service_id: Option<Uuid>,
+    pub auto_deploy: bool,
+    pub deploy_strategy: String,
+    pub deploy_tag_pattern: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -75,6 +78,14 @@ pub struct UpdateFunctionRequest {
     pub env_vars: Option<serde_json::Value>,
     pub env_whitelist: Option<Vec<String>>,
     pub timeout_secs: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateGroupRequest {
+    pub auto_deploy: Option<bool>,
+    pub deploy_strategy: Option<String>,
+    pub deploy_tag_pattern: Option<String>,
+    pub branch: Option<String>,
 }
 
 // ─── Response types ───────────────────────────────────────────────────────────
