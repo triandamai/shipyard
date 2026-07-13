@@ -12,6 +12,6 @@ EXPOSE 8000
 CMD ["deno", "run", \
      "--allow-net", \
      "--allow-env", \
-     "--allow-read=/tmp", \
+     "--allow-read=/tmp,/opt/shipyard/data", \
      "--allow-write=/tmp", \
      "main.ts"]

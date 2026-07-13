@@ -906,9 +906,12 @@ async fn delete_group(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
-    // If the group has a synthetic service row, delete it — the service's
-    // ON DELETE CASCADE takes care of the group row and all its domains.
-    // Otherwise delete the group directly (org-level groups without a project).
+    // Traefik config file is always named `efg-{group_id[..8]}.yml` — same
+    // formula used in create_group (line 690). Derive it before any DB changes.
+    let traefik_conf_filename = format!("efg-{}.yml", &group_id.to_string()[..8]);
+
+    // ── 1. Pre-fetch everything needed for cleanup BEFORE any deletion ─────────
+
     let service_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT service_id FROM edge_function_groups WHERE id = $1 AND org_id = $2",
     )
@@ -918,6 +921,21 @@ async fn delete_group(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?
     .flatten();
+
+    // Function IDs — needed to wipe per-function artifact dirs from disk
+    let fn_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM edge_functions WHERE group_id = $1 AND org_id = $2",
+    )
+    .bind(group_id)
+    .bind(org_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    // ── 2. Delete DB rows ──────────────────────────────────────────────────────
+    // Deleting the service row cascades to: edge_function_groups, domains,
+    // edge_functions, and edge_function_deployments.
+    // Groups without a project have no service row — delete directly.
 
     if let Some(sid) = service_id {
         sqlx::query("DELETE FROM services WHERE id = $1")
@@ -932,6 +950,53 @@ async fn delete_group(
             .execute(&state.db)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?;
+    }
+
+    // ── 3. Remove Traefik domain config file (non-fatal) ──────────────────────
+    if let Some(conf_dir) = state.config.traefik.dynamic_config_dir.as_deref() {
+        let conf_path = std::path::Path::new(conf_dir).join(&traefik_conf_filename);
+        match tokio::fs::remove_file(&conf_path).await {
+            Ok(_) => tracing::info!("delete_group: removed Traefik config {conf_path:?}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("delete_group: could not remove {conf_path:?}: {e}"),
+        }
+    }
+
+    // ── 4. Remove artifact directories on disk (non-fatal) ────────────────────
+    // <data_dir>/edge/<fn_id>/ contains all version dirs and the current symlink.
+    if !fn_ids.is_empty() {
+        let data_dir = state.config.data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            for fn_id in &fn_ids {
+                let dir = std::path::PathBuf::from(&data_dir)
+                    .join("edge")
+                    .join(fn_id.to_string());
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    tracing::warn!(
+                        "delete_group: could not remove artifact dir {}: {e}", dir.display()
+                    );
+                }
+            }
+        })
+        .await
+        .ok();
+    }
+
+    // ── 5. Remove the org's runtime Swarm service if no functions remain ───────
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM edge_functions WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    if remaining == 0 {
+        let runtime_name = format!("shipyard-edge-{}", &org_id.to_string()[..8]);
+        match state.docker.remove_service(&runtime_name).await {
+            Ok(_) => tracing::info!("delete_group: removed runtime service {runtime_name}"),
+            Err(e) => tracing::warn!("delete_group: could not remove {runtime_name}: {e}"),
+        }
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": true }))))
