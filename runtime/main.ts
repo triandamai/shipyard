@@ -197,7 +197,8 @@ async function reloadAtBoot(): Promise<void> {
 // ── Invocation logging ────────────────────────────────────────────────────────
 //
 // Fire-and-forget POST to the backend. Never throws — a logging failure must
-// not affect the function response.
+// not affect the function response. Logs non-2xx responses as warnings so
+// failures appear in runtime container logs for debugging.
 
 function logInvocation(
   fnName: string,
@@ -222,7 +223,17 @@ function logInvocation(
       duration_ms: Math.round(durationMs),
       error,
     }),
-  }).catch(() => { /* ignore — logging must not affect the response */ });
+  }).then(res => {
+    if (!res.ok) {
+      res.text().then(body =>
+        console.warn(`[log] backend rejected invocation log for /${fnName}: ${res.status} ${body}`)
+      ).catch(() => {
+        console.warn(`[log] backend rejected invocation log for /${fnName}: ${res.status}`);
+      });
+    }
+  }).catch(e => {
+    console.warn(`[log] could not send invocation log for /${fnName}: ${e}`);
+  });
 }
 
 // ── Invoke handler ─────────────────────────────────────────────────────────────
@@ -329,8 +340,22 @@ if (!ORG_ID) {
   Deno.exit(1);
 }
 
+const POLL_INTERVAL_MS = Number(Deno.env.get("RELOAD_INTERVAL_MS") ?? "30000");
+
 console.log(`Shipyard Edge Runtime starting — org: ${ORG_ID}`);
 await reloadAtBoot();
+
+// Periodic background reload — catches any deploys whose push-based /reload
+// POST was missed (race, network blip, or container not ready at deploy time).
+if (POLL_INTERVAL_MS > 0) {
+  setInterval(async () => {
+    try {
+      await reload();
+    } catch (e) {
+      console.warn(`[poll-reload] failed: ${e}`);
+    }
+  }, POLL_INTERVAL_MS);
+}
 
 Deno.serve({ port: PORT }, handleRequest);
 console.log(`Listening on :${PORT}`);

@@ -933,9 +933,18 @@ async fn delete_group(
     .unwrap_or_default();
 
     // ── 2. Delete DB rows ──────────────────────────────────────────────────────
-    // Deleting the service row cascades to: edge_function_groups, domains,
-    // edge_functions, and edge_function_deployments.
-    // Groups without a project have no service row — delete directly.
+    // edge_functions.group_id is ON DELETE SET NULL (not CASCADE), so deleting
+    // the group/service would leave function rows and their invocation logs
+    // behind. Explicitly delete functions first; the CASCADE on
+    // edge_function_invocation_logs.function_id and
+    // edge_function_deployments.function_id handles the rest.
+    if !fn_ids.is_empty() {
+        sqlx::query("DELETE FROM edge_functions WHERE id = ANY($1)")
+            .bind(&fn_ids)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+    }
 
     if let Some(sid) = service_id {
         sqlx::query("DELETE FROM services WHERE id = $1")
@@ -1070,6 +1079,14 @@ async fn runtime_log(
             .fetch_optional(&state.db)
             .await
             .map_err(|e| AppError::Database(e.to_string()))?;
+
+    if fn_id.is_none() {
+        tracing::warn!(
+            org_id = %body.org_id,
+            fn_name = %body.fn_name,
+            "runtime_log: function not found — invocation log dropped"
+        );
+    }
 
     if let Some(fn_id) = fn_id {
         sqlx::query(
