@@ -147,6 +147,10 @@ async fn create_runtime_service(
             format!("SHIPYARD_RUNTIME_API_URL={api_url}"),
             format!("SHIPYARD_RUNTIME_ORG_ID={org_id}"),
             format!("SHIPYARD_RUNTIME_SECRET={runtime_secret}"),
+            format!(
+                "RELOAD_INTERVAL_MS={}",
+                state.config.edge_functions.reload_interval_ms.unwrap_or(30_000)
+            ),
         ],
         labels,
         mounts,

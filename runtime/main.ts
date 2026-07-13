@@ -194,9 +194,41 @@ async function reloadAtBoot(): Promise<void> {
   }
 }
 
+// ── Invocation logging ────────────────────────────────────────────────────────
+//
+// Fire-and-forget POST to the backend. Never throws — a logging failure must
+// not affect the function response.
+
+function logInvocation(
+  fnName: string,
+  method: string,
+  path: string,
+  statusCode: number,
+  durationMs: number,
+  error: string | null,
+): void {
+  fetch(`${API_URL}/api/internal/edge-runtime/log`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SECRET}`,
+    },
+    body: JSON.stringify({
+      org_id:      ORG_ID,
+      fn_name:     fnName,
+      method,
+      path,
+      status_code: statusCode,
+      duration_ms: Math.round(durationMs),
+      error,
+    }),
+  }).catch(() => { /* ignore — logging must not affect the response */ });
+}
+
 // ── Invoke handler ─────────────────────────────────────────────────────────────
 
 async function invokeFunction(
+  fnName: string,
   entry: FunctionEntry,
   req: Request,
   fnPath: string,
@@ -215,20 +247,26 @@ async function invokeFunction(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  const start = Date.now();
+  let statusCode = 500;
+  let invokeError: string | null = null;
+
   try {
     const res = await entry.handler(forwarded);
+    statusCode = res.status;
     return res;
   } catch (e) {
     if (controller.signal.aborted) {
-      return Response.json(
-        { error: "function timed out" },
-        { status: 504 },
-      );
+      invokeError = "function timed out";
+      statusCode = 504;
+      return Response.json({ error: invokeError }, { status: statusCode });
     }
+    invokeError = String(e);
     console.error(`[invoke] error in handler: ${e}`);
-    return Response.json({ error: String(e) }, { status: 500 });
+    return Response.json({ error: invokeError }, { status: 500 });
   } finally {
     clearTimeout(timer);
+    logInvocation(fnName, req.method, fnPath, statusCode, Date.now() - start, invokeError);
   }
 }
 
@@ -279,14 +317,9 @@ async function handleRequest(req: Request): Promise<Response> {
   const fnPath = "/" + segments.slice(1).join("/") + url.search;
   const start  = Date.now();
 
-  try {
-    const res = await invokeFunction(entry, req, fnPath);
-    console.log(`${req.method} /${fnName}${fnPath} → ${res.status} (${Date.now() - start}ms)`);
-    return res;
-  } catch (e) {
-    console.error(`${req.method} /${fnName}${fnPath} → ERROR: ${e}`);
-    return Response.json({ error: String(e) }, { status: 500 });
-  }
+  const res = await invokeFunction(fnName, entry, req, fnPath);
+  console.log(`${req.method} /${fnName}${fnPath} → ${res.status} (${Date.now() - start}ms)`);
+  return res;
 }
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────

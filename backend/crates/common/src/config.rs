@@ -225,6 +225,11 @@ pub struct EdgeFunctionsConfig {
     /// Number of past artifact versions to retain per function for rollback.
     #[serde(default = "default_retention_versions")]
     pub retention_versions: usize,
+    /// How often (ms) the runtime polls the manifest for code updates.
+    /// Acts as a fallback when the push-based /reload POST is missed.
+    /// Set to 0 to disable polling. Default 30 000 (30 s).
+    #[serde(default)]
+    pub reload_interval_ms: Option<u64>,
 }
 
 fn default_edge_runtime_image() -> String { "triandamai827/shipyard-edge-runtime:latest".to_string() }
@@ -247,6 +252,7 @@ impl Default for EdgeFunctionsConfig {
             max_invocations_free: default_edge_invocations_free(),
             max_invocations_pro: default_edge_invocations_pro(),
             retention_versions: default_retention_versions(),
+            reload_interval_ms: None,
         }
     }
 }
