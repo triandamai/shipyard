@@ -12,6 +12,10 @@ Shipyard gives you a Heroku-like deployment experience on infrastructure you con
 
 **Key features:**
 
+- One-click deploys — containerized services live in seconds, no YAML wrangling
+- Static site hosting with auto framework detection (Next.js, SvelteKit, Vite, CRA, and more)
+- Git integration — push to deploy with branch/tag/PR trigger strategies
+- Edge functions — multi-node serverless execution at the network edge
 - Visual service topology with real-time status updates (via MQTT WebSocket)
 - Git-triggered deployments with parallel execution control
 - Automatic Traefik routing with wildcard domain generation (nip.io / traefik.me)
