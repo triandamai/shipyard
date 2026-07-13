@@ -551,9 +551,15 @@ async fn get_function_code(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
-    let code: Option<String> = if let Some(dep_id) = q.deployment_id {
-        sqlx::query_scalar(
-            "SELECT efd.code_bundle
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        code_bundle: Option<String>,
+        artifact_path: Option<String>,
+    }
+
+    let row: Option<Row> = if let Some(dep_id) = q.deployment_id {
+        sqlx::query_as(
+            "SELECT efd.code_bundle, efd.artifact_path
              FROM edge_function_deployments efd
              JOIN edge_functions ef ON ef.id = efd.function_id
              WHERE efd.id = $1 AND efd.function_id = $2 AND ef.org_id = $3",
@@ -564,10 +570,9 @@ async fn get_function_code(
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?
-        .flatten()
     } else {
-        sqlx::query_scalar(
-            "SELECT efd.code_bundle
+        sqlx::query_as(
+            "SELECT efd.code_bundle, efd.artifact_path
              FROM edge_function_deployments efd
              JOIN edge_functions ef ON ef.id = efd.function_id
              WHERE efd.function_id = $1 AND ef.org_id = $2 AND efd.status = 'live'
@@ -579,7 +584,55 @@ async fn get_function_code(
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?
-        .flatten()
+    };
+
+    let code: Option<String> = match row {
+        None => None,
+        Some(r) if r.code_bundle.is_some() => r.code_bundle,
+        Some(_) => {
+            // Artifact-path deployment — read source files from the version dir on disk.
+            // Use the version-specific dir for a pinned dep, or the `current` symlink for live.
+            let artifact_dir = if let Some(dep_id) = q.deployment_id {
+                std::path::PathBuf::from(&state.config.data_dir)
+                    .join("edge")
+                    .join(fn_id.to_string())
+                    .join(dep_id.to_string())
+            } else {
+                std::path::PathBuf::from(&state.config.data_dir)
+                    .join("edge")
+                    .join(fn_id.to_string())
+                    .join("current")
+            };
+
+            tokio::task::spawn_blocking(move || -> Option<String> {
+                let mut files: Vec<_> = std::fs::read_dir(&artifact_dir)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let p = e.path();
+                        matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "js"))
+                    })
+                    .collect();
+                files.sort_by_key(|e| e.file_name());
+
+                let parts: Vec<String> = files
+                    .iter()
+                    .filter_map(|e| {
+                        let content = std::fs::read_to_string(e.path()).ok()?;
+                        if files.len() > 1 {
+                            Some(format!("// {}\n{}", e.file_name().to_string_lossy(), content))
+                        } else {
+                            Some(content)
+                        }
+                    })
+                    .collect();
+
+                if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
+            })
+            .await
+            .ok()
+            .flatten()
+        }
     };
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "code": code }))))

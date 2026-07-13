@@ -610,44 +610,49 @@
 											{/if}
 											<div class="dep-list">
 												{#each fnDeployments[fn.id] as dep (dep.id)}
-													<div class="dep-row">
-														<div class="dep-meta">
-															<span class="dep-dot" class:dep-dot-live={dep.status === 'live'}></span>
-															<span class="dep-version mono">{dep.version}</span>
-															<span class="dep-status-label" class:dep-live-label={dep.status === 'live'}>
-																{dep.status}
-															</span>
-															{#if dep.commit_sha}
-																<span class="dep-sha mono">{dep.commit_sha.slice(0, 7)}</span>
-															{/if}
-															<span class="dep-time">{formatTime(dep.created_at)}</span>
-														</div>
-														<div class="dep-btns">
-															<button class="dep-btn" onclick={() => openCode(fn, dep)}>
-																<Code2 size={10} /> View
-															</button>
-															{#if dep.status !== 'live'}
-																<button
-																	class="dep-btn dep-btn-restore"
-																	disabled={rollingBackId === dep.id}
-																	onclick={() => rollbackDeployment(fn, dep)}
-																>
-																	{#if rollingBackId === dep.id}
-																		<div class="spin-xs-inline"></div>
-																	{:else}
-																		<RotateCcw size={10} /> Restore
-																	{/if}
+													<div class="ver-block" class:ver-live={dep.status === 'live'}>
+														<div class="ver-header">
+															<div class="ver-label-row">
+																<span class="ver-dot" class:ver-dot-live={dep.status === 'live'}></span>
+																<span class="ver-label mono">{dep.version}</span>
+																{#if dep.status === 'live'}
+																	<span class="ver-latest">latest</span>
+																{/if}
+																{#if dep.commit_sha}
+																	<span class="ver-sha mono">{dep.commit_sha.slice(0, 7)}</span>
+																{/if}
+																<span class="ver-time">{formatTime(dep.created_at)}</span>
+															</div>
+															<div class="dep-btns">
+																<button class="dep-btn" onclick={() => openCode(fn, dep)}>
+																	<Code2 size={10} /> Code
 																</button>
-															{/if}
+																{#if dep.status !== 'live'}
+																	<button
+																		class="dep-btn dep-btn-restore"
+																		disabled={rollingBackId === dep.id}
+																		onclick={() => rollbackDeployment(fn, dep)}
+																	>
+																		{#if rollingBackId === dep.id}
+																			<div class="spin-xs-inline"></div>
+																		{:else}
+																			<RotateCcw size={10} /> Restore
+																		{/if}
+																	</button>
+																{/if}
+															</div>
 														</div>
+														{#if dep.files && dep.files.length > 0}
+															<div class="ver-files">
+																{#each dep.files as file}
+																	<div class="ver-file">
+																		<FileText size={9} />
+																		<span class="mono">{file}</span>
+																	</div>
+																{/each}
+															</div>
+														{/if}
 													</div>
-													{#if dep.files && dep.files.length > 0}
-														<div class="dep-files">
-															{#each dep.files as file}
-																<span class="dep-file mono">{file}</span>
-															{/each}
-														</div>
-													{/if}
 												{/each}
 											</div>
 										{/if}
@@ -932,38 +937,51 @@
 		border: 1px solid color-mix(in srgb, #ef4444 25%, transparent);
 		border-radius: 4px;
 	}
+	/* ── Version blocks (deployment history) ── */
 	.dep-list { display: flex; flex-direction: column; }
-	.dep-row {
+
+	.ver-block {
+		border-bottom: 1px solid var(--border);
+		padding: 8px 12px;
+	}
+	.ver-block:last-child { border-bottom: none; }
+	.ver-block.ver-live {
+		border-left: 2px solid var(--accent);
+		padding-left: 10px;
+		background: color-mix(in srgb, var(--accent) 3%, transparent);
+	}
+
+	.ver-header {
 		display: flex; align-items: center; justify-content: space-between;
-		padding: 7px 12px; border-bottom: 1px solid var(--border);
 		gap: 8px;
 	}
-	.dep-row:last-child { border-bottom: none; }
-	.dep-meta { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; }
-	.dep-dot {
+	.ver-label-row {
+		display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0;
+	}
+	.ver-dot {
 		width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 		background: var(--text-dim);
 	}
-	.dep-dot-live { background: #22c55e; }
-	.dep-status-label {
-		font-size: 10px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+	.ver-dot-live { background: #22c55e; box-shadow: 0 0 4px #22c55e66; }
+	.ver-label { font-size: 12px; font-weight: 700; color: var(--text-primary); flex-shrink: 0; }
+	.ver-latest {
+		font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 99px;
+		background: color-mix(in srgb, var(--accent) 15%, transparent);
+		color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
 	}
-	.dep-live-label { color: #22c55e; }
-	.dep-version { font-size: 10px; font-weight: 700; color: var(--accent); flex-shrink: 0; }
-	.dep-sha { font-size: 11px; color: var(--text-primary); flex-shrink: 0; }
-	.dep-time { font-size: 10px; color: var(--text-dim); }
-	.dep-files {
-		display: flex; flex-wrap: wrap; gap: 4px;
-		padding: 4px 12px 8px 26px;
-		border-bottom: 1px solid var(--border);
+	.ver-sha { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+	.ver-time { font-size: 10px; color: var(--text-dim); }
+
+	.ver-files {
+		display: flex; flex-direction: column; gap: 2px;
+		margin-top: 6px; padding-left: 14px;
 	}
-	.dep-files:last-child { border-bottom: none; }
-	.dep-file {
-		font-size: 10px; color: var(--text-dim);
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		padding: 1px 6px; border-radius: 3px;
+	.ver-file {
+		display: flex; align-items: center; gap: 5px;
+		font-size: 11px; color: var(--text-muted);
 	}
+	:global(.ver-file svg) { color: var(--text-dim); flex-shrink: 0; }
+
 	.dep-btns { display: flex; gap: 4px; flex-shrink: 0; }
 	.dep-btn {
 		display: inline-flex; align-items: center; gap: 4px;

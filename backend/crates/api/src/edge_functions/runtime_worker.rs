@@ -30,8 +30,13 @@ async fn tick(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     for org_id in active_orgs.iter().copied() {
-        if let Err(e) = ensure_runtime_exists(state, org_id).await {
-            tracing::warn!("EdgeRuntimeWorker: could not ensure runtime for org {org_id}: {e}");
+        match ensure_runtime_exists(state, org_id).await {
+            Ok(newly_created) if newly_created => {
+                // Bootstrap reload in the container handles initial function loading.
+                tracing::info!("EdgeRuntimeWorker: created runtime for org {org_id}");
+            }
+            Err(e) => tracing::warn!("EdgeRuntimeWorker: could not ensure runtime for org {org_id}: {e}"),
+            _ => {}
         }
     }
 
@@ -43,8 +48,9 @@ async fn tick(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Ensures the Deno runtime Swarm service exists for the given org.
 /// Creates it if missing; recreates it if unhealthy.
-/// Called both by the background worker and inline from deploy_function.
-pub async fn ensure_runtime_exists(state: &AppState, org_id: Uuid) -> Result<(), String> {
+/// Returns `true` if a new container was created (caller may want to wait for
+/// it to become healthy before sending `/reload`), `false` if it was already up.
+pub async fn ensure_runtime_exists(state: &AppState, org_id: Uuid) -> Result<bool, String> {
     let short = &org_id.to_string()[..8];
     let service_name = format!("shipyard-edge-{short}");
 
@@ -58,7 +64,7 @@ pub async fn ensure_runtime_exists(state: &AppState, org_id: Uuid) -> Result<(),
         // Service exists. Quick health check via the internal URL.
         let url = format!("http://{service_name}:8000/health");
         if state.http_client.get(&url).send().await.map_or(false, |r| r.status().is_success()) {
-            return Ok(());
+            return Ok(false);
         }
         // Unhealthy — fall through to recreate
         tracing::warn!("edge runtime for org {org_id} is unhealthy, recreating");
@@ -67,7 +73,29 @@ pub async fn ensure_runtime_exists(state: &AppState, org_id: Uuid) -> Result<(),
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
 
-    create_runtime_service(state, org_id, &service_name).await
+    create_runtime_service(state, org_id, &service_name).await?;
+    Ok(true)
+}
+
+/// Polls the runtime's /health endpoint until it responds OK or the deadline passes.
+/// Returns once healthy; callers should then send /reload.
+pub async fn wait_for_runtime_ready(state: &AppState, org_id: Uuid) {
+    let short = &org_id.to_string()[..8];
+    let url = format!("http://shipyard-edge-{short}:8000/health");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        if state
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_or(false, |r| r.status().is_success())
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    tracing::warn!("edge runtime for org {org_id} did not become healthy within 30s");
 }
 
 async fn create_runtime_service(

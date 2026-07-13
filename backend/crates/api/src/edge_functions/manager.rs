@@ -224,8 +224,14 @@ pub async fn deploy_from_path(
 
     // Ensure the runtime exists once for the whole batch, then reload it.
     if !report.deployed.is_empty() {
-        if let Err(e) = crate::edge_functions::runtime_worker::ensure_runtime_exists(state, org_id).await {
-            tracing::warn!("edge runtime start failed for org {org_id}: {e}");
+        match crate::edge_functions::runtime_worker::ensure_runtime_exists(state, org_id).await {
+            Ok(newly_created) if newly_created => {
+                // New container — wait for it to be ready before sending reload
+                // so the POST actually reaches Deno instead of failing silently.
+                crate::edge_functions::runtime_worker::wait_for_runtime_ready(state, org_id).await;
+            }
+            Err(e) => tracing::warn!("edge runtime start failed for org {org_id}: {e}"),
+            _ => {}
         }
         let _ = reload_runtime(state, org_id).await;
     }

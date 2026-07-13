@@ -31,10 +31,11 @@ let registry = new Map<string, FunctionEntry>();
 // ── Manifest types ─────────────────────────────────────────────────────────────
 
 interface ManifestEntry {
-  name:         string;
-  code:         string;
-  env:          Record<string, string>;
-  timeout_secs: number;
+  name:          string;
+  artifact_path?: string;  // directory path (current symlink); preferred over code
+  code?:         string;   // legacy: inline source for rows predating artifact storage
+  env:           Record<string, string>;
+  timeout_secs:  number;
 }
 
 // ── Load manifest from API ─────────────────────────────────────────────────────
@@ -50,13 +51,63 @@ async function fetchManifest(): Promise<ManifestEntry[]> {
   return res.json();
 }
 
-// ── Load a single function from code string via temp file ─────────────────────
+// ── Load a function from a disk artifact directory ─────────────────────────────
 //
+// `artifactPath` is the `current` symlink directory (e.g. /data/edge/<fn_id>/current).
+// We resolve the real path (follows the symlink) so each deploy gets a unique
+// file:// URL — Deno's module cache is keyed by URL, so this busts stale code
+// automatically on reload without any temp-file tricks.
+
+async function loadFunctionFromPath(
+  name: string,
+  artifactPath: string,
+): Promise<Handler | null> {
+  let realDir: string;
+  try {
+    realDir = await Deno.realPath(artifactPath);
+  } catch (e) {
+    console.error(`  ✗ error   /${name}: artifact dir not found at ${artifactPath}: ${e}`);
+    return null;
+  }
+
+  // Find the first .ts file in the directory.
+  const tsFiles: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(realDir)) {
+      if (entry.isFile && entry.name.endsWith(".ts")) tsFiles.push(entry.name);
+    }
+  } catch (e) {
+    console.error(`  ✗ error   /${name}: cannot read artifact dir ${realDir}: ${e}`);
+    return null;
+  }
+
+  if (tsFiles.length === 0) {
+    console.warn(`  ✗ skipped /${name} — no .ts file in ${realDir}`);
+    return null;
+  }
+
+  const filePath = `${realDir}/${tsFiles[0]}`;
+  try {
+    const mod = await import(`file://${filePath}`);
+    if (typeof mod.default !== "function") {
+      console.warn(`  ✗ skipped /${name} — no default export in ${filePath}`);
+      return null;
+    }
+    return mod.default as Handler;
+  } catch (e) {
+    console.error(`  ✗ error   /${name}: ${e}`);
+    return null;
+  }
+}
+
+// ── Load a single function from inline code string via temp file ───────────────
+//
+// Legacy path for rows that predate artifact storage (code_bundle column).
 // Deno caches modules by URL, so each reload needs a unique file path.
 // We increment a per-function counter and remove the previous temp file
 // after the new one is imported.
 
-async function loadFunction(
+async function loadFunctionFromCode(
   name: string,
   code: string,
 ): Promise<Handler | null> {
@@ -91,17 +142,19 @@ async function loadFunction(
 async function reload(): Promise<void> {
   console.log(`[reload] fetching manifest from ${API_URL}`);
 
-  let manifest: ManifestEntry[];
-  try {
-    manifest = await fetchManifest();
-  } catch (e) {
-    console.error(`[reload] failed: ${e}`);
-    return;
-  }
+  // Let the error propagate so callers can decide to retry or surface it.
+  const manifest = await fetchManifest();
 
   const newRegistry = new Map<string, FunctionEntry>();
   for (const entry of manifest) {
-    const handler = await loadFunction(entry.name, entry.code);
+    let handler: Handler | null = null;
+    if (entry.artifact_path) {
+      handler = await loadFunctionFromPath(entry.name, entry.artifact_path);
+    } else if (entry.code) {
+      handler = await loadFunctionFromCode(entry.name, entry.code);
+    } else {
+      console.warn(`  ✗ skipped /${entry.name} — no artifact_path or code in manifest`);
+    }
     if (handler) {
       newRegistry.set(entry.name, {
         handler,
@@ -114,6 +167,31 @@ async function reload(): Promise<void> {
 
   registry = newRegistry;
   console.log(`[reload] done — ${registry.size} function(s) active`);
+}
+
+// ── Boot reload with retry ─────────────────────────────────────────────────────
+//
+// Called once at startup. Retries with backoff so the runtime recovers
+// when the backend API is temporarily unreachable (e.g. both containers
+// starting simultaneously on a fresh deployment).
+
+async function reloadAtBoot(): Promise<void> {
+  const maxAttempts = 10;
+  const delayMs = 3000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await reload();
+      return;
+    } catch (e) {
+      if (attempt === maxAttempts) {
+        console.error(`[boot] manifest fetch failed after ${maxAttempts} attempts — starting with empty registry`);
+        return;
+      }
+      console.warn(`[boot] manifest fetch attempt ${attempt}/${maxAttempts} failed: ${e} — retrying in ${delayMs}ms`);
+      await new Promise<void>((r) => setTimeout(r, delayMs));
+    }
+  }
 }
 
 // ── Invoke handler ─────────────────────────────────────────────────────────────
@@ -180,7 +258,12 @@ async function handleRequest(req: Request): Promise<Response> {
     if (auth !== `Bearer ${SECRET}`) {
       return new Response("Unauthorized", { status: 401 });
     }
-    await reload();
+    try {
+      await reload();
+    } catch (e) {
+      console.error(`[reload] manifest fetch failed: ${e}`);
+      return Response.json({ ok: false, error: String(e) }, { status: 502 });
+    }
     return Response.json({ ok: true, functions: registry.size });
   }
 
@@ -214,7 +297,7 @@ if (!ORG_ID) {
 }
 
 console.log(`Shipyard Edge Runtime starting — org: ${ORG_ID}`);
-await reload();
+await reloadAtBoot();
 
 Deno.serve({ port: PORT }, handleRequest);
 console.log(`Listening on :${PORT}`);
