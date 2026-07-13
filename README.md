@@ -4,6 +4,8 @@ A self-hosted PaaS for deploying and managing containerized applications on your
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
+![Shipyard Preview](examples/preview.png)
+
 ## Overview
 
 Shipyard gives you a Heroku-like deployment experience on infrastructure you control. Connect your Git repositories, define your services, and Shipyard handles building images, routing traffic, and monitoring deployments — all from a visual topology canvas.

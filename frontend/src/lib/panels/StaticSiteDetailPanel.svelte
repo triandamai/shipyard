@@ -9,6 +9,7 @@
 	import { uiStore } from '$lib/stores/ui.store';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
+	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
 	import type { StaticSiteConfig, Service, Deployment, Domain } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
 
@@ -22,6 +23,11 @@
 
 	let { serviceId, projectId, orgId, onDeployed, onDeleted }: Props = $props();
 
+	function portal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return { destroy() { node.remove(); } };
+	}
+
 	// ── Core state ─────────────────────────────────────────────────────────────
 	let config       = $state<StaticSiteConfig | null>(null);
 	let service      = $state<Service | null>(null);
@@ -29,16 +35,10 @@
 	let deployments  = $state<Deployment[]>([]);
 	let loading      = $state(true);
 	let loadError    = $state('');
-	let activeTab    = $state<'overview' | 'config' | 'git' | 'deployments' | 'domains' | 'docs' | 'visitor_logs'>('overview');
+	let activeTab    = $state<'overview' | 'config' | 'git' | 'deployments' | 'domains' | 'docs'>('overview');
 
-	// ── Visitor Logs ───────────────────────────────────────────────────────────
-	let visitorLogs      = $state<string[]>([]);
-	let isStreamingLogs  = $state(false);
-	let logsError        = $state('');
-	let logsSearch       = $state('');
-	let logsTail         = $state(500);
-	let logsSource       = $state<EventSource | null>(null);
-	let logsContainerEl  = $state<HTMLDivElement | null>(null);
+	// ── Visitor Logs overlay ──────────────────────────────────────────────────
+	let logOverlayOpen = $state(false);
 
 	// ── Delete state ───────────────────────────────────────────────────────────
 	let showDeleteModal  = $state(false);
@@ -483,61 +483,10 @@
 		if (file) uploadFile = file;
 	}
 
-	async function loadStaticLogs() {
-		logsError = '';
-		try {
-			const res = await api.getStaticLogs(serviceId, logsTail);
-			if (res.data) {
-				visitorLogs = res.data;
-				scrollToBottom();
-			} else {
-				logsError = res.error?.message ?? 'Failed to load logs';
-			}
-		} catch {
-			logsError = 'Failed to load logs';
-		}
+	async function fetchVisitorLogs(tail: number): Promise<string[]> {
+		const res = await api.getStaticLogs(serviceId, tail);
+		return res.data ?? [];
 	}
-
-	function startLogsStream() {
-		if (logsSource) return;
-		isStreamingLogs = true;
-		logsError = '';
-
-		const es = new EventSource(`/api/services/${serviceId}/static/logs/stream`);
-		logsSource = es;
-
-		es.onmessage = (e) => {
-			if (!e.data?.trim()) return;
-			visitorLogs = [...visitorLogs, e.data];
-			scrollToBottom();
-		};
-
-		es.onerror = () => {
-			logsError = 'Stream disconnected. Reconnecting...';
-		};
-	}
-
-	function stopLogsStream() {
-		logsSource?.close();
-		logsSource = null;
-		isStreamingLogs = false;
-	}
-
-	function scrollToBottom() {
-		if (logsContainerEl) {
-			requestAnimationFrame(() => {
-				if (logsContainerEl) {
-					logsContainerEl.scrollTop = logsContainerEl.scrollHeight;
-				}
-			});
-		}
-	}
-
-	let filteredLogs = $derived(
-		visitorLogs.filter((line) =>
-			line.toLowerCase().includes(logsSearch.toLowerCase())
-		)
-	);
 
 	async function switchTab(tab: typeof activeTab) {
 		activeTab = tab;
@@ -546,13 +495,6 @@
 		if (tab === 'git') {
 			void loadWebhookToken();
 			void loadGitProviders();
-		}
-		if (tab === 'visitor_logs') {
-			visitorLogs = [];
-			await loadStaticLogs();
-			startLogsStream();
-		} else {
-			stopLogsStream();
 		}
 	}
 
@@ -563,9 +505,7 @@
 		loading = false;
 	});
 
-	onDestroy(() => {
-		stopLogsStream();
-	});
+	onDestroy(() => {});
 </script>
 
 <!-- ─── Delete confirmation modal ────────────────────────────────────────────── -->
@@ -635,6 +575,21 @@
 		<div class="error-msg">{loadError}</div>
 	{:else if config}
 
+		<!-- Visitor Logs overlay -->
+		<div use:portal>
+			<LogViewerOverlay
+				open={logOverlayOpen}
+				title="Visitor Logs"
+				subtitle={service?.slug ?? serviceId}
+				streamUrl="/api/services/{serviceId}/static/logs/stream"
+				fetchFn={fetchVisitorLogs}
+				tailOptions={[100, 200, 500, 1000]}
+				initialTail={200}
+				emptyMessage="No visitor traffic recorded yet."
+				onClose={() => { logOverlayOpen = false; }}
+			/>
+		</div>
+
 		<!-- Tabs -->
 		<div class="tabs">
 			{#each [
@@ -643,7 +598,6 @@
 				['config','Build Config'],
 				...(config.source === 'git' ? [['git', 'Git']] as const : []),
 				['domains','Domains'],
-				['visitor_logs','Visitor Logs'],
 				['docs','Guide'],
 			] as [tab, label] (tab)}
 				<button
@@ -675,6 +629,9 @@
 							<Loader2 size={12} class="spin-icon" /> View progress
 						</button>
 					{/if}
+					<button class="btn-visitor-logs" onclick={() => { logOverlayOpen = true; }}>
+						<AlertCircle size={12} /> Visitor Logs
+					</button>
 				</div>
 			</section>
 
@@ -789,18 +746,16 @@
 
 		<!-- ── Git tab ── -->
 		{#if activeTab === 'git'}
-			<!-- Linked Git Account / Provider -->
-			<section class="section" style="margin-bottom: 1.5rem;">
-				<div class="section-title">Linked Git Account</div>
-				<p class="section-desc">Connect this static site to a Git provider account to enable automated commit-push tracking and webhook registration.</p>
-				<div class="form-group" style="margin-top: 1rem;">
-					<label class="form-label" for="git-provider-select" style="display: block; margin-bottom: 0.5rem; font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em;">Git Provider</label>
-					<div style="display: flex; gap: 10px;">
-						<select
-							id="git-provider-select"
-							bind:value={gitProviderId}
-							style="width: 100%; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px; outline: none; transition: border-color 0.15s ease;"
-						>
+			<div class="git-config-section">
+
+				<!-- Linked Git Account -->
+				<div class="git-card">
+					<div class="git-card-title">Linked Git Account</div>
+					<p class="git-card-desc">Connect this static site to a Git provider account to enable automated commit-push tracking and webhook registration.</p>
+
+					<div class="git-field">
+						<label class="git-label" for="git-provider-select">Git Provider</label>
+						<select id="git-provider-select" class="git-select" bind:value={gitProviderId}>
 							<option value="">No provider linked</option>
 							{#each orgGitProviders as provider (provider.id)}
 								<option value={provider.id}>
@@ -808,32 +763,31 @@
 								</option>
 							{/each}
 						</select>
-						<button class="btn-primary" onclick={saveGitProvider} disabled={gitProviderSaving} style="white-space: nowrap; height: 36px; padding: 0 16px;">
-							{#if gitProviderSaving}
-								<div class="spinner-xs"></div> Saving…
-							{:else}
-								Link Provider
-							{/if}
-						</button>
 					</div>
-					{#if gitProviderError}<div class="form-error" style="margin-top: 5px; color: var(--status-err); font-size: 12px;">{gitProviderError}</div>{/if}
-					{#if gitProviderSuccess}<div class="form-success" style="margin-top: 5px; color: var(--status-ok); font-size: 12px;">{gitProviderSuccess}</div>{/if}
+
+					{#if gitProviderError}<p class="git-error">{gitProviderError}</p>{/if}
+					{#if gitProviderSuccess}<p class="git-save-success">{gitProviderSuccess}</p>{/if}
 					{#if webhookRegStatus}
-						<div class="webhook-status {webhookRegStatus.ok ? 'success' : 'error'}" style="margin-top: 8px;">
+						<div class="webhook-status {webhookRegStatus.ok ? 'success' : 'error'}">
 							{webhookRegStatus.message}
 						</div>
 					{/if}
+
+					<div class="git-save-row">
+						<button class="btn-primary btn-sm" onclick={saveGitProvider} disabled={gitProviderSaving}>
+							{#if gitProviderSaving}<div class="spinner-xs"></div> Saving…{:else}Link Provider{/if}
+						</button>
+					</div>
 				</div>
-			</section>
 
-			<section class="section">
-				<div class="section-title">Git Deployment Settings</div>
-				<p class="section-desc">Configure the rules that trigger automatic deployments when code changes are pushed to GitHub.</p>
+				<!-- Deployment Strategy -->
+				<div class="git-card">
+					<div class="git-card-title">Deployment Strategy</div>
+					<p class="git-card-desc">Configure the rules that trigger automatic deployments when code changes are pushed.</p>
 
-				<div class="form-grid">
-					<div class="form-group">
-						<label class="form-label">Deployment Strategy</label>
-						<select class="form-select" bind:value={editGitDeployStrategy}>
+					<div class="git-field">
+						<label class="git-label">Strategy</label>
+						<select class="git-select" bind:value={editGitDeployStrategy}>
 							<option value="push">Deploy on Push to Branch</option>
 							<option value="tag">Deploy on Tag Push</option>
 							<option value="pull_request">Deploy on Pull Request Merge</option>
@@ -841,111 +795,129 @@
 					</div>
 
 					{#if editGitDeployStrategy === 'push'}
-						<div class="form-group">
-							<label class="form-label">Target Branch</label>
-							<input
-								class="form-input mono"
-								bind:value={editGitDeployBranch}
-								placeholder="e.g. main (falls back to service default)"
-							/>
-							<span class="field-hint">Deployments will trigger when commits are pushed to this branch.</span>
+						<div class="git-field">
+							<label class="git-label" for="ss-branch-input">Target Branch</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">⎇</span>
+								<input
+									id="ss-branch-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={editGitDeployBranch}
+									placeholder="main"
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Deploy triggers when commits are pushed to this branch.</p>
 						</div>
 					{/if}
 
 					{#if editGitDeployStrategy === 'tag'}
-						<div class="form-group">
-							<label class="form-label">Tag Pattern</label>
-							<input
-								class="form-input mono"
-								bind:value={editGitDeployTagPattern}
-								placeholder="e.g. v* (or * for all tags)"
-							/>
-							<span class="field-hint">Deployments will trigger when a tag matching this wildcard/glob pattern is pushed.</span>
+						<div class="git-field">
+							<label class="git-label" for="ss-tag-input">Tag Pattern</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">🏷️</span>
+								<input
+									id="ss-tag-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={editGitDeployTagPattern}
+									placeholder="v*"
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Deploy when a tag matching this glob is pushed (e.g. <code>v*</code>).</p>
 						</div>
 					{/if}
 
 					{#if editGitDeployStrategy === 'pull_request'}
-						<div class="form-group">
-							<label class="form-label">Target Branch (PR Merge)</label>
-							<input
-								class="form-input mono"
-								bind:value={editGitDeployBranch}
-								placeholder="e.g. main (falls back to service default)"
-							/>
-							<span class="field-hint">Deployments will trigger when a pull request is merged into this branch.</span>
+						<div class="git-field">
+							<label class="git-label" for="ss-pr-branch-input">Target Branch (PR Merge)</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">⎇</span>
+								<input
+									id="ss-pr-branch-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={editGitDeployBranch}
+									placeholder="main"
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Deploy when a pull request is merged into this branch.</p>
 						</div>
 					{/if}
-				</div>
 
-				{#if gitSaveError}<div class="form-error">{gitSaveError}</div>{/if}
-				{#if gitSaveSuccess}<div class="form-success">{gitSaveSuccess}</div>{/if}
+					{#if gitSaveError}<p class="git-error">{gitSaveError}</p>{/if}
+					{#if gitSaveSuccess}<p class="git-save-success">{gitSaveSuccess}</p>{/if}
 
-				<div class="action-row" style="margin-top: 1rem;">
-					<button class="btn-primary" onclick={saveGitConfig} disabled={gitSaving}>
-						{#if gitSaving}
-							<div class="spinner-xs"></div> Saving…
-						{:else}
-							Save Settings
-						{/if}
-					</button>
-				</div>
-			</section>
-
-			<!-- Webhook URL Card -->
-			<section class="section" style="margin-top: 1rem;">
-				<div class="git-card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-					<div class="section-title" style="margin-bottom: 0;">Webhook URL</div>
-					<div class="webhook-provider-tabs">
-						{#each (['github', 'gitlab', 'gitea'] as const) as p}
-							<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
-								{p.charAt(0).toUpperCase() + p.slice(1)}
-							</button>
-						{/each}
-					</div>
-				</div>
-				<p class="section-desc" style="margin-bottom: 1rem;">
-					Add this URL as a webhook in your Git provider with the <strong>push</strong> event.
-					No secret header is required — the token in the URL authenticates the request.
-				</p>
-
-				{#if isLoadingWebhook}
-					<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
-				{:else}
-					<div class="webhook-url-row">
-						<input
-							class="webhook-url-input"
-							readonly
-							value={webhookToken
-								? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
-								: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
-						/>
-						<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
-							{#if webhookCopied}
-								<CheckCircle2 size={13} />Copied
-							{:else}
-								<Copy size={13} />Copy
-							{/if}
+					<div class="git-save-row">
+						<button class="btn-primary btn-sm" onclick={saveGitConfig} disabled={gitSaving}>
+							{#if gitSaving}<div class="spinner-xs"></div> Saving…{:else}Save Settings{/if}
 						</button>
 					</div>
+				</div>
 
-					<div class="webhook-actions" style="margin-top: 0.75rem;">
-						{#if rotateConfirm}
-							<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
-							<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
-								{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
-							</button>
-							<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
-						{:else}
-							<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
-								<RefreshCw size={11} />Rotate URL
-							</button>
-						{/if}
+				<!-- Webhook URL -->
+				<div class="git-card">
+					<div class="git-card-header">
+						<div class="git-card-title">Webhook URL</div>
+						<div class="webhook-provider-tabs">
+							{#each (['github', 'gitlab', 'gitea'] as const) as p}
+								<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
+									{p.charAt(0).toUpperCase() + p.slice(1)}
+								</button>
+							{/each}
+						</div>
 					</div>
-					{#if service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-						<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
+					<p class="git-card-desc">
+						Register this URL in your repository's webhook settings with the <strong>push</strong> event.
+						The token in the URL authenticates the request — no secret header needed.
+					</p>
+
+					{#if isLoadingWebhook}
+						<div class="webhook-loading"><div class="spinner-xs-inline"></div> Loading…</div>
+					{:else}
+						<div class="webhook-url-row">
+							<input
+								class="webhook-url-input"
+								readonly
+								value={webhookToken
+									? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+									: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
+							/>
+							<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
+								{#if webhookCopied}
+									<CheckCircle2 size={13} /> Copied
+								{:else}
+									<Copy size={13} /> Copy
+								{/if}
+							</button>
+						</div>
+
+						<div class="webhook-actions">
+							{#if rotateConfirm}
+								<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
+								<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+									{#if isRotatingWebhook}<div class="spinner-xs-inline"></div> Rotating…{:else}Yes, rotate{/if}
+								</button>
+								<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
+							{:else}
+								<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
+									<RefreshCw size={11} /> Rotate URL
+								</button>
+							{/if}
+						</div>
+						{#if service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
+							<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
+						{/if}
 					{/if}
-				{/if}
-			</section>
+				</div>
+
+			</div>
 		{/if}
 
 		<!-- ── Deployments tab ── -->
@@ -1178,54 +1150,6 @@ export default &#123;
 			</section>
 		{/if}
 
-		<!-- ── Visitor Logs tab ── -->
-		{#if activeTab === 'visitor_logs'}
-			<section class="section" style="display:flex; flex-direction:column; flex:1; height:100%; min-height:400px; gap: 10px;">
-				<div class="logs-toolbar">
-					<input
-						type="text"
-						placeholder="Search logs…"
-						bind:value={logsSearch}
-						class="logs-search-input"
-					/>
-					<div class="logs-controls">
-						<select bind:value={logsTail} onchange={loadStaticLogs} class="logs-select">
-							<option value={100}>100 lines</option>
-							<option value={200}>200 lines</option>
-							<option value={500}>500 lines</option>
-							<option value={1000}>1000 lines</option>
-						</select>
-						<button class="btn btn-ghost btn-sm" onclick={() => { visitorLogs = []; }}>
-							Clear
-						</button>
-						<button
-							class="btn btn-sm"
-							class:btn-primary={!isStreamingLogs}
-							onclick={isStreamingLogs ? stopLogsStream : startLogsStream}
-						>
-							{isStreamingLogs ? 'Disconnect' : 'Connect'}
-						</button>
-					</div>
-				</div>
-
-				{#if logsError}
-					<div class="logs-error-bar">
-						<AlertCircle size={14} />
-						<span>{logsError}</span>
-					</div>
-				{/if}
-
-				<div class="logs-console" bind:this={logsContainerEl}>
-					{#each filteredLogs as line}
-						<div class="logs-line">{line}</div>
-					{:else}
-						<div class="logs-empty">
-							{isStreamingLogs ? 'Waiting for traffic...' : 'Logs disconnected. Click Connect to stream logs.'}
-						</div>
-					{/each}
-				</div>
-			</section>
-		{/if}
 
 	{/if}
 </div>
@@ -1923,80 +1847,19 @@ export default &#123;
 		animation: spin 0.7s linear infinite;
 	}
 
-	/* ── Visitor Logs styles ── */
-	.logs-toolbar {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 12px;
-		margin-bottom: 4px;
-	}
-	.logs-search-input {
-		flex: 1;
-		padding: 6px 10px;
-		font-size: 11px;
-		background: var(--bg-input);
+	/* ── Visitor Logs button ── */
+	.btn-visitor-logs {
+		display: inline-flex; align-items: center; gap: 5px;
+		font-size: 11px; font-weight: 600;
+		color: var(--text-muted);
+		background: var(--bg-elevated);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--text-primary);
+		padding: 4px 10px; cursor: pointer;
+		transition: all var(--transition-fast);
+		white-space: nowrap; flex-shrink: 0;
 	}
-	.logs-search-input:focus {
-		border-color: var(--accent);
-		outline: none;
-	}
-	.logs-controls {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.logs-select {
-		padding: 5px 8px;
-		font-size: 11px;
-		background: var(--bg-input);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary);
-	}
-	.logs-error-bar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 8px 12px;
-		background: rgba(239, 68, 68, 0.1);
-		border: 1px solid rgba(239, 68, 68, 0.2);
-		border-radius: var(--radius-sm);
-		color: #EF4444;
-		font-size: 11px;
-		margin-bottom: 2px;
-	}
-	.logs-console {
-		flex: 1;
-		min-height: 350px;
-		background: #0c0f12;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 12px;
-		overflow-y: auto;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: #e2e8f0;
-		line-height: 1.5;
-		white-space: pre-wrap;
-		word-break: break-all;
-	}
-	.logs-line {
-		padding: 2px 0;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.02);
-	}
-	.logs-empty {
-		display: flex;
-		justify-content: center;
-		align-items: center;
-		height: 100%;
-		min-height: 300px;
-		color: var(--text-dim);
-		font-size: 11px;
-	}
+	.btn-visitor-logs:hover { border-color: var(--accent); color: var(--accent); }
 	.webhook-provider-tabs {
 		display: inline-flex;
 		gap: 3px;
@@ -2102,4 +1965,76 @@ export default &#123;
 		color: var(--text-muted);
 		border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
 	}
+
+	/* ── Git config cards (shared pattern with ServiceDetailPanel) ── */
+	.git-config-section { display: flex; flex-direction: column; gap: 12px; }
+
+	.git-card {
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 14px 16px;
+		display: flex; flex-direction: column; gap: 10px;
+	}
+
+	.git-card-header {
+		display: flex; align-items: center; justify-content: space-between;
+	}
+
+	.git-card-title {
+		font-size: 13px; font-weight: 700; color: var(--text-primary);
+	}
+
+	.git-card-desc {
+		font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0;
+	}
+
+	.git-field { display: flex; flex-direction: column; gap: 5px; }
+
+	.git-label {
+		font-size: 11px; font-weight: 600; color: var(--text-dim);
+		text-transform: uppercase; letter-spacing: 0.06em;
+	}
+
+	.git-select {
+		width: 100%; padding: 7px 10px; border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		background: var(--bg-surface); color: var(--text-primary);
+		font-size: 12px; outline: none; cursor: pointer;
+		transition: border-color var(--transition-fast);
+	}
+	.git-select:focus { border-color: var(--accent); }
+
+	.git-branch-row {
+		display: flex; align-items: center;
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		background: var(--bg-surface); overflow: hidden;
+		transition: border-color var(--transition-fast);
+	}
+	.git-branch-row:focus-within { border-color: var(--accent); }
+
+	.git-branch-icon {
+		padding: 0 8px; font-size: 13px; color: var(--text-dim);
+		background: var(--bg-elevated); border-right: 1px solid var(--border);
+		display: flex; align-items: center; height: 32px; flex-shrink: 0;
+	}
+
+	.git-branch-input {
+		flex: 1; padding: 6px 10px; border: none; outline: none;
+		background: transparent; color: var(--text-primary);
+		font-size: 12px; font-family: var(--font-mono);
+	}
+
+	.git-hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; }
+	.git-hint code {
+		font-family: var(--font-mono); font-size: 10px;
+		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
+		border: 1px solid var(--border);
+	}
+
+	.git-save-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+	.git-error { font-size: 11px; color: #ef4444; margin: 0; }
+	.git-save-success { font-size: 11px; color: #22c55e; margin: 0; }
+
+	.btn-sm { padding: 5px 10px; font-size: 11px; }
 </style>

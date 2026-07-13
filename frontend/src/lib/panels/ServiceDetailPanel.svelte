@@ -28,6 +28,7 @@
 	import EnvManagerPanel from './EnvManagerPanel.svelte';
 	import ExecPanel from './ExecPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
+	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
@@ -1138,138 +1139,45 @@ let showDbClient    = $state(false);
 	</div>
 {/if}
 
-<!-- ─── Container Logs Overlay (portalled, 2/3 screen) ───────────────── -->
+<!-- ─── Container Logs Overlay ─────────────────────────────────────────── -->
 {#if containerLogsTarget}
-	<div use:portal class="clog-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) requestCloseContainerLogs(); }}>
-	<div class="clog-panel">
-		<div class="log-overlay-header">
-			<div class="clog-header-row clog-header-top">
-				<div class="log-overlay-title">
-					<FileText size={14} />
-					<!-- Replica selector -->
-					<select
-						class="clog-replica-select"
-						value={containerLogsTarget.id}
-						onchange={async (e) => {
-							const target = e.currentTarget as HTMLSelectElement;
-							const c = containers.find(ct => ct.id === target.value);
-							if (c) { disconnectContainerLogs(); await openContainerLogs(c); }
-						}}
-					>
-						{#each containers.filter(c => c.docker_container_id).sort((a, b) => (a.replica_index ?? 0) - (b.replica_index ?? 0)) as c}
-							<option value={c.id}>replica-{c.replica_index ?? '?'}</option>
-						{/each}
-					</select>
-					<span class="log-dep-time font-mono">{containerLogsTarget.docker_container_id.slice(0, 12)}</span>
-				</div>
-
-				<!-- Tail selector -->
-				<div class="clog-tail-group">
-					<span class="clog-tail-label">Lines</span>
-					{#each CLOG_TAIL_OPTIONS as n}
-						<button
-							class="clog-tail-btn"
-							class:active={clogTail === n}
-							onclick={async () => {
-								clogTail = n;
-								if (containerLogsTarget) {
-									disconnectContainerLogs();
-									await openContainerLogs(containerLogsTarget);
-								}
-							}}
-						>{n}</button>
-					{/each}
-				</div>
-
-				<div class="log-overlay-controls">
-					{#if clogStatus === 'connected'}
-						<span class="clog-dot"></span>
-						<span class="clog-status-label">Live</span>
-						<button class="clog-ctrl-btn" onclick={disconnectContainerLogs}>
-							<Square size={11} />Stop
-						</button>
-					{:else if clogStatus === 'connecting'}
-						<Loader2 size={13} class="spin" />
-						<span class="clog-status-label muted">Connecting…</span>
-					{:else if clogStatus === 'error'}
-						<span class="clog-status-label error">{clogError}</span>
-						<button class="clog-ctrl-btn" onclick={connectContainerLogs}>
-							<Play size={11} />Retry
-						</button>
-					{:else}
-						<button class="clog-ctrl-btn primary" onclick={connectContainerLogs}>
-							<Play size={11} />Connect
-						</button>
-					{/if}
-				</div>
-				<button class="icon-btn" onclick={requestCloseContainerLogs}><X size={16} /></button>
-			</div>
-
-			<!-- Search bar -->
-			<div class="clog-search-row">
-				<input
-					class="clog-search-input"
-					type="text"
-					placeholder="Search logs…"
-					bind:value={clogSearch}
-				/>
-				{#if clogSearch}
-					<span class="clog-search-count">
-						{filteredContainerLogs.length + filteredClogLines.length} matches
-					</span>
-					<button class="clog-search-clear" onclick={() => clogSearch = ''}>✕</button>
-				{/if}
-			</div>
-		</div>
-
-		{#if showLogCloseConfirm}
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="clog-confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showLogCloseConfirm = false; }} onkeydown={() => {}}>
-				<div class="clog-confirm-card">
-					<p class="clog-confirm-title">Close log panel?</p>
-					<p class="clog-confirm-sub">The live stream will be disconnected and all log output will be cleared.</p>
-					<div class="clog-confirm-actions">
-						<button class="clog-confirm-btn clog-confirm-cancel" onclick={() => showLogCloseConfirm = false}>Cancel</button>
-						<button class="clog-confirm-btn clog-confirm-close" onclick={closeContainerLogs}>Close</button>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		{#if isLoadingContainerLogs}
-			<div class="log-loading"><div class="spinner-sm"></div> Loading…</div>
-		{:else}
-			<div class="clog-lines" bind:this={clogEl}>
-				{#if containerLogs.length === 0 && clogLines.length === 0}
-					<div class="empty-logs-msg">
-						{clogStatus === 'idle' ? 'Press Connect to stream live logs.' : 'No output yet…'}
-					</div>
-				{:else if filteredContainerLogs.length === 0 && filteredClogLines.length === 0 && clogSearch}
-					<div class="empty-logs-msg">No lines match "{clogSearch}"</div>
-				{:else}
-					{#each filteredContainerLogs as line, i (i)}
-						{@const p = parseLine(line)}
-						<div class="clog-line clog-lvl-{p.level}">
-							{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
-							<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
-							<span class="clog-msg">{#if p.target}<span class="clog-target-inline">{p.target}</span> {/if}{p.content || line}</span>
-						</div>
-					{/each}
-					{#if filteredClogLines.length > 0}
-						<div class="clog-stream-divider">── live ──</div>
-						{#each filteredClogLines as line, i (i)}
-							{@const p = parseLine(line)}
-							<div class="clog-line clog-lvl-{p.level} clog-live">
-								{#if p.ts}<span class="clog-ts">{p.ts}</span>{/if}
-								<span class="clog-badge clog-badge-{p.level}">{p.level.toUpperCase()}</span>
-								<span class="clog-msg">{#if p.target}<span class="clog-target-inline">{p.target}</span> {/if}{p.content || line}</span>
-							</div>
-						{/each}
-					{/if}
-				{/if}
-			</div>
-		{/if}
-	</div>
+	{#snippet replicaSelector()}
+		<select
+			class="clog-replica-select"
+			value={containerLogsTarget?.id}
+			onchange={async (e) => {
+				const t = e.currentTarget as HTMLSelectElement;
+				const c = containers.find(ct => ct.id === t.value);
+				if (c) await openContainerLogs(c);
+			}}
+		>
+			{#each containers.filter(c => c.docker_container_id).sort((a, b) => (a.replica_index ?? 0) - (b.replica_index ?? 0)) as c}
+				<option value={c.id}>replica-{c.replica_index ?? '?'}</option>
+			{/each}
+		</select>
+	{/snippet}
+	<div use:portal>
+		<LogViewerOverlay
+			open={!!containerLogsTarget}
+			title={service?.name ?? 'Container Logs'}
+			subtitle={containerLogsTarget.docker_container_id.slice(0, 12)}
+			fetchFn={async (tail) => {
+				if (!containerLogsTarget) return [];
+				const cid = containerLogsTarget.docker_container_id;
+				const res = await api.get<string[]>(
+					`/services/${serviceId}/containers/${cid}/logs?tail=${tail}&timestamps=true`
+				);
+				if (res.error) throw new Error(res.error.message);
+				return res.data ?? [];
+			}}
+			streamUrl="/api/services/{serviceId}/containers/{containerLogsTarget.docker_container_id}/logs/stream"
+			parseLine={parseLine}
+			resetKey={containerLogsTarget.id}
+			tailOptions={CLOG_TAIL_OPTIONS as unknown as number[]}
+			initialTail={clogTail}
+			headerControls={replicaSelector}
+			onClose={closeContainerLogs}
+		/>
 	</div>
 {/if}
 
@@ -1593,6 +1501,17 @@ let showDbClient    = $state(false);
 						<button class="btn btn-secondary btn-sm full-w" onclick={() => showEnvPanel = true}>
 							<Settings size={13} />
 							Manage Environment Variables
+						</button>
+						<button
+							class="btn btn-secondary btn-sm full-w"
+							onclick={() => {
+								const c = containers.find(ct => ct.docker_container_id);
+								if (c) openContainerLogs(c);
+							}}
+							disabled={!containers.some(ct => ct.docker_container_id)}
+						>
+							<FileText size={13} />
+							View Logs
 						</button>
 					</div>
 
@@ -2971,6 +2890,9 @@ let showDbClient    = $state(false);
 
 	.section-action {
 		padding: 12px 12px 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
 	}
 	.full-w { width: 100%; justify-content: center; }
 

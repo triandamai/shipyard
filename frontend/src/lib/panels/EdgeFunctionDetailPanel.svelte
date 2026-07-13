@@ -9,6 +9,8 @@
 	import { uiStore } from '$lib/stores/ui.store';
 	import { formatDistanceToNow } from 'date-fns';
 	import EdgeFnDomainAddPanel from './resources/EdgeFnDomainAddPanel.svelte';
+	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
+	import type { LogColumn } from '$lib/components/LogViewerOverlay.svelte';
 	import { EditorView, basicSetup } from 'codemirror';
 	import { javascript } from '@codemirror/lang-javascript';
 	import { oneDark } from '@codemirror/theme-one-dark';
@@ -22,6 +24,11 @@
 	}
 
 	let { groupId, orgId, projectId, onDeleted }: Props = $props();
+
+	function portal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return { destroy() { node.remove(); } };
+	}
 
 	// ── Types ──────────────────────────────────────────────────────────────────
 
@@ -97,13 +104,9 @@
 	let codeEditorView: EditorView | null = null;
 	let copied          = $state(false);
 
-	// Logs overlay
-	let logsOverlay   = $state(false);
-	let logsLoading   = $state(false);
-	let logsItems     = $state<InvocationLog[]>([]);
-	let logsFnName    = $state('');
-	let logsFnId      = $state('');
-	let logsError     = $state('');
+	// Logs overlay (powered by LogViewerOverlay)
+	let logsOverlayOpen = $state(false);
+	let logsOverlayFn   = $state<EFn | null>(null);
 
 	// Domain DNS check
 	let dnsState = $state<Record<string, 'idle' | 'checking' | 'ok' | 'fail'>>({});
@@ -185,11 +188,9 @@
 		activeTab = tab;
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'functions') {
-			// Preload deployment history for all functions in parallel
 			for (const fn of functions) {
 				if (!fnDeployments[fn.id]) loadFnDeployments(fn.id);
 			}
-			// Auto-expand the first function so history is immediately visible
 			if (functions.length > 0 && !expandedFnId) {
 				expandedFnId = functions[0].id;
 			}
@@ -275,7 +276,6 @@
 		fnEnvSaving = { ...fnEnvSaving, [fnId]: false };
 		if (res.error) { fnEnvError = { ...fnEnvError, [fnId]: res.error.message }; return; }
 		fnEnvOk = { ...fnEnvOk, [fnId]: true };
-		// Invalidate cached detail so it re-fetches on next expand
 		const updated = { ...fnDetails };
 		delete updated[fnId];
 		fnDetails = updated;
@@ -366,30 +366,25 @@
 
 	// ── Logs overlay ───────────────────────────────────────────────────────────
 
-	async function openLogs(fn: EFn) {
-		logsFnName  = fn.name;
-		logsFnId    = fn.id;
-		logsItems   = [];
-		logsError   = '';
-		logsOverlay = true;
-		logsLoading = true;
-		const res = await api.get<{ items: InvocationLog[] }>(`/orgs/${orgId}/edge-functions/${fn.id}/logs`);
-		logsLoading = false;
-		if (res.error) { logsError = res.error.message; return; }
-		logsItems = res.data?.items ?? [];
-	}
-
-	async function refreshLogs() {
-		logsLoading = true; logsError = '';
-		const res = await api.get<{ items: InvocationLog[] }>(`/orgs/${orgId}/edge-functions/${logsFnId}/logs`);
-		logsLoading = false;
-		if (res.error) { logsError = res.error.message; return; }
-		logsItems = res.data?.items ?? [];
+	function openLogs(fn: EFn) {
+		logsOverlayFn   = fn;
+		logsOverlayOpen = true;
 	}
 
 	function closeLogs() {
-		logsOverlay = false;
+		logsOverlayOpen = false;
 	}
+
+	// Invocation log table columns
+	const invocationLogColumns: LogColumn[] = [
+		{ key: 'logged_at',   label: 'Time',     width: '130px', format: (v) => formatTime(v) },
+		{ key: 'method',      label: 'Method',   width: '70px',  mono: true },
+		{ key: 'path',        label: 'Path',     mono: true },
+		{ key: 'status_code', label: 'Status',   width: '65px',  mono: true,
+			color: (row) => row.status_code < 300 ? '#22c55e' : row.status_code < 400 ? '#f59e0b' : '#ef4444' },
+		{ key: 'duration_ms', label: 'Duration', width: '80px',  format: (v) => `${v}ms` },
+		{ key: 'error',       label: 'Error',    format: (v) => v ?? '' },
+	];
 
 	// ── Actions ────────────────────────────────────────────────────────────────
 
@@ -475,64 +470,26 @@
 	</div>
 {/if}
 
-<!-- ── Logs overlay ─────────────────────────────────────────────────────────── -->
-{#if logsOverlay}
-	<div class="overlay-backdrop" role="dialog" aria-modal="true">
-		<div class="logs-overlay">
-			<div class="overlay-header">
-				<div class="overlay-title">
-					<FileText size={14} />
-					<span>{logsFnName}</span>
-					<span class="overlay-subtitle">invocation logs · last 100</span>
-				</div>
-				<div class="overlay-actions">
-					<button class="btn-icon" onclick={refreshLogs} title="Refresh">
-						<RotateCcw size={13} />
-					</button>
-					<button class="btn-icon" onclick={closeLogs} title="Close"><X size={14} /></button>
-				</div>
-			</div>
-			<div class="logs-body">
-				{#if logsLoading}
-					<div class="overlay-loading"><div class="spinner-sm"></div> Loading logs…</div>
-				{:else if logsError}
-					<div class="err-msg">{logsError}</div>
-				{:else if logsItems.length === 0}
-					<div class="overlay-empty">No invocations recorded yet.</div>
-				{:else}
-					<table class="logs-table">
-						<thead>
-							<tr>
-								<th>Time</th>
-								<th>Method</th>
-								<th>Path</th>
-								<th>Status</th>
-								<th>Duration</th>
-								<th>Error</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each logsItems as log (log.id)}
-								<tr class:log-error={!!log.error}>
-									<td class="log-time">{formatTime(log.logged_at)}</td>
-									<td><span class="method-badge">{log.method}</span></td>
-									<td class="log-path mono">{log.path}</td>
-									<td>
-										<span class="status-badge" style="color:{statusColor(log.status_code)}">
-											{log.status_code}
-										</span>
-									</td>
-									<td class="log-dur">{log.duration_ms}ms</td>
-									<td class="log-err-msg">{log.error ?? ''}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				{/if}
-			</div>
-		</div>
-	</div>
-{/if}
+<!-- ── Invocation logs overlay ───────────────────────────────────────────────── -->
+<div use:portal>
+	<LogViewerOverlay
+		open={logsOverlayOpen}
+		title={logsOverlayFn?.name ?? 'Invocation Logs'}
+		subtitle="invocation logs"
+		columns={invocationLogColumns}
+		fetchFn={async (_tail) => {
+			if (!logsOverlayFn) return [];
+			const res = await api.get<{ items: InvocationLog[] }>(
+				`/orgs/${orgId}/edge-functions/${logsOverlayFn.id}/logs`
+			);
+			if (res.error) throw new Error(res.error.message);
+			return res.data?.items ?? [];
+		}}
+		resetKey={logsOverlayFn?.id ?? ''}
+		emptyMessage="No invocations recorded yet."
+		onClose={closeLogs}
+	/>
+</div>
 
 <!-- ── Delete modal ──────────────────────────────────────────────────────────── -->
 {#if showDeleteModal}
@@ -549,18 +506,18 @@
 				</p>
 				<div class="modal-confirm-field">
 					<label class="modal-confirm-label">
-						Type the branch name <code class="code">{group?.branch}</code> to confirm
+						Type the branch name <code class="modal-confirm-code">{group?.branch}</code> to confirm
 					</label>
-					<input class="modal-input" type="text" placeholder={group?.branch ?? ''}
+					<input class="modal-confirm-input" type="text" placeholder={group?.branch ?? ''}
 						bind:value={deleteInput} autocomplete="off" />
 				</div>
-				{#if deleteError}<div class="err-msg">{deleteError}</div>{/if}
+				{#if deleteError}<div class="form-error">{deleteError}</div>{/if}
 			</div>
 			<div class="modal-footer">
-				<button class="btn-ghost" onclick={() => { showDeleteModal = false; deleteInput = ''; }}
+				<button class="btn btn-ghost" onclick={() => { showDeleteModal = false; deleteInput = ''; }}
 					disabled={isDeleting}>Cancel</button>
-				<button class="btn-danger" disabled={!deleteValid || isDeleting} onclick={deleteGroup}>
-					{#if isDeleting}<div class="spin-xs"></div> Deleting…{:else}<Trash2 size={13} /> Delete{/if}
+				<button class="btn btn-danger" disabled={!deleteValid || isDeleting} onclick={deleteGroup}>
+					{#if isDeleting}<div class="spinner-xs"></div> Deleting…{:else}<Trash2 size={13} /> Delete{/if}
 				</button>
 			</div>
 		</div>
@@ -572,7 +529,7 @@
 	{#if loading}
 		<div class="loading-row"><div class="spinner-sm"></div> Loading…</div>
 	{:else if loadError}
-		<div class="err-msg">{loadError}</div>
+		<div class="form-error">{loadError}</div>
 	{:else if group}
 
 		<div class="tabs">
@@ -590,42 +547,51 @@
 		<!-- ── Overview ── -->
 		{#if activeTab === 'overview'}
 			<section class="section">
-				<div class="hero-row">
-					<div class="hero-icon"><Zap size={18} /></div>
-					<div class="hero-info">
-						<div class="hero-name">{repoName(group.repo_url)}</div>
-						<div class="hero-sub">
-							<GitBranch size={10} />
-							<span class="mono">{group.branch}</span>
-							{#if group.provider}<span class="sep">·</span><span>{group.provider}</span>{/if}
+				<div class="info-card">
+					<div class="info-card-header">
+						<Zap size={13} />
+						<span>Edge Function Group</span>
+					</div>
+					<div class="info-card-body">
+						<div class="info-row">
+							<span class="info-key">Repository</span>
+							<code class="info-val mono">{group.repo_url}</code>
+						</div>
+						<div class="info-row">
+							<span class="info-key">Branch</span>
+							<code class="info-val mono">{group.branch}</code>
+						</div>
+						<div class="info-row">
+							<span class="info-key">Provider</span>
+							<span class="info-val">{group.provider}</span>
+						</div>
+						<div class="info-row">
+							<span class="info-key">Last SHA</span>
+							<code class="info-val mono">{group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : '—'}</code>
+						</div>
+						<div class="info-row">
+							<span class="info-key">Functions</span>
+							<span class="info-val">{functions.length}</span>
+						</div>
+						<div class="info-row">
+							<span class="info-key">Created</span>
+							<span class="info-val">{formatTime(group.created_at)}</span>
 						</div>
 					</div>
 				</div>
 			</section>
 
 			<section class="section">
-				<div class="kv-grid">
-					<div class="kv-row"><span class="kv-k">Repo</span><span class="kv-v mono">{group.repo_url}</span></div>
-					<div class="kv-row"><span class="kv-k">Branch</span><span class="kv-v mono">{group.branch}</span></div>
-					<div class="kv-row"><span class="kv-k">Last SHA</span>
-						<span class="kv-v mono">{group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : '—'}</span>
-					</div>
-					<div class="kv-row"><span class="kv-k">Created</span><span class="kv-v">{formatTime(group.created_at)}</span></div>
-					<div class="kv-row"><span class="kv-k">Functions</span><span class="kv-v">{functions.length}</span></div>
-				</div>
-			</section>
-
-			<section class="section">
-				{#if redeployError}<div class="err-msg">{redeployError}</div>{/if}
+				{#if redeployError}<div class="form-error">{redeployError}</div>{/if}
 				{#if redeployOk}
 					{#if lastReport}
 						{#if lastReport.deployed.length > 0}
-							<div class="ok-msg">
+							<div class="form-success">
 								✓ {lastReport.deployed.length} function{lastReport.deployed.length !== 1 ? 's' : ''} deployed
 								{#if lastReport.failed.length > 0} · {lastReport.failed.length} failed{/if}
 							</div>
 						{:else if lastReport.failed.length > 0}
-							<div class="err-msg">
+							<div class="form-error">
 								Deploy ran but {lastReport.failed.length} function{lastReport.failed.length !== 1 ? 's' : ''} failed:
 								{lastReport.failed.map(([name, err]) => `${name}: ${err}`).join(', ')}
 							</div>
@@ -637,15 +603,15 @@
 							</div>
 						{/if}
 					{:else}
-						<div class="ok-msg">Redeploy triggered.</div>
+						<div class="form-success">Redeploy triggered.</div>
 					{/if}
 				{/if}
 				<div class="overview-actions">
-					<button class="btn-primary" onclick={redeploy} disabled={redeploying}>
-						{#if redeploying}<div class="spin-xs-w"></div> Redeploying…
+					<button class="btn btn-primary" onclick={redeploy} disabled={redeploying}>
+						{#if redeploying}<div class="spinner-xs"></div> Redeploying…
 						{:else}<RefreshCw size={13} /> Redeploy Now{/if}
 					</button>
-					<a class="btn-docs" href="/docs/edge-functions" target="_blank" rel="noopener">
+					<a class="btn btn-secondary" href="/docs/edge-functions" target="_blank" rel="noopener">
 						<BookOpen size={12} /> Docs
 					</a>
 				</div>
@@ -655,7 +621,8 @@
 		<!-- ── Functions ── -->
 		{#if activeTab === 'functions'}
 			{#if functions.length === 0}
-				<div class="empty-state">No functions deployed yet.
+				<div class="empty-state">
+					No functions deployed yet.
 					<span class="empty-sub">
 						Click <strong>Redeploy Now</strong> on the Overview tab, or push to
 						<code class="mono-inline">{group?.branch ?? 'main'}</code>.
@@ -671,7 +638,6 @@
 					{#each functions as fn (fn.id)}
 						{@const expanded = expandedFnId === fn.id}
 						<div class="fn-card" class:expanded>
-							<!-- card header — always visible -->
 							<button class="fn-card-header" onclick={() => toggleFn(fn.id)}>
 								<div class="fn-dot" class:active={fn.status === 'active'}></div>
 								<span class="fn-name mono">{fn.name}</span>
@@ -680,10 +646,9 @@
 								<ChevronRight size={13} class={expanded ? 'fn-chevron rotated' : 'fn-chevron'} />
 							</button>
 
-							<!-- expanded content -->
 							{#if expanded}
 								<div class="fn-detail">
-									<!-- Status row -->
+									<!-- Status + URL -->
 									<div class="fn-status-row">
 										<span class="fn-status-badge" class:status-active={fn.status === 'active'}>
 											{fn.status}
@@ -697,10 +662,10 @@
 
 									<!-- Action buttons -->
 									<div class="fn-actions">
-										<button class="btn-action" onclick={() => openCode(fn)}>
-											<Code2 size={12} /> View Live Code
+										<button class="btn btn-secondary btn-sm" onclick={() => openCode(fn)}>
+											<Code2 size={12} /> View Code
 										</button>
-										<button class="btn-action" onclick={() => openLogs(fn)}>
+										<button class="btn btn-secondary btn-sm" onclick={() => openLogs(fn)}>
 											<FileText size={12} /> Invocation Logs
 										</button>
 									</div>
@@ -711,7 +676,7 @@
 											<GitBranch size={11} /> Deployment History
 										</div>
 										{#if fnDeploymentsLoading[fn.id]}
-											<div class="dep-loading"><div class="spin-xs-inline"></div> Loading…</div>
+											<div class="dep-loading"><div class="spinner-xs-inline"></div> Loading…</div>
 										{:else if !fnDeployments[fn.id] || fnDeployments[fn.id].length === 0}
 											<div class="dep-empty">No deployments recorded.</div>
 										{:else}
@@ -725,9 +690,7 @@
 															<div class="ver-label-row">
 																<span class="ver-dot" class:ver-dot-live={dep.status === 'live'}></span>
 																<span class="ver-label mono">{dep.version}</span>
-																{#if dep.status === 'live'}
-																	<span class="ver-latest">latest</span>
-																{/if}
+																{#if dep.status === 'live'}<span class="ver-latest">latest</span>{/if}
 																{#if dep.commit_sha}
 																	<span class="ver-sha mono">{dep.commit_sha.slice(0, 7)}</span>
 																{/if}
@@ -744,7 +707,7 @@
 																		onclick={() => rollbackDeployment(fn, dep)}
 																	>
 																		{#if rollingBackId === dep.id}
-																			<div class="spin-xs-inline"></div>
+																			<div class="spinner-xs-inline"></div>
 																		{:else}
 																			<RotateCcw size={10} /> Restore
 																		{/if}
@@ -768,18 +731,20 @@
 										{/if}
 									</div>
 
-									<!-- Env vars -->
-									<div class="env-section">
-										<div class="env-section-header">
-											<div class="env-section-title"><Key size={11} /> Environment Variables</div>
-											<button class="dep-btn" onclick={() => addEnvVar(fn.id)}><Plus size={10} /> Add</button>
+									<!-- Env Vars -->
+									<div class="dep-history">
+										<div class="dep-history-title">
+											<Key size={11} /> Environment Variables
+											<button class="dep-btn" style="margin-left:auto" onclick={() => addEnvVar(fn.id)}>
+												<Plus size={10} /> Add
+											</button>
 										</div>
 										{#if fnEnvLoading[fn.id]}
-											<div class="dep-loading"><div class="spin-xs-inline"></div> Loading…</div>
+											<div class="dep-loading"><div class="spinner-xs-inline"></div> Loading…</div>
 										{:else}
 											{@const envEntries = Object.entries(fnEnvEditing[fn.id] ?? {})}
 											{#if envEntries.length === 0}
-												<div class="env-empty">No env vars. Click Add to set one.</div>
+												<div class="dep-empty">No env vars set.</div>
 											{:else}
 												<div class="env-rows">
 													{#each envEntries as [k, v] (k)}
@@ -798,20 +763,19 @@
 													{/each}
 												</div>
 											{/if}
-											{#if fnEnvError[fn.id]}<div class="err-msg" style="margin-top:6px">{fnEnvError[fn.id]}</div>{/if}
-											{#if fnEnvOk[fn.id]}<div class="ok-msg" style="margin-top:6px">Saved.</div>{/if}
-											<div style="display:flex;justify-content:flex-end;margin-top:6px">
-												<button class="btn-action" disabled={fnEnvSaving[fn.id]} onclick={() => saveFnEnvVars(fn.id)}>
-													{#if fnEnvSaving[fn.id]}<div class="spin-xs-inline"></div> Saving…{:else}<CheckCircle size={11} /> Save Env Vars{/if}
+											{#if fnEnvError[fn.id]}<div class="form-error" style="margin:6px 12px">{fnEnvError[fn.id]}</div>{/if}
+											{#if fnEnvOk[fn.id]}<div class="form-success" style="margin:6px 12px">Saved.</div>{/if}
+											<div style="display:flex;justify-content:flex-end;padding:8px 12px">
+												<button class="btn btn-primary btn-sm" disabled={fnEnvSaving[fn.id]} onclick={() => saveFnEnvVars(fn.id)}>
+													{#if fnEnvSaving[fn.id]}<div class="spinner-xs"></div> Saving…{:else}<CheckCircle size={11} /> Save{/if}
 												</button>
 											</div>
 										{/if}
 									</div>
 
 									<!-- How to invoke -->
-									<div class="invoke-section">
-										<div class="invoke-title"><Terminal size={11} /> How to invoke</div>
-
+									<div class="dep-history">
+										<div class="dep-history-title"><Terminal size={11} /> How to invoke</div>
 										{#if fn.public_url}
 											<div class="invoke-block">
 												<div class="invoke-label">GET request</div>
@@ -824,11 +788,11 @@
   -d '{"key": "value"}'`}</pre>
 											</div>
 											<div class="invoke-block">
-												<div class="invoke-label">With custom path</div>
+												<div class="invoke-label">Custom path</div>
 												<pre class="invoke-code">{`curl "${fn.public_url}/your-path?param=value"`}</pre>
 											</div>
 										{:else}
-											<div class="invoke-note">Deploy this function first to get a public URL.</div>
+											<div class="dep-empty">Deploy this function first to get a public URL.</div>
 										{/if}
 									</div>
 								</div>
@@ -841,66 +805,150 @@
 
 		<!-- ── Git ── -->
 		{#if activeTab === 'git'}
-			<section class="section">
-				<div class="kv-grid">
-					<div class="kv-row"><span class="kv-k">Provider</span><span class="kv-v">{group.provider}</span></div>
-					<div class="kv-row"><span class="kv-k">Repo</span><span class="kv-v mono">{group.repo_url}</span></div>
-					<div class="kv-row"><span class="kv-k">SHA</span>
-						<span class="kv-v mono">{group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : '—'}</span>
+			<div class="git-config-section">
+
+				<!-- Repo info (read-only) -->
+				<div class="git-card">
+					<div class="git-card-title">Repository</div>
+					<div class="git-repo-info">
+						<div class="git-repo-row">
+							<span class="git-repo-label">Provider</span>
+							<span class="git-repo-val">{group.provider}</span>
+						</div>
+						<div class="git-repo-row">
+							<span class="git-repo-label">URL</span>
+							<code class="git-repo-val mono">{group.repo_url}</code>
+						</div>
+						{#if group.last_deployed_sha}
+							<div class="git-repo-row">
+								<span class="git-repo-label">Last SHA</span>
+								<code class="git-repo-val mono">{group.last_deployed_sha.slice(0, 7)}</code>
+							</div>
+						{/if}
 					</div>
 				</div>
-			</section>
 
-			<section class="section">
-				<div class="section-title">Deploy Settings</div>
-
-				<label class="toggle-row">
-					<span class="toggle-label">Auto-deploy</span>
-					<input type="checkbox" bind:checked={autoDeployEnabled} />
-					<span class="toggle-desc">Trigger deployment automatically on webhook events</span>
-				</label>
-
-				<div class="form-row">
-					<label class="form-label">Branch</label>
-					<input class="form-input mono" type="text" bind:value={deployBranch} placeholder="main" />
-				</div>
-
-				<div class="form-row">
-					<label class="form-label">Strategy</label>
-					<select class="form-select" bind:value={deployStrategy}>
-						<option value="push">Branch push</option>
-						<option value="tag">Tag push</option>
-						<option value="pull_request">PR / MR merge</option>
-					</select>
-				</div>
-
-				{#if deployStrategy === 'tag'}
-					<div class="form-row">
-						<label class="form-label">Tag pattern</label>
-						<input class="form-input mono" type="text" bind:value={deployTagPattern} placeholder="v*" />
+				<!-- Auto-deploy + strategy -->
+				<div class="git-card">
+					<div class="git-card-header">
+						<div class="git-card-title">Auto-deploy</div>
+						<label class="toggle-switch">
+							<input type="checkbox" bind:checked={autoDeployEnabled} />
+							<span class="toggle-track"></span>
+						</label>
 					</div>
-				{/if}
+					<p class="git-card-desc">
+						Automatically trigger a deployment when Shipyard receives a webhook event
+						from this {group.provider} repository.
+					</p>
 
-				{#if gitSaveError}<div class="err-msg">{gitSaveError}</div>{/if}
-				{#if gitSaveOk}<div class="ok-msg">Settings saved.</div>{/if}
+					<div class="git-field">
+						<label class="git-label">Deployment Strategy</label>
+						<select class="git-select" bind:value={deployStrategy} disabled={!autoDeployEnabled}>
+							<option value="push">Deploy on Branch Push</option>
+							<option value="tag">Deploy on Tag Push</option>
+							<option value="pull_request">Deploy on PR / MR Merge</option>
+						</select>
+					</div>
 
-				<button class="btn-primary" onclick={saveGitSettings} disabled={gitSaving}>
-					{#if gitSaving}<div class="spin-xs-w"></div> Saving…{:else}<Settings size={12} /> Save Settings{/if}
-				</button>
-			</section>
+					{#if deployStrategy === 'push'}
+						<div class="git-field">
+							<label class="git-label" for="ef-branch-input">Branch to watch</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">⎇</span>
+								<input
+									id="ef-branch-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={deployBranch}
+									placeholder="main"
+									disabled={!autoDeployEnabled}
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
+						</div>
+					{/if}
 
-			<section class="section">
-				<div class="section-title">Webhook URL</div>
-				<p class="section-desc">
-					Register this URL as a webhook in your {group.provider} repository. Shipyard will verify the signature automatically.
-				</p>
-				<div class="webhook-row">
-					<code class="webhook-url mono">{window.location.origin}/api/webhooks/{group.provider}/fn/{group.id}/{group.webhook_secret}</code>
-					<button class="btn-icon" onclick={copyWebhookUrl} title="Copy URL">
-						{#if webhookCopied}<CheckCircle size={13} style="color:#22c55e" />{:else}<Copy size={13} />{/if}
-					</button>
+					{#if deployStrategy === 'tag'}
+						<div class="git-field">
+							<label class="git-label" for="ef-tag-input">Tag pattern</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">🏷️</span>
+								<input
+									id="ef-tag-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={deployTagPattern}
+									placeholder="v*"
+									disabled={!autoDeployEnabled}
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Deploy when a tag matching this glob is pushed (e.g. <code>v*</code>).</p>
+						</div>
+					{/if}
+
+					{#if deployStrategy === 'pull_request'}
+						<div class="git-field">
+							<label class="git-label" for="ef-pr-branch-input">Target branch (PR merge)</label>
+							<div class="git-branch-row">
+								<span class="git-branch-icon">⎇</span>
+								<input
+									id="ef-pr-branch-input"
+									class="git-branch-input"
+									type="text"
+									bind:value={deployBranch}
+									placeholder="main"
+									disabled={!autoDeployEnabled}
+									spellcheck="false"
+									autocomplete="off"
+								/>
+							</div>
+							<p class="git-hint">Deploy when a pull request is merged into this branch.</p>
+						</div>
+					{/if}
+
+					{#if gitSaveError}<p class="git-error">{gitSaveError}</p>{/if}
+
+					<div class="git-save-row">
+						<button class="btn btn-primary btn-sm" onclick={saveGitSettings} disabled={gitSaving}>
+							{#if gitSaving}<span class="spinner-xs"></span> Saving…
+							{:else if gitSaveOk}Saved
+							{:else}Save
+							{/if}
+						</button>
+					</div>
 				</div>
-			</section>
+
+				<!-- Webhook URL -->
+				<div class="git-card">
+					<div class="git-card-header">
+						<div class="git-card-title">Webhook URL</div>
+					</div>
+					<p class="git-card-desc">
+						Register this URL as a webhook in your {group.provider} repository.
+						Shipyard verifies the payload signature automatically — no secret header needed.
+					</p>
+					<div class="webhook-url-row">
+						<input
+							class="webhook-url-input"
+							readonly
+							value="{window.location.origin}/api/webhooks/{group.provider}/fn/{group.id}/{group.webhook_secret}"
+						/>
+						<button class="webhook-copy-btn" onclick={copyWebhookUrl}>
+							{#if webhookCopied}
+								<CheckCircle size={13} /> Copied
+							{:else}
+								<Copy size={13} /> Copy
+							{/if}
+						</button>
+					</div>
+				</div>
+
+			</div>
 		{/if}
 
 		<!-- ── Domains ── -->
@@ -908,7 +956,7 @@
 			<section class="section">
 				<div class="section-head">
 					<span class="section-title">Custom Domains</span>
-					<button class="btn-secondary btn-sm" onclick={openAddDomainPanel}>
+					<button class="btn btn-secondary btn-sm" onclick={openAddDomainPanel}>
 						<Plus size={12} /> Add Domain
 					</button>
 				</div>
@@ -933,11 +981,11 @@
 									{/if}
 								</div>
 								<div class="domain-actions">
-									<button class="btn-ghost btn-xs" onclick={() => checkDns(domain)}
+									<button class="btn btn-ghost btn-xs" onclick={() => checkDns(domain)}
 										disabled={dnsState[domain.id] === 'checking'}>
 										{dnsState[domain.id] === 'checking' ? '…' : 'DNS'}
 									</button>
-									<button class="btn-ghost btn-xs danger-ghost" onclick={() => removeDomain(domain.id)}>
+									<button class="btn btn-ghost btn-xs danger-ghost" onclick={() => removeDomain(domain.id)}>
 										<Trash2 size={11} />
 									</button>
 								</div>
@@ -948,23 +996,33 @@
 
 				<div class="dns-hint">
 					<strong>DNS:</strong> Point your domain's A record to the Shipyard server IP,
-					or CNAME to your Shipyard hostname. Traffic routes to the edge runtime on port 8000.
+					or CNAME to your Shipyard hostname.
 				</div>
 			</section>
 		{/if}
 
 		<!-- ── Danger ── -->
 		{#if activeTab === 'danger'}
-			<section class="section danger-section">
-				<div class="section-title danger-title">Delete this group</div>
-				<p class="section-desc">
-					Permanently deletes all functions, code bundles, invocation logs, and custom domains.
-					Traefik routes are removed immediately. This cannot be undone.
-				</p>
-				<button class="btn-danger-outline" onclick={() => { showDeleteModal = true; deleteInput = ''; }}>
-					<Trash2 size={12} /> Delete Group
-				</button>
-			</section>
+			<div class="danger-zone">
+				<div class="danger-header">
+					<AlertTriangle size={13} />
+					<span>Danger Zone</span>
+				</div>
+				<div class="danger-body">
+					<div class="danger-row">
+						<div class="danger-info">
+							<span class="danger-title">Delete this group</span>
+							<span class="danger-desc">
+								Permanently deletes all functions, code bundles, invocation logs, and custom domains.
+								Traefik routes are removed immediately. This cannot be undone.
+							</span>
+						</div>
+						<button class="btn btn-danger-outline btn-sm" onclick={() => { showDeleteModal = true; deleteInput = ''; }}>
+							<Trash2 size={12} /> Delete
+						</button>
+					</div>
+				</div>
+			</div>
 		{/if}
 
 	{/if}
@@ -1027,37 +1085,142 @@
 		font-size: 11px; font-weight: 600; color: var(--text-muted);
 		text-transform: uppercase; letter-spacing: 0.05em;
 	}
-	.section-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 
-	/* ── Hero ── */
-	.hero-row {
-		display: flex; align-items: center; gap: 12px; padding: 12px;
-		background: var(--bg-elevated); border: 1px solid var(--border);
+	/* ── Info card (overview) ── */
+	.info-card {
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
+		background: var(--bg-elevated);
+		overflow: hidden;
 	}
-	.hero-icon {
-		width: 36px; height: 36px; border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent); display: flex; align-items: center; justify-content: center;
-		flex-shrink: 0;
+	.info-card-header {
+		display: flex; align-items: center; gap: 7px;
+		padding: 9px 12px;
+		font-size: 11px; font-weight: 700; color: var(--text-dim);
+		text-transform: uppercase; letter-spacing: 0.07em;
+		border-bottom: 1px solid var(--border);
+		background: var(--bg-base);
 	}
-	.hero-info { flex: 1; min-width: 0; }
-	.hero-name { font-size: 14px; font-weight: 700; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.hero-sub { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-	.sep { color: var(--border); }
-
-	/* ── KV grid ── */
-	.kv-grid {
-		display: flex; flex-direction: column; gap: 0;
-		border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
-	}
-	.kv-row {
-		display: flex; align-items: center; padding: 7px 12px;
+	.info-card-body { padding: 4px 0; }
+	.info-row {
+		display: flex; align-items: center; padding: 6px 12px;
 		font-size: 12px; border-bottom: 1px solid var(--border);
 	}
-	.kv-row:last-child { border-bottom: none; }
-	.kv-k { color: var(--text-muted); width: 100px; flex-shrink: 0; }
-	.kv-v { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+	.info-row:last-child { border-bottom: none; }
+	.info-key { color: var(--text-muted); width: 100px; flex-shrink: 0; }
+	.info-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+	/* ── Git config section ── */
+	.git-config-section { display: flex; flex-direction: column; gap: 12px; }
+
+	.git-card {
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 14px 16px;
+		display: flex; flex-direction: column; gap: 10px;
+	}
+
+	.git-card-header {
+		display: flex; align-items: center; justify-content: space-between;
+	}
+
+	.git-card-title {
+		font-size: 13px; font-weight: 700; color: var(--text-primary);
+	}
+
+	.git-card-desc {
+		font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0;
+	}
+
+	.git-repo-info { display: flex; flex-direction: column; gap: 0; }
+	.git-repo-row {
+		display: flex; align-items: center; gap: 10px;
+		padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+	}
+	.git-repo-row:last-child { border-bottom: none; }
+	.git-repo-label { color: var(--text-muted); width: 72px; flex-shrink: 0; font-size: 11px; }
+	.git-repo-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+	.git-field { display: flex; flex-direction: column; gap: 5px; }
+	.git-label {
+		font-size: 11px; font-weight: 600; color: var(--text-dim);
+		text-transform: uppercase; letter-spacing: 0.06em;
+	}
+	.git-select {
+		width: 100%; padding: 7px 10px; border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		background: var(--bg-surface); color: var(--text-primary);
+		font-size: 12px; outline: none; cursor: pointer;
+		transition: border-color var(--transition-fast);
+	}
+	.git-select:focus { border-color: var(--accent); }
+	.git-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+	.git-branch-row {
+		display: flex; align-items: center;
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		background: var(--bg-surface); overflow: hidden;
+		transition: border-color var(--transition-fast);
+	}
+	.git-branch-row:focus-within { border-color: var(--accent); }
+	.git-branch-icon {
+		padding: 0 8px; font-size: 13px; color: var(--text-dim);
+		background: var(--bg-elevated); border-right: 1px solid var(--border);
+		display: flex; align-items: center; height: 32px; flex-shrink: 0;
+	}
+	.git-branch-input {
+		flex: 1; padding: 6px 10px; border: none; outline: none;
+		background: transparent; color: var(--text-primary);
+		font-size: 12px; font-family: var(--font-mono);
+	}
+	.git-branch-input:disabled { opacity: 0.5; }
+
+	.git-hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; }
+	.git-hint code {
+		font-family: var(--font-mono); font-size: 10px;
+		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
+		border: 1px solid var(--border);
+	}
+
+	.git-save-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+	.git-error { font-size: 11px; color: #ef4444; margin: 0; }
+
+	/* ── Toggle switch ── */
+	.toggle-switch { display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+	.toggle-switch input { display: none; }
+	.toggle-track {
+		width: 32px; height: 18px; border-radius: 9px;
+		background: var(--border);
+		position: relative; transition: background var(--transition-fast);
+	}
+	.toggle-track::after {
+		content: ''; position: absolute; top: 2px; left: 2px;
+		width: 14px; height: 14px; border-radius: 50%;
+		background: white; transition: transform var(--transition-fast);
+		box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+	}
+	.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+	.toggle-switch input:checked + .toggle-track::after { transform: translateX(14px); }
+
+	/* ── Webhook ── */
+	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
+	.webhook-url-input {
+		flex: 1; font-family: var(--font-mono); font-size: 11px;
+		color: var(--text-muted); background: var(--bg-base);
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		padding: 6px 8px; outline: none; min-width: 0;
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+	}
+	.webhook-copy-btn {
+		display: flex; align-items: center; gap: 4px;
+		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
+		padding: 5px 10px; border-radius: var(--radius-sm);
+		border: 1px solid var(--border); background: var(--bg-elevated);
+		color: var(--text-muted); cursor: pointer; white-space: nowrap; flex-shrink: 0;
+		transition: all var(--transition-fast);
+	}
+	.webhook-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 	/* ── Function cards ── */
 	.fn-cards { display: flex; flex-direction: column; gap: 6px; }
@@ -1094,11 +1257,10 @@
 	:global(.fn-chevron) { color: var(--text-dim); flex-shrink: 0; transition: transform var(--transition-fast); }
 	:global(.fn-chevron.rotated) { transform: rotate(90deg); }
 
-	/* ── Function detail (expanded) ── */
 	.fn-detail {
 		border-top: 1px solid var(--border);
 		padding: 12px;
-		display: flex; flex-direction: column; gap: 12px;
+		display: flex; flex-direction: column; gap: 10px;
 	}
 
 	.fn-status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1119,17 +1281,8 @@
 	.fn-url:hover { color: var(--accent); }
 
 	.fn-actions { display: flex; gap: 6px; }
-	.btn-action {
-		display: inline-flex; align-items: center; gap: 5px;
-		padding: 5px 11px; font-size: 11px; font-weight: 600;
-		background: var(--bg-surface); color: var(--text-primary);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; transition: all var(--transition-fast);
-		font-family: var(--font-sans);
-	}
-	.btn-action:hover { border-color: var(--accent); color: var(--accent); }
 
-	/* ── Deployment history ── */
+	/* ── Deployment history / shared section card ── */
 	.dep-history {
 		background: var(--bg-base); border: 1px solid var(--border);
 		border-radius: var(--radius-sm); overflow: hidden;
@@ -1151,7 +1304,6 @@
 		border: 1px solid color-mix(in srgb, #ef4444 25%, transparent);
 		border-radius: 4px;
 	}
-	/* ── Version blocks (deployment history) ── */
 	.dep-list { display: flex; flex-direction: column; }
 
 	.ver-block {
@@ -1208,27 +1360,34 @@
 	.dep-btn:hover { border-color: var(--accent); color: var(--accent); }
 	.dep-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 	.dep-btn-restore:hover { border-color: #f59e0b; color: #f59e0b; }
-	.spin-xs-inline {
-		display: inline-block; width: 10px; height: 10px;
-		border: 1.5px solid var(--border); border-top-color: var(--accent);
-		border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
 
-	/* ── Invoke section ── */
-	.invoke-section {
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		overflow: hidden;
-	}
-	.invoke-title {
-		display: flex; align-items: center; gap: 6px;
-		padding: 7px 12px;
-		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
+	/* ── Env vars ── */
+	.env-rows { display: flex; flex-direction: column; }
+	.env-row {
+		display: flex; align-items: center; gap: 4px; padding: 5px 10px;
 		border-bottom: 1px solid var(--border);
-		background: var(--bg-elevated);
 	}
+	.env-row:last-child { border-bottom: none; }
+	.env-input {
+		padding: 4px 7px; font-size: 11px;
+		border: 1px solid var(--border); border-radius: 4px;
+		background: var(--bg-surface); color: var(--text-primary); outline: none;
+		transition: border-color var(--transition-fast);
+	}
+	.env-input:focus { border-color: var(--accent); }
+	.env-key { width: 120px; flex-shrink: 0; }
+	.env-val { flex: 1; min-width: 0; }
+	.env-eq { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
+	.env-rm {
+		display: flex; align-items: center; justify-content: center;
+		width: 22px; height: 22px; border-radius: 4px;
+		background: none; border: none; cursor: pointer;
+		color: var(--text-dim); flex-shrink: 0;
+		transition: all var(--transition-fast);
+	}
+	.env-rm:hover { color: #ef4444; background: color-mix(in srgb, #ef4444 10%, transparent); }
+
+	/* ── Invoke section (inside dep-history) ── */
 	.invoke-block { border-bottom: 1px solid var(--border); }
 	.invoke-block:last-child { border-bottom: none; }
 	.invoke-label {
@@ -1240,9 +1399,6 @@
 		font-family: var(--font-mono); font-size: 11px;
 		color: var(--text-primary); white-space: pre-wrap; word-break: break-all;
 		line-height: 1.7;
-	}
-	.invoke-note {
-		padding: 10px 12px; font-size: 11px; color: var(--text-dim); font-style: italic;
 	}
 
 	/* ── Domain list ── */
@@ -1268,13 +1424,26 @@
 		border: 1px solid var(--border); border-radius: var(--radius-sm); line-height: 1.5;
 	}
 
-	/* ── Danger ── */
-	.danger-section {
-		border: 1px solid color-mix(in srgb, #ef4444 35%, transparent);
-		border-radius: var(--radius-sm); padding: 14px;
-		background: color-mix(in srgb, #ef4444 4%, transparent);
+	/* ── Danger zone ── */
+	.danger-zone {
+		border: 1px solid color-mix(in srgb, #ef4444 40%, var(--border));
+		border-radius: var(--radius-sm); overflow: hidden;
 	}
-	.danger-title { color: #ef4444; }
+	.danger-header {
+		display: flex; align-items: center; gap: 6px;
+		padding: 8px 12px;
+		background: color-mix(in srgb, #ef4444 8%, transparent);
+		color: #ef4444;
+		font-size: 11px; font-weight: 700;
+		text-transform: uppercase; letter-spacing: 0.05em;
+	}
+	.danger-body { padding: 12px; }
+	.danger-row {
+		display: flex; align-items: center; gap: 12px; justify-content: space-between;
+	}
+	.danger-info { display: flex; flex-direction: column; gap: 3px; }
+	.danger-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+	.danger-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 
 	/* ── Overlays ── */
 	.overlay-backdrop {
@@ -1285,7 +1454,7 @@
 		padding: 24px;
 	}
 
-	.code-overlay, .logs-overlay {
+	.code-overlay {
 		display: flex; flex-direction: column;
 		width: 100%; max-width: 900px;
 		background: var(--bg-surface);
@@ -1322,15 +1491,10 @@
 		min-height: 0;
 	}
 
-	.editor-wrap {
-		flex: 1; overflow: auto; height: 100%;
-	}
+	.editor-wrap { flex: 1; overflow: auto; height: 100%; }
 
-	/* Override CodeMirror to fill the container */
 	:global(.editor-wrap .cm-editor) {
-		height: 100%;
-		font-size: 13px;
-		font-family: var(--font-mono);
+		height: 100%; font-size: 13px; font-family: var(--font-mono);
 	}
 	:global(.editor-wrap .cm-scroller) { overflow: auto; }
 
@@ -1338,114 +1502,65 @@
 		display: flex; align-items: center; gap: 10px;
 		padding: 32px; color: var(--text-muted); font-size: 13px;
 	}
-	.overlay-empty {
-		padding: 32px; text-align: center; color: var(--text-dim); font-size: 13px;
-	}
-
-	/* ── Logs table ── */
-	.logs-body {
-		flex: 1; overflow: auto; min-height: 0;
-	}
-	.logs-table {
-		width: 100%; border-collapse: collapse; font-size: 12px;
-	}
-	.logs-table thead {
-		position: sticky; top: 0; z-index: 1;
-		background: var(--bg-elevated);
-	}
-	.logs-table th {
-		padding: 8px 12px; text-align: left;
-		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-		border-bottom: 1px solid var(--border);
-	}
-	.logs-table td {
-		padding: 7px 12px; border-bottom: 1px solid var(--border);
-		color: var(--text-primary); vertical-align: middle;
-	}
-	.logs-table tr:last-child td { border-bottom: none; }
-	.logs-table tr:hover td { background: var(--bg-elevated); }
-	.logs-table tr.log-error td { background: color-mix(in srgb, #ef4444 4%, transparent); }
-
-	.log-time  { color: var(--text-dim); white-space: nowrap; font-size: 11px; }
-	.log-path  { font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.log-dur   { color: var(--text-muted); white-space: nowrap; }
-	.log-err-msg { color: #ef4444; font-size: 11px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-	.method-badge {
-		font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px;
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent); font-family: var(--font-mono);
-	}
-	.status-badge { font-size: 12px; font-weight: 700; font-family: var(--font-mono); }
 
 	/* ── Buttons ── */
 	.overview-actions { display: flex; gap: 8px; align-items: center; }
-	.btn-primary {
+
+	.btn {
 		display: inline-flex; align-items: center; gap: 6px;
-		padding: 7px 14px; font-size: 12px; font-weight: 600;
-		background: var(--accent); color: white; border: none;
+		font-size: 12px; font-weight: 600; font-family: var(--font-sans);
 		border-radius: var(--radius-sm); cursor: pointer;
-		transition: opacity var(--transition-fast); flex: 1; justify-content: center;
+		transition: all var(--transition-fast); border: none;
+		padding: 7px 14px;
+	}
+	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+	.btn-primary {
+		background: var(--accent); color: white;
 	}
 	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
-	.btn-docs {
-		display: inline-flex; align-items: center; gap: 5px;
-		padding: 7px 12px; border-radius: var(--radius-sm);
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		color: var(--text-muted); font-size: 12px; font-weight: 600;
-		text-decoration: none; font-family: var(--font-sans);
-		transition: all var(--transition-fast); white-space: nowrap; cursor: pointer;
-	}
-	.btn-docs:hover { border-color: var(--accent); color: var(--accent); }
-	.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 	.btn-secondary {
-		display: inline-flex; align-items: center; gap: 6px;
-		padding: 7px 12px; font-size: 12px; font-weight: 500;
 		background: var(--bg-elevated); color: var(--text-primary);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; transition: border-color var(--transition-fast);
+		border: 1px solid var(--border);
 	}
-	.btn-secondary:hover { border-color: var(--border-hover); }
-	.btn-secondary.btn-sm { padding: 4px 9px; font-size: 11px; }
+	.btn-secondary:hover:not(:disabled) { border-color: var(--border-hover); }
 
 	.btn-ghost {
-		display: inline-flex; align-items: center; gap: 5px;
-		padding: 5px 10px; font-size: 11px; color: var(--text-muted);
-		background: none; border: none; border-radius: var(--radius-sm); cursor: pointer;
+		background: none; color: var(--text-muted); border: none;
+		padding: 5px 10px; font-weight: 500;
 	}
 	.btn-ghost:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
-	.btn-ghost.btn-xs { padding: 3px 7px; }
-	.btn-ghost.danger-ghost:hover { color: #ef4444; }
 
 	.btn-danger {
-		display: inline-flex; align-items: center; gap: 6px;
-		padding: 7px 14px; font-size: 12px; font-weight: 600;
-		background: #ef4444; color: white; border: none;
-		border-radius: var(--radius-sm); cursor: pointer;
+		background: #ef4444; color: white;
 	}
-	.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+	.btn-danger:hover:not(:disabled) { opacity: 0.88; }
 
 	.btn-danger-outline {
-		display: inline-flex; align-items: center; gap: 5px;
-		padding: 6px 12px; font-size: 12px; font-weight: 600; color: #ef4444;
-		background: transparent; border: 1px solid color-mix(in srgb, #ef4444 50%, transparent);
-		border-radius: var(--radius-sm); cursor: pointer; transition: all var(--transition-fast);
+		background: transparent; color: #ef4444;
+		border: 1px solid color-mix(in srgb, #ef4444 50%, transparent);
 	}
-	.btn-danger-outline:hover { background: color-mix(in srgb, #ef4444 10%, transparent); border-color: #ef4444; }
+	.btn-danger-outline:hover:not(:disabled) {
+		background: color-mix(in srgb, #ef4444 10%, transparent);
+		border-color: #ef4444;
+	}
+
+	.btn-sm { padding: 5px 10px; font-size: 11px; }
+	.btn-xs { padding: 3px 7px; font-size: 11px; }
+	.danger-ghost:hover { color: #ef4444 !important; }
 
 	/* ── Misc ── */
 	.mono { font-family: var(--font-mono); font-size: 11px; }
 	.loading-row { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; padding: 24px 0; }
 
-	.err-msg {
+	.form-error {
 		font-size: 12px; color: #ef4444; padding: 8px 10px;
 		background: color-mix(in srgb, #ef4444 8%, transparent);
 		border: 1px solid color-mix(in srgb, #ef4444 25%, transparent);
 		border-radius: var(--radius-sm);
 	}
-	.ok-msg {
+	.form-success {
 		font-size: 12px; color: #22c55e; padding: 8px 10px;
 		background: color-mix(in srgb, #22c55e 8%, transparent);
 		border: 1px solid color-mix(in srgb, #22c55e 25%, transparent);
@@ -1472,13 +1587,15 @@
 		width: 16px; height: 16px; border: 2px solid var(--border);
 		border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite;
 	}
-	.spin-xs-w {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
+	.spinner-xs {
+		display: inline-block; width: 12px; height: 12px;
+		border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
+		border-radius: 50%; animation: spin 0.7s linear infinite;
 	}
-	.spin-xs {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
+	.spinner-xs-inline {
+		display: inline-block; width: 10px; height: 10px;
+		border: 1.5px solid var(--border); border-top-color: var(--accent);
+		border-radius: 50%; animation: spin 0.7s linear infinite;
 	}
 
 	/* ── Delete modal ── */
@@ -1504,97 +1621,17 @@
 	.modal-warning { font-size: 12px; color: var(--text-primary); line-height: 1.5; margin: 0; }
 	.modal-confirm-field { display: flex; flex-direction: column; gap: 5px; }
 	.modal-confirm-label { font-size: 11px; color: var(--text-muted); }
-	.code {
+	.modal-confirm-code {
 		font-family: var(--font-mono); font-size: 11px;
 		background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px;
+		border: 1px solid var(--border);
 	}
-	.modal-input {
+	.modal-confirm-input {
 		padding: 7px 9px; font-size: 12px; font-family: var(--font-mono);
 		border: 1px solid var(--border); border-radius: var(--radius-sm);
 		background: var(--bg-elevated); color: var(--text-primary); outline: none;
 	}
-	.modal-input:focus { border-color: #ef4444; }
-
-	/* ── Git tab ── */
-	.toggle-row {
-		display: flex; align-items: center; gap: 8px;
-		padding: 9px 12px; border: 1px solid var(--border);
-		border-radius: var(--radius-sm); background: var(--bg-elevated);
-		cursor: pointer; font-size: 12px;
-	}
-	.toggle-label { font-weight: 600; color: var(--text-primary); }
-	.toggle-row input[type="checkbox"] { accent-color: var(--accent); }
-	.toggle-desc { font-size: 11px; color: var(--text-muted); flex: 1; }
-
-	.form-row { display: flex; flex-direction: column; gap: 4px; }
-	.form-label { font-size: 11px; font-weight: 600; color: var(--text-muted); }
-	.form-input {
-		padding: 7px 9px; font-size: 12px;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-elevated); color: var(--text-primary); outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.form-input:focus { border-color: var(--accent); }
-	.form-select {
-		padding: 7px 9px; font-size: 12px;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-elevated); color: var(--text-primary); outline: none;
-		cursor: pointer; appearance: auto;
-	}
-	.form-select:focus { border-color: var(--accent); }
-
-	.webhook-row {
-		display: flex; align-items: center; gap: 8px;
-		padding: 9px 12px; border: 1px solid var(--border);
-		border-radius: var(--radius-sm); background: var(--bg-elevated);
-	}
-	.webhook-url {
-		flex: 1; font-size: 11px; color: var(--text-muted);
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
-
-	/* ── Env vars ── */
-	.env-section {
-		background: var(--bg-base); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); overflow: hidden;
-	}
-	.env-section-header {
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 7px 12px;
-		border-bottom: 1px solid var(--border); background: var(--bg-elevated);
-	}
-	.env-section-title {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
-	}
-	.env-empty {
-		padding: 10px 12px; font-size: 11px; color: var(--text-dim); font-style: italic;
-	}
-	.env-rows { display: flex; flex-direction: column; }
-	.env-row {
-		display: flex; align-items: center; gap: 4px; padding: 5px 10px;
-		border-bottom: 1px solid var(--border);
-	}
-	.env-row:last-child { border-bottom: none; }
-	.env-input {
-		padding: 4px 7px; font-size: 11px;
-		border: 1px solid var(--border); border-radius: 4px;
-		background: var(--bg-surface); color: var(--text-primary); outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.env-input:focus { border-color: var(--accent); }
-	.env-key { width: 120px; flex-shrink: 0; }
-	.env-val { flex: 1; min-width: 0; }
-	.env-eq { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
-	.env-rm {
-		display: flex; align-items: center; justify-content: center;
-		width: 22px; height: 22px; border-radius: 4px;
-		background: none; border: none; cursor: pointer;
-		color: var(--text-dim); flex-shrink: 0;
-		transition: all var(--transition-fast);
-	}
-	.env-rm:hover { color: #ef4444; background: color-mix(in srgb, #ef4444 10%, transparent); }
+	.modal-confirm-input:focus { border-color: #ef4444; }
 
 	@keyframes spin { to { transform: rotate(360deg); } }
 </style>
