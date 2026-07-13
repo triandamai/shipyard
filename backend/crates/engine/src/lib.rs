@@ -4,10 +4,12 @@ pub mod static_site;
 pub mod ssr;
 pub mod edge_fn_config;
 pub mod edge_fn_detector;
-pub mod edge_artifact;
+pub mod artifact;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::artifact::{ArtifactStore, StaticArtifact};
 
 use shipyard_common::error::{AppError, AppResult};
 use shipyard_common::types::{LogLevel, MqttPayload};
@@ -375,16 +377,17 @@ impl DeploymentEngine {
         service_id: Uuid,
         deployment_id: Uuid,
     ) -> AppResult<()> {
-        // Steps were pre-inserted by the upload API endpoint.
-        // Artifact is stored at: {sites_dir}/uploads/{service_id}/{deployment_id}.zip
-        let sites_base = format!("{}/static", self.data_dir);
+        let store = StaticArtifact::new(&self.data_dir);
+
+        // Paths that are not artifact concerns (nginx config, extract staging, upload store).
+        let sites_base  = format!("{}/static", self.data_dir);
         let extract_dir = format!("{sites_base}/{service_id}/extracts/{deployment_id}");
-        let version_dir = format!("{sites_base}/{service_id}/{deployment_id}");
-        let public_dir  = format!("{version_dir}/public");
-        let current_link = format!("{sites_base}/{service_id}/current");
         let conf_dir    = format!("{sites_base}/conf.d");
-        let uploads_dir = format!("{sites_base}/uploads/{service_id}");
-        let artifact = format!("{uploads_dir}/{deployment_id}.zip");
+        let artifact    = format!("{sites_base}/uploads/{service_id}/{deployment_id}.zip");
+
+        // Artifact paths — derived from the store.
+        let version_dir = store.version_path(service_id, deployment_id);
+        let public_dir  = store.make_version_dir(service_id, deployment_id)?;
 
         // Ensure the nginx container exists and is running before we write configs or serve files.
         self.ensure_static_nginx(&sites_base).await?;
@@ -394,7 +397,7 @@ impl DeploymentEngine {
         let r = self.static_step_extract(&artifact, &extract_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Step 1: parse shipyard.json + resolve serve root + validate
+        // Step 1: parse shipyard.json + resolve serve root + validate.
         // Resolve happens here so that a zip containing `dist/ shipyard.json` is
         // automatically unwrapped: the resolved root will be `extract_dir/dist`
         // rather than `extract_dir` itself.
@@ -416,30 +419,31 @@ impl DeploymentEngine {
             None => return Err(AppError::Internal("parse_shipyard_config returned nothing".into())),
         };
 
-        // Step 2: publish_files — copy from the resolved root (not raw extract_dir)
+        // Step 2: publish_files — copy from the resolved root into the version's public/ dir.
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
-        let r = self.static_step_publish(&upload_root, &public_dir, deployment_id, step_id).await;
-        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
-
-        // Clean up extract dir — files have been published; no need to keep the intermediate copy.
-        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-
-        // Step 3: go_live — atomic symlink swap (current → new version dir).
-        // This must happen BEFORE write_nginx_conf so that when nginx reloads it can
-        // immediately serve from `current/public` without a transient 404 window.
-        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let r = self.static_step_go_live(
-            &current_link, &version_dir,
-            format!("{sites_base}/{service_id}"), self.static_retention,
+        let r = self.static_step_publish(
+            &upload_root,
+            &public_dir.to_string_lossy(),
             deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
+        // Clean up extract dir — files have been published.
+        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+
+        // Step 3: go_live — swap `current` symlink to the new version dir.
+        // Must happen BEFORE write_nginx_conf so `current/public` exists when nginx reloads.
+        let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
+        let r = self.static_step_go_live(&store, service_id, &version_dir, deployment_id, step_id).await;
+        self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
         // Step 4: write_nginx_conf — `current/public` now exists (go_live just ran).
-        let current_public = format!("{sites_base}/{service_id}/current/public");
+        let current_public = store.current_path(service_id).join("public");
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
         let r = self.static_step_write_nginx_conf(
-            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
+            service_id,
+            &current_public.to_string_lossy(),
+            &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -448,7 +452,7 @@ impl DeploymentEngine {
         let r = self.static_step_finalize(service_id, &deploy_config, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Clean up the artifact zip after successful deploy
+        // Clean up the artifact zip after successful deploy.
         let _ = tokio::fs::remove_file(&artifact).await;
 
         Ok(())
@@ -496,12 +500,16 @@ impl DeploymentEngine {
                 "1".into(), "bun install".into(), "custom".into(),
             ));
 
-        let sites_base    = format!("{}/static", self.data_dir);
-        let repo_path     = format!("{sites_base}/{service_id}/repo");
-        let version_dir   = format!("{sites_base}/{service_id}/{deployment_id}");
-        let public_dir    = format!("{version_dir}/public");
-        let current_link  = format!("{sites_base}/{service_id}/current");
-        let conf_dir      = format!("{sites_base}/conf.d");
+        let store = StaticArtifact::new(&self.data_dir);
+
+        // Paths that are not artifact concerns (nginx config, git clone cache).
+        let sites_base = format!("{}/static", self.data_dir);
+        let repo_path  = format!("{sites_base}/{service_id}/repo");
+        let conf_dir   = format!("{sites_base}/conf.d");
+
+        // Artifact paths — derived from the store.
+        let version_dir = store.version_path(service_id, deployment_id);
+        let public_dir  = store.make_version_dir(service_id, deployment_id)?;
 
         // Ensure the nginx container exists and is running before we write configs or serve files.
         self.ensure_static_nginx(&sites_base).await?;
@@ -641,29 +649,31 @@ impl DeploymentEngine {
             None => return Err(AppError::Internal("parse_shipyard_config returned nothing".into())),
         };
 
-        // Step 3: publish_files
+        // Step 3: publish_files — copy build output into the version's public/ dir.
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let r = self.static_step_publish(&built_output_path, &public_dir, deployment_id, step_id).await;
+        let r = self.static_step_publish(
+            &built_output_path,
+            &public_dir.to_string_lossy(),
+            deployment_id, step_id,
+        ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
         // Clean up the build output dir — contents are now in public_dir; keep the repo for incremental pulls.
         let _ = tokio::fs::remove_dir_all(&built_output_path).await;
 
-        // Step 4: go_live — atomic symlink swap (must run before write_nginx_conf so
+        // Step 4: go_live — swap `current` symlink (must run before write_nginx_conf so
         // `current/public` exists when nginx reloads, avoiding a transient 404 window).
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
-        let r = self.static_step_go_live(
-            &current_link, &version_dir,
-            format!("{sites_base}/{service_id}"), self.static_retention,
-            deployment_id, step_id,
-        ).await;
+        let r = self.static_step_go_live(&store, service_id, &version_dir, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
         // Step 5: write_nginx_conf — `current/public` now exists (go_live just ran).
-        let current_public = format!("{sites_base}/{service_id}/current/public");
+        let current_public = store.current_path(service_id).join("public");
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 5).await?;
         let r = self.static_step_write_nginx_conf(
-            service_id, &current_public, &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
+            service_id,
+            &current_public.to_string_lossy(),
+            &sites_base, &conf_dir, &deploy_config, deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
@@ -933,20 +943,19 @@ impl DeploymentEngine {
 
     async fn static_step_go_live(
         &self,
-        current_link: &str,
-        version_dir: &str,
-        versions_root: String,
-        retention: usize,
+        store: &StaticArtifact,
+        service_id: Uuid,
+        version_dir: &std::path::Path,
         deployment_id: Uuid,
         step_id: Uuid,
     ) -> AppResult<()> {
-        let current = current_link.to_string();
-        let version = version_dir.to_string();
+        let version_dir = version_dir.to_path_buf();
+        let service_dir = store.current_path(service_id).parent().unwrap().to_path_buf();
 
         tokio::task::spawn_blocking(move || {
             crate::static_site::atomic_swap_symlink(
-                std::path::Path::new(&current),
-                std::path::Path::new(&version),
+                &service_dir.join("current"),
+                &version_dir,
             )
         })
         .await
@@ -954,18 +963,19 @@ impl DeploymentEngine {
 
         self.insert_log(deployment_id, Some(step_id), "info", "Symlink swapped — site is live").await;
 
-        // Prune old versions (non-fatal)
-        let versions_root_clone = versions_root;
-        let pruned = tokio::task::spawn_blocking(move || {
-            crate::static_site::prune_old_versions(
-                std::path::Path::new(&versions_root_clone),
-                retention,
-            )
-        })
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .unwrap_or(0);
+        // Prune old versions (non-fatal).
+        let pruned = {
+            let data_dir = store.current_path(service_id);
+            let parent = data_dir.parent().unwrap().to_path_buf();
+            let retention = self.static_retention;
+            tokio::task::spawn_blocking(move || {
+                crate::static_site::prune_old_versions(&parent, retention)
+            })
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or(0)
+        };
 
         if pruned > 0 {
             self.insert_log(

@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use shipyard_common::crypto::decrypt_or_passthrough;
 use shipyard_common::error::AppError;
-use shipyard_engine::edge_artifact::{ArtifactStore, EdgeArtifact};
+use shipyard_engine::artifact::{ArtifactStore, EdgeArtifact};
 use shipyard_engine::edge_fn_detector;
 
 use crate::AppState;

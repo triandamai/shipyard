@@ -351,7 +351,7 @@ async fn rollback(
     Path((org_id, fn_id, dep_id)): Path<(Uuid, Uuid, Uuid)>,
     auth: AuthUser,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    use shipyard_engine::edge_artifact::{ArtifactStore, EdgeArtifact};
+    use shipyard_engine::artifact::{ArtifactStore, EdgeArtifact};
 
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
