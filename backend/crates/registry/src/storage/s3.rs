@@ -58,7 +58,16 @@ impl S3Storage {
         }
 
         let mut bucket = bucket.unwrap();
-        bucket.set_path_style();
+        let endpoint_lower = self.endpoint.to_lowercase();
+        let use_path_style = endpoint_lower.contains("localhost")
+            || endpoint_lower.contains("127.0.0.1")
+            || endpoint_lower.contains("::1")
+            || endpoint_lower.contains("192.168.")
+            || endpoint_lower.contains("10.");
+
+        if use_path_style {
+            bucket.set_path_style();
+        }
         bucket.set_listobjects_v2();
         Ok(*bucket)
     }
@@ -145,6 +154,33 @@ impl super::StorageBackend for S3Storage {
                 if err_str.contains("serde xml") || err_str.contains("xml") || err_str.contains("DeError") {
                     // Diagnostic connection test: fetch a nonexistent dummy key to determine if it is a credential, endpoint or DNS issue.
                     match bucket.get_object("shipyard-connection-test-dummy-key-xyz").await {
+                        Ok(res) => {
+                            let code = res.status_code();
+                            let body = res.to_string().unwrap_or_else(|_| "".into());
+                            
+                            // If code is 404, check if it's a valid S3 NoSuchKey response.
+                            // A generic web server 404 (e.g. wrong path/endpoint routing) means path style is misconfigured.
+                            if code == 404 {
+                                if !body.contains("NoSuchKey") && !body.contains("NoSuchBucket") {
+                                    return Err(StorageError::Backend(format!(
+                                        "S3 connection failed (HTTP 404 Not Found): S3 API not found at endpoint. Please check if your S3 endpoint URL or bucket name is correct, and if virtual-host style requests are supported. Response: {}",
+                                        body
+                                    )));
+                                }
+                            } else if code >= 300 {
+                                return Err(StorageError::Backend(format!(
+                                    "S3 connection failed (HTTP {}): {}. Please verify your S3 credentials, bucket name, and region.",
+                                    code, body
+                                )));
+                            } else if code == 200 {
+                                let trimmed = body.trim();
+                                if trimmed.starts_with("<html") || trimmed.starts_with("<!DOCTYPE") || trimmed.contains("<html") {
+                                    return Err(StorageError::Backend(
+                                        "S3 endpoint returned an HTML page instead of S3 API response. Please verify that your S3 endpoint URL and port are correct and pointing to the S3 API.".to_string()
+                                    ));
+                                }
+                            }
+                        }
                         Err(s3::error::S3Error::HttpFailWithBody(code, body)) => {
                             return Err(StorageError::Backend(format!(
                                 "S3 connection failed (HTTP {}): {}. Please verify your S3 credentials, bucket name, and region.",
@@ -164,8 +200,6 @@ impl super::StorageBackend for S3Storage {
                         }
                         Err(conn_err) => {
                             let conn_err_str = conn_err.to_string();
-                            // If the connection succeeds but returns 404 (as the dummy key does not exist),
-                            // then the bucket is accessible, so we return the original list error.
                             if !conn_err_str.contains("404") && !conn_err_str.contains("HttpFailWithBody(404") {
                                 return Err(StorageError::Backend(format!(
                                     "S3 diagnostic connection error: {}. Please check your S3 configuration.",
@@ -173,7 +207,6 @@ impl super::StorageBackend for S3Storage {
                                 )));
                             }
                         }
-                        Ok(_) => {}
                     }
                 }
                 return Err(StorageError::Backend(e.to_string()));
