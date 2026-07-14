@@ -1809,7 +1809,7 @@ async fn create_api_key(
         return Err(ApiAppError(AppError::Validation("Key name must not be empty".to_string())));
     }
 
-    let valid_scopes = ["read", "deploy", "write", "admin"];
+    let valid_scopes = ["read", "deploy", "write", "admin", "registry:view", "registry:manage"];
     for s in &body.scopes {
         if !valid_scopes.contains(&s.as_str()) {
             return Err(ApiAppError(AppError::Validation(format!(
@@ -1819,6 +1819,13 @@ async fn create_api_key(
             ))));
         }
     }
+
+    // Expand registry scopes to their full namespaced form before storage.
+    let scopes: Vec<String> = body.scopes.iter().map(|s| match s.as_str() {
+        "registry:view"   => format!("shipyard:{org_id}:registry:view"),
+        "registry:manage" => format!("shipyard:{org_id}:registry:manage"),
+        other             => other.to_string(),
+    }).collect();
 
     let (full_key, prefix, hash) = generate_api_key();
     let key_id = uuid::Uuid::now_v7();
@@ -1834,7 +1841,7 @@ async fn create_api_key(
     .bind(&body.name)
     .bind(&prefix)
     .bind(&hash)
-    .bind(&body.scopes)
+    .bind(&scopes)
     .bind(body.expires_at)
     .bind(now)
     .execute(&state.db)
@@ -1850,7 +1857,7 @@ async fn create_api_key(
             name: body.name,
             key: full_key,
             key_prefix: prefix,
-            scopes: body.scopes,
+            scopes,
             expires_at: body.expires_at,
             created_at: now,
         })),
@@ -1973,21 +1980,6 @@ async fn fetch_table_columns(db: &sqlx::PgPool, table_name: &str) -> Result<Vec<
     .fetch_all(db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))
-}
-
-/// Convert a Postgres row cell to a JSON value — handles common platform types.
-fn platform_pg_to_json(row: &sqlx::postgres::PgRow, idx: usize) -> serde_json::Value {
-    use sqlx::{Column, Row, TypeInfo};
-    let type_name = row.column(idx).type_info().name().to_ascii_uppercase();
-    match type_name.as_str() {
-        "INT2" | "INT4"   => row.try_get::<i32, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "INT8" | "OID"    => row.try_get::<i64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "FLOAT4"          => row.try_get::<f32, _>(idx).ok().map(|v| serde_json::Value::from(v as f64)).unwrap_or(serde_json::Value::Null),
-        "FLOAT8"          => row.try_get::<f64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "BOOL"            => row.try_get::<bool, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "JSON" | "JSONB"  => row.try_get::<serde_json::Value, _>(idx).unwrap_or(serde_json::Value::Null),
-        _                 => row.try_get::<String, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-    }
 }
 
 /// GET /admin/db/tables/:table_name/columns

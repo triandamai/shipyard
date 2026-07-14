@@ -20,6 +20,12 @@ pub struct AppConfig {
     /// Set via SHIPYARD__APP_URL. Defaults to http://localhost:5173.
     #[serde(default = "default_app_url")]
     pub app_url: String,
+    /// Public hostname for the REST API, e.g. "api.example.com".
+    /// Used as the Traefik router Host rule for the API domain.
+    /// Defaults to "api-<domain>" derived from app_url when not set.
+    /// Set via SHIPYARD__API_DOMAIN.
+    #[serde(default)]
+    pub api_domain: Option<String>,
     /// Stripe webhook signing secret (whsec_...). Required to verify Stripe webhook signatures.
     /// Set via SHIPYARD__STRIPE_WEBHOOK_SECRET.
     #[serde(default)]
@@ -57,6 +63,8 @@ pub struct AppConfig {
     pub stripe_price_max: Option<String>,
     #[serde(default)]
     pub edge_functions: EdgeFunctionsConfig,
+    #[serde(default)]
+    pub registry: RegistryConfig,
 }
 
 fn default_app_url() -> String {
@@ -260,6 +268,46 @@ impl Default for EdgeFunctionsConfig {
 fn default_static_service_name() -> String { "shipyard-static".to_string() }
 fn default_max_upload_mb() -> u64 { 256 }
 fn default_retention_versions() -> usize { 5 }
+fn default_registry_hostname() -> String { "registry.shipyard.local".to_string() }
+fn default_registry_local_path() -> String { "/data/registry".to_string() }
+
+/// Artifactory registry configuration.
+/// Set via SHIPYARD__REGISTRY__ prefix in env / config file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegistryConfig {
+    /// "local" (default) or "s3"
+    #[serde(default = "default_registry_storage")]
+    pub storage: String,
+    /// Local disk path when storage = "local". Defaults to {data_dir}/registry.
+    #[serde(default = "default_registry_local_path")]
+    pub local_path: String,
+    /// Public hostname for the registry, e.g. registry.shipyard.local
+    #[serde(default = "default_registry_hostname")]
+    pub hostname: String,
+    // S3 / MinIO — required when storage = "s3"
+    pub s3_endpoint:   Option<String>,
+    pub s3_bucket:     Option<String>,
+    pub s3_access_key: Option<String>,
+    pub s3_secret_key: Option<String>,
+    pub s3_region:     Option<String>,
+}
+
+fn default_registry_storage() -> String { "local".to_string() }
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            storage:       default_registry_storage(),
+            local_path:    default_registry_local_path(),
+            hostname:      default_registry_hostname(),
+            s3_endpoint:   None,
+            s3_bucket:     None,
+            s3_access_key: None,
+            s3_secret_key: None,
+            s3_region:     None,
+        }
+    }
+}
 
 impl Default for StaticServerConfig {
     fn default() -> Self {
@@ -338,6 +386,7 @@ impl Default for AppConfig {
             static_server: StaticServerConfig::default(),
             data_dir: "/opt/shipyard/data".to_string(),
             app_url: default_app_url(),
+            api_domain: None,
             stripe_webhook_secret: None,
             stripe_secret_key: None,
             hetzner_api_key: None,
@@ -350,6 +399,7 @@ impl Default for AppConfig {
             stripe_price_pro: None,
             stripe_price_max: None,
             edge_functions: EdgeFunctionsConfig::default(),
+            registry: RegistryConfig::default(),
         }
     }
 }

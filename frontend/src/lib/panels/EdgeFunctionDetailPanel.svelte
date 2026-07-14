@@ -15,6 +15,8 @@
 	import { javascript } from '@codemirror/lang-javascript';
 	import { oneDark } from '@codemirror/theme-one-dark';
 	import { EditorState } from '@codemirror/state';
+	import type { GitProvider } from '$lib/api/types';
+	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 
 	interface Props {
 		groupId:   string;
@@ -39,6 +41,7 @@
 		provider: string; repo_url: string; branch: string;
 		webhook_secret: string;
 		auto_deploy: boolean; deploy_strategy: string; deploy_tag_pattern: string | null;
+		git_provider_id: string | null;
 		last_deployed_sha: string | null; created_at: string;
 	}
 	interface EFn {
@@ -84,6 +87,8 @@
 	let group     = $state<Group | null>(null);
 	let functions = $state<EFn[]>([]);
 	let domains   = $state<EFnDomain[]>([]);
+
+	let canDelete = $state<boolean>(true);
 
 	// Per-function expanded state in functions tab
 	let expandedFnId = $state<string | null>(null);
@@ -134,6 +139,14 @@
 	let gitSaveOk          = $state(false);
 	let gitSaveError       = $state('');
 	let webhookCopied      = $state(false);
+
+	// Git account (provider) linking
+	let orgGitProviders     = $state<GitProvider[]>([]);
+	let loadingGitProviders = $state(false);
+	let gitProviderId       = $state<string>('');
+	let gitProviderSaving   = $state(false);
+	let gitProviderError    = $state('');
+	let gitProviderSuccess  = $state('');
 
 	// Per-function env vars
 	let fnDetails    = $state<Record<string, EFnDetail>>({});
@@ -200,11 +213,41 @@
 			deployStrategy    = group.deploy_strategy;
 			deployTagPattern  = group.deploy_tag_pattern ?? '';
 			deployBranch      = group.branch;
+			gitProviderId     = group.git_provider_id ?? '';
 			gitSaveOk = false; gitSaveError = '';
+			gitProviderError = ''; gitProviderSuccess = '';
+			loadGitProviders();
 		}
 	}
 
 	// ── Git tab ────────────────────────────────────────────────────────────────
+
+	async function loadGitProviders() {
+		if (orgGitProviders.length > 0) return;
+		loadingGitProviders = true;
+		const res = await api.listGitProviders(orgId);
+		if (res.data) orgGitProviders = res.data;
+		loadingGitProviders = false;
+	}
+
+	async function saveGitProvider() {
+		gitProviderSaving = true; gitProviderError = ''; gitProviderSuccess = '';
+		const providerVal = gitProviderId === '' ? null : gitProviderId;
+		const res = await api.put<{ updated: boolean; group: Group }>(`/orgs/${orgId}/edge-functions/groups/${groupId}`, {
+			git_provider_id: providerVal,
+		});
+		gitProviderSaving = false;
+		if (res.error) { gitProviderError = res.error.message; return; }
+		// Use the server-echoed group to confirm exactly what was saved.
+		if (res.data?.group) {
+			group = res.data.group;
+			gitProviderId = group.git_provider_id ?? '';
+		} else if (group) {
+			group = { ...group, git_provider_id: providerVal };
+		}
+		gitProviderSuccess = 'Git account linked.';
+		setTimeout(() => { gitProviderSuccess = ''; }, 3000);
+	}
 
 	async function saveGitSettings() {
 		gitSaving = true; gitSaveOk = false; gitSaveError = '';
@@ -533,7 +576,7 @@
 	{:else if group}
 
 		<div class="tabs">
-			{#each [['overview','Overview'],['functions','Functions'],['git','Git'],['domains','Domains'],['danger','Danger']] as [id, label]}
+			{#each [['overview','Overview'],['functions','Functions'],['git','Git'],['domains','Domains']] as [id, label]}
 				<button class="tab" class:active={activeTab === id}
 					class:tab-danger={id === 'danger'}
 					onclick={() => switchTab(id as Tab)}>{label}
@@ -615,6 +658,32 @@
 						<BookOpen size={12} /> Docs
 					</a>
 				</div>
+			</section>
+			<section class="section">
+				<!-- Danger zone -->
+				{#if canDelete}
+					<div class="danger-zone">
+						<div class="danger-header">
+							<AlertTriangle size={13} />
+							<span>Danger Zone</span>
+						</div>
+						<div class="danger-body">
+							<div class="danger-row">
+								<div class="danger-info">
+									<span class="danger-title">Delete this service</span>
+									<span class="danger-desc">Stops the service and permanently removes all data.</span>
+								</div>
+								<button
+										class="btn btn-danger-outline btn-sm"
+										onclick={() => {  }}
+								>
+									<Trash2 size={12} />
+									Delete
+								</button>
+							</div>
+						</div>
+					</div>
+				{/if}
 			</section>
 		{/if}
 
@@ -805,149 +874,50 @@
 
 		<!-- ── Git ── -->
 		{#if activeTab === 'git'}
-			<div class="git-config-section">
+			<GitSettingsSection
+				providers={orgGitProviders}
+				loadingProviders={loadingGitProviders}
+				bind:providerId={gitProviderId}
+				providerDefaultLabel="No account linked"
+				onSaveProvider={saveGitProvider}
+				providerSaving={gitProviderSaving}
+				providerError={gitProviderError}
+				providerSuccess={gitProviderSuccess}
+				showAutoDeployToggle={true}
+				bind:autoDeploy={autoDeployEnabled}
+				bind:strategy={deployStrategy}
+				bind:branch={deployBranch}
+				bind:tagPattern={deployTagPattern}
+				deployDisabled={!autoDeployEnabled}
+				onSave={saveGitSettings}
+				saving={gitSaving}
+				saveOk={gitSaveOk}
+				saveError={gitSaveError}
+				webhookUrl="{window.location.origin}/api/webhooks/{group.provider}/fn/{group.id}/{group.webhook_secret}"
+				showProviderTabs={false}
+				webhookCopied={webhookCopied}
+				onCopyWebhook={copyWebhookUrl}
+			/>
 
-				<!-- Repo info (read-only) -->
-				<div class="git-card">
-					<div class="git-card-title">Repository</div>
-					<div class="git-repo-info">
+			<!-- Repo info (read-only) — more detailed than generic card -->
+			<div class="git-card" style="margin-top:12px">
+				<div class="git-card-title">Repository</div>
+				<div class="git-repo-info">
+					<div class="git-repo-row">
+						<span class="git-repo-label">Provider</span>
+						<span class="git-repo-val">{group.provider}</span>
+					</div>
+					<div class="git-repo-row">
+						<span class="git-repo-label">URL</span>
+						<code class="git-repo-val mono">{group.repo_url}</code>
+					</div>
+					{#if group.last_deployed_sha}
 						<div class="git-repo-row">
-							<span class="git-repo-label">Provider</span>
-							<span class="git-repo-val">{group.provider}</span>
-						</div>
-						<div class="git-repo-row">
-							<span class="git-repo-label">URL</span>
-							<code class="git-repo-val mono">{group.repo_url}</code>
-						</div>
-						{#if group.last_deployed_sha}
-							<div class="git-repo-row">
-								<span class="git-repo-label">Last SHA</span>
-								<code class="git-repo-val mono">{group.last_deployed_sha.slice(0, 7)}</code>
-							</div>
-						{/if}
-					</div>
-				</div>
-
-				<!-- Auto-deploy + strategy -->
-				<div class="git-card">
-					<div class="git-card-header">
-						<div class="git-card-title">Auto-deploy</div>
-						<label class="toggle-switch">
-							<input type="checkbox" bind:checked={autoDeployEnabled} />
-							<span class="toggle-track"></span>
-						</label>
-					</div>
-					<p class="git-card-desc">
-						Automatically trigger a deployment when Shipyard receives a webhook event
-						from this {group.provider} repository.
-					</p>
-
-					<div class="git-field">
-						<label class="git-label">Deployment Strategy</label>
-						<select class="git-select" bind:value={deployStrategy} disabled={!autoDeployEnabled}>
-							<option value="push">Deploy on Branch Push</option>
-							<option value="tag">Deploy on Tag Push</option>
-							<option value="pull_request">Deploy on PR / MR Merge</option>
-						</select>
-					</div>
-
-					{#if deployStrategy === 'push'}
-						<div class="git-field">
-							<label class="git-label" for="ef-branch-input">Branch to watch</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">⎇</span>
-								<input
-									id="ef-branch-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={deployBranch}
-									placeholder="main"
-									disabled={!autoDeployEnabled}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
+							<span class="git-repo-label">Last SHA</span>
+							<code class="git-repo-val mono">{group.last_deployed_sha.slice(0, 7)}</code>
 						</div>
 					{/if}
-
-					{#if deployStrategy === 'tag'}
-						<div class="git-field">
-							<label class="git-label" for="ef-tag-input">Tag pattern</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">🏷️</span>
-								<input
-									id="ef-tag-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={deployTagPattern}
-									placeholder="v*"
-									disabled={!autoDeployEnabled}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Deploy when a tag matching this glob is pushed (e.g. <code>v*</code>).</p>
-						</div>
-					{/if}
-
-					{#if deployStrategy === 'pull_request'}
-						<div class="git-field">
-							<label class="git-label" for="ef-pr-branch-input">Target branch (PR merge)</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">⎇</span>
-								<input
-									id="ef-pr-branch-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={deployBranch}
-									placeholder="main"
-									disabled={!autoDeployEnabled}
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Deploy when a pull request is merged into this branch.</p>
-						</div>
-					{/if}
-
-					{#if gitSaveError}<p class="git-error">{gitSaveError}</p>{/if}
-
-					<div class="git-save-row">
-						<button class="btn btn-primary btn-sm" onclick={saveGitSettings} disabled={gitSaving}>
-							{#if gitSaving}<span class="spinner-xs"></span> Saving…
-							{:else if gitSaveOk}Saved
-							{:else}Save
-							{/if}
-						</button>
-					</div>
 				</div>
-
-				<!-- Webhook URL -->
-				<div class="git-card">
-					<div class="git-card-header">
-						<div class="git-card-title">Webhook URL</div>
-					</div>
-					<p class="git-card-desc">
-						Register this URL as a webhook in your {group.provider} repository.
-						Shipyard verifies the payload signature automatically — no secret header needed.
-					</p>
-					<div class="webhook-url-row">
-						<input
-							class="webhook-url-input"
-							readonly
-							value="{window.location.origin}/api/webhooks/{group.provider}/fn/{group.id}/{group.webhook_secret}"
-						/>
-						<button class="webhook-copy-btn" onclick={copyWebhookUrl}>
-							{#if webhookCopied}
-								<CheckCircle size={13} /> Copied
-							{:else}
-								<Copy size={13} /> Copy
-							{/if}
-						</button>
-					</div>
-				</div>
-
 			</div>
 		{/if}
 
@@ -999,30 +969,6 @@
 					or CNAME to your Shipyard hostname.
 				</div>
 			</section>
-		{/if}
-
-		<!-- ── Danger ── -->
-		{#if activeTab === 'danger'}
-			<div class="danger-zone">
-				<div class="danger-header">
-					<AlertTriangle size={13} />
-					<span>Danger Zone</span>
-				</div>
-				<div class="danger-body">
-					<div class="danger-row">
-						<div class="danger-info">
-							<span class="danger-title">Delete this group</span>
-							<span class="danger-desc">
-								Permanently deletes all functions, code bundles, invocation logs, and custom domains.
-								Traefik routes are removed immediately. This cannot be undone.
-							</span>
-						</div>
-						<button class="btn btn-danger-outline btn-sm" onclick={() => { showDeleteModal = true; deleteInput = ''; }}>
-							<Trash2 size={12} /> Delete
-						</button>
-					</div>
-				</div>
-			</div>
 		{/if}
 
 	{/if}
@@ -1110,9 +1056,7 @@
 	.info-key { color: var(--text-muted); width: 100px; flex-shrink: 0; }
 	.info-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
-	/* ── Git config section ── */
-	.git-config-section { display: flex; flex-direction: column; gap: 12px; }
-
+	/* ── Git repo card (remaining after GitSettingsSection refactor) ── */
 	.git-card {
 		background: var(--bg-elevated);
 		border: 1px solid var(--border);
@@ -1120,19 +1064,7 @@
 		padding: 14px 16px;
 		display: flex; flex-direction: column; gap: 10px;
 	}
-
-	.git-card-header {
-		display: flex; align-items: center; justify-content: space-between;
-	}
-
-	.git-card-title {
-		font-size: 13px; font-weight: 700; color: var(--text-primary);
-	}
-
-	.git-card-desc {
-		font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0;
-	}
-
+	.git-card-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
 	.git-repo-info { display: flex; flex-direction: column; gap: 0; }
 	.git-repo-row {
 		display: flex; align-items: center; gap: 10px;
@@ -1141,86 +1073,6 @@
 	.git-repo-row:last-child { border-bottom: none; }
 	.git-repo-label { color: var(--text-muted); width: 72px; flex-shrink: 0; font-size: 11px; }
 	.git-repo-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-
-	.git-field { display: flex; flex-direction: column; gap: 5px; }
-	.git-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-	.git-select {
-		width: 100%; padding: 7px 10px; border-radius: var(--radius-sm);
-		border: 1px solid var(--border);
-		background: var(--bg-surface); color: var(--text-primary);
-		font-size: 12px; outline: none; cursor: pointer;
-		transition: border-color var(--transition-fast);
-	}
-	.git-select:focus { border-color: var(--accent); }
-	.git-select:disabled { opacity: 0.5; cursor: not-allowed; }
-
-	.git-branch-row {
-		display: flex; align-items: center;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-surface); overflow: hidden;
-		transition: border-color var(--transition-fast);
-	}
-	.git-branch-row:focus-within { border-color: var(--accent); }
-	.git-branch-icon {
-		padding: 0 8px; font-size: 13px; color: var(--text-dim);
-		background: var(--bg-elevated); border-right: 1px solid var(--border);
-		display: flex; align-items: center; height: 32px; flex-shrink: 0;
-	}
-	.git-branch-input {
-		flex: 1; padding: 6px 10px; border: none; outline: none;
-		background: transparent; color: var(--text-primary);
-		font-size: 12px; font-family: var(--font-mono);
-	}
-	.git-branch-input:disabled { opacity: 0.5; }
-
-	.git-hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; }
-	.git-hint code {
-		font-family: var(--font-mono); font-size: 10px;
-		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
-		border: 1px solid var(--border);
-	}
-
-	.git-save-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
-	.git-error { font-size: 11px; color: #ef4444; margin: 0; }
-
-	/* ── Toggle switch ── */
-	.toggle-switch { display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
-	.toggle-switch input { display: none; }
-	.toggle-track {
-		width: 32px; height: 18px; border-radius: 9px;
-		background: var(--border);
-		position: relative; transition: background var(--transition-fast);
-	}
-	.toggle-track::after {
-		content: ''; position: absolute; top: 2px; left: 2px;
-		width: 14px; height: 14px; border-radius: 50%;
-		background: white; transition: transform var(--transition-fast);
-		box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-	}
-	.toggle-switch input:checked + .toggle-track { background: var(--accent); }
-	.toggle-switch input:checked + .toggle-track::after { transform: translateX(14px); }
-
-	/* ── Webhook ── */
-	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
-	.webhook-url-input {
-		flex: 1; font-family: var(--font-mono); font-size: 11px;
-		color: var(--text-muted); background: var(--bg-base);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		padding: 6px 8px; outline: none; min-width: 0;
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
-	.webhook-copy-btn {
-		display: flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		padding: 5px 10px; border-radius: var(--radius-sm);
-		border: 1px solid var(--border); background: var(--bg-elevated);
-		color: var(--text-muted); cursor: pointer; white-space: nowrap; flex-shrink: 0;
-		transition: all var(--transition-fast);
-	}
-	.webhook-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 	/* ── Function cards ── */
 	.fn-cards { display: flex; flex-direction: column; gap: 6px; }

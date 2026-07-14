@@ -23,6 +23,7 @@ impl std::fmt::Display for ProviderError {
 pub struct VmDetails {
     pub provider_vm_id: String,
     pub public_ip: String,
+    #[allow(dead_code)]
     pub region: String,
 }
 
@@ -30,6 +31,7 @@ pub enum VmStatus {
     Running { public_ip: String },
     Initializing,
     Off,
+    #[allow(dead_code)]
     Unknown(String),
 }
 

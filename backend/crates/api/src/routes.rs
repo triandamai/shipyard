@@ -28,6 +28,8 @@ use crate::billing;
 use crate::nodes;
 use crate::plans;
 use crate::edge_functions;
+use crate::artifactory;
+use crate::artifact_source;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -79,6 +81,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(dbclient::routes())
         // Static site — /services/:service_id/static/config, /static/upload
         .merge(static_site::routes())
+        // Artifact source — /services/:service_id/artifact-source
+        .merge(artifact_source::routes())
         // Git providers — org-scoped Git integrations
         .merge(git_providers::routes())
         // Billing webhook — /billing/webhooks
@@ -93,6 +97,10 @@ pub fn api_router() -> Router<AppState> {
         .nest("/internal", edge_functions::internal_routes())
         // Plans — GET /plans (public, no auth)
         .merge(plans::routes())
+        // Artifactory — /orgs/:org_id/registry/...
+        .nest("/orgs/:org_id/registry", artifactory::routes())
+        // Admin Artifactory — /admin/registry/...
+        .nest("/admin/registry", artifactory::admin_routes())
         // Admin — /admin/...
         .nest("/admin", admin::routes())
 }

@@ -1,5 +1,6 @@
 use shipyard_common::config::EdgeFunctionsConfig;
 
+#[allow(dead_code)]
 pub struct TierQuota {
     pub max_functions: Option<u32>,   // None = unlimited
     pub max_bundle_kb: u64,

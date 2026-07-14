@@ -92,6 +92,10 @@
 			{ id: 'shipyard:admin:system:config:view',   label: 'View' },
 			{ id: 'shipyard:admin:system:config:manage', label: 'Manage' },
 		]},
+		{ label: 'Registry', perms: [
+			{ id: 'shipyard:admin:registry:view',   label: 'View' },
+			{ id: 'shipyard:admin:registry:manage', label: 'Manage' },
+		]},
 	];
 
 	onMount(() => load());

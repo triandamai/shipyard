@@ -10,6 +10,7 @@
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
+	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 	import type { StaticSiteConfig, Service, Deployment, Domain } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
 
@@ -77,7 +78,7 @@
 	// ── Webhook URL & Auto-register ──────────────────────────────────────────
 	let webhookToken      = $state('');
 	let webhookProvider   = $state<'github' | 'gitlab' | 'gitea'>('github');
-	let gitProviderId       = $state<string | null>(null);
+	let gitProviderId       = $state('');
 	let orgGitProviders     = $state<import('$lib/api/types').GitProvider[]>([]);
 	let loadingGitProviders = $state(false);
 	let gitProviderSaving   = $state(false);
@@ -90,7 +91,7 @@
 		if (res.data) {
 			orgGitProviders = res.data;
 			if (service?.git_provider_id) {
-				const activeProv = res.data.find(p => p.id === service.git_provider_id);
+				const activeProv = res.data.find(p => p.id === service?.git_provider_id);
 				if (activeProv) {
 					const pType = activeProv.provider_type;
 					if (pType === 'github' || pType === 'gitlab' || pType === 'gitea') {
@@ -746,178 +747,39 @@
 
 		<!-- ── Git tab ── -->
 		{#if activeTab === 'git'}
-			<div class="git-config-section">
-
-				<!-- Linked Git Account -->
-				<div class="git-card">
-					<div class="git-card-title">Linked Git Account</div>
-					<p class="git-card-desc">Connect this static site to a Git provider account to enable automated commit-push tracking and webhook registration.</p>
-
-					<div class="git-field">
-						<label class="git-label" for="git-provider-select">Git Provider</label>
-						<select id="git-provider-select" class="git-select" bind:value={gitProviderId}>
-							<option value="">No provider linked</option>
-							{#each orgGitProviders as provider (provider.id)}
-								<option value={provider.id}>
-									{provider.name} ({provider.provider_type.toUpperCase()})
-								</option>
-							{/each}
-						</select>
-					</div>
-
-					{#if gitProviderError}<p class="git-error">{gitProviderError}</p>{/if}
-					{#if gitProviderSuccess}<p class="git-save-success">{gitProviderSuccess}</p>{/if}
-					{#if webhookRegStatus}
-						<div class="webhook-status {webhookRegStatus.ok ? 'success' : 'error'}">
-							{webhookRegStatus.message}
-						</div>
-					{/if}
-
-					<div class="git-save-row">
-						<button class="btn-primary btn-sm" onclick={saveGitProvider} disabled={gitProviderSaving}>
-							{#if gitProviderSaving}<div class="spinner-xs"></div> Saving…{:else}Link Provider{/if}
-						</button>
-					</div>
-				</div>
-
-				<!-- Deployment Strategy -->
-				<div class="git-card">
-					<div class="git-card-title">Deployment Strategy</div>
-					<p class="git-card-desc">Configure the rules that trigger automatic deployments when code changes are pushed.</p>
-
-					<div class="git-field">
-						<label class="git-label">Strategy</label>
-						<select class="git-select" bind:value={editGitDeployStrategy}>
-							<option value="push">Deploy on Push to Branch</option>
-							<option value="tag">Deploy on Tag Push</option>
-							<option value="pull_request">Deploy on Pull Request Merge</option>
-						</select>
-					</div>
-
-					{#if editGitDeployStrategy === 'push'}
-						<div class="git-field">
-							<label class="git-label" for="ss-branch-input">Target Branch</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">⎇</span>
-								<input
-									id="ss-branch-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={editGitDeployBranch}
-									placeholder="main"
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Deploy triggers when commits are pushed to this branch.</p>
-						</div>
-					{/if}
-
-					{#if editGitDeployStrategy === 'tag'}
-						<div class="git-field">
-							<label class="git-label" for="ss-tag-input">Tag Pattern</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">🏷️</span>
-								<input
-									id="ss-tag-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={editGitDeployTagPattern}
-									placeholder="v*"
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Deploy when a tag matching this glob is pushed (e.g. <code>v*</code>).</p>
-						</div>
-					{/if}
-
-					{#if editGitDeployStrategy === 'pull_request'}
-						<div class="git-field">
-							<label class="git-label" for="ss-pr-branch-input">Target Branch (PR Merge)</label>
-							<div class="git-branch-row">
-								<span class="git-branch-icon">⎇</span>
-								<input
-									id="ss-pr-branch-input"
-									class="git-branch-input"
-									type="text"
-									bind:value={editGitDeployBranch}
-									placeholder="main"
-									spellcheck="false"
-									autocomplete="off"
-								/>
-							</div>
-							<p class="git-hint">Deploy when a pull request is merged into this branch.</p>
-						</div>
-					{/if}
-
-					{#if gitSaveError}<p class="git-error">{gitSaveError}</p>{/if}
-					{#if gitSaveSuccess}<p class="git-save-success">{gitSaveSuccess}</p>{/if}
-
-					<div class="git-save-row">
-						<button class="btn-primary btn-sm" onclick={saveGitConfig} disabled={gitSaving}>
-							{#if gitSaving}<div class="spinner-xs"></div> Saving…{:else}Save Settings{/if}
-						</button>
-					</div>
-				</div>
-
-				<!-- Webhook URL -->
-				<div class="git-card">
-					<div class="git-card-header">
-						<div class="git-card-title">Webhook URL</div>
-						<div class="webhook-provider-tabs">
-							{#each (['github', 'gitlab', 'gitea'] as const) as p}
-								<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
-									{p.charAt(0).toUpperCase() + p.slice(1)}
-								</button>
-							{/each}
-						</div>
-					</div>
-					<p class="git-card-desc">
-						Register this URL in your repository's webhook settings with the <strong>push</strong> event.
-						The token in the URL authenticates the request — no secret header needed.
-					</p>
-
-					{#if isLoadingWebhook}
-						<div class="webhook-loading"><div class="spinner-xs-inline"></div> Loading…</div>
-					{:else}
-						<div class="webhook-url-row">
-							<input
-								class="webhook-url-input"
-								readonly
-								value={webhookToken
-									? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
-									: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
-							/>
-							<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
-								{#if webhookCopied}
-									<CheckCircle2 size={13} /> Copied
-								{:else}
-									<Copy size={13} /> Copy
-								{/if}
-							</button>
-						</div>
-
-						<div class="webhook-actions">
-							{#if rotateConfirm}
-								<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
-								<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
-									{#if isRotatingWebhook}<div class="spinner-xs-inline"></div> Rotating…{:else}Yes, rotate{/if}
-								</button>
-								<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
-							{:else}
-								<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
-									<RefreshCw size={11} /> Rotate URL
-								</button>
-							{/if}
-						</div>
-						{#if service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-							<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
-						{/if}
-					{/if}
-				</div>
-
-			</div>
+			<GitSettingsSection
+				providers={orgGitProviders}
+				loadingProviders={loadingGitProviders}
+				bind:providerId={gitProviderId}
+				providerDefaultLabel="No provider linked"
+				onSaveProvider={saveGitProvider}
+				providerSaving={gitProviderSaving}
+				providerError={gitProviderError}
+				providerSuccess={gitProviderSuccess}
+				providerWebhookStatus={webhookRegStatus}
+				showAutoDeployToggle={false}
+				bind:strategy={editGitDeployStrategy}
+				bind:branch={editGitDeployBranch}
+				bind:tagPattern={editGitDeployTagPattern}
+				onSave={saveGitConfig}
+				saving={gitSaving}
+				saveError={gitSaveError}
+				saveSuccess={gitSaveSuccess}
+				webhookUrl={webhookToken
+					? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+					: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
+				webhookLoading={isLoadingWebhook}
+				showProviderTabs={true}
+				bind:webhookProvider={webhookProvider}
+				webhookCopied={webhookCopied}
+				onCopyWebhook={copyWebhookUrl}
+				onRotateWebhook={rotateWebhook}
+				bind:webhookRotateConfirm={rotateConfirm}
+				isRotatingWebhook={isRotatingWebhook}
+				autoWebhookInfo={service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')
+					? `Webhook is auto-registered on ${webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.`
+					: undefined}
+			/>
 		{/if}
 
 		<!-- ── Deployments tab ── -->

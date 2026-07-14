@@ -17,28 +17,24 @@ struct ProviderDef {
     auth_url: &'static str,
     token_url: &'static str,
     scope: &'static str,
-    settings_key: &'static str,
 }
 
 fn provider_def(provider: &str) -> Option<ProviderDef> {
     match provider {
         "github" => Some(ProviderDef {
-            auth_url:     "https://github.com/login/oauth/authorize",
-            token_url:    "https://github.com/login/oauth/access_token",
-            scope:        "repo",
-            settings_key: "git_github_token",
+            auth_url:  "https://github.com/login/oauth/authorize",
+            token_url: "https://github.com/login/oauth/access_token",
+            scope:     "repo",
         }),
         "gitlab" => Some(ProviderDef {
-            auth_url:     "https://gitlab.com/oauth/authorize",
-            token_url:    "https://gitlab.com/oauth/token",
-            scope:        "read_repository",
-            settings_key: "git_gitlab_token",
+            auth_url:  "https://gitlab.com/oauth/authorize",
+            token_url: "https://gitlab.com/oauth/token",
+            scope:     "read_repository",
         }),
         "bitbucket" => Some(ProviderDef {
-            auth_url:     "https://bitbucket.org/site/oauth2/authorize",
-            token_url:    "https://bitbucket.org/site/oauth2/access_token",
-            scope:        "repository",
-            settings_key: "git_bitbucket_token",
+            auth_url:  "https://bitbucket.org/site/oauth2/authorize",
+            token_url: "https://bitbucket.org/site/oauth2/access_token",
+            scope:     "repository",
         }),
         _ => None,
     }

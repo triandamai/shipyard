@@ -36,6 +36,17 @@ enum ImageSource {
         /// Absolute filesystem path where the repo is (or will be) checked out.
         repo_path: String,
     },
+    /// Pull a pre-built artifact blob from Shipyard's own internal OCI registry
+    /// and deploy it directly, without cloning or building anything.
+    ShipyardArtifact {
+        namespace_id: Uuid,
+        repo: String,
+        tag: String,
+        /// "docker_image" | "static_bundle" | "edge_function"
+        kind: String,
+        /// The resolved `artifacts.id` row.
+        artifact_id: Uuid,
+    },
 }
 
 // ─── Step metadata ────────────────────────────────────────────────────────────
@@ -69,6 +80,14 @@ pub struct DeploymentEngine {
     pub data_dir: String,
     /// How many past deploy versions to keep per static site.
     pub static_retention: usize,
+    /// Optional pusher for recording built artifacts in the Shipyard registry.
+    /// If None, artifact recording is skipped (no-op) without failing the build.
+    pub registry: Option<shipyard_registry::push::ArtifactPusher>,
+    /// Public hostname of the internal OCI registry (e.g. "registry.shipyard.local").
+    /// When non-empty, git-built Docker images are tagged and pushed to this registry
+    /// after a successful `docker build`, making them available for cross-node pulls.
+    /// When empty, only a metadata record is written (legacy behaviour).
+    pub registry_hostname: String,
 }
 
 impl Clone for DeploymentEngine {
@@ -83,6 +102,8 @@ impl Clone for DeploymentEngine {
             port_proxy: self.port_proxy,
             data_dir: self.data_dir.clone(),
             static_retention: self.static_retention,
+            registry: self.registry.clone(),
+            registry_hostname: self.registry_hostname.clone(),
         }
     }
 }
@@ -109,7 +130,22 @@ impl DeploymentEngine {
             port_proxy,
             data_dir,
             static_retention,
+            registry: None,
+            registry_hostname: String::new(),
         }
+    }
+
+    /// Attach a registry pusher so builds record artifacts automatically.
+    pub fn with_registry(mut self, pusher: shipyard_registry::push::ArtifactPusher) -> Self {
+        self.registry = Some(pusher);
+        self
+    }
+
+    /// Set the internal registry hostname so git-built Docker images are pushed
+    /// to the Shipyard OCI registry after a successful `docker build`.
+    pub fn with_registry_hostname(mut self, hostname: impl Into<String>) -> Self {
+        self.registry_hostname = hostname.into();
+        self
     }
 
     /// Returns the DockerEngine that should be used for a given service.
@@ -332,15 +368,6 @@ impl DeploymentEngine {
     // Static site deploy pipeline
     // ─────────────────────────────────────────────────────────────────────────
 
-    const STATIC_UPLOAD_STEPS: [(i32, &'static str); 6] = [
-        (0, "extract_archive"),
-        (1, "parse_shipyard_config"),
-        (2, "publish_files"),
-        (3, "go_live"),
-        (4, "write_nginx_conf"),
-        (5, "finalize"),
-    ];
-
     const STATIC_GIT_STEPS: [(i32, &'static str); 7] = [
         (0, "clone_or_pull"),
         (1, "build_site"),
@@ -427,6 +454,32 @@ impl DeploymentEngine {
             deployment_id, step_id,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+
+        // Push static_bundle artifact to registry (best-effort, non-fatal).
+        if let Some(pusher) = &self.registry {
+            match tokio::fs::read(&artifact).await {
+                Ok(bytes) => {
+                    let zip_bytes = bytes::Bytes::from(bytes);
+                    let metadata = serde_json::json!({ "source": "upload" });
+                    let repo = self.service_slug_or_id(service_id).await;
+                    match pusher.push_static_bundle(
+                        org_id, project_id,
+                        &repo, &deployment_id.to_string(),
+                        zip_bytes, metadata,
+                    ).await {
+                        Ok(digest) => {
+                            self.insert_log(deployment_id, None, "info", &format!("Pushed static bundle to registry: {digest}")).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(deployment_id = %deployment_id, "registry push failed (non-fatal): {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(deployment_id = %deployment_id, "registry push failed (non-fatal): {e}");
+                }
+            }
+        }
 
         // Clean up extract dir — files have been published.
         let _ = tokio::fs::remove_dir_all(&extract_dir).await;
@@ -637,6 +690,58 @@ impl DeploymentEngine {
                 None => return Err(AppError::Internal("build_site returned nothing".into())),
             }
         };
+
+        // Push static_bundle artifact to registry (best-effort, non-fatal).
+        if let Some(pusher) = &self.registry {
+            let zip_tmp = format!("{}/registry/tmp/{}.zip", self.data_dir, deployment_id);
+            let zip_path = std::path::PathBuf::from(&zip_tmp);
+            if let Some(parent) = zip_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let zip_result: AppResult<bytes::Bytes> = tokio::task::spawn_blocking({
+                let src = built_output_path.clone();
+                let dst = zip_path.clone();
+                move || {
+                    crate::static_site::zip_directory(std::path::Path::new(&src), &dst)?;
+                    let bytes = std::fs::read(&dst)
+                        .map_err(|e| AppError::Internal(format!("read zip: {e}")))?;
+                    Ok(bytes::Bytes::from(bytes))
+                }
+            }).await.map_err(|e| AppError::Internal(format!("spawn_blocking zip: {e}"))).and_then(|r| r);
+
+            match zip_result {
+                Ok(zip_bytes) => {
+                    let _ = tokio::fs::remove_file(&zip_path).await;
+                    let tag = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+                        deployment_id.to_string()
+                    } else {
+                        source_ref.to_string()
+                    };
+                    let metadata = serde_json::json!({
+                        "build_command": build_command,
+                        "output_dir":    output_dir,
+                    });
+                    let repo = self.service_slug_or_id(service_id).await;
+                    match pusher.push_static_bundle(
+                        org_id, project_id,
+                        &repo, &tag,
+                        zip_bytes, metadata,
+                    ).await {
+                        Ok(digest) => {
+                            let msg = format!("Pushed static bundle to registry: {digest}");
+                            self.insert_log(deployment_id, None, "info", &msg).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(deployment_id = %deployment_id, "registry push failed (non-fatal): {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&zip_path).await;
+                    tracing::warn!(deployment_id = %deployment_id, "zip for registry push failed (non-fatal): {e}");
+                }
+            }
+        }
 
         // Step 2: parse shipyard.json from repo root for runtime config (spa, headers, etc.)
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
@@ -1028,7 +1133,7 @@ impl DeploymentEngine {
         output_dir: &str,
         install_command: &str,
         build_command: &str,
-        node_version: &str,
+        _node_version: &str,
         image: &str,
         deployment_id: Uuid,
         step_id: Uuid,
@@ -1395,12 +1500,49 @@ impl DeploymentEngine {
             None => return Err(AppError::Internal("acquire_image returned no value".into())),
         };
 
+        // ── ShipyardArtifact short-circuit ─────────────────────────────────────
+        // static_bundle and edge_function artifacts don't go through Docker steps;
+        // step_acquire_image returns a sentinel string that we dispatch here.
+        if resolved_image_ref.starts_with("__ARTIFACT_STATIC__:") {
+            return self
+                .run_static_from_artifact_steps(
+                    org_id, project_id, service_id, deployment_id,
+                    &resolved_image_ref,
+                )
+                .await;
+        }
+        if resolved_image_ref.starts_with("__ARTIFACT_EDGE__:") {
+            return self
+                .run_edge_from_artifact_steps(
+                    org_id, project_id, service_id, deployment_id,
+                    &resolved_image_ref,
+                )
+                .await;
+        }
+
         // Record the resolved image so rollback can re-use the exact artifact.
         let _ = sqlx::query("UPDATE deployments SET deployed_image = $1 WHERE id = $2")
             .bind(&resolved_image_ref)
             .bind(deployment_id)
             .execute(&self.db)
             .await;
+
+        // Record docker image in registry (best-effort, non-fatal).
+        if let Some(pusher) = &self.registry {
+            let tag = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+                deployment_id.to_string()
+            } else {
+                source_ref.to_string()
+            };
+            let repo = self.service_slug_or_id(service_id).await;
+            if let Err(e) = pusher.record_docker_image(
+                org_id, project_id,
+                &repo, &tag,
+                &resolved_image_ref,
+            ).await {
+                tracing::warn!(deployment_id = %deployment_id, "docker image registry record failed (non-fatal): {e}");
+            }
+        }
 
         // Step 2: Apply env vars — returns Vec<String> of "KEY=VALUE"
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 2).await?;
@@ -1668,6 +1810,18 @@ impl DeploymentEngine {
     }
 
     // ── DB log helper ─────────────────────────────────────────────────────────
+
+    /// Return the service's slug for use as a registry repo name.
+    /// Falls back to the UUID string if the slug can't be fetched.
+    async fn service_slug_or_id(&self, service_id: Uuid) -> String {
+        sqlx::query_scalar::<_, String>("SELECT slug FROM services WHERE id = $1")
+            .bind(service_id)
+            .fetch_optional(&self.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| service_id.to_string())
+    }
 
     async fn insert_log(
         &self,
@@ -2490,6 +2644,55 @@ impl DeploymentEngine {
 
         let (svc_type, image_col, git_repo_url, git_branch, directory_path) = row;
 
+        // ── Shipyard internal artifact source (highest priority) ──────────────
+        // Check before git/registry so a service can switch from git to artifact
+        // without changing svc_type.
+        let artifact_source = sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT namespace_id, repo, tag
+             FROM service_artifact_sources
+             WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        if let Some((namespace_id, repo, tag)) = artifact_source {
+            // Resolve to an artifact row (latest pushed, matching namespace/repo/tag).
+            let art = sqlx::query_as::<_, (Uuid, String)>(
+                "SELECT id, kind
+                 FROM artifacts
+                 WHERE namespace_id = $1 AND repo = $2 AND tag = $3
+                 ORDER BY pushed_at DESC
+                 LIMIT 1",
+            )
+            .bind(namespace_id)
+            .bind(&repo)
+            .bind(&tag)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+            if let Some((artifact_id, kind)) = art {
+                tracing::info!(
+                    "Validated artifact source: namespace={namespace_id} repo={repo} tag={tag} kind={kind}"
+                );
+                return Ok(ImageSource::ShipyardArtifact {
+                    namespace_id,
+                    repo,
+                    tag,
+                    kind,
+                    artifact_id,
+                });
+            } else {
+                return Err(AppError::BadRequest(format!(
+                    "No artifact found for {repo}:{tag} in namespace {namespace_id}. \
+                     Push an artifact to the registry first."
+                )));
+            }
+        }
+
+
         if svc_type == "git" {
             // ── Git service ──────────────────────────────────────────────────
             let repo_url = git_repo_url.filter(|u| !u.is_empty()).ok_or_else(|| {
@@ -2733,8 +2936,138 @@ impl DeploymentEngine {
                     .await
                     .map_err(|e| AppError::Database(e.to_string()))?;
 
-                tracing::info!("Git build complete: {local_tag}");
-                Ok(local_tag)
+                // Push to internal registry if a hostname is configured (best-effort, non-fatal).
+                // This makes the image available for cross-node pulls and for Case 1 deploys.
+                let final_ref = if !self.registry_hostname.is_empty() {
+                    // Build the internal registry tag: <hostname>/<org_id>/<service_id>:<short_sha>
+                    let sha_len = 7.min(commit_info.sha.len());
+                    let registry_tag = format!(
+                        "{}/{}/{}:{}",
+                        self.registry_hostname,
+                        org_id,
+                        service_id,
+                        &commit_info.sha[..sha_len],
+                    );
+
+                    // Step A: docker tag <local_tag> <registry_tag>
+                    let tag_result = tokio::process::Command::new("docker")
+                        .args(["tag", &local_tag, &registry_tag])
+                        .output()
+                        .await;
+
+                    match tag_result {
+                        Ok(o) if o.status.success() => {
+                            let push_msg = format!("Tagged for internal registry: {registry_tag}");
+                            self.insert_log(deployment_id, Some(step_id), "info", &push_msg).await;
+
+                            // Step B: docker push <registry_tag>
+                            let push_result = tokio::process::Command::new("docker")
+                                .args(["push", &registry_tag])
+                                .output()
+                                .await;
+
+                            match push_result {
+                                Ok(o) if o.status.success() => {
+                                    let pushed_msg = format!("Pushed to internal registry: {registry_tag}");
+                                    self.insert_log(deployment_id, Some(step_id), "info", &pushed_msg).await;
+                                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pushed_msg).await;
+                                    registry_tag // use registry ref as the authoritative ref
+                                }
+                                Ok(o) => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr);
+                                    tracing::warn!(deployment_id = %deployment_id, "docker push to internal registry failed (non-fatal): {stderr}");
+                                    local_tag // fall back to local tag
+                                }
+                                Err(e) => {
+                                    tracing::warn!(deployment_id = %deployment_id, "docker push command error (non-fatal): {e}");
+                                    local_tag
+                                }
+                            }
+                        }
+                        Ok(o) => {
+                            let stderr = String::from_utf8_lossy(&o.stderr);
+                            tracing::warn!(deployment_id = %deployment_id, "docker tag for registry failed (non-fatal): {stderr}");
+                            local_tag
+                        }
+                        Err(e) => {
+                            tracing::warn!(deployment_id = %deployment_id, "docker tag command error (non-fatal): {e}");
+                            local_tag
+                        }
+                    }
+                } else {
+                    local_tag
+                };
+
+                tracing::info!("Git build complete: {final_ref}");
+                Ok(final_ref)
+            }
+
+            ImageSource::ShipyardArtifact { namespace_id, repo, tag, kind, artifact_id } => {
+                let msg = format!(
+                    "Deploying from Shipyard artifact: {repo}:{tag} (kind={kind}, id={artifact_id})"
+                );
+                self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
+                self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
+
+                // Fetch manifest digest so we can pass it to kind-specific handlers.
+                let manifest_digest: String = sqlx::query_scalar(
+                    "SELECT manifest_digest FROM artifacts WHERE id = $1",
+                )
+                .bind(artifact_id)
+                .fetch_one(&self.db)
+                .await
+                .map_err(|e| AppError::Database(format!("artifact not found: {e}")))?;
+
+                match kind.as_str() {
+                    "docker_image" => {
+                        if self.registry_hostname.is_empty() {
+                            return Err(AppError::Internal(
+                                "Cannot deploy docker_image artifact: \
+                                 registry_hostname is not configured in [registry] config."
+                                    .into(),
+                            ));
+                        }
+                        // Resolve namespace slug (org-slug/project-slug) for a readable image ref.
+                        let ns_slug: String = sqlx::query_scalar(
+                            "SELECT slug FROM registry_namespaces WHERE id = $1",
+                        )
+                        .bind(namespace_id)
+                        .fetch_one(&self.db)
+                        .await
+                        .map_err(|e| AppError::Database(format!("namespace not found: {e}")))?;
+
+                        // Pull the image from the internal registry.
+                        let image_ref = format!(
+                            "{}/{}/{}:{}",
+                            self.registry_hostname, ns_slug, repo, tag
+                        );
+                        let pull_msg = format!("Pulling image from internal registry: {image_ref}");
+                        self.insert_log(deployment_id, Some(step_id), "info", &pull_msg).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pull_msg).await;
+
+                        let lines = self.docker.pull_image(&image_ref, "", None).await?;
+                        for line in &lines {
+                            if !line.trim().is_empty() {
+                                self.insert_log(deployment_id, Some(step_id), "info", line).await;
+                            }
+                        }
+                        Ok(image_ref)
+                    }
+                    "static_bundle" => {
+                        // Sentinel: the execute_deployment caller will short-circuit
+                        // to run_static_from_artifact_steps.
+                        Ok(format!("__ARTIFACT_STATIC__:{artifact_id}:{manifest_digest}"))
+                    }
+                    "edge_function" => {
+                        // Sentinel: the execute_deployment caller will short-circuit
+                        // to run_edge_from_artifact_steps.
+                        Ok(format!("__ARTIFACT_EDGE__:{artifact_id}:{manifest_digest}"))
+                    }
+                    other => Err(AppError::Internal(format!(
+                        "Unsupported artifact kind '{other}'. \
+                         Supported: docker_image, static_bundle, edge_function."
+                    ))),
+                }
             }
         }
     }
@@ -2865,9 +3198,10 @@ impl DeploymentEngine {
             self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
 
+            let auth_url_cp = authenticated_url.clone();
             tokio::task::spawn_blocking(move || {
                 let git = GitService::new(&repo_path);
-                git.checkout_ref(&repo_path, &target_ref)
+                git.checkout_ref(&repo_path, &target_ref, Some(&auth_url_cp))
             })
             .await
             .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))?
@@ -2920,7 +3254,7 @@ impl DeploymentEngine {
                     });
                 })?;
 
-                git.checkout_ref(&path_cp, &target_ref_cp)
+                git.checkout_ref(&path_cp, &target_ref_cp, Some(&authenticated_url_cp))
             })
             .await
             .map_err(|e| AppError::Internal(format!("spawn_blocking panicked: {e}")))?
@@ -3483,6 +3817,181 @@ impl DeploymentEngine {
             &MqttPayload::new("topology.changed")
                 .with_meta(serde_json::json!({ "reason": "deploy_finalized", "service_id": service_id })),
         ).await;
+
+        Ok(())
+    }
+
+    // ── Shipyard Artifact deploy pipelines ────────────────────────────────────
+
+    /// Deploy a static site from a pre-built artifact blob stored in the
+    /// Shipyard internal OCI registry (Case 1 — static_bundle kind).
+    ///
+    /// Fetches the zip blob from storage, writes it to the standard upload path,
+    /// then delegates to `run_static_upload_steps` for extraction and serving.
+    async fn run_static_from_artifact_steps(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        artifact_ref: &str,
+    ) -> AppResult<()> {
+        // sentinel: __ARTIFACT_STATIC__:<artifact_id>:<manifest_digest>
+        let parts: Vec<&str> = artifact_ref.splitn(3, ':').collect();
+        if parts.len() < 3 {
+            return Err(AppError::Internal("invalid artifact ref format".into()));
+        }
+        let manifest_digest = parts[2];
+
+        let storage = self.registry.as_ref()
+            .map(|p| std::sync::Arc::clone(&p.storage))
+            .ok_or_else(|| AppError::Internal(
+                "registry storage not configured; cannot deploy static artifact".into(),
+            ))?;
+
+        // Resolve manifest → blob digest → storage key.
+        let manifest_json: String = sqlx::query_scalar(
+            "SELECT content FROM registry_manifests WHERE digest = $1",
+        )
+        .bind(manifest_digest)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(format!("manifest not found: {e}")))?;
+
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+            .map_err(|e| AppError::Internal(format!("invalid manifest JSON: {e}")))?;
+
+        let blob_digest = manifest["layers"][0]["digest"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("manifest has no blob layer".into()))?
+            .to_string();
+
+        let storage_key: String = sqlx::query_scalar(
+            "SELECT storage_key FROM registry_blobs WHERE digest = $1",
+        )
+        .bind(&blob_digest)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(format!("blob record not found: {e}")))?;
+
+        // Fetch zip bytes from storage.
+        let zip_bytes = storage.get_bytes(&storage_key).await
+            .map_err(|e| AppError::Internal(format!("fetch artifact blob: {e}")))?;
+
+        self.insert_log(deployment_id, None, "info",
+            &format!("Fetched static bundle from registry ({} bytes)", zip_bytes.len())).await;
+
+        // Write to the upload path that run_static_upload_steps reads from.
+        let upload_path = format!("{}/static/uploads/{}/{}.zip", self.data_dir, service_id, deployment_id);
+        let upload_dir  = format!("{}/static/uploads/{}", self.data_dir, service_id);
+        tokio::fs::create_dir_all(&upload_dir).await
+            .map_err(|e| AppError::Internal(format!("create upload dir: {e}")))?;
+        tokio::fs::write(&upload_path, &zip_bytes[..]).await
+            .map_err(|e| AppError::Internal(format!("write artifact zip: {e}")))?;
+
+        self.run_static_upload_steps(org_id, project_id, service_id, deployment_id).await
+    }
+
+    /// Deploy an edge function from a pre-built artifact blob stored in the
+    /// Shipyard internal OCI registry (Case 1 — edge_function kind).
+    ///
+    /// Fetches the JS bundle from storage, writes it via `EdgeArtifact`, and
+    /// activates the new version.  Runtime container reload is NOT performed
+    /// here — trigger a reload via the edge function API after this completes.
+    async fn run_edge_from_artifact_steps(
+        &self,
+        _org_id: Uuid,
+        _project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        artifact_ref: &str,
+    ) -> AppResult<()> {
+        use crate::artifact::{ArtifactStore, EdgeArtifact};
+
+        // sentinel: __ARTIFACT_EDGE__:<artifact_id>:<manifest_digest>
+        let parts: Vec<&str> = artifact_ref.splitn(3, ':').collect();
+        if parts.len() < 3 {
+            return Err(AppError::Internal("invalid artifact ref format".into()));
+        }
+        let manifest_digest = parts[2];
+
+        let storage = self.registry.as_ref()
+            .map(|p| std::sync::Arc::clone(&p.storage))
+            .ok_or_else(|| AppError::Internal(
+                "registry storage not configured; cannot deploy edge artifact".into(),
+            ))?;
+
+        // Resolve manifest → blob digest → storage key.
+        let manifest_json: String = sqlx::query_scalar(
+            "SELECT content FROM registry_manifests WHERE digest = $1",
+        )
+        .bind(manifest_digest)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(format!("manifest not found: {e}")))?;
+
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_json)
+            .map_err(|e| AppError::Internal(format!("invalid manifest JSON: {e}")))?;
+
+        let blob_digest = manifest["layers"][0]["digest"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("manifest has no blob layer".into()))?
+            .to_string();
+
+        let entry_point = manifest["annotations"]["org.shipyard.entry_point"]
+            .as_str()
+            .unwrap_or("index.js")
+            .to_string();
+
+        let storage_key: String = sqlx::query_scalar(
+            "SELECT storage_key FROM registry_blobs WHERE digest = $1",
+        )
+        .bind(&blob_digest)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(format!("blob record not found: {e}")))?;
+
+        let bundle_bytes = storage.get_bytes(&storage_key).await
+            .map_err(|e| AppError::Internal(format!("fetch artifact blob: {e}")))?;
+        let code = String::from_utf8(bundle_bytes.to_vec())
+            .map_err(|e| AppError::Internal(format!("edge bundle is not valid UTF-8: {e}")))?;
+
+        self.insert_log(deployment_id, None, "info",
+            &format!("Fetched edge function bundle from registry ({} bytes, entry={entry_point})", code.len())).await;
+
+        // Write bundle to disk and activate — service_id is used as fn_id.
+        let fn_id = service_id;
+        let data_dir = self.data_dir.clone();
+        let entry_owned = entry_point.clone();
+        let code_owned = code.clone();
+        let version_dir = tokio::task::spawn_blocking(move || -> AppResult<std::path::PathBuf> {
+            let store = EdgeArtifact::new(&data_dir);
+            let vd = store.write_version(fn_id, deployment_id, &[(entry_owned, code_owned)])?;
+            store.update_current(fn_id, &vd)?;
+            Ok(vd)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))??;
+
+        tracing::info!(
+            deployment_id = %deployment_id,
+            fn_id = %fn_id,
+            version_dir = %version_dir.display(),
+            "edge function artifact deployed to disk",
+        );
+
+        sqlx::query(
+            "UPDATE edge_functions \
+             SET status = 'active', last_deployed_at = NOW(), updated_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind(fn_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        self.insert_log(deployment_id, None, "info",
+            "Edge function artifact deployed. Trigger a runtime reload via the edge function API to activate.").await;
 
         Ok(())
     }

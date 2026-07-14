@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct EdgeFunction {
     pub id: Uuid,
     pub org_id: Uuid,
@@ -20,6 +21,7 @@ pub struct EdgeFunction {
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct EdgeFunctionDeployment {
     pub id: Uuid,
     pub function_id: Uuid,
@@ -44,10 +46,12 @@ pub struct EdgeFunctionGroup {
     pub auto_deploy: bool,
     pub deploy_strategy: String,
     pub deploy_tag_pattern: Option<String>,
+    pub git_provider_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct EdgeFunctionInvocationLog {
     pub id: Uuid,
     pub function_id: Uuid,
@@ -64,13 +68,26 @@ pub struct EdgeFunctionInvocationLog {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateFunctionGroupRequest {
+    /// Set to "artifact" when deploying from Shipyard's own registry.
+    /// Omit (defaults to "github"/"gitlab" etc.) for git-based groups.
+    #[serde(default)]
     pub provider: String,
+    /// Git clone URL, or empty string when source is "artifact".
+    #[serde(default)]
     pub repo_url: String,
+    /// Git branch, or empty string when source is "artifact".
+    #[serde(default)]
     pub branch: String,
     /// Project to associate this group with (shows on that project's canvas).
     pub project_id: Option<Uuid>,
     /// ID of the linked GitProvider row (for OAuth token + webhook registration).
     pub git_provider_id: Option<Uuid>,
+    // ── Artifact source fields (when provider = "artifact") ───────────────────
+    #[allow(dead_code)]
+    pub artifact_namespace_id: Option<Uuid>,
+    pub artifact_repo:         Option<String>,
+    #[allow(dead_code)]
+    pub artifact_tag:          Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +103,7 @@ pub struct UpdateGroupRequest {
     pub deploy_strategy: Option<String>,
     pub deploy_tag_pattern: Option<String>,
     pub branch: Option<String>,
+    pub git_provider_id: Option<serde_json::Value>, // null clears, string UUID sets
 }
 
 // ─── Response types ───────────────────────────────────────────────────────────

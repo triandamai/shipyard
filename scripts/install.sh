@@ -239,6 +239,12 @@ DOMAIN=""
 read_input "  Domain name (e.g. app.example.com): " DOMAIN ""
 [[ -n "${DOMAIN}" ]] || error "Domain name is required."
 
+API_DOMAIN=""
+read_input "  API domain (e.g. api.example.com) [api-${DOMAIN}]: " API_DOMAIN "api-${DOMAIN}"
+
+REGISTRY_DOMAIN=""
+read_input "  Registry domain (e.g. registry.example.com) [registry.${DOMAIN}]: " REGISTRY_DOMAIN "registry.${DOMAIN}"
+
 ACME_EMAIL=""
 read_input "  Email for Let's Encrypt certificates: " ACME_EMAIL ""
 [[ -n "${ACME_EMAIL}" ]] || error "Email is required for Let's Encrypt."
@@ -260,6 +266,40 @@ if [[ "${USE_HTTPS}" == "y" || "${USE_HTTPS}" == "Y" || "${USE_HTTPS}" == "yes" 
     PROTOCOL="https"
 else
     PROTOCOL="http"
+fi
+
+# ── Registry storage engine ───────────────────────────────────────────────────
+REGISTRY_STORAGE=""
+read_input "  Artifact registry storage engine [disk/s3] (default: disk): " REGISTRY_STORAGE "disk"
+
+S3_ENDPOINT=""
+S3_BUCKET=""
+S3_ACCESS_KEY=""
+S3_SECRET_KEY=""
+S3_REGION=""
+
+if [[ "${REGISTRY_STORAGE}" == "s3" ]]; then
+    read_input "  S3/MinIO endpoint URL (e.g. https://s3.example.com): " S3_ENDPOINT ""
+    [[ -n "${S3_ENDPOINT}" ]] || error "S3 endpoint is required when using s3 storage."
+
+    read_input "  S3 bucket name [shipyard-registry]: " S3_BUCKET "shipyard-registry"
+
+    read_input "  S3 access key: " S3_ACCESS_KEY ""
+    [[ -n "${S3_ACCESS_KEY}" ]] || error "S3 access key is required."
+
+    # Read secret key without echo
+    if [[ -t 0 ]]; then
+        read -rsp "  S3 secret key: " S3_SECRET_KEY; echo ""
+    elif [[ -c /dev/tty ]]; then
+        read -rsp "  S3 secret key: " S3_SECRET_KEY < /dev/tty; echo ""
+    fi
+    [[ -n "${S3_SECRET_KEY}" ]] || error "S3 secret key is required."
+
+    read_input "  S3 region [us-east-1]: " S3_REGION "us-east-1"
+    success "S3 registry storage configured (endpoint=${S3_ENDPOINT}, bucket=${S3_BUCKET})"
+else
+    REGISTRY_STORAGE="local"
+    success "Local disk registry storage selected"
 fi
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
@@ -421,11 +461,27 @@ SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
 SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=${EDGE_RUNTIME_SECRET}
 # API URL reachable from every Swarm node (via Traefik). Worker nodes cannot
 # resolve the container name 'shipyard-backend' via DNS — use the public subdomain.
-SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL=${PROTOCOL}://api-${DOMAIN}
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL=${PROTOCOL}://${API_DOMAIN}
 
 # Scripts base URL — used by update.sh to self-update from the landing site.
 # Set this to the public URL of your Shipyard landing (e.g. https://shipyard.example.com).
 SCRIPTS_URL=${SCRIPTS_URL}
+
+# Public API domain (used by Traefik router rule and edge runtime API URL)
+SHIPYARD__API_DOMAIN=${API_DOMAIN}
+
+# Artifact Registry
+SHIPYARD__REGISTRY__HOSTNAME=${REGISTRY_DOMAIN}
+SHIPYARD__REGISTRY__STORAGE=${REGISTRY_STORAGE}
+$(if [[ "${REGISTRY_STORAGE}" == "s3" ]]; then
+cat <<S3VARS
+SHIPYARD__REGISTRY__S3_ENDPOINT=${S3_ENDPOINT}
+SHIPYARD__REGISTRY__S3_BUCKET=${S3_BUCKET}
+SHIPYARD__REGISTRY__S3_ACCESS_KEY=${S3_ACCESS_KEY}
+SHIPYARD__REGISTRY__S3_SECRET_KEY=${S3_SECRET_KEY}
+SHIPYARD__REGISTRY__S3_REGION=${S3_REGION}
+S3VARS
+fi)
 
 RUST_LOG=shipyard=info,tower_http=warn
 ENV

@@ -573,12 +573,11 @@ async fn get_function_code(
     #[derive(sqlx::FromRow)]
     struct Row {
         code_bundle: Option<String>,
-        artifact_path: Option<String>,
     }
 
     let row: Option<Row> = if let Some(dep_id) = q.deployment_id {
         sqlx::query_as(
-            "SELECT efd.code_bundle, efd.artifact_path
+            "SELECT efd.code_bundle
              FROM edge_function_deployments efd
              JOIN edge_functions ef ON ef.id = efd.function_id
              WHERE efd.id = $1 AND efd.function_id = $2 AND ef.org_id = $3",
@@ -591,7 +590,7 @@ async fn get_function_code(
         .map_err(|e| AppError::Database(e.to_string()))?
     } else {
         sqlx::query_as(
-            "SELECT efd.code_bundle, efd.artifact_path
+            "SELECT efd.code_bundle
              FROM edge_function_deployments efd
              JOIN edge_functions ef ON ef.id = efd.function_id
              WHERE efd.function_id = $1 AND ef.org_id = $2 AND efd.status = 'live'
@@ -668,7 +667,8 @@ async fn list_groups(
 
     let groups: Vec<EdgeFunctionGroup> = sqlx::query_as(
         "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at
+                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern,
+                git_provider_id, created_at
          FROM edge_function_groups WHERE org_id = $1 ORDER BY created_at DESC"
     )
     .bind(org_id)
@@ -699,13 +699,17 @@ async fn create_group(
     // participates in topology, domains, and all shared service infrastructure.
     let service_id: Option<Uuid> = if let Some(project_id) = body.project_id {
         let sid = Uuid::now_v7();
-        let repo_name = body.repo_url
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("edge-fn")
-            .trim_end_matches(".git")
-            .to_string();
+        let repo_name = if body.provider == "artifact" {
+            body.artifact_repo.as_deref().unwrap_or("edge-fn").to_string()
+        } else {
+            body.repo_url
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or("edge-fn")
+                .trim_end_matches(".git")
+                .to_string()
+        };
         let slug = format!("efg-{}", &group_id.to_string()[..8]);
         sqlx::query(
             "INSERT INTO services (id, project_id, name, slug, type, status, replicas, ports)
@@ -725,10 +729,11 @@ async fn create_group(
 
     let group: EdgeFunctionGroup = sqlx::query_as(
         "INSERT INTO edge_function_groups
-             (id, org_id, project_id, provider, repo_url, branch, webhook_secret, service_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             (id, org_id, project_id, provider, repo_url, branch, webhook_secret, service_id, git_provider_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                   last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at",
+                   last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern,
+                   git_provider_id, created_at",
     )
     .bind(group_id)
     .bind(org_id)
@@ -738,6 +743,7 @@ async fn create_group(
     .bind(&body.branch)
     .bind(&secret)
     .bind(service_id)
+    .bind(body.git_provider_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
@@ -926,25 +932,73 @@ async fn update_group(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     crate::orgs::require_member(&state.db, org_id, auth.user_id).await?;
 
-    sqlx::query(
-        "UPDATE edge_function_groups
-         SET auto_deploy        = COALESCE($1, auto_deploy),
-             deploy_strategy    = COALESCE($2, deploy_strategy),
-             deploy_tag_pattern = COALESCE($3, deploy_tag_pattern),
-             branch             = COALESCE($4, branch)
-         WHERE id = $5 AND org_id = $6",
+    // git_provider_id: JSON null → set to NULL, JSON string UUID → set to that UUID, absent → no change
+    let new_git_provider_id: Option<Option<Uuid>> = match &body.git_provider_id {
+        None => None, // field absent — don't touch
+        Some(serde_json::Value::Null) => Some(None), // explicit null — clear it
+        Some(serde_json::Value::String(s)) => {
+            Some(s.parse::<Uuid>().ok())
+        }
+        _ => None,
+    };
+
+    if let Some(provider_id) = new_git_provider_id {
+        sqlx::query(
+            "UPDATE edge_function_groups
+             SET auto_deploy        = COALESCE($1, auto_deploy),
+                 deploy_strategy    = COALESCE($2, deploy_strategy),
+                 deploy_tag_pattern = COALESCE($3, deploy_tag_pattern),
+                 branch             = COALESCE($4, branch),
+                 git_provider_id    = $5
+             WHERE id = $6 AND org_id = $7",
+        )
+        .bind(body.auto_deploy)
+        .bind(body.deploy_strategy)
+        .bind(body.deploy_tag_pattern)
+        .bind(body.branch)
+        .bind(provider_id)
+        .bind(group_id)
+        .bind(org_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    } else {
+        sqlx::query(
+            "UPDATE edge_function_groups
+             SET auto_deploy        = COALESCE($1, auto_deploy),
+                 deploy_strategy    = COALESCE($2, deploy_strategy),
+                 deploy_tag_pattern = COALESCE($3, deploy_tag_pattern),
+                 branch             = COALESCE($4, branch)
+             WHERE id = $5 AND org_id = $6",
+        )
+        .bind(body.auto_deploy)
+        .bind(body.deploy_strategy)
+        .bind(body.deploy_tag_pattern)
+        .bind(body.branch)
+        .bind(group_id)
+        .bind(org_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    }
+
+    // Return the updated group so the caller can confirm exactly what was saved.
+    let updated: EdgeFunctionGroup = sqlx::query_as(
+        "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
+                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern,
+                git_provider_id, created_at
+         FROM edge_function_groups WHERE id = $1 AND org_id = $2"
     )
-    .bind(body.auto_deploy)
-    .bind(body.deploy_strategy)
-    .bind(body.deploy_tag_pattern)
-    .bind(body.branch)
     .bind(group_id)
     .bind(org_id)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    Ok(Json(ApiResponse::ok(serde_json::json!({ "updated": true }))))
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "updated": true,
+        "group": updated,
+    }))))
 }
 
 async fn delete_group(
@@ -1068,7 +1122,8 @@ async fn trigger_group_deploy(
 
     let group: EdgeFunctionGroup = sqlx::query_as(
         "SELECT id, org_id, project_id, provider, repo_url, branch, webhook_secret,
-                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern, created_at
+                last_deployed_sha, service_id, auto_deploy, deploy_strategy, deploy_tag_pattern,
+                git_provider_id, created_at
          FROM edge_function_groups WHERE id = $1 AND org_id = $2"
     )
     .bind(group_id)

@@ -312,7 +312,11 @@ async fn migrate_node_services(
             state.config.docker.port_proxy,
             state.config.data_dir.clone(),
             state.config.static_server.retention_versions,
-        );
+        ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+            state.db.clone(),
+            Arc::clone(&state.registry_storage),
+        ))
+        .with_registry_hostname(state.config.registry.hostname.clone());
 
         let service_id = svc.service_id;
         let source_ref = svc.source_ref.clone();

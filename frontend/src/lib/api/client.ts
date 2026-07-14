@@ -324,6 +324,7 @@ class ApiClient {
 			auto_deploy: boolean;
 			git_deploy_strategy: 'push' | 'tag' | 'pull_request';
 			git_deploy_branch: string | null;
+			git_provider_id:string|null;
 			git_deploy_tag_pattern: string | null;
 		}>
 	): Promise<ApiResponse<Service>> {

@@ -2,10 +2,11 @@
 	import { onMount } from 'svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
-	import { ChevronRight, Settings, CheckCircle, Zap } from '@lucide/svelte';
+	import { ChevronRight, Settings, CheckCircle, Zap, Package } from '@lucide/svelte';
 	import GitAccountPickerPanel from './GitAccountPickerPanel.svelte';
 	import GitRepoPickerPanel from './GitRepoPickerPanel.svelte';
 	import GitBranchPickerPanel from './GitBranchPickerPanel.svelte';
+	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
 
 	interface Props {
 		projectId: string;
@@ -29,16 +30,35 @@
 		bitbucket: '#0052CC',
 	};
 
+	let source = $state<'git' | 'artifactory'>('git');
+
 	let connectedAccounts = $state<ConnectedAccount[]>([]);
 	let accountsLoading   = $state(true);
 	let selectedAccount   = $state<ConnectedAccount | null>(null);
 	let selectedRepo      = $state<{ name: string; fullName: string; cloneUrl: string } | null>(null);
 	let selectedBranch    = $state('main');
 
+	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
+	let selectedArtifact = $state<SelectedArtifact | null>(null);
+
 	let isSubmitting = $state(false);
 	let submitError  = $state('');
 	let created      = $state(false);
 	let createdGroupId = $state('');
+
+	function openArtifactoryPicker() {
+		uiStore.pushPanel({
+			component: ArtifactoryPickerPanel,
+			title: 'Pick Edge Function Artifact',
+			props: {
+				kind: 'edge_function',
+				onSelect: (art: SelectedArtifact) => {
+					selectedArtifact = art;
+					uiStore.popPanel();
+				},
+			},
+		});
+	}
 
 	async function loadAccounts() {
 		accountsLoading = true;
@@ -118,20 +138,33 @@
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
-		if (!selectedAccount || !selectedRepo) {
+		if (source === 'git' && (!selectedAccount || !selectedRepo)) {
 			submitError = 'Please select an account and repository.';
+			return;
+		}
+		if (source === 'artifactory' && !selectedArtifact) {
+			submitError = 'Please select an artifact from the registry.';
 			return;
 		}
 		submitError  = '';
 		isSubmitting = true;
 		try {
-			const res = await api.post<{ id: string }>(`/orgs/${orgId}/edge-functions/groups`, {
-				provider:        selectedAccount.provider_type,
-				repo_url:        selectedRepo.cloneUrl,
-				branch:          selectedBranch || 'main',
-				project_id:      projectId || null,
-				git_provider_id: selectedAccount.id,
-			});
+			const body = source === 'artifactory'
+				? {
+					provider:              'artifact',
+					project_id:            projectId || null,
+					artifact_namespace_id: selectedArtifact!.namespace_id,
+					artifact_repo:         selectedArtifact!.repo,
+					artifact_tag:          selectedArtifact!.tag,
+				}
+				: {
+					provider:        selectedAccount!.provider_type,
+					repo_url:        selectedRepo!.cloneUrl,
+					branch:          selectedBranch || 'main',
+					project_id:      projectId || null,
+					git_provider_id: selectedAccount!.id,
+				};
+			const res = await api.post<{ id: string }>(`/orgs/${orgId}/edge-functions/groups`, body);
 			if (res.error) { submitError = res.error.message; return; }
 			createdGroupId = res.data?.id ?? '';
 			created = true;
@@ -164,6 +197,39 @@
 				</span>
 			</div>
 
+			<div class="divider"></div>
+
+			<!-- Source selection -->
+			<div class="form-group">
+				<label class="form-label">Source</label>
+				<div class="source-options">
+					<label class="source-opt" class:active={source === 'git'}>
+						<input type="radio" name="ef-source" value="git" bind:group={source} />
+						<span class="opt-label">Git repository</span>
+					</label>
+					<label class="source-opt" class:active={source === 'artifactory'}>
+						<input type="radio" name="ef-source" value="artifactory" bind:group={source} />
+						<span class="opt-label">Shipyard Artifactory</span>
+					</label>
+				</div>
+			</div>
+
+			{#if source === 'artifactory'}
+				<div class="form-group">
+					<label class="form-label">Artifact</label>
+					<button type="button" class="picker-btn" onclick={openArtifactoryPicker}>
+						{#if selectedArtifact}
+							<Package size={13} style="color:#f59e0b;flex-shrink:0" />
+							<span class="picker-value font-mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
+						{:else}
+							<span class="picker-placeholder">Select from Shipyard registry…</span>
+						{/if}
+						<ChevronRight size={14} class="picker-chevron" />
+					</button>
+				</div>
+			{/if}
+
+			{#if source === 'git'}
 			<div class="divider"></div>
 
 			<!-- Step 1: Account -->
@@ -218,11 +284,15 @@
 				</button>
 			</div>
 
+			{/if}<!-- end {#if source === 'git'} -->
+
 			{#if submitError}
 				<div class="error-msg">{submitError}</div>
 			{/if}
 
-			<button class="btn btn-primary submit-btn" type="submit" disabled={isSubmitting || !selectedRepo}>
+			<button class="btn btn-primary submit-btn" type="submit"
+				disabled={isSubmitting || (source === 'git' && !selectedRepo) || (source === 'artifactory' && !selectedArtifact)}
+			>
 				{#if isSubmitting}
 					<div class="btn-spinner"></div> Deploying…
 				{:else}
@@ -291,6 +361,20 @@
 		border-radius: var(--radius-sm);
 	}
 	.no-accounts-link:hover { text-decoration: underline; }
+
+	.source-options { display: flex; flex-direction: column; gap: 6px; }
+	.source-opt {
+		display: flex; align-items: center; gap: 8px;
+		padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+		cursor: pointer; font-size: 12px; font-weight: 500; color: var(--text-primary);
+		transition: all var(--transition-fast);
+	}
+	.source-opt input[type="radio"] { cursor: pointer; }
+	.source-opt.active {
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 6%, transparent);
+	}
+	.opt-label { font-size: 12px; font-weight: 500; }
 
 	.error-msg {
 		font-size: 12px; color: var(--accent-red); padding: 8px 10px;

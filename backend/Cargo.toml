@@ -9,6 +9,7 @@ members = [
     "crates/git",
     "crates/mqtt_broker",
     "crates/openapi",
+    "crates/registry",
     "crates/traefik",
 ]
 resolver = "2"
@@ -63,6 +64,7 @@ aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 
 # IDs
 uuid = { version = "1", features = ["v4", "v7", "serde"] }

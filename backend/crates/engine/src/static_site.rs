@@ -728,6 +728,52 @@ pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Zip a directory recursively into `zip_path`, returning the total byte count.
+/// Uses Deflate compression. Files are stored with paths relative to `src_dir`.
+pub fn zip_directory(src_dir: &Path, zip_path: &Path) -> AppResult<u64> {
+    use std::io::{Read, Write};
+    use zip::write::SimpleFileOptions;
+    use walkdir::WalkDir;
+
+    let file = std::fs::File::create(zip_path)
+        .map_err(|e| AppError::Internal(format!("create zip {}: {e}", zip_path.display())))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let opts = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for entry in WalkDir::new(src_dir).sort_by_file_name() {
+        let entry = entry.map_err(|e| AppError::Internal(format!("walkdir: {e}")))?;
+        let path = entry.path();
+        let rel = path.strip_prefix(src_dir)
+            .map_err(|e| AppError::Internal(format!("strip_prefix: {e}")))?;
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let name = rel.to_string_lossy();
+        if path.is_dir() {
+            archive.add_directory(format!("{}/", name), opts)
+                .map_err(|e| AppError::Internal(format!("zip dir {name}: {e}")))?;
+        } else {
+            archive.start_file(name.as_ref(), opts)
+                .map_err(|e| AppError::Internal(format!("zip file {name}: {e}")))?;
+            let mut f = std::fs::File::open(path)
+                .map_err(|e| AppError::Internal(format!("open {}: {e}", path.display())))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)
+                .map_err(|e| AppError::Internal(format!("read {}: {e}", path.display())))?;
+            archive.write_all(&buf)
+                .map_err(|e| AppError::Internal(format!("write {name}: {e}")))?;
+        }
+    }
+
+    let file = archive.finish()
+        .map_err(|e| AppError::Internal(format!("finish zip: {e}")))?;
+    let size = file.metadata()
+        .map_err(|e| AppError::Internal(format!("zip metadata: {e}")))?
+        .len();
+    Ok(size)
+}
+
 fn sanitize_zip_path(raw: &str) -> AppResult<PathBuf> {
     let p = Path::new(raw);
     let mut out = PathBuf::new();

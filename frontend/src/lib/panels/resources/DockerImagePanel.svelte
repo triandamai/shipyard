@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Trash2, Network, ChevronRight, X, Plug } from '@lucide/svelte';
+	import { Trash2, Network, ChevronRight, X, Plug, Package } from '@lucide/svelte';
+	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
 	import type { Service, Network as NetworkType } from '$lib/api/types';
@@ -30,9 +31,40 @@
 	let name = $state(initialName);
 	let slug = $state(initialSlug);
 	let image = $state(initialImage);
+	let registrySource = $state<'external' | 'shipyard'>('external');
 	let registryUrl = $state('');
 	let registryUser = $state('');
 	let registryPass = $state('');
+	let registryHostname = $state('');
+
+	// Load registry hostname so we can pre-fill for Shipyard registry
+	$effect(() => {
+		if (orgId) {
+			api.get(`/orgs/${orgId}/registry/info`).then(res => {
+				registryHostname = res.data?.hostname ?? '';
+			});
+		}
+	});
+
+	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
+	let selectedArtifact = $state<SelectedArtifact | null>(null);
+
+	function openShipyardPicker() {
+		uiStore.pushPanel({
+			component: ArtifactoryPickerPanel,
+			title: 'Pick Docker Image',
+			props: {
+				kind: 'docker_image',
+				onSelect: (art: SelectedArtifact) => {
+					selectedArtifact = art;
+					// Build the full image ref: registry.domain/org/project/repo:tag
+					image = `${registryHostname}/${art.namespace_slug}/${art.repo}:${art.tag}`;
+					if (!name) { name = art.repo; slug = deriveSlug(art.repo); }
+					uiStore.popPanel();
+				},
+			},
+		});
+	}
 	let ports = $state<string[]>([]);
 	let replicas = $state(1);
 	let envs = $state<Array<{ key: string; value: string; is_secret: boolean }>>([]);
@@ -153,25 +185,54 @@
 				placeholder="nginx:latest" required />
 		</div>
 
-		<div class="section-title">Registry (optional)</div>
+		<div class="section-title">Registry</div>
 
-		<div class="form-group">
-			<label class="form-label" for="di-reg">Registry URL</label>
-			<input id="di-reg" class="form-input font-mono" type="text" bind:value={registryUrl}
-				placeholder="registry-1.docker.io" />
+		<div class="reg-source-tabs">
+			<button type="button" class="reg-tab" class:active={registrySource === 'external'}
+				onclick={() => { registrySource = 'external'; selectedArtifact = null; }}>
+				External / Docker Hub
+			</button>
+			<button type="button" class="reg-tab" class:active={registrySource === 'shipyard'}
+				onclick={() => { registrySource = 'shipyard'; }}>
+				<Package size={12} /> Shipyard Artifactory
+			</button>
 		</div>
-		<div class="form-row">
-			<div class="form-group" style="flex:1">
-				<label class="form-label" for="di-user">Username</label>
-				<input id="di-user" class="form-input" type="text" bind:value={registryUser}
-					placeholder="myuser" autocomplete="off" />
+
+		{#if registrySource === 'shipyard'}
+			<div class="form-group">
+				<label class="form-label">Select Image</label>
+				<button type="button" class="picker-btn" onclick={openShipyardPicker}>
+					{#if selectedArtifact}
+						<Package size={13} style="color:#3b82f6;flex-shrink:0" />
+						<span class="picker-value font-mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
+					{:else}
+						<span class="picker-placeholder">Browse Shipyard registry…</span>
+					{/if}
+					<ChevronRight size={13} class="picker-chevron" />
+				</button>
+				{#if registryHostname}
+					<span class="field-hint">Registry: {registryHostname}</span>
+				{/if}
 			</div>
-			<div class="form-group" style="flex:1">
-				<label class="form-label" for="di-pass">Password / Token</label>
-				<input id="di-pass" class="form-input font-mono" type="password" bind:value={registryPass}
-					placeholder="••••••••" autocomplete="new-password" />
+		{:else}
+			<div class="form-group">
+				<label class="form-label" for="di-reg">Registry URL <span class="optional">(optional)</span></label>
+				<input id="di-reg" class="form-input font-mono" type="text" bind:value={registryUrl}
+					placeholder="registry-1.docker.io" />
 			</div>
-		</div>
+			<div class="form-row">
+				<div class="form-group" style="flex:1">
+					<label class="form-label" for="di-user">Username</label>
+					<input id="di-user" class="form-input" type="text" bind:value={registryUser}
+						placeholder="myuser" autocomplete="off" />
+				</div>
+				<div class="form-group" style="flex:1">
+					<label class="form-label" for="di-pass">Password / Token</label>
+					<input id="di-pass" class="form-input font-mono" type="password" bind:value={registryPass}
+						placeholder="••••••••" autocomplete="new-password" />
+				</div>
+			</div>
+		{/if}
 
 		<div class="section-title">Deployment</div>
 
@@ -294,6 +355,27 @@
 		border-bottom: 1px solid var(--border); padding-bottom: 4px;
 		margin-top: 4px; display: flex; align-items: center; justify-content: space-between;
 	}
+
+	/* Registry source tabs */
+	.reg-source-tabs {
+		display: flex; gap: 6px; flex-wrap: wrap;
+	}
+	.reg-tab {
+		display: inline-flex; align-items: center; gap: 5px;
+		padding: 6px 12px; font-size: 12px; font-weight: 500;
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		background: var(--bg-elevated); color: var(--text-dim);
+		cursor: pointer; transition: all var(--transition-fast);
+	}
+	.reg-tab:hover { border-color: var(--accent); color: var(--text-primary); }
+	.reg-tab.active {
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 8%, transparent);
+		color: var(--accent);
+	}
+	.optional { font-weight: 400; text-transform: none; letter-spacing: 0; }
+	.field-hint { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* Picker button */
 	.picker-btn {

@@ -10,6 +10,8 @@ shipyard-docker = { path = "../docker" }
 shipyard-mqtt = { path = "../mqtt_broker" }
 shipyard-traefik = { path = "../traefik" }
 shipyard-git = { path = "../git" }
+shipyard-registry = { path = "../registry" }
+bytes = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

@@ -54,6 +54,7 @@ pub async fn runtime_url_for_org(state: &AppState, org_id: Uuid) -> Option<Strin
 }
 
 /// Check that the org has not exceeded its function count quota.
+#[allow(dead_code)]
 pub async fn check_function_quota(state: &AppState, org_id: Uuid) -> Result<(), AppError> {
     let tier = get_org_tier(state, org_id).await?;
     let quota = quota_for_tier(&tier, &state.config.edge_functions);
@@ -120,6 +121,26 @@ pub async fn deploy_function(
     })
     .await
     .map_err(|e| AppError::Internal(format!("spawn_blocking: {e}")))??;
+
+    // Push edge function bundle to registry (best-effort, non-fatal).
+    {
+        let pusher = shipyard_registry::push::ArtifactPusher::new(
+            state.db.clone(),
+            std::sync::Arc::clone(&state.registry_storage),
+        );
+        let bundle = axum::body::Bytes::from(code.as_bytes().to_vec());
+        let metadata = serde_json::json!({ "runtime": "js", "entry_point": filename });
+        if let Err(e) = pusher.push_edge_function(
+            org_id,
+            org_id, // use org_id as project_id placeholder for edge functions
+            fn_id.to_string().as_str(),
+            deploy_id.to_string().as_str(),
+            bundle,
+            metadata,
+        ).await {
+            tracing::warn!(fn_id = %fn_id, "edge function registry push failed (non-fatal): {e}");
+        }
+    }
 
     // Mark previous live deployment as rolled_back.
     sqlx::query(
@@ -259,10 +280,35 @@ pub async fn deploy_from_git(
     let tmp_path2 = tmp_path.clone();
     let fallback_sha_owned = fallback_sha.to_string();
 
+    // Build authenticated URL from linked git provider if available.
+    let authenticated_url = if let Some(prov_id) = group.git_provider_id {
+        let row = sqlx::query_as::<_, (String, String)>(
+            "SELECT provider_type, token FROM git_providers WHERE id = $1"
+        )
+        .bind(prov_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((provider_type, token)) = row {
+            if repo_url.starts_with("https://") {
+                let domain = repo_url.strip_prefix("https://").unwrap_or(&repo_url);
+                let domain = if let Some(idx) = domain.find('@') { &domain[idx + 1..] } else { domain };
+                match provider_type.as_str() {
+                    "github"    => format!("https://x-access-token:{}@{}", token, domain),
+                    "gitlab"    => format!("https://oauth2:{}@{}", token, domain),
+                    "bitbucket" => format!("https://x-token-auth:{}@{}", token, domain),
+                    _           => format!("https://{}@{}", token, domain),
+                }
+            } else { repo_url.clone() }
+        } else { repo_url.clone() }
+    } else { repo_url.clone() };
+
     // Clone and read the HEAD SHA in the same blocking task.
     let actual_sha = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
         let git = GitService::new(&tmp_path);
-        git.clone_repo(&repo_url, &tmp_path, Some(&branch), |_| {})
+        git.clone_repo(&authenticated_url, &tmp_path, Some(&branch), |_| {})
             .map_err(|e| AppError::Git(e.to_string()))?;
         let sha = git
             .head_commit(&tmp_path2)

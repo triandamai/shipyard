@@ -183,7 +183,11 @@ async fn trigger_deploy(
         state.config.docker.port_proxy,
         state.config.data_dir.clone(),
         state.config.static_server.retention_versions,
-    );
+    ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+        state.db.clone(),
+        Arc::clone(&state.registry_storage),
+    ))
+    .with_registry_hostname(state.config.registry.hostname.clone());
 
     tokio::spawn(async move {
         if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
@@ -547,7 +551,11 @@ async fn redeploy_service(
         state.config.docker.port_proxy,
         state.config.data_dir.clone(),
         state.config.static_server.retention_versions,
-    );
+    ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+        state.db.clone(),
+        Arc::clone(&state.registry_storage),
+    ))
+    .with_registry_hostname(state.config.registry.hostname.clone());
 
     tokio::spawn(async move {
         if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, &source_ref).await {
@@ -618,7 +626,11 @@ async fn rollback_deployment(
         state.config.docker.port_proxy,
         state.config.data_dir.clone(),
         state.config.static_server.retention_versions,
-    );
+    ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+        state.db.clone(),
+        Arc::clone(&state.registry_storage),
+    ))
+    .with_registry_hostname(state.config.registry.hostname.clone());
 
     let image_ref_clone = image_ref.clone();
     tokio::spawn(async move {

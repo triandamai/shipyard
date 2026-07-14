@@ -272,6 +272,13 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 			{ id: 'keys:write', label: 'Manage API keys', description: 'Create and revoke API keys' },
 		],
 	},
+	{
+		group: 'Registry',
+		permissions: [
+			{ id: 'registry:view',   label: 'View registry',   description: 'Browse namespaces, repositories, and artifacts' },
+			{ id: 'registry:manage', label: 'Manage registry', description: 'Delete repositories and artifacts' },
+		],
+	},
 ];
 
 /** Build a full org-level shipyard: permission string from a suffix id. */
@@ -651,7 +658,7 @@ export interface AdminDeploymentsResponse {
 }
 
 // API Key Management
-export type ApiKeyScope = 'read' | 'deploy' | 'write' | 'admin';
+export type ApiKeyScope = 'read' | 'deploy' | 'write' | 'admin' | 'registry:view' | 'registry:manage';
 
 export interface ApiKeyItem {
 	id: string;

@@ -29,6 +29,7 @@
 	import ExecPanel from './ExecPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
+	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
@@ -75,7 +76,7 @@
 	async function ensureNodes() {
 		if (nodeMap.size > 0) return;
 		try {
-			const res = await api.getSwarmNodes();
+			const res = await api.getSwarmNodes(orgId);
 			if (!res.error && res.data) {
 				nodeMap = new Map(res.data.map(n => [n.id, n]));
 			}
@@ -191,7 +192,7 @@ let showDbClient    = $state(false);
 	let gitSaveOk       = $state(false);
 	let gitSaveError    = $state('');
 
-	let gitProviderId       = $state<string | null>(null);
+	let gitProviderId       = $state('');
 	let orgGitProviders     = $state<import('$lib/api/types').GitProvider[]>([]);
 	let loadingGitProviders = $state(false);
 
@@ -1320,6 +1321,66 @@ let showDbClient    = $state(false);
 			<!-- ── Overview ── -->
 			{#if activeTab === 'overview'}
 				<div class="overview-wrap">
+					<!-- Metadata grid -->
+					<div class="overview-grid">
+						<div class="field">
+							<span class="field-label">Name</span>
+							<span class="field-value">{service.name}</span>
+						</div>
+						<div class="field">
+							<span class="field-label">Slug</span>
+							<span class="field-value font-mono">{service.slug}</span>
+						</div>
+						<div class="field field-full">
+							<span class="field-label">Hostname</span>
+							<span class="field-value field-copy-row">
+								<span class="font-mono">{service.slug}</span>
+								<button
+									class="btn-copy-inline"
+									title="Copy hostname — use this to connect from other containers"
+									onclick={() => navigator.clipboard.writeText(service?.slug || '')}
+								><Copy size={11} /></button>
+							</span>
+						</div>
+						<div class="field">
+							<span class="field-label">Status</span>
+							<span class="field-value">
+								<span class="status-dot {statusClass(service.status)}"></span>
+								{statusLabel(service.status)}
+							</span>
+						</div>
+						<div class="field">
+							<span class="field-label">Replicas</span>
+							<span class="field-value">{service.replicas}</span>
+						</div>
+						<div class="field">
+							<span class="field-label">Created</span>
+							<span class="field-value">{formatTime(service.created_at)}</span>
+						</div>
+						<div class="field">
+							<span class="field-label">Updated</span>
+							<span class="field-value">{formatTime(service.updated_at)}</span>
+						</div>
+					</div>
+
+					<!-- Manage Env button -->
+					<div class="section-action">
+						<button class="btn btn-secondary btn-sm full-w" onclick={() => showEnvPanel = true}>
+							<Settings size={13} />
+							Manage Environment Variables
+						</button>
+						<button
+							class="btn btn-secondary btn-sm full-w"
+							onclick={() => {
+								const c = containers.find(ct => ct.docker_container_id);
+								if (c) openContainerLogs(c);
+							}}
+							disabled={!containers.some(ct => ct.docker_container_id)}
+						>
+							<FileText size={13} />
+							View Logs
+						</button>
+					</div>
 
 					<!-- Type-specific info card -->
 					<div class="info-card">
@@ -1416,11 +1477,11 @@ let showDbClient    = $state(false);
 											{/if}
 										</code>
 										<button class="conn-icon-btn" title={connHostRevealed ? 'Hide' : 'Reveal'}
-											onclick={() => connHostRevealed = !connHostRevealed}>
+										        onclick={() => connHostRevealed = !connHostRevealed}>
 											{#if connHostRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
 										</button>
 										<button class="conn-icon-btn" title="Copy"
-											onclick={() => navigator.clipboard.writeText(connInfo ? `${connInfo.host}:${connInfo.port}` : service!.slug)}>
+										        onclick={() => navigator.clipboard.writeText(connInfo ? `${connInfo.host}:${connInfo.port}` : service!.slug)}>
 											<Copy size={12} />
 										</button>
 									</div>
@@ -1435,11 +1496,11 @@ let showDbClient    = $state(false);
 												{connInfo.url_template}
 											</code>
 											<button class="conn-icon-btn" title={connUrlRevealed ? 'Hide' : 'Reveal'}
-												onclick={() => connUrlRevealed = !connUrlRevealed}>
+											        onclick={() => connUrlRevealed = !connUrlRevealed}>
 												{#if connUrlRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
 											</button>
 											<button class="conn-icon-btn" title="Copy"
-												onclick={async () => {
+											        onclick={async () => {
 													if (!connInfo) return;
 													await navigator.clipboard.writeText(connInfo.url_template);
 													connInfoCopied = true;
@@ -1452,67 +1513,6 @@ let showDbClient    = $state(false);
 								{/if}
 							</div>
 						{/if}
-					</div>
-
-					<!-- Metadata grid -->
-					<div class="overview-grid">
-						<div class="field">
-							<span class="field-label">Name</span>
-							<span class="field-value">{service.name}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Slug</span>
-							<span class="field-value font-mono">{service.slug}</span>
-						</div>
-						<div class="field field-full">
-							<span class="field-label">Hostname</span>
-							<span class="field-value field-copy-row">
-								<span class="font-mono">{service.slug}</span>
-								<button
-									class="btn-copy-inline"
-									title="Copy hostname — use this to connect from other containers"
-									onclick={() => navigator.clipboard.writeText(service.slug)}
-								><Copy size={11} /></button>
-							</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Status</span>
-							<span class="field-value">
-								<span class="status-dot {statusClass(service.status)}"></span>
-								{statusLabel(service.status)}
-							</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Replicas</span>
-							<span class="field-value">{service.replicas}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Created</span>
-							<span class="field-value">{formatTime(service.created_at)}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Updated</span>
-							<span class="field-value">{formatTime(service.updated_at)}</span>
-						</div>
-					</div>
-
-					<!-- Manage Env button -->
-					<div class="section-action">
-						<button class="btn btn-secondary btn-sm full-w" onclick={() => showEnvPanel = true}>
-							<Settings size={13} />
-							Manage Environment Variables
-						</button>
-						<button
-							class="btn btn-secondary btn-sm full-w"
-							onclick={() => {
-								const c = containers.find(ct => ct.docker_container_id);
-								if (c) openContainerLogs(c);
-							}}
-							disabled={!containers.some(ct => ct.docker_container_id)}
-						>
-							<FileText size={13} />
-							View Logs
-						</button>
 					</div>
 
 					<!-- Danger zone -->
@@ -1695,206 +1695,40 @@ let showDbClient    = $state(false);
 
 			<!-- ── Git deploy config ── -->
 			{:else if activeTab === 'git'}
-				<div class="git-config-section">
-
-					<!-- Linked Git Account / Provider -->
-					<div class="git-card" style="margin-bottom: 1rem; padding: 16px;">
-						<div class="git-field" style="display: flex; flex-direction: column; gap: 4px;">
-							<label class="git-label" style="font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em;">Connected Git Account</label>
-							<select class="git-select" bind:value={gitProviderId} style="width: 100%; padding: 8px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px;">
-								<option value="">Legacy Global Settings Token (Default)</option>
-								{#each orgGitProviders as provider (provider.id)}
-									<option value={provider.id}>{provider.name} ({provider.provider_type.toUpperCase()})</option>
-								{/each}
-							</select>
-							<p class="git-hint" style="font-size: 11px; color: var(--text-muted); margin: 2px 0 0;">Change which Git credentials to use when checking out this repository.</p>
-						</div>
-					</div>
-
-					<!-- Auto-deploy toggle -->
-					<div class="git-card">
-						<div class="git-card-header">
-							<div class="git-card-title">Deploy on push</div>
-							<label class="toggle-switch">
-								<input type="checkbox" bind:checked={gitAutoDeploy} />
-								<span class="toggle-track"></span>
-							</label>
-						</div>
-						<p class="git-card-desc">
-							Automatically trigger a deployment whenever a push is detected on the
-							configured branch. The webhook URL below must be registered with your
-							Git provider.
-						</p>
-
-						<!-- Deployment Strategy -->
-						<div class="git-field" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 4px;">
-							<label class="git-label">Deployment Strategy</label>
-							<select class="git-select" bind:value={gitDeployStrategy} disabled={!gitAutoDeploy} style="width: 100%; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-primary); font-size: 13px;">
-								<option value="push">Deploy on Push to Branch</option>
-								<option value="tag">Deploy on Tag Push</option>
-								<option value="pull_request">Deploy on Pull Request Merge</option>
-							</select>
-						</div>
-
-						{#if gitDeployStrategy === 'push'}
-							<!-- Branch input -->
-							<div class="git-field" style="margin-top: 1rem;">
-								<label class="git-label" for="git-branch-input">Branch to watch</label>
-								<div class="git-branch-row">
-									<span class="git-branch-icon">⎇</span>
-									<input
-										id="git-branch-input"
-										class="git-branch-input"
-										type="text"
-										bind:value={gitBranch}
-										placeholder="main"
-										disabled={!gitAutoDeploy}
-										spellcheck="false"
-										autocomplete="off"
-									/>
-								</div>
-								<p class="git-hint">Only pushes to this branch will trigger a deployment.</p>
-							</div>
-						{/if}
-
-						{#if gitDeployStrategy === 'tag'}
-							<!-- Tag pattern input -->
-							<div class="git-field" style="margin-top: 1rem;">
-								<label class="git-label" for="git-tag-pattern-input">Tag Pattern</label>
-								<div class="git-branch-row">
-									<span class="git-branch-icon">🏷️</span>
-									<input
-										id="git-tag-pattern-input"
-										class="git-branch-input"
-										type="text"
-										bind:value={gitDeployTagPattern}
-										placeholder="e.g. v* (or * for all tags)"
-										disabled={!gitAutoDeploy}
-										spellcheck="false"
-										autocomplete="off"
-									/>
-								</div>
-								<p class="git-hint">Deployments will trigger when a tag matching this wildcard/glob pattern is pushed.</p>
-							</div>
-						{/if}
-
-						{#if gitDeployStrategy === 'pull_request'}
-							<!-- Target Branch for PR -->
-							<div class="git-field" style="margin-top: 1rem;">
-								<label class="git-label" for="git-pr-branch-input">Target Branch (PR Merge)</label>
-								<div class="git-branch-row">
-									<span class="git-branch-icon">⎇</span>
-									<input
-										id="git-pr-branch-input"
-										class="git-branch-input"
-										type="text"
-										bind:value={gitDeployBranch}
-										placeholder="e.g. main (falls back to watch branch)"
-										disabled={!gitAutoDeploy}
-										spellcheck="false"
-										autocomplete="off"
-									/>
-								</div>
-								<p class="git-hint">Deployments will trigger when a pull request is merged into this branch.</p>
-							</div>
-						{/if}
-
-						{#if gitSaveError}
-							<p class="git-error">{gitSaveError}</p>
-						{/if}
-
-						<div class="git-save-row">
-							<button
-								class="btn btn-primary btn-sm"
-								onclick={saveGitConfig}
-								disabled={gitSaving}
-							>
-								{#if gitSaving}
-									<span class="spinner-xs"></span>Saving…
-								{:else if gitSaveOk}
-									Saved
-								{:else}
-									Save
-								{/if}
-							</button>
-						</div>
-						{#if webhookRegStatus}
-							<div class="webhook-status {webhookRegStatus.ok ? 'success' : 'error'}" style="margin: 6px 0 0;">
-								{webhookRegStatus.message}
-							</div>
-						{/if}
-					</div>
-
-					<!-- Webhook URL -->
-					<div class="git-card">
-						<div class="git-card-header">
-							<div class="git-card-title">Webhook URL</div>
-							<div class="webhook-provider-tabs">
-								{#each (['github', 'gitlab', 'gitea'] as const) as p}
-									<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
-										{p.charAt(0).toUpperCase() + p.slice(1)}
-									</button>
-								{/each}
-							</div>
-						</div>
-						<p class="git-card-desc">
-							Add this URL as a webhook in your Git provider with the <strong>push</strong> event.
-							No secret header is required — the token in the URL authenticates the request.
-						</p>
-
-						{#if isLoadingWebhook}
-							<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
-						{:else}
-							<div class="webhook-url-row">
-								<input
-									class="webhook-url-input"
-									readonly
-									value={webhookToken
-										? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
-										: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
-								/>
-								<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
-									{#if webhookCopied}
-										<CheckCircle2 size={13} />Copied
-									{:else}
-										<Copy size={13} />Copy
-									{/if}
-								</button>
-							</div>
-
-							<div class="webhook-actions">
-								{#if rotateConfirm}
-									<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
-									<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
-										{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
-									</button>
-									<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
-								{:else}
-									<button class="webhook-rotate-btn" onclick={() => { rotateConfirm = true; }}>
-										<RefreshCw size={11} />Rotate URL
-									</button>
-								{/if}
-							</div>
-							{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-								<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
-							{/if}
-						{/if}
-					</div>
-
-					<!-- Repo info (read-only) -->
-					{#if service?.git_repo_url}
-						<div class="git-card">
-							<div class="git-card-title">Repository</div>
-							<div class="git-repo-info">
-								<span class="git-repo-label">URL</span>
-								<a class="git-repo-url" href={service.git_repo_url} target="_blank" rel="noreferrer">
-									{service.git_repo_url}
-								</a>
-							</div>
-						</div>
-					{/if}
-
-				</div>
+				<GitSettingsSection
+					providers={orgGitProviders}
+					loadingProviders={loadingGitProviders}
+					bind:providerId={gitProviderId}
+					providerDefaultLabel="Legacy Global Settings Token (Default)"
+					showAutoDeployToggle={true}
+					bind:autoDeploy={gitAutoDeploy}
+					bind:strategy={gitDeployStrategy}
+					bind:branch={gitBranch}
+					bind:tagPattern={gitDeployTagPattern}
+					bind:prBranch={gitDeployBranch}
+					deployDisabled={!gitAutoDeploy}
+					onSave={saveGitConfig}
+					saving={gitSaving}
+					saveOk={gitSaveOk}
+					saveError={gitSaveError}
+					strategyWebhookStatus={webhookRegStatus}
+					webhookUrl={webhookToken
+						? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+						: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
+					webhookLoading={isLoadingWebhook}
+					showProviderTabs={true}
+					bind:webhookProvider={webhookProvider}
+					webhookCopied={webhookCopied}
+					onCopyWebhook={copyWebhookUrl}
+					onRotateWebhook={rotateWebhook}
+					bind:webhookRotateConfirm={rotateConfirm}
+					isRotatingWebhook={isRotatingWebhook}
+					autoWebhookInfo={service?.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')
+						? `Webhook is auto-registered on ${webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.`
+						: undefined}
+					repoUrl={service?.git_repo_url ?? undefined}
+					repoIsLink={true}
+				/>
 
 			<!-- ── Replicas ── -->
 			{:else if activeTab === 'replicas'}

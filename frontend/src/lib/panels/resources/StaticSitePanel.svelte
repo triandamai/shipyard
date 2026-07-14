@@ -7,7 +7,8 @@
 	import GitAccountPickerPanel from './GitAccountPickerPanel.svelte';
 	import GitRepoPickerPanel from './GitRepoPickerPanel.svelte';
 	import GitBranchPickerPanel from './GitBranchPickerPanel.svelte';
-	import { ChevronRight, Settings } from '@lucide/svelte';
+	import { ChevronRight, Settings, Package } from '@lucide/svelte';
+	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
 
 	interface Props {
 		projectId: string;
@@ -29,7 +30,26 @@
 	let name       = $state('');
 	let slug       = $state('');
 	let slugEdited = $state(false);
-	let source     = $state<'git' | 'upload'>('git');
+	let source     = $state<'git' | 'upload' | 'artifactory'>('git');
+
+	// ── Artifactory source ─────────────────────────────────────────────────────
+	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
+	let selectedArtifact = $state<SelectedArtifact | null>(null);
+
+	function openArtifactoryPicker() {
+		uiStore.pushPanel({
+			component: ArtifactoryPickerPanel,
+			title: 'Pick Artifact',
+			props: {
+				kind: 'static_bundle',
+				onSelect: (art: SelectedArtifact) => {
+					selectedArtifact = art;
+					if (!name) { name = art.repo; slug = deriveSlug(art.repo); }
+					uiStore.popPanel();
+				},
+			},
+		});
+	}
 
 	// ── Git source ─────────────────────────────────────────────────────────────
 	let connectedAccounts  = $state<ConnectedAccount[]>([]);
@@ -194,6 +214,10 @@
 			error = 'Please select a repository.';
 			return;
 		}
+		if (source === 'artifactory' && !selectedArtifact) {
+			error = 'Please select an artifact from the registry.';
+			return;
+		}
 		error = '';
 		submitting = true;
 
@@ -201,7 +225,7 @@
 			name,
 			slug: slug || deriveSlug(name),
 			type: 'static',
-			icon: (source === 'git' && (useShipyardJson || framework === 'custom')) ? 'html5' : (getFrameworkIcon(framework) || 'html5'),
+			icon: source === 'artifactory' ? 'package' : (source === 'git' && (useShipyardJson || framework === 'custom')) ? 'html5' : (getFrameworkIcon(framework) || 'html5'),
 			...(source === 'git' && selectedRepo ? {
 				git_repo_url: selectedRepo.cloneUrl,
 				git_branch:   selectedBranch || 'main',
@@ -216,14 +240,22 @@
 		onCreated?.(svc);
 
 		// Save config
+		const isArtifact = source === 'artifactory';
 		await api.updateStaticConfig(svc.id, {
-			source,
-			build_command:   source === 'upload' || useShipyardJson ? '' : buildCmd,
-			output_dir:      source === 'upload' || useShipyardJson ? '' : outputDir,
-			node_version:    source === 'upload' || useShipyardJson ? '' : nodeVer,
-			install_command: source === 'upload' || useShipyardJson ? '' : installCmd,
-			framework:       source === 'upload' || useShipyardJson ? 'auto' : framework,
-		});
+			source: isArtifact ? 'artifact' : source,
+			build_command:   (!isArtifact && source !== 'upload' && !useShipyardJson) ? buildCmd : '',
+			output_dir:      (!isArtifact && source !== 'upload' && !useShipyardJson) ? outputDir : '',
+			node_version:    (!isArtifact && source !== 'upload' && !useShipyardJson) ? nodeVer : '',
+			install_command: (!isArtifact && source !== 'upload' && !useShipyardJson) ? installCmd : '',
+			framework:       (!isArtifact && source !== 'upload' && !useShipyardJson) ? framework : 'auto',
+			...(isArtifact && selectedArtifact ? {
+				deploy_config: {
+					artifact_namespace_id: selectedArtifact.namespace_id,
+					artifact_repo:         selectedArtifact.repo,
+					artifact_tag:          selectedArtifact.tag,
+				},
+			} : {}),
+		} as any);
 
 		submitting = false;
 		uiStore.clearPanels();
@@ -271,6 +303,10 @@
 			<label class="source-opt" class:active={source === 'upload'}>
 				<input type="radio" name="source" value="upload" bind:group={source} />
 				<span class="opt-label">Upload — pre-built files</span>
+			</label>
+			<label class="source-opt" class:active={source === 'artifactory'}>
+				<input type="radio" name="source" value="artifactory" bind:group={source} />
+				<span class="opt-label">Shipyard Artifactory — deploy from registry</span>
 			</label>
 		</div>
 	</div>
@@ -389,6 +425,22 @@
 		</div>
 	{/if}
 
+	{#if source === 'artifactory'}
+		<div class="divider"></div>
+		<div class="form-section">
+			<div class="section-title">Artifact</div>
+			<button type="button" class="picker-btn" onclick={openArtifactoryPicker}>
+				{#if selectedArtifact}
+					<Package size={13} style="color:#8b5cf6;flex-shrink:0" />
+					<span class="picker-value mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
+				{:else}
+					<span class="picker-placeholder">Select from Shipyard registry…</span>
+				{/if}
+				<ChevronRight size={14} class="picker-chevron" />
+			</button>
+		</div>
+	{/if}
+
 	{#if error}
 		<div class="form-error">{error}</div>
 	{/if}
@@ -397,7 +449,7 @@
 		<button
 			type="submit"
 			class="btn-primary"
-			disabled={submitting || !name.trim() || (source === 'git' && !selectedRepo)}
+			disabled={submitting || !name.trim() || (source === 'git' && !selectedRepo) || (source === 'artifactory' && !selectedArtifact)}
 		>
 			{#if submitting}
 				Creating…

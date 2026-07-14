@@ -3,7 +3,7 @@
 //! Wraps git2 for cloning repositories, pulling updates, and parsing
 //! branches/tags/commits. Milestone 2.10.
 
-use git2::{BranchType, FetchOptions, RemoteCallbacks, Repository, build::CheckoutBuilder};
+use git2::{BranchType, CredentialType, FetchOptions, RemoteCallbacks, Repository, build::CheckoutBuilder};
 use shipyard_common::error::{AppError, AppResult};
 
 /// Information about the HEAD commit of a repository.
@@ -21,6 +21,25 @@ pub struct CommitInfo {
 /// via `tokio::task::spawn_blocking`.
 pub struct GitService {
     pub base_path: String,
+}
+
+/// Extract `(username, password)` from an HTTPS URL with embedded credentials.
+/// Handles `https://user:pass@host/...`.
+fn url_creds(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let at   = rest.find('@')?;
+    let cred = &rest[..at];
+    let col  = cred.find(':')?;
+    Some((cred[..col].to_string(), cred[col + 1..].to_string()))
+}
+
+/// Build a `RemoteCallbacks` that supplies `userpass_plaintext` credentials.
+fn make_cred_callbacks<'a>(user: String, pass: String) -> RemoteCallbacks<'a> {
+    let mut cb = RemoteCallbacks::new();
+    cb.credentials(move |_url, _username, _allowed: CredentialType| {
+        git2::Cred::userpass_plaintext(&user, &pass)
+    });
+    cb
 }
 
 impl GitService {
@@ -45,7 +64,13 @@ impl GitService {
         branch: Option<&str>,
         progress_cb: impl Fn(&str) + Send + 'static,
     ) -> AppResult<()> {
-        let mut callbacks = RemoteCallbacks::new();
+        let creds = url_creds(url);
+
+        let mut callbacks = if let Some((user, pass)) = creds {
+            make_cred_callbacks(user, pass)
+        } else {
+            RemoteCallbacks::new()
+        };
 
         callbacks.transfer_progress(move |stats| {
             let msg = format!(
@@ -77,9 +102,15 @@ impl GitService {
 
     /// Pull the latest changes on an already-cloned repo (fetch + fast-forward
     /// merge). If `branch` is `None` the current HEAD branch is used.
-    pub fn pull_repo(&self, repo_path: &str, branch: Option<&str>) -> AppResult<()> {
+    /// `authenticated_url` is used to derive credentials and update the remote.
+    pub fn pull_repo(&self, repo_path: &str, branch: Option<&str>, authenticated_url: Option<&str>) -> AppResult<()> {
         let repo = Repository::open(repo_path)
             .map_err(|e| AppError::Git(format!("open repo: {}", e)))?;
+
+        if let Some(auth_url) = authenticated_url {
+            repo.remote_set_url("origin", auth_url)
+                .map_err(|e| AppError::Git(format!("set remote url: {}", e)))?;
+        }
 
         let mut remote = repo
             .find_remote("origin")
@@ -99,8 +130,14 @@ impl GitService {
             }
         };
 
+        let remote_url = remote.url().unwrap_or("").to_string();
+        let mut fetch_opts = FetchOptions::new();
+        if let Some((user, pass)) = url_creds(authenticated_url.unwrap_or(&remote_url)) {
+            fetch_opts.remote_callbacks(make_cred_callbacks(user, pass));
+        }
+
         remote
-            .fetch(&[branch_name.as_str()], None, None)
+            .fetch(&[branch_name.as_str()], Some(&mut fetch_opts), None)
             .map_err(|e| AppError::Git(format!("fetch: {}", e)))?;
 
         // Locate the FETCH_HEAD reference.
@@ -230,15 +267,30 @@ impl GitService {
     /// Checkout a specific reference (branch name, tag name, or commit SHA).
     /// Resolves the reference using `git2::Repository::revparse_single`,
     /// updates the repository HEAD state, and updates the working tree.
-    pub fn checkout_ref(&self, repo_path: &str, target_ref: &str) -> AppResult<()> {
+    ///
+    /// `authenticated_url` updates the stored remote URL (with embedded
+    /// credentials) before fetching so rotated tokens take effect.
+    pub fn checkout_ref(&self, repo_path: &str, target_ref: &str, authenticated_url: Option<&str>) -> AppResult<()> {
         let repo = Repository::open(repo_path)
             .map_err(|e| AppError::Git(format!("open repo: {}", e)))?;
+
+        if let Some(auth_url) = authenticated_url {
+            repo.remote_set_url("origin", auth_url)
+                .map_err(|e| AppError::Git(format!("set remote url: {}", e)))?;
+        }
 
         let mut remote = repo
             .find_remote("origin")
             .map_err(|e| AppError::Git(format!("find remote: {}", e)))?;
+
+        let remote_url = remote.url().unwrap_or("").to_string();
+        let mut fetch_opts = FetchOptions::new();
+        if let Some((user, pass)) = url_creds(authenticated_url.unwrap_or(&remote_url)) {
+            fetch_opts.remote_callbacks(make_cred_callbacks(user, pass));
+        }
+
         remote
-            .fetch(&[] as &[&str], None, None)
+            .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
             .map_err(|e| AppError::Git(format!("fetch remote: {}", e)))?;
 
         // Try origin/<ref> first (remote branches), then direct (tags, SHAs, local refs).

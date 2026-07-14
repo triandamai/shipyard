@@ -819,7 +819,6 @@ async fn traefik_log_stream(
 ) -> Result<Response<Body>, ApiAppError> {
     require_superadmin(&state.db, auth.user_id).await?;
 
-    use futures::StreamExt;
     use axum::http::header;
 
     let log_path = "/var/log/traefik/access.log";
@@ -1134,8 +1133,7 @@ async fn get_redis_info(
         Some(c) => c,
         None => return Err(ApiAppError(AppError::Internal("Redis not configured".to_string()))),
     };
-
-    use redis::AsyncCommands;
+    
     let raw: String = redis::cmd("INFO")
         .arg("all")
         .query_async(&mut conn)

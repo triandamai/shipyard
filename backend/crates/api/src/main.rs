@@ -58,6 +58,15 @@ mod plans;
 mod provisioning;
 mod compute;
 mod edge_functions;
+mod artifactory;
+mod artifact_source;
+
+use shipyard_registry::{
+    router::registry_router,
+    storage::{local::LocalStorage, StorageBackend},
+    RegistryState,
+};
+use axum::extract::FromRef;
 
 /// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
 /// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.
@@ -77,6 +86,21 @@ pub struct AppState {
     pub auth_limiter: SharedRateLimiter,
     /// Notified whenever a deployment completes so the Swarm sync loop wakes immediately.
     pub swarm_sync_trigger: Arc<Notify>,
+    /// Artifact registry storage backend (local or S3).
+    pub registry_storage: Arc<dyn StorageBackend>,
+}
+
+/// Allow registry route handlers typed `State<RegistryState>` to be used inside
+/// the main `Router<AppState>` — axum calls this to extract the sub-state.
+impl FromRef<AppState> for RegistryState {
+    fn from_ref(s: &AppState) -> Self {
+        RegistryState {
+            db:         s.db.clone(),
+            storage:    Arc::clone(&s.registry_storage),
+            hostname:   s.config.registry.hostname.clone(),
+            jwt_secret: s.config.auth.jwt_secret.clone(),
+        }
+    }
 }
 
 fn main() {
@@ -153,8 +177,23 @@ async fn async_main() {
     // Write Traefik dynamic config (shipyard.yml) on every startup so Traefik
     // always has the global routes and middleware definitions, even after a volume wipe.
     if let Some(ref dir) = config.traefik.dynamic_config_dir {
+        // Derive the API domain from config or fall back to "api-<domain>".
+        let raw_domain = config.app_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap_or(&config.app_url)
+            .split(':')
+            .next()
+            .unwrap_or(&config.app_url);
+        let default_api_domain = format!("api-{raw_domain}");
+        let api_domain = config.api_domain.as_deref().unwrap_or(&default_api_domain);
+
         write_shipyard_traefik_config(
             &config.app_url,
+            api_domain,
+            &config.registry.hostname,
             dir,
             &config.traefik.entrypoint_http,
             &config.traefik.entrypoint_https,
@@ -363,6 +402,47 @@ async fn async_main() {
         }
     };
 
+    // ── Registry storage ──────────────────────────────────────────────────────
+    let registry_path = format!("{}/registry", config.data_dir);
+    if let Err(e) = tokio::fs::create_dir_all(&registry_path).await {
+        tracing::error!("Failed to create registry data dir '{registry_path}': {e}");
+        std::process::exit(1);
+    }
+
+    let registry_storage: Arc<dyn StorageBackend> = if config.registry.storage == "s3" {
+        #[cfg(feature = "s3")]
+        {
+            use shipyard_registry::storage::s3::S3Storage;
+            let endpoint   = config.registry.s3_endpoint.as_deref().unwrap_or_default();
+            let bucket     = config.registry.s3_bucket.as_deref().unwrap_or("shipyard-registry");
+            let access_key = config.registry.s3_access_key.as_deref().unwrap_or_default();
+            let secret_key = config.registry.s3_secret_key.as_deref().unwrap_or_default();
+            let region     = config.registry.s3_region.as_deref().unwrap_or("us-east-1");
+            match S3Storage::new(endpoint, bucket, access_key, secret_key, region).await {
+                Ok(s3) => {
+                    tracing::info!("Registry storage: S3/MinIO at {endpoint} bucket={bucket}");
+                    Arc::new(s3)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to init S3 registry storage: {e}. Falling back to local disk.");
+                    Arc::new(LocalStorage::new(&registry_path))
+                }
+            }
+        }
+        #[cfg(not(feature = "s3"))]
+        {
+            tracing::warn!(
+                "Registry storage is set to 's3' but the s3 feature is not compiled in. \
+                 Falling back to local disk at {registry_path}. \
+                 Rebuild with --features s3 to enable S3 storage."
+            );
+            Arc::new(LocalStorage::new(&registry_path))
+        }
+    } else {
+        tracing::info!("Registry storage: local disk at {registry_path}");
+        Arc::new(LocalStorage::new(&registry_path))
+    };
+
     let auth_limiter = middleware::rate_limit::make_auth_rate_limiter();
 
     let swarm_sync_trigger = Arc::new(Notify::new());
@@ -377,6 +457,7 @@ async fn async_main() {
         http_client: reqwest::Client::new(),
         auth_limiter,
         swarm_sync_trigger: Arc::clone(&swarm_sync_trigger),
+        registry_storage,
     };
 
     // ── Deployment scheduler ──────────────────────────────────────────────────
@@ -385,10 +466,11 @@ async fn async_main() {
     // trigger_deploy is off and no queued rows are ever created, so the loop
     // is effectively a no-op in that case.
     {
-        let sched_db     = state.db.clone();
-        let sched_docker = Arc::clone(&state.docker);
-        let sched_mqtt   = Arc::clone(&state.mqtt);
-        let sched_config = Arc::clone(&state.config);
+        let sched_db      = state.db.clone();
+        let sched_docker  = Arc::clone(&state.docker);
+        let sched_mqtt    = Arc::clone(&state.mqtt);
+        let sched_config  = Arc::clone(&state.config);
+        let sched_storage = Arc::clone(&state.registry_storage);
 
         tokio::spawn(async move {
             loop {
@@ -455,7 +537,11 @@ async fn async_main() {
                                 sched_config.docker.port_proxy,
                                 sched_config.data_dir.clone(),
                                 sched_config.static_server.retention_versions,
-                            );
+                            ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+                                sched_db.clone(),
+                                Arc::clone(&sched_storage),
+                            ))
+                            .with_registry_hostname(sched_config.registry.hostname.clone());
                             tokio::spawn(async move {
                                 if let Err(e) = engine.deploy_queued(dep_id, svc_id, &triggered_by, &source_ref).await {
                                     tracing::error!(deployment_id = %dep_id, "scheduled deployment failed: {e}");
@@ -615,6 +701,10 @@ async fn async_main() {
         // Edge function invocations — public, no auth, routed to per-org runtime.
         // Must be outside /api so it's not behind the init gate.
         .nest("/fn", edge_functions::invoke_routes())
+        // OCI artifact registry — nested at /registry so Traefik can route
+        // registry-domain.com/* → backend:3001/registry/* with addPrefix middleware.
+        // RegistryState is extracted from AppState via FromRef.
+        .nest("/registry", registry_router::<AppState>())
         // Public Open API — mounted separately so it can use its own state/auth.
         .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
@@ -796,6 +886,8 @@ async fn mqtt_auth(
 /// Writing it here makes startup self-healing — Traefik hot-reloads it immediately.
 async fn write_shipyard_traefik_config(
     app_url: &str,
+    api_domain: &str,
+    registry_hostname: &str,
     dynamic_config_dir: &str,
     entrypoint_http: &str,
     entrypoint_https: &str,
@@ -813,7 +905,6 @@ async fn write_shipyard_traefik_config(
         .unwrap_or(app_url);
 
     let is_https = app_url.starts_with("https://");
-    let api_domain = format!("api-{domain}");
     let static_entrypoints = if is_https { entrypoint_https } else { entrypoint_http };
     let static_tls = if is_https { "      tls: {}" } else { "" };
 
@@ -827,10 +918,19 @@ async fn write_shipyard_traefik_config(
       tls:
         certResolver: {cert_resolver}
 
-    shipyard-backend:
-      rule: "Host(`{api_domain}`) && PathPrefix(`/openapi/v1`)"
+    shipyard-api:
+      rule: "Host(`{api_domain}`)"
       entryPoints: [{entrypoint_https}]
       service: shipyard-backend
+      tls:
+        certResolver: {cert_resolver}
+
+    shipyard-registry:
+      rule: "Host(`{registry_hostname}`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-backend
+      middlewares:
+        - shipyard-registry-prefix
       tls:
         certResolver: {cert_resolver}
 
@@ -879,6 +979,10 @@ async fn write_shipyard_traefik_config(
           - url: "http://shipyard-nginx-static:80"
 
   middlewares:
+    shipyard-registry-prefix:
+      addPrefix:
+        prefix: "/registry"
+
     shipyard-mqtt-strip:
       stripPrefix:
         prefixes:

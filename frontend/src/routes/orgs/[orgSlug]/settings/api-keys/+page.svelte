@@ -39,11 +39,13 @@
 	let revoking = $state<string | null>(null);
 	let confirmRevoke = $state<string | null>(null);
 
-	const ALL_SCOPES: { value: ApiKeyScope; label: string; desc: string }[] = [
-		{ value: 'read',   label: 'Read',   desc: 'View projects, services, and deployments' },
-		{ value: 'deploy', label: 'Deploy', desc: 'Trigger deployments' },
-		{ value: 'write',  label: 'Write',  desc: 'Create and update services' },
-		{ value: 'admin',  label: 'Admin',  desc: 'Manage API keys and org settings' },
+	const ALL_SCOPES: { value: ApiKeyScope; label: string; desc: string; group?: string }[] = [
+		{ value: 'read',             label: 'Read',            desc: 'View projects, services, and deployments' },
+		{ value: 'deploy',           label: 'Deploy',          desc: 'Trigger deployments' },
+		{ value: 'write',            label: 'Write',           desc: 'Create and update services' },
+		{ value: 'admin',            label: 'Admin',           desc: 'Manage API keys and org settings' },
+		{ value: 'registry:view',    label: 'Registry — View',    desc: 'Pull images and browse artifacts  (shipyard:<org>:registry:view)',    group: 'registry' },
+		{ value: 'registry:manage',  label: 'Registry — Manage',  desc: 'Push and delete artifacts  (shipyard:<org>:registry:manage)',          group: 'registry' },
 	];
 
 	// ─── Data loading ─────────────────────────────────────────────────────────
@@ -235,7 +237,12 @@
 				<div class="field">
 					<label>Scopes</label>
 					<div class="scope-list">
-						{#each ALL_SCOPES as s}
+						{#each ALL_SCOPES as s, i}
+							{#if i > 0 && s.group === 'registry' && ALL_SCOPES[i - 1].group !== 'registry'}
+								<div class="scope-divider">
+									<span>Registry permissions</span>
+								</div>
+							{/if}
 							<button
 								class="scope-toggle"
 								class:active={newScopes.includes(s.value)}
@@ -601,6 +608,17 @@
 	.field-error { font-size: 12px; color: #ef4444; margin: 0; }
 
 	.scope-list { display: flex; flex-direction: column; gap: 6px; }
+	.scope-divider {
+		display: flex; align-items: center; gap: 8px;
+		margin: 4px 0 2px;
+	}
+	.scope-divider::before, .scope-divider::after {
+		content: ''; flex: 1; height: 1px; background: var(--border);
+	}
+	.scope-divider span {
+		font-size: 10px; font-weight: 600; color: var(--text-muted);
+		text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
+	}
 	.scope-toggle {
 		display: flex;
 		align-items: center;

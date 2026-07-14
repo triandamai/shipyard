@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Home, FolderOpen, Settings, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command, CreditCard, ShieldAlert } from '@lucide/svelte';
+	import { Home, FolderOpen, Settings, Package, Anchor, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command, CreditCard, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -27,9 +27,10 @@
 	}
 
 	let navItems = $derived<NavItem[]>([
-		{ icon: Home,       label: 'Home',     href: `/orgs/${orgSlug}`,          exact: true },
-		{ icon: FolderOpen, label: 'Projects', href: `/orgs/${orgSlug}/projects`              },
-		{ icon: Settings,   label: 'Settings', href: `/orgs/${orgSlug}/settings`              }
+		{ icon: Home,       label: 'Home',      href: `/orgs/${orgSlug}`,          exact: true },
+		{ icon: FolderOpen, label: 'Projects',  href: `/orgs/${orgSlug}/projects`              },
+		{ icon: Package,    label: 'Registry',  href: `/orgs/${orgSlug}/registry`              },
+		{ icon: Settings,   label: 'Settings',  href: `/orgs/${orgSlug}/settings`              }
 	]);
 
 	function isActive(item: NavItem): boolean {

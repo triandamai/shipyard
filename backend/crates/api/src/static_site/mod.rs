@@ -54,6 +54,9 @@ pub struct UpdateStaticConfigRequest {
     pub git_deploy_strategy:    Option<String>,
     pub git_deploy_branch:      Option<Option<String>>,
     pub git_deploy_tag_pattern: Option<Option<String>>,
+    /// Artifact source metadata (when source = 'artifact').
+    /// Stored as JSON: { artifact_namespace_id, artifact_repo, artifact_tag }
+    pub deploy_config:   Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,12 +143,17 @@ async fn put_static_config(
 
     // Apply partial updates
     if let Some(v) = &body.source {
-        if v != "git" && v != "upload" {
+        if v != "git" && v != "upload" && v != "artifact" {
             return Err(ApiAppError(AppError::BadRequest(
-                "source must be 'git' or 'upload'".into(),
+                "source must be 'git', 'upload', or 'artifact'".into(),
             )));
         }
         sqlx::query("UPDATE static_site_configs SET source = $1, updated_at = NOW() WHERE service_id = $2")
+            .bind(v).bind(service_id).execute(&state.db).await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+    if let Some(v) = &body.deploy_config {
+        sqlx::query("UPDATE static_site_configs SET deploy_config = $1, updated_at = NOW() WHERE service_id = $2")
             .bind(v).bind(service_id).execute(&state.db).await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
@@ -398,7 +406,11 @@ async fn upload_static(
             state.config.docker.port_proxy,
             state.config.data_dir.clone(),
             state.config.static_server.retention_versions,
-        );
+        ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+            state.db.clone(),
+            Arc::clone(&state.registry_storage),
+        ))
+        .with_registry_hostname(state.config.registry.hostname.clone());
         tokio::spawn(async move {
             if let Err(e) = engine.deploy(deployment_id, service_id, &triggered_by, "upload").await {
                 tracing::error!(deployment_id = %deployment_id, "Upload deployment error: {e}");

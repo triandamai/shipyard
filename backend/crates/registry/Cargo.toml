@@ -1,0 +1,37 @@
+[package]
+name = "shipyard-registry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+shipyard-db     = { path = "../db" }
+
+tokio       = { workspace = true }
+axum        = { workspace = true }
+sqlx        = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+async-trait = { workspace = true }
+bytes       = { workspace = true }
+futures     = { workspace = true }
+sha2          = { workspace = true }
+hex           = { workspace = true }
+base64        = { workspace = true }
+jsonwebtoken  = { workspace = true }
+tokio-util    = { version = "0.7", features = ["io"] }
+
+# S3 backend
+aws-sdk-s3        = { version = "1", optional = true }
+aws-config        = { version = "1", optional = true }
+aws-credential-types = { version = "1", optional = true }
+
+[features]
+default = ["local"]
+local   = []
+s3      = ["dep:aws-sdk-s3", "dep:aws-config", "dep:aws-credential-types"]

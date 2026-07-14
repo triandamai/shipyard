@@ -236,7 +236,11 @@ async fn trigger_deploy(
         state.config.docker.port_proxy,
         state.config.data_dir.clone(),
         state.config.static_server.retention_versions,
-    );
+    ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+        state.db.clone(),
+        Arc::clone(&state.registry_storage),
+    ))
+    .with_registry_hostname(state.config.registry.hostname.clone());
 
     let deploy_notify = Arc::clone(&state.swarm_sync_trigger);
     tokio::spawn(async move {
@@ -661,7 +665,11 @@ async fn redeploy_service(
         state.config.docker.port_proxy,
         state.config.data_dir.clone(),
         state.config.static_server.retention_versions,
-    );
+    ).with_registry(shipyard_registry::push::ArtifactPusher::new(
+        state.db.clone(),
+        Arc::clone(&state.registry_storage),
+    ))
+    .with_registry_hostname(state.config.registry.hostname.clone());
 
     let redeploy_notify = Arc::clone(&state.swarm_sync_trigger);
     tokio::spawn(async move {
