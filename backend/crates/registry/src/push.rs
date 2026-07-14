@@ -173,6 +173,36 @@ impl ArtifactPusher {
     ) -> Result<(), PushError> {
         let ns_id = self.ensure_namespace(org_id, project_id).await?;
 
+        // Extract referenced tag from image_ref if present (e.g. registry/org/repo:tag)
+        let ref_tag = image_ref.split(':').last().unwrap_or("");
+        if !ref_tag.is_empty() {
+            let existing = sqlx::query_as::<_, (String, i64, serde_json::Value)>(
+                "SELECT manifest_digest, size_bytes, metadata 
+                 FROM artifacts 
+                 WHERE namespace_id = $1 AND repo = $2 AND tag = $3"
+            )
+            .bind(ns_id)
+            .bind(repo)
+            .bind(ref_tag)
+            .fetch_optional(&self.db)
+            .await?;
+
+            if let Some((manifest_digest, size_bytes, metadata)) = existing {
+                self.upsert_artifact(
+                    ns_id, kinds::kind::DOCKER_IMAGE, repo, tag,
+                    &manifest_digest, size_bytes, &metadata,
+                ).await?;
+
+                if tag != "latest" {
+                    self.upsert_artifact(
+                        ns_id, kinds::kind::DOCKER_IMAGE, repo, "latest",
+                        &manifest_digest, size_bytes, &metadata,
+                    ).await?;
+                }
+                return Ok(());
+            }
+        }
+
         let manifest = serde_json::json!({
             "schemaVersion": 2,
             "mediaType": "application/vnd.oci.image.manifest.v1+json",
