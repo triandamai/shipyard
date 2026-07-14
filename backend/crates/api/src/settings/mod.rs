@@ -930,10 +930,19 @@ async fn mqtt_proxy(path: &str) -> Result<Json<ApiResponse<Value>>, ApiAppError>
         .await
         .map_err(|e| ApiAppError(AppError::Internal(format!("MQTT API unreachable: {e}"))))?;
 
-    let body: Value = resp
-        .json()
+    let status = resp.status();
+    if !status.is_success() {
+        return Ok(Json(ApiResponse::ok(serde_json::json!([]))));
+    }
+
+    let text = resp
+        .text()
         .await
-        .map_err(|e| ApiAppError(AppError::Internal(format!("MQTT API parse error: {e}"))))?;
+        .map_err(|e| ApiAppError(AppError::Internal(format!("MQTT API read error: {e}"))))?;
+
+    let body: Value = serde_json::from_str(&text).unwrap_or_else(|_| {
+        serde_json::json!([])
+    });
 
     Ok(Json(ApiResponse::ok(body)))
 }

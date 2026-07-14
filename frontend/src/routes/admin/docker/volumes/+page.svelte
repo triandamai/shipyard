@@ -205,7 +205,7 @@
 	.m-card-row:last-child { border-bottom:none; }
 	.m-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; flex-shrink:0; }
 
-	@media (max-width: 680px) {
+	@media (max-width: 860px) {
 		.tbl { display:none; }
 		.card-list { display:block; }
 		.inner-toolbar { flex-direction:column; align-items:flex-start; gap:8px; }

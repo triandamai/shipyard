@@ -16,6 +16,13 @@
 	let page = $state(0);
 	const LIMIT = 25;
 
+	let expanded = $state(new Set<string>());
+	function toggleExpand(id: string) {
+		if (expanded.has(id)) expanded.delete(id);
+		else expanded.add(id);
+		expanded = new Set(expanded);
+	}
+
 	async function load() {
 		loading = true; error = '';
 		const r = await api.get<ServiceSummary[]>('/admin/docker/services');
@@ -46,7 +53,7 @@
 			<svg viewBox="0 0 20 20" fill="currentColor" class="si" width="12" height="12"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
 			<input type="text" placeholder="Search services…" bind:value={search} />
 		</label>
-		<button class="refresh-btn" onclick={load}>
+		<button class="refresh-btn" onclick={load} title="Refresh">
 			<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
 		</button>
 	</div>
@@ -61,21 +68,58 @@
 {:else}
 	<div class="tbl">
 		<div class="thead">
-			<span style="flex:2">Name</span>
+			<span style="flex:2.2">Name</span>
 			<span style="flex:3">Image</span>
 			<span style="flex:0.8">Mode</span>
 			<span style="flex:0.9">Replicas</span>
 		</div>
 		{#each paged as s}
-			<div class="trow">
-				<div class="mono" style="flex:2;font-size:12px">{s.name}</div>
-				<div class="cell img" style="flex:3">{s.image}</div>
-				<div class="cell" style="flex:0.8">{s.mode}</div>
-				<div style="flex:0.9">
-					<span class="rep-pill" class:rep-ok={s.replicas_running >= s.replicas_desired} class:rep-warn={s.replicas_running < s.replicas_desired}>
-						{s.replicas_running}/{s.replicas_desired}
-					</span>
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="trow-wrapper">
+				<div class="trow" onclick={() => toggleExpand(s.id)}>
+					<div class="mono trunc expand-cell" style="flex:2.2;font-size:12px">
+						<span class="chevron" class:expanded={expanded.has(s.id)}>▶</span>
+						{s.name}
+					</div>
+					<div class="cell img trunc" style="flex:3">{s.image}</div>
+					<div class="cell" style="flex:0.8">{s.mode}</div>
+					<div style="flex:0.9">
+						<span class="rep-pill" class:rep-ok={s.replicas_running >= s.replicas_desired} class:rep-warn={s.replicas_running < s.replicas_desired}>
+							{s.replicas_running}/{s.replicas_desired}
+						</span>
+					</div>
 				</div>
+				{#if expanded.has(s.id)}
+					<div class="details-panel">
+						<div class="details-grid">
+							<div><strong>Service ID:</strong> <span class="mono">{s.id}</span></div>
+							<div><strong>Mode:</strong> {s.mode}</div>
+							<div style="grid-column: 1 / -1"><strong>Image:</strong> <span class="mono">{s.image}</span></div>
+							{#if s.ports && s.ports.length > 0}
+								<div style="grid-column: 1 / -1"><strong>Published Ports:</strong> <span class="mono">{s.ports.join(', ')}</span></div>
+							{/if}
+							{#if s.created_at}
+								<div><strong>Created At:</strong> {new Date(s.created_at).toLocaleString()}</div>
+							{/if}
+							{#if s.updated_at}
+								<div><strong>Updated At:</strong> {new Date(s.updated_at).toLocaleString()}</div>
+							{/if}
+							{#if Object.keys(s.labels).length > 0}
+								<div style="grid-column: 1 / -1">
+									<strong>Labels:</strong>
+									<div class="labels-box mono">
+										{#each Object.entries(s.labels) as [k, val]}
+											<div><span class="lbl-key">{k}:</span> {val}</div>
+										{:else}
+											<!-- no-op -->
+										{/each}
+									</div>
+								</div>
+							{/if}
+						</div>
+					</div>
+				{/if}
 			</div>
 		{/each}
 	</div>
@@ -114,13 +158,22 @@
 
 	.tbl { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.07); }
 	.thead { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:10.5px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.065em; }
-	.trow { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); transition:background .1s; }
-	.trow:last-child { border-bottom:none; }
+	.trow-wrapper { border-bottom:1px solid var(--border); display:flex; flex-direction:column; }
+	.trow-wrapper:last-child { border-bottom:none; }
+	.trow { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:none; transition:background .1s; cursor:pointer; }
 	.trow:hover { background:var(--row-hover); }
+	.expand-cell { display:flex; align-items:center; gap:6px; min-width:0; }
+	.chevron { display:inline-block; font-size:8px; color:var(--text-3); transition:transform .2s; margin-right:2px; flex-shrink:0; }
+	.chevron.expanded { transform:rotate(90deg); }
+	.details-panel { padding:14px 20px 16px; background:var(--surface-2); border-top:1px solid var(--border); font-size:12.5px; border-bottom:1px solid var(--border); }
+	.details-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+	.labels-box { margin-top:6px; padding:8px 12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:11px; max-height:120px; overflow-y:auto; }
+	.lbl-key { color:var(--accent); font-weight:500; }
+
 	.cell { font-size:12.5px; color:var(--text-2); }
-	.muted { color:var(--text-3); }
 	.mono { font-family:var(--mono); color:var(--text); }
-	.img { font-size:11.5px; font-family:var(--mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.trunc { text-overflow:ellipsis; white-space:nowrap; overflow:hidden; min-width:0; }
+	.img { font-size:11.5px; font-family:var(--mono); }
 	.rep-pill { display:inline-flex; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; }
 	.rep-ok { background:var(--ok-soft); color:var(--ok); }
 	.rep-warn { background:var(--warn-soft); color:var(--warn); }
@@ -145,7 +198,7 @@
 	.m-card-row:last-child { border-bottom:none; }
 	.m-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; flex-shrink:0; }
 
-	@media (max-width: 680px) {
+	@media (max-width: 860px) {
 		.tbl { display:none; }
 		.card-list { display:block; }
 		.inner-toolbar { flex-direction:column; align-items:flex-start; gap:8px; }
