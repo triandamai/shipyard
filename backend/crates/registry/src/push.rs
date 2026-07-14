@@ -218,6 +218,193 @@ impl ArtifactPusher {
         Ok(())
     }
 
+    /// Save a local docker image, extract its layers, and push them to the registry storage (S3/local).
+    /// Returns the OCI manifest digest of the pushed image.
+    pub async fn push_docker_image(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        repo: &str,
+        tag: &str,
+        local_image_tag: &str,
+    ) -> Result<String, PushError> {
+        let ns_id = self.ensure_namespace(org_id, project_id).await?;
+
+        // 1. Create a temporary file to save the docker tar
+        let temp_dir = tempfile::tempdir().map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+        let tar_path = temp_dir.path().join("image.tar");
+
+        // Run `docker save <local_image_tag> -o <tar_path>`
+        let status = tokio::process::Command::new("docker")
+            .args(["save", local_image_tag, "-o"])
+            .arg(&tar_path)
+            .status()
+            .await
+            .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+
+        if !status.success() {
+            return Err(PushError::Storage(StorageError::Backend(format!(
+                "Failed to save docker image: {}",
+                local_image_tag
+            ))));
+        }
+
+        // 2. Extract the tarball using `tar` command line tool
+        let extract_dir = temp_dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+
+        let extract_status = tokio::process::Command::new("tar")
+            .arg("-xf")
+            .arg(&tar_path)
+            .arg("-C")
+            .arg(&extract_dir)
+            .status()
+            .await
+            .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+
+        if !extract_status.success() {
+            return Err(PushError::Storage(StorageError::Backend(
+                "Failed to extract docker image tarball".into()
+            )));
+        }
+
+        // 3. Read manifest.json
+        let manifest_path = extract_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            return Err(PushError::Storage(StorageError::Backend(
+                "docker save manifest.json not found".into()
+            )));
+        }
+
+        let manifest_content = tokio::fs::read_to_string(&manifest_path)
+            .await
+            .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+
+        let manifest_val: serde_json::Value = serde_json::from_str(&manifest_content)?;
+        let manifest_arr = manifest_val.as_array().ok_or_else(|| {
+            PushError::Storage(StorageError::Backend("Invalid manifest.json structure".into()))
+        })?;
+
+        if manifest_arr.is_empty() {
+            return Err(PushError::Storage(StorageError::Backend("Empty manifest.json".into())));
+        }
+
+        let img_manifest = &manifest_arr[0];
+        let config_file = img_manifest.get("Config").and_then(|c| c.as_str()).ok_or_else(|| {
+            PushError::Storage(StorageError::Backend("Config file not defined in manifest".into()))
+        })?;
+
+        let layers = img_manifest.get("Layers").and_then(|l| l.as_array()).ok_or_else(|| {
+            PushError::Storage(StorageError::Backend("Layers not defined in manifest".into()))
+        })?;
+
+        // 4. Push the config blob
+        let config_path = extract_dir.join(config_file);
+        let config_bytes = tokio::fs::read(&config_path)
+            .await
+            .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+        let config_bytes = Bytes::from(config_bytes);
+        let (config_digest, config_size) = self.push_blob(&config_bytes).await?;
+
+        // 5. Push all layer blobs and build their OCI descriptor objects
+        let mut oci_layers = Vec::new();
+        let mut total_size = config_size;
+
+        for layer_val in layers {
+            let layer_rel_path = layer_val.as_str().ok_or_else(|| {
+                PushError::Storage(StorageError::Backend("Invalid layer path".into()))
+            })?;
+            let layer_path = extract_dir.join(layer_rel_path);
+            let layer_bytes = tokio::fs::read(&layer_path)
+                .await
+                .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+            let layer_bytes = Bytes::from(layer_bytes);
+            let (layer_digest, layer_size) = self.push_blob(&layer_bytes).await?;
+            total_size += layer_size;
+
+            oci_layers.push(serde_json::json!({
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "size": layer_size,
+                "digest": layer_digest
+            }));
+        }
+
+        // 6. Build the OCI manifest structure
+        let oci_manifest = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "size": config_size,
+                "digest": config_digest
+            },
+            "layers": oci_layers,
+            "annotations": {
+                "org.shipyard.artifact.kind": "docker_image",
+                "org.shipyard.docker.image_ref": local_image_tag
+            }
+        });
+
+        let manifest_json = serde_json::to_string(&oci_manifest)?;
+        let manifest_digest = Self::manifest_digest(&manifest_json);
+
+        // Save manifest row in DB
+        sqlx::query(
+            "INSERT INTO registry_manifests (digest, media_type, content, size_bytes)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (digest) DO NOTHING",
+        )
+        .bind(&manifest_digest)
+        .bind("application/vnd.oci.image.manifest.v1+json")
+        .bind(&manifest_json)
+        .bind(manifest_json.len() as i64)
+        .execute(&self.db)
+        .await?;
+
+        // Increment ref count for config blob
+        sqlx::query("UPDATE registry_blobs SET ref_count = ref_count + 1 WHERE digest = $1")
+            .bind(&config_digest)
+            .execute(&self.db)
+            .await?;
+
+        // Increment ref count for each layer
+        for layer_val in layers {
+            let layer_rel_path = layer_val.as_str().unwrap();
+            let layer_path = extract_dir.join(layer_rel_path);
+            let layer_bytes = tokio::fs::read(&layer_path).await
+                .map_err(|e| PushError::Storage(StorageError::Io(e)))?;
+            let mut h = Sha256::new();
+            h.update(&layer_bytes);
+            let digest = format!("sha256:{}", hex::encode(h.finalize()));
+
+            sqlx::query("UPDATE registry_blobs SET ref_count = ref_count + 1 WHERE digest = $1")
+                .bind(&digest)
+                .execute(&self.db)
+                .await?;
+        }
+
+        // Save artifact
+        let metadata = serde_json::json!({
+            "image_ref": local_image_tag,
+            "layers": layers.len()
+        });
+
+        self.upsert_artifact(
+            ns_id, kinds::kind::DOCKER_IMAGE, repo, tag,
+            &manifest_digest, total_size, &metadata,
+        ).await?;
+
+        if tag != "latest" {
+            self.upsert_artifact(
+                ns_id, kinds::kind::DOCKER_IMAGE, repo, "latest",
+                &manifest_digest, total_size, &metadata,
+            ).await?;
+        }
+
+        Ok(manifest_digest)
+    }
+
+
     /// Push an edge function bundle as an `edge_function` OCI artifact.
     ///
     /// Creates the namespace if needed, stores the blob, wraps it in a minimal

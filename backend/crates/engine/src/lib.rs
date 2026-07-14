@@ -2938,59 +2938,42 @@ impl DeploymentEngine {
 
                 // Push to internal registry if a hostname is configured (best-effort, non-fatal).
                 // This makes the image available for cross-node pulls and for Case 1 deploys.
-                let final_ref = if !self.registry_hostname.is_empty() {
-                    // Build the internal registry tag: <hostname>/<org_id>/<service_id>:<short_sha>
+                let final_ref = if !self.registry_hostname.is_empty() && self.registry.is_some() {
                     let sha_len = 7.min(commit_info.sha.len());
+                    let tag = &commit_info.sha[..sha_len];
+                    let repo = self.service_slug_or_id(service_id).await;
                     let registry_tag = format!(
                         "{}/{}/{}:{}",
                         self.registry_hostname,
                         org_id,
                         service_id,
-                        &commit_info.sha[..sha_len],
+                        tag,
                     );
 
-                    // Step A: docker tag <local_tag> <registry_tag>
-                    let tag_result = tokio::process::Command::new("docker")
-                        .args(["tag", &local_tag, &registry_tag])
-                        .output()
-                        .await;
+                    let push_msg = format!("Saving and pushing Docker image to internal storage: {registry_tag}");
+                    self.insert_log(deployment_id, Some(step_id), "info", &push_msg).await;
+                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &push_msg).await;
 
-                    match tag_result {
-                        Ok(o) if o.status.success() => {
-                            let push_msg = format!("Tagged for internal registry: {registry_tag}");
-                            self.insert_log(deployment_id, Some(step_id), "info", &push_msg).await;
+                    let pusher = self.registry.as_ref().unwrap();
+                    let push_result = pusher.push_docker_image(
+                        org_id,
+                        project_id,
+                        &repo,
+                        tag,
+                        &local_tag,
+                    ).await;
 
-                            // Step B: docker push <registry_tag>
-                            let push_result = tokio::process::Command::new("docker")
-                                .args(["push", &registry_tag])
-                                .output()
-                                .await;
-
-                            match push_result {
-                                Ok(o) if o.status.success() => {
-                                    let pushed_msg = format!("Pushed to internal registry: {registry_tag}");
-                                    self.insert_log(deployment_id, Some(step_id), "info", &pushed_msg).await;
-                                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pushed_msg).await;
-                                    registry_tag // use registry ref as the authoritative ref
-                                }
-                                Ok(o) => {
-                                    let stderr = String::from_utf8_lossy(&o.stderr);
-                                    tracing::warn!(deployment_id = %deployment_id, "docker push to internal registry failed (non-fatal): {stderr}");
-                                    local_tag // fall back to local tag
-                                }
-                                Err(e) => {
-                                    tracing::warn!(deployment_id = %deployment_id, "docker push command error (non-fatal): {e}");
-                                    local_tag
-                                }
-                            }
-                        }
-                        Ok(o) => {
-                            let stderr = String::from_utf8_lossy(&o.stderr);
-                            tracing::warn!(deployment_id = %deployment_id, "docker tag for registry failed (non-fatal): {stderr}");
-                            local_tag
+                    match push_result {
+                        Ok(_) => {
+                            let pushed_msg = format!("Successfully pushed Docker image layers to internal registry storage");
+                            self.insert_log(deployment_id, Some(step_id), "info", &pushed_msg).await;
+                            self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pushed_msg).await;
+                            registry_tag // use registry ref as the authoritative ref
                         }
                         Err(e) => {
-                            tracing::warn!(deployment_id = %deployment_id, "docker tag command error (non-fatal): {e}");
+                            tracing::warn!(deployment_id = %deployment_id, "direct docker push to registry failed (non-fatal): {e}");
+                            let err_msg = format!("Registry push warning (non-fatal): {e}");
+                            self.insert_log(deployment_id, Some(step_id), "warn", &err_msg).await;
                             local_tag
                         }
                     }

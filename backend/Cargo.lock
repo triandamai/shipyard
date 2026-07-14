@@ -3839,6 +3839,7 @@ dependencies = [
  "shipyard-common",
  "shipyard-db",
  "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
