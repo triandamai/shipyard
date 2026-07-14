@@ -117,7 +117,7 @@
 									<div class="labels-box mono">
 										{#each Object.entries(v.labels) as [k, val]}
 											<div><span class="lbl-key">{k}:</span> {val}</div>
-										{#each_else}
+										{:else}
 											<!-- no-op -->
 										{/each}
 									</div>
