@@ -123,6 +123,43 @@ impl super::StorageBackend for S3Storage {
             .map_err(|_| StorageError::NotFound(key.to_string()))?;
         Ok(resp.0.content_length.unwrap_or(0) as u64)
     }
+
+    async fn list(&self, prefix: &str, delimiter: &str) -> Result<super::StorageListResult, StorageError> {
+        let bucket = self.build_bucket()?;
+        let delimiter_opt = if delimiter.is_empty() {
+            None
+        } else {
+            Some(delimiter.to_string())
+        };
+
+        let list_results = bucket
+            .list(prefix.to_string(), delimiter_opt)
+            .await
+            .map_err(|e| StorageError::Backend(e.to_string()))?;
+
+        let mut objects = Vec::new();
+        let mut common_prefixes = Vec::new();
+
+        for res in list_results {
+            for obj in res.contents {
+                objects.push(super::StorageObject {
+                    key: obj.key,
+                    size: obj.size,
+                    last_modified: Some(obj.last_modified),
+                });
+            }
+            if let Some(prefixes) = res.common_prefixes {
+                for pref in prefixes {
+                    common_prefixes.push(pref.prefix);
+                }
+            }
+        }
+
+        Ok(super::StorageListResult {
+            objects,
+            common_prefixes,
+        })
+    }
 }
 
 /// Stub when s3 feature is disabled — prevents compilation errors on import.

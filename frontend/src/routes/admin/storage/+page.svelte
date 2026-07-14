@@ -1,0 +1,457 @@
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { api } from '$lib/api/client';
+	import { 
+		Folder, 
+		File, 
+		ChevronRight, 
+		Search, 
+		ArrowLeft, 
+		HardDrive, 
+		Calendar, 
+		X, 
+		Download, 
+		RefreshCw, 
+		Copy, 
+		Check 
+	} from '@lucide/svelte';
+
+	interface StorageObject {
+		key: string;
+		size: number;
+		last_modified: string | null;
+	}
+
+	interface ListResult {
+		objects: StorageObject[];
+		common_prefixes: string[];
+	}
+
+	// Dynamic prefix state synced with URL search params
+	let currentPrefix = $derived(page.url.searchParams.get('prefix') ?? '');
+
+	let objects = $state<StorageObject[]>([]);
+	let commonPrefixes = $state<string[]>([]);
+	let loading = $state(false);
+	let error = $state('');
+	let search = $state('');
+
+	// Preview overlay state
+	let previewKey = $state<string | null>(null);
+	let previewLoading = $state(false);
+	let previewContent = $state<string | null>(null);
+	let previewError = $state('');
+	let previewIsImage = $derived(
+		previewKey ? /\.(png|jpe?g|gif|svg|webp|ico)$/i.test(previewKey) : false
+	);
+	let copied = $state(false);
+
+	async function loadList(prefix: string) {
+		loading = true;
+		error = '';
+		const r = await api.get<ListResult>(`/admin/storage/list`, {
+			prefix: prefix || undefined,
+			delimiter: '/'
+		});
+		if (r.data) {
+			objects = r.data.objects;
+			commonPrefixes = r.data.common_prefixes;
+		} else {
+			error = r.error?.message ?? 'Failed to list storage objects';
+		}
+		loading = false;
+	}
+
+	function navigateTo(prefix: string) {
+		const url = new URL(window.location.href);
+		if (prefix) {
+			url.searchParams.set('prefix', prefix);
+		} else {
+			url.searchParams.delete('prefix');
+		}
+		goto(url.toString(), { keepFocus: true });
+	}
+
+	// Trigger load whenever the URL prefix query param changes
+	$effect(() => {
+		loadList(currentPrefix);
+	});
+
+	function goUp() {
+		if (!currentPrefix) return;
+		const parts = currentPrefix.replace(/\/$/, '').split('/');
+		parts.pop();
+		const parent = parts.length > 0 ? parts.join('/') + '/' : '';
+		navigateTo(parent);
+	}
+
+	function handleItemClick(item: { type: 'folder' | 'file'; path: string }) {
+		if (item.type === 'folder') {
+			navigateTo(item.path);
+		} else {
+			openPreview(item.path);
+		}
+	}
+
+	async function openPreview(key: string) {
+		previewKey = key;
+		previewError = '';
+		previewContent = null;
+		copied = false;
+
+		if (previewIsImage) {
+			// For images, we can reference the API endpoint URL directly
+			previewContent = `/api/admin/storage/preview?key=${encodeURIComponent(key)}`;
+			return;
+		}
+
+		previewLoading = true;
+		try {
+			// Fetch content as text (use custom fetch to handle text stream or custom types)
+			const token = localStorage.getItem('shipyard_token');
+			const response = await fetch(`/api/admin/storage/preview?key=${encodeURIComponent(key)}`, {
+				headers: token ? { Authorization: `Bearer ${token}` } : {}
+			});
+			
+			if (!response.ok) {
+				throw new Error(`HTTP error ${response.status}`);
+			}
+			
+			const text = await response.text();
+			previewContent = text;
+		} catch (e: any) {
+			previewError = e.message ?? 'Failed to load preview';
+		} finally {
+			previewLoading = false;
+		}
+	}
+
+	function closePreview() {
+		previewKey = null;
+		previewContent = null;
+		previewError = '';
+	}
+
+	function copyToClipboard() {
+		if (!previewContent) return;
+		navigator.clipboard.writeText(previewContent);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
+	}
+
+	function fmtBytes(n: number): string {
+		if (!n) return '0 B';
+		if (n < 1024) return `${n} B`;
+		if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+		return `${(n / 1024 / 1024).toFixed(1)} MB`;
+	}
+
+	function getBreadcrumbs(prefix: string) {
+		const parts = prefix.replace(/\/$/, '').split('/').filter(Boolean);
+		let acc = '';
+		return parts.map(p => {
+			acc += p + '/';
+			return { label: p, prefix: acc };
+		});
+	}
+
+	// Filter directories & objects by search
+	let filteredFolders = $derived(
+		commonPrefixes.filter(p => {
+			const name = p.replace(/\/$/, '').split('/').pop() ?? '';
+			return !search || name.toLowerCase().includes(search.toLowerCase());
+		})
+	);
+
+	let filteredFiles = $derived(
+		objects.filter(o => {
+			const name = o.key.split('/').pop() ?? '';
+			return !search || name.toLowerCase().includes(search.toLowerCase());
+		})
+	);
+
+	onMount(() => {
+		loadList(currentPrefix);
+	});
+</script>
+
+<svelte:head>
+	<title>S3 Storage Browser — Shipyard Admin</title>
+</svelte:head>
+
+<div class="p">
+	<div class="hdr">
+		<div>
+			<h1 class="ttl">Storage Browser</h1>
+			<p class="sub">Registry content store explorer (S3 / Local storage backend)</p>
+		</div>
+		<button class="refresh-btn" onclick={() => loadList(currentPrefix)} title="Refresh">
+			<RefreshCw width="14" height="14" class={loading ? 'spin' : ''} />
+		</button>
+	</div>
+
+	<!-- Breadcrumbs and Navigation bar -->
+	<div class="nav-bar">
+		<div class="breadcrumbs">
+			<button class="crumb-btn" onclick={() => navigateTo('')}>
+				<HardDrive width="14" height="14" style="margin-right: 4px;" />
+				Root
+			</button>
+			{#each getBreadcrumbs(currentPrefix) as crumb}
+				<ChevronRight width="12" height="12" class="crumb-sep" />
+				<button class="crumb-btn" onclick={() => navigateTo(crumb.prefix)}>{crumb.label}</button>
+			{/each}
+		</div>
+
+		{#if currentPrefix}
+			<button class="up-btn" onclick={goUp}>
+				<ArrowLeft width="12" height="12" />
+				Go Up
+			</button>
+		{/if}
+	</div>
+
+	<!-- Search & Toolbar -->
+	<div class="toolbar">
+		<label class="search">
+			<Search width="14" height="14" class="search-icon" />
+			<input type="text" placeholder="Filter items in folder…" bind:value={search} />
+		</label>
+	</div>
+
+	{#if loading && objects.length === 0 && commonPrefixes.length === 0}
+		<div class="loading-wrap">
+			<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:200px;height:14px"></div></div>
+			<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:140px;height:14px"></div></div>
+			<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:180px;height:14px"></div></div>
+		</div>
+	{:else if error}
+		<div class="err-banner">{error}</div>
+	{:else if filteredFolders.length === 0 && filteredFiles.length === 0}
+		<div class="empty">No files or folders found here.</div>
+	{:else}
+		<div class="explorer">
+			<div class="explorer-header">
+				<span style="flex: 3;">Name</span>
+				<span style="flex: 1; text-align: right;">Size</span>
+				<span style="flex: 1.5; text-align: right;">Last Modified</span>
+			</div>
+
+			<div class="items-list">
+				<!-- Folders -->
+				{#each filteredFolders as folder}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div class="item-row folder-row" onclick={() => handleItemClick({ type: 'folder', path: folder })}>
+						<div class="item-name" style="flex: 3;">
+							<Folder class="folder-icon" width="16" height="16" />
+							<span class="mono">{folder.replace(currentPrefix, '')}</span>
+						</div>
+						<div class="item-size" style="flex: 1; text-align: right;">—</div>
+						<div class="item-date" style="flex: 1.5; text-align: right;">—</div>
+					</div>
+				{/each}
+
+				<!-- Files -->
+				{#each filteredFiles as file}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div class="item-row file-row" onclick={() => handleItemClick({ type: 'file', path: file.key })}>
+						<div class="item-name" style="flex: 3;">
+							<File class="file-icon" width="16" height="16" />
+							<span class="mono trunc">{file.key.replace(currentPrefix, '')}</span>
+						</div>
+						<div class="item-size" style="flex: 1; text-align: right;">{fmtBytes(file.size)}</div>
+						<div class="item-date" style="flex: 1.5; text-align: right;">
+							{#if file.last_modified}
+								<Calendar width="11" height="11" style="display:inline; margin-right:4px; vertical-align:-1px;" />
+								{new Date(file.last_modified).toLocaleString()}
+							{:else}
+								—
+							{/if}
+						</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
+</div>
+
+<!-- Preview Drawer / Side Panel Overlay -->
+{#if previewKey}
+	<div class="overlay" onclick={closePreview}>
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="drawer" onclick={(e) => e.stopPropagation()}>
+			<div class="drawer-header">
+				<div class="drawer-title-area">
+					<span class="drawer-meta-label">FILE PREVIEW</span>
+					<h3 class="drawer-title mono trunc" title={previewKey}>{previewKey.split('/').pop()}</h3>
+				</div>
+				<div class="drawer-actions">
+					{#if previewContent && !previewIsImage}
+						<button class="drawer-btn" onclick={copyToClipboard} title="Copy Content">
+							{#if copied}
+								<Check width="14" height="14" style="color:var(--ok)" />
+							{:else}
+								<Copy width="14" height="14" />
+							{/if}
+						</button>
+					{/if}
+					<a class="drawer-btn" href={`/api/admin/storage/preview?key=${encodeURIComponent(previewKey)}`} download={previewKey.split('/').pop()} target="_blank" title="Download File">
+						<Download width="14" height="14" />
+					</a>
+					<button class="drawer-btn close-btn" onclick={closePreview}>
+						<X width="16" height="16" />
+					</button>
+				</div>
+			</div>
+
+			<div class="drawer-body">
+				{#if previewLoading}
+					<div class="preview-loading">
+						<div class="spinner"></div>
+						<span>Loading file content…</span>
+					</div>
+				{:else if previewError}
+					<div class="preview-error">
+						<h3>Failed to render preview</h3>
+						<p>{previewError}</p>
+					</div>
+				{:else if previewIsImage}
+					<div class="preview-image-container">
+						<!-- svelte-ignore a11y_missing_attribute -->
+						<img src={previewContent} class="preview-image" />
+					</div>
+				{:else if previewContent !== null}
+					<div class="preview-text-container">
+						<pre class="preview-code mono">{previewContent}</pre>
+					</div>
+				{:else}
+					<div class="preview-binary">
+						<File width="48" height="48" style="color: var(--text-3); margin-bottom: 12px;" />
+						<h3>Binary File</h3>
+						<p>Previews are not supported for this file type.</p>
+						<a class="download-link" href={`/api/admin/storage/preview?key=${encodeURIComponent(previewKey)}`} download={previewKey.split('/').pop()} target="_blank">
+							<Download width="14" height="14" style="margin-right: 6px;" />
+							Download File
+						</a>
+					</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+{/if}
+
+<style>
+	.p { max-width: 1100px; margin: 0 auto; padding: 40px 36px; box-sizing: border-box; }
+	.hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+	.ttl { font-size: 20px; font-weight: 700; color: var(--text); margin: 0 0 4px; letter-spacing: -0.02em; }
+	.sub { font-size: 13px; color: var(--text-3); margin: 0; }
+	
+	.refresh-btn { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--radius-sm); cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text-2); transition: background .15s; }
+	.refresh-btn:hover { background: var(--surface-2); }
+	
+	/* Navigation and Breadcrumbs */
+	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; }
+	.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--text-2); }
+	.crumb-btn { display: inline-flex; align-items: center; background: transparent; border: none; padding: 2px 6px; border-radius: 4px; color: var(--text-2); font-weight: 500; cursor: pointer; font-family: var(--font); font-size: 13px; transition: color .1s, background .1s; }
+	.crumb-btn:hover { color: var(--accent); background: rgba(255,255,255,0.03); }
+	.crumb-sep { color: var(--text-3); flex-shrink: 0; }
+	
+	.up-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; transition: background .15s; font-family: var(--font); }
+	.up-btn:hover { background: var(--surface-2); color: var(--text); }
+
+	/* Toolbar & Search */
+	.toolbar { display: flex; align-items: center; margin-bottom: 16px; }
+	.search { position: relative; display: flex; align-items: center; flex: 1; cursor: text; }
+	.search-icon { position: absolute; left: 10px; color: var(--text-3); pointer-events: none; }
+	.search input { height: 34px; padding: 0 10px 0 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--text); outline: none; width: 100%; transition: border-color .15s, box-shadow .15s; font-family: var(--font); }
+	.search input::placeholder { color: var(--text-3); }
+	.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+
+	/* Explorer Table */
+	.explorer { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+	.explorer-header { display: flex; align-items: center; padding: 10px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .065em; }
+	.items-list { display: flex; flex-direction: column; }
+	
+	.item-row { display: flex; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--border); transition: background .1s; cursor: pointer; font-size: 13px; color: var(--text-2); }
+	.item-row:last-child { border-bottom: none; }
+	.item-row:hover { background: var(--row-hover); }
+	
+	.item-name { display: flex; align-items: center; gap: 10px; font-family: var(--mono); color: var(--text); min-width: 0; }
+	.folder-icon { color: var(--accent); flex-shrink: 0; }
+	.file-icon { color: var(--text-3); flex-shrink: 0; }
+	
+	.item-size { color: var(--text-2); }
+	.item-date { color: var(--text-3); font-size: 12px; }
+
+	.mono { font-family: var(--mono); }
+	.trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+
+	/* Loading Skeleton & Error/Empty */
+	.loading-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+	.sk-row { display: flex; align-items: center; gap: 12px; }
+	.sk { background: var(--border); border-radius: 4px; animation: sk 1.3s ease-in-out infinite; }
+	@keyframes sk { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
+	
+	.err-banner { padding: 12px 16px; background: var(--danger-soft); border: 1px solid rgba(220,38,38,0.2); border-radius: var(--radius); font-size: 13px; color: var(--danger); }
+	.empty { padding: 56px; text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-3); font-size: 13px; }
+
+	/* Preview Overlay & Drawer */
+	.overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000; display: flex; justify-content: flex-end; }
+	.drawer { width: 100%; max-width: 600px; height: 100%; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4); animation: slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+	
+	@keyframes slideIn {
+		from { transform: translateX(100%); }
+		to { transform: translateX(0); }
+	}
+
+	.drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+	.drawer-title-area { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+	.drawer-meta-label { font-size: 9.5px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; }
+	.drawer-title { font-size: 16px; font-weight: 700; color: var(--text); margin: 0; }
+	
+	.drawer-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+	.drawer-btn { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; }
+	.drawer-btn:hover { background: var(--surface-2); color: var(--text); }
+	.close-btn:hover { background: var(--danger-soft); color: var(--danger); border-color: rgba(220,38,38,0.2); }
+
+	.drawer-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; }
+
+	/* Preview Types */
+	.preview-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 12px; color: var(--text-3); font-size: 13px; }
+	.spinner { width: 24px; height: 24px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+	@keyframes spin { to { transform: rotate(360deg); } }
+	
+	.preview-error { text-align: center; margin: auto; max-width: 320px; }
+	.preview-error h3 { font-size: 15px; color: var(--danger); margin: 0 0 8px; }
+	.preview-error p { font-size: 13px; color: var(--text-3); margin: 0; line-height: 1.5; }
+
+	.preview-image-container { display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; overflow: auto; max-height: 100%; box-sizing: border-box; }
+	.preview-image { max-width: 100%; max-height: 480px; object-fit: contain; border-radius: var(--radius-sm); }
+
+	.preview-text-container { background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 1; max-height: 100%; }
+	.preview-code { margin: 0; padding: 16px; font-size: 12px; line-height: 1.6; color: var(--text-2); white-space: pre; font-family: var(--mono); }
+
+	.preview-binary { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; text-align: center; max-width: 320px; }
+	.preview-binary h3 { font-size: 15px; color: var(--text); margin: 0 0 6px; }
+	.preview-binary p { font-size: 13px; color: var(--text-3); margin: 0 0 20px; line-height: 1.5; }
+	
+	.download-link { display: inline-flex; align-items: center; padding: 8px 16px; background: var(--accent); color: #000; font-size: 13px; font-weight: 600; text-decoration: none; border-radius: var(--radius-sm); transition: opacity .15s; }
+	.download-link:hover { opacity: 0.9; }
+
+	/* Responsiveness */
+	@media (max-width: 768px) {
+		.p { padding: 24px 16px; }
+		.explorer-header { display: none; }
+		.item-row { flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; }
+		.item-name { width: 100%; }
+		.item-size, .item-date { width: 100%; text-align: left !important; font-size: 11px; padding-left: 26px; }
+		
+		.overlay { justify-content: center; }
+		.drawer { height: 100%; max-width: 100%; border-left: none; }
+	}
+</style>

@@ -86,6 +86,8 @@ pub fn routes() -> Router<AppState> {
         .route("/redis/info", get(get_redis_info))
         .route("/payments", get(list_payments))
         .route("/swarm/nodes", get(list_swarm_nodes))
+        .route("/storage/list", get(list_storage))
+        .route("/storage/preview", get(preview_storage))
 }
 
 // ─── GET /admin/stats ─────────────────────────────────────────────────────────
@@ -1351,4 +1353,81 @@ async fn list_payments(
         "per_page": per_page,
     }))))
 }
+
+#[derive(Deserialize)]
+struct StorageListQuery {
+    prefix: Option<String>,
+    delimiter: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StoragePreviewQuery {
+    key: String,
+}
+
+fn guess_content_type(key: &str) -> &'static str {
+    let ext = key.split('.').last().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" => "application/javascript",
+        "json" => "application/json",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "tar" => "application/x-tar",
+        "gz" => "application/gzip",
+        "yaml" | "yml" => "text/yaml",
+        "md" => "text/markdown",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn list_storage(
+    State(state): State<AppState>,
+    Query(query): Query<StorageListQuery>,
+    auth: AuthUser,
+) -> Result<Json<ApiResponse<shipyard_registry::storage::StorageListResult>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "infra:read").await?;
+
+    let prefix = query.prefix.unwrap_or_default();
+    let delimiter = query.delimiter.unwrap_or_else(|| "/".to_string());
+
+    let result = state
+        .registry_storage
+        .list(&prefix, &delimiter)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Storage list error: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+async fn preview_storage(
+    State(state): State<AppState>,
+    Query(query): Query<StoragePreviewQuery>,
+    auth: AuthUser,
+) -> Result<Response, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "infra:read").await?;
+
+    let bytes = state
+        .registry_storage
+        .get_bytes(&query.key)
+        .await
+        .map_err(|e| ApiAppError(AppError::NotFound(format!("Key not found: {e}"))))?;
+
+    let content_type = guess_content_type(&query.key);
+
+    let response = Response::builder()
+        .header("content-type", content_type)
+        .header("content-length", bytes.len().to_string())
+        .body(Body::from(bytes))
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+
+    Ok(response)
+}
+
 

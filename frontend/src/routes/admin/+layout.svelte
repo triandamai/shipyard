@@ -67,6 +67,7 @@
 				{ href: '/admin/docker',   label: 'Docker',       d: 'M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z' },
 				{ href: '/admin/traefik',  label: 'Traefik',      d: 'M13 7H7v6h6V7z M2 3a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H3a1 1 0 01-1-1V3z' },
 				{ href: '/admin/registry', label: 'Registry',     d: 'M4 3a2 2 0 100 4h12a2 2 0 100-4H4zM3 8h14v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8zm5 3a1 1 0 000 2h4a1 1 0 100-2H8z' },
+				{ href: '/admin/storage',  label: 'Storage (S3)',  d: 'M3 15a1 1 0 001 1h12a1 1 0 001-1v-5a1 1 0 00-1-1H4a1 1 0 00-1 1v5zm0-8a1 1 0 001 1h12a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v2z' },
 				{ href: '/admin/mqtt',     label: 'MQTT',         d: 'M5 12a1 1 0 01-1-1V7a1 1 0 012 0v4a1 1 0 01-1 1zm5 4a1 1 0 01-1-1V3a1 1 0 012 0v12a1 1 0 01-1 1zm5-8a1 1 0 01-1-1V7a1 1 0 012 0v0a1 1 0 01-1 1z' },
 				{ href: '/admin/static',   label: 'Static Sites', d: 'M2 6a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM4 12h12v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm8-2a1 1 0 000 2h2a1 1 0 000-2h-2z' },
 			]

@@ -19,6 +19,19 @@ pub enum StorageError {
     Backend(String),
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StorageObject {
+    pub key: String,
+    pub size: u64,
+    pub last_modified: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StorageListResult {
+    pub objects: Vec<StorageObject>,
+    pub common_prefixes: Vec<String>,
+}
+
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     /// Write bytes to the given key. Overwrites if key already exists.
@@ -48,6 +61,9 @@ pub trait StorageBackend: Send + Sync {
 
     /// Return the size in bytes of the object at the given key.
     async fn size(&self, key: &str) -> Result<u64, StorageError>;
+
+    /// List objects/common prefixes under a prefix with delimiter.
+    async fn list(&self, prefix: &str, delimiter: &str) -> Result<StorageListResult, StorageError>;
 }
 
 /// Canonical storage key for a content-addressed blob.
