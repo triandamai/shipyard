@@ -409,10 +409,9 @@ async fn async_main() {
         std::process::exit(1);
     }
 
-    let registry_storage: Arc<dyn StorageBackend> = if config.registry.storage == "s3" {
-        #[cfg(feature = "s3")]
-        {
-            use shipyard_registry::storage::s3::S3Storage;
+    let registry_storage: Arc<dyn StorageBackend> = {
+        use shipyard_registry::storage::s3::S3Storage;
+        if config.registry.storage == "s3" {
             let endpoint   = config.registry.s3_endpoint.as_deref().unwrap_or_default();
             let bucket     = config.registry.s3_bucket.as_deref().unwrap_or("shipyard-registry");
             let access_key = config.registry.s3_access_key.as_deref().unwrap_or_default();
@@ -421,26 +420,17 @@ async fn async_main() {
             match S3Storage::new(endpoint, bucket, access_key, secret_key, region).await {
                 Ok(s3) => {
                     tracing::info!("Registry storage: S3/MinIO at {endpoint} bucket={bucket}");
-                    Arc::new(s3)
+                    Arc::new(s3) as Arc<dyn StorageBackend>
                 }
                 Err(e) => {
                     tracing::error!("Failed to init S3 registry storage: {e}. Falling back to local disk.");
-                    Arc::new(LocalStorage::new(&registry_path))
+                    Arc::new(LocalStorage::new(&registry_path)) as Arc<dyn StorageBackend>
                 }
             }
+        } else {
+            tracing::info!("Registry storage: local disk at {registry_path}");
+            Arc::new(LocalStorage::new(&registry_path)) as Arc<dyn StorageBackend>
         }
-        #[cfg(not(feature = "s3"))]
-        {
-            tracing::warn!(
-                "Registry storage is set to 's3' but the s3 feature is not compiled in. \
-                 Falling back to local disk at {registry_path}. \
-                 Rebuild with --features s3 to enable S3 storage."
-            );
-            Arc::new(LocalStorage::new(&registry_path))
-        }
-    } else {
-        tracing::info!("Registry storage: local disk at {registry_path}");
-        Arc::new(LocalStorage::new(&registry_path))
     };
 
     let auth_limiter = middleware::rate_limit::make_auth_rate_limiter();

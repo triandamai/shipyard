@@ -55,4 +55,5 @@ tempfile = "3.27.0"
 aes-gcm = { workspace = true }
 
 [features]
+default = ["s3"]
 s3 = ["shipyard-registry/s3"]
