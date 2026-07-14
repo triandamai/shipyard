@@ -97,6 +97,26 @@
 				</div>
 			{/each}
 		</div>
+
+		<div class="card-list">
+			{#each jobs as j}
+				<div class="m-card">
+					<div class="m-card-title"><a class="link" href="/orgs/{j.org_slug}" target="_blank">{j.org_name}</a></div>
+					<div class="m-card-row"><span class="m-card-key">Node</span><span class="mono cell">{j.name}</span></div>
+					<div class="m-card-row"><span class="m-card-key">Provider</span><span class="cell">{j.provider}</span></div>
+					<div class="m-card-row"><span class="m-card-key">Region</span><span class="cell">{j.region}</span></div>
+					<div class="m-card-row">
+						<span class="m-card-key">Status</span>
+						<span>
+							<span class="dot" style="background:{statusColor(j.status)}"></span>
+							<span style="font-size:12px;color:{statusColor(j.status)};font-weight:500">{j.status}</span>
+						</span>
+					</div>
+					<div class="m-card-row"><span class="m-card-key">Started</span><span class="muted" style="font-size:11.5px">{relTime(j.created_at)}</span></div>
+				</div>
+			{/each}
+		</div>
+
 		{#if totalPages > 1}
 			<div class="pager">
 				<button class="pg-btn" disabled={page === 0} onclick={() => { page--; load(); }}>Prev</button>
@@ -141,4 +161,17 @@
 	.pg-btn:hover:not(:disabled) { background:var(--surface-2); }
 	.pg-btn:disabled { opacity:.4; cursor:not-allowed; }
 	.pg-info { font-size:12px; color:var(--text-3); }
+
+	.card-list { display:none; }
+	.m-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; }
+	.m-card-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px; }
+	.m-card-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--text-2); }
+	.m-card-row:last-child { border-bottom:none; }
+	.m-card-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
+
+	@media (max-width: 640px) {
+		.p { padding:20px 12px; }
+		.tbl { display:none; }
+		.card-list { display:block; }
+	}
 </style>

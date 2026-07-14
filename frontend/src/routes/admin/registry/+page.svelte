@@ -357,19 +357,20 @@
 	.ftr-btn:hover { background: var(--surface-2); color: var(--text); }
 
 	/* ── Stat cards ── */
-	.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+	.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 	.card {
-		display: flex; align-items: center; gap: 12px;
-		background: var(--surface); border: 1px solid var(--border);
-		border-radius: var(--radius); padding: 14px 16px;
+		display: flex; align-items: center; gap: 12px; padding: 16px;
+		background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+		min-width: 0;
 	}
+	.card-body { min-width: 0; }
 	.card-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 	.card-icon.blue   { background: rgba(59,130,246,0.12); color: #3b82f6; }
 	.card-icon.purple { background: rgba(139,92,246,0.12); color: #8b5cf6; }
 	.card-icon.green  { background: rgba(34,197,94,0.12);  color: #22c55e; }
 	.card-icon.orange { background: rgba(249,115,22,0.12); color: #f97316; }
-	.card-val   { font-size: 20px; font-weight: 700; color: var(--text); line-height: 1; }
-	.card-label { font-size: 11px; color: var(--text-2); margin-top: 3px; }
+	.card-val   { font-size: 19px; font-weight: 700; color: var(--text); line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.card-label { font-size: 11px; color: var(--text-3); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	/* ── Config box ── */
 	.config-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 16px; }
@@ -516,6 +517,12 @@
 
 	@media (max-width: 768px) {
 		.page  { padding: 16px; }
-		.cards { grid-template-columns: repeat(2, 1fr); }
+	}
+	@media (max-width: 600px) {
+		.config-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+		.config-key { width: auto; }
+		.ns-main { flex-wrap: wrap; }
+		.ns-info { width: 100%; order: 2; margin-top: 4px; }
+		.delete-btn { order: 1; margin-left: auto; }
 	}
 </style>

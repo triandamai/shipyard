@@ -138,189 +138,88 @@
 		orgStore.setActiveOrg(org);
 		goto(`/orgs/${org.slug}/projects`);
 	}
+	function orgGradientStyle(name: string): string {
+		const gradients = [
+			'linear-gradient(135deg, #818cf8, #4f46e5)', // Indigo
+			'linear-gradient(135deg, #3b82f6, #1d4ed8)', // Blue
+			'linear-gradient(135deg, #10b981, #047857)', // Emerald
+			'linear-gradient(135deg, #f59e0b, #b45309)', // Amber
+			'linear-gradient(135deg, #f43f5e, #be123c)', // Rose
+		];
+		const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+		return gradients[hash % gradients.length];
+	}
+
+	function formatDate(dateStr?: string): string {
+		if (!dateStr) return 'Recent';
+		try {
+			return new Date(dateStr).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+		} catch {
+			return 'Recent';
+		}
+	}
 </script>
 
-<div
-	style="
-		min-height: 100vh;
-		background: var(--bg-base);
-		padding: 40px 32px;
-	"
->
-	<div style="max-width: 960px; margin: 0 auto;">
+<div class="orgs-container">
+	<div class="orgs-inner">
 
 		<!-- Header -->
-		<div
-			style="
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				margin-bottom: 32px;
-			"
-		>
+		<div class="orgs-header">
 			<div>
-				<h1 style="font-size: 22px; font-weight: 700; margin-bottom: 4px;">
-					Your Organizations
-				</h1>
-				<p style="color: var(--text-muted); font-size: 14px;">
-					Select an organization to view its projects
-				</p>
+				<h1 class="orgs-title">Your Organizations</h1>
+				<p class="orgs-subtitle">Select an organization to manage your services and infrastructure.</p>
 			</div>
-			<button class="btn btn-primary" onclick={openModal}>
-				+ New
+			<button class="btn-new-org" onclick={openModal}>
+				<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+				New Organization
 			</button>
 		</div>
 
 		<!-- Loading -->
 		{#if loading}
-			<div
-				style="
-					display: flex;
-					align-items: center;
-					justify-content: center;
-					padding: 80px 0;
-					gap: 12px;
-					color: var(--text-muted);
-					font-size: 14px;
-				"
-			>
-				<span
-					style="
-						width: 20px;
-						height: 20px;
-						border: 2px solid var(--border);
-						border-top-color: var(--accent);
-						border-radius: 50%;
-						display: inline-block;
-						animation: spin 0.7s linear infinite;
-					"
-				></span>
+			<div class="orgs-loading-wrap">
+				<span class="orgs-spinner"></span>
 				Loading organizations…
 			</div>
 
 		<!-- Error -->
 		{:else if fetchError}
-			<div
-				style="
-					padding: 16px 20px;
-					background: var(--accent-red-muted);
-					border: 1px solid var(--accent-red);
-					border-radius: var(--radius-md);
-					color: var(--accent-red);
-					font-size: 13px;
-					display: flex;
-					align-items: center;
-					justify-content: space-between;
-				"
-			>
+			<div class="orgs-error-banner">
 				<span>{fetchError}</span>
 				<button class="btn btn-ghost btn-sm" onclick={loadOrgs}>Retry</button>
 			</div>
 
 		<!-- Empty state -->
 		{:else if orgs.length === 0}
-			<div
-				style="
-					display: flex;
-					flex-direction: column;
-					align-items: center;
-					justify-content: center;
-					padding: 80px 0;
-					gap: 16px;
-					text-align: center;
-				"
-			>
-				<div
-					style="
-						width: 56px;
-						height: 56px;
-						border-radius: var(--radius-lg);
-						background: var(--bg-elevated);
-						border: 1px solid var(--border);
-						display: flex;
-						align-items: center;
-						justify-content: center;
-						font-size: 24px;
-					"
-				>
-					🏢
-				</div>
+			<div class="orgs-empty-state">
+				<div class="orgs-empty-icon">🏢</div>
 				<div>
-					<p style="color: var(--text-primary); font-weight: 500; margin-bottom: 4px;">
-						No organizations yet
-					</p>
-					<p style="color: var(--text-muted); font-size: 13px;">
-						Create your first organization to get started
-					</p>
+					<p class="orgs-empty-title">No organizations yet</p>
+					<p class="orgs-empty-sub">Create your first organization to get started</p>
 				</div>
-				<button class="btn btn-primary" onclick={openModal}>
-					+ New Organization
+				<button class="btn-new-org" onclick={openModal}>
+					Create Organization
 				</button>
 			</div>
 
 		<!-- Org grid -->
 		{:else}
-			<div
-				style="
-					display: grid;
-					grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-					gap: 16px;
-				"
-			>
+			<div class="orgs-grid">
 				{#each orgs as org (org.id)}
-					<button
-						class="card card-interactive"
-						style="
-							text-align: left;
-							background: var(--bg-surface);
-							border: 1px solid var(--border);
-							border-radius: var(--radius-lg);
-							padding: 20px;
-							cursor: pointer;
-							display: flex;
-							flex-direction: column;
-							gap: 10px;
-							transition: all var(--transition-fast);
-						"
-						onclick={() => goToOrg(org)}
-					>
-						<div
-							style="
-								width: 40px;
-								height: 40px;
-								border-radius: var(--radius-md);
-								background: var(--accent-muted);
-								border: 1px solid rgba(124, 106, 247, 0.3);
-								display: flex;
-								align-items: center;
-								justify-content: center;
-								font-size: 18px;
-								font-weight: 700;
-								color: var(--accent);
-							"
-						>
+					<button class="org-card" onclick={() => goToOrg(org)}>
+						<div class="org-avatar" style="background: {orgGradientStyle(org.name)}">
 							{org.name[0]?.toUpperCase() ?? '?'}
 						</div>
-						<div>
-							<div
-								style="
-									font-size: 14px;
-									font-weight: 600;
-									color: var(--text-primary);
-									margin-bottom: 2px;
-								"
-							>
-								{org.name}
-							</div>
-							<div
-								style="
-									font-size: 12px;
-									color: var(--text-muted);
-									font-family: var(--font-mono);
-								"
-							>
-								{org.slug}
-							</div>
+						<div class="org-details">
+							<div class="org-name">{org.name}</div>
+							<div class="org-slug">{org.slug}</div>
+						</div>
+						<div class="org-footer">
+							<span class="org-meta-item">
+								<svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1-1v3H2a1 1 0 000 2h3v3H2a1 1 0 000 2h3v3a1 1 0 002 0v-3h3v3a1 1 0 002 0v-3h3a1 1 0 100-2h-3V7h3a1 1 0 100-2h-3V2a1 1 0 10-2 0v3H7V2a1 1 0 00-1-1zm3 8V7H7v3h2z" clip-rule="evenodd"/></svg>
+								Projects
+							</span>
+							<span class="org-date">Created {formatDate(org.created_at)}</span>
 						</div>
 					</button>
 				{/each}
@@ -482,4 +381,41 @@
 	.btn-confirm { padding:6px 16px; border-radius:var(--radius-md); font-size:13px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; }
 	.btn-confirm:hover:not(:disabled) { opacity:.88; }
 	.btn-confirm:disabled { opacity:.45; cursor:not-allowed; }
+
+	/* Orgs list custom styles */
+	.orgs-container { min-height:100vh; background:var(--bg-base); padding:40px 32px; }
+	.orgs-inner { max-width:960px; margin:0 auto; }
+	.orgs-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:32px; gap:16px; flex-wrap:wrap; }
+	.orgs-title { font-size:22px; font-weight:700; color:var(--text-primary); margin:0 0 4px; letter-spacing:-0.02em; }
+	.orgs-subtitle { color:var(--text-muted); font-size:13.5px; margin:0; }
+	.btn-new-org { display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; border-radius:var(--radius-md); transition:opacity .15s; font-family:var(--font); }
+	.btn-new-org:hover { opacity:.88; }
+
+	.orgs-loading-wrap { display:flex; align-items:center; justify-content:center; padding:80px 0; gap:12px; color:var(--text-muted); font-size:14px; }
+	.orgs-spinner { width:20px; height:20px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.7s linear infinite; }
+
+	.orgs-error-banner { padding:16px 20px; background:var(--accent-red-muted); border:1px solid var(--accent-red); border-radius:var(--radius-md); color:var(--accent-red); font-size:13px; display:flex; align-items:center; justify-content:space-between; }
+
+	.orgs-empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 0; gap:16px; text-align:center; }
+	.orgs-empty-icon { width:56px; height:56px; border-radius:var(--radius-lg); background:var(--bg-elevated); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:24px; }
+	.orgs-empty-title { color:var(--text-primary); font-weight:500; margin-bottom:4px; }
+	.orgs-empty-sub { color:var(--text-muted); font-size:13px; }
+
+	.orgs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:18px; }
+	.org-card { text-align:left; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; cursor:pointer; display:flex; flex-direction:column; gap:14px; transition:transform 0.2s, border-color 0.2s, box-shadow 0.2s; box-shadow:var(--shadow-sm); width:100%; border-sizing:border-box; }
+	.org-card:hover { transform:translateY(-2px); border-color:var(--accent); box-shadow:0 6px 20px rgba(124, 106, 247, 0.06); }
+	.org-avatar { width:40px; height:40px; border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; box-shadow:var(--shadow-sm); }
+	.org-details { display:flex; flex-direction:column; gap:2px; }
+	.org-name { font-size:14px; font-weight:600; color:var(--text-primary); }
+	.org-slug { font-size:12px; color:var(--text-muted); font-family:var(--font-mono); }
+	.org-footer { display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid var(--border); font-size:11px; color:var(--text-muted); width:100%; }
+	.org-meta-item { display:inline-flex; align-items:center; gap:4px; font-weight:500; }
+	.org-date { font-size:11px; }
+
+	@media (max-width: 640px) {
+		.orgs-container { padding:24px 16px; }
+		.orgs-header { flex-direction:column; align-items:flex-start; gap:12px; }
+		.btn-new-org { width:100%; justify-content:center; }
+		.orgs-grid { grid-template-columns:1fr; }
+	}
 </style>

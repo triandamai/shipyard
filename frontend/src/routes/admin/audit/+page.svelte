@@ -11,9 +11,19 @@
 	let orgFilter   = $state('');
 	let search      = $state('');
 
+	let page = $state(0);
+	const LIMIT = 25;
+
+	let expanded = $state(new Set<string>());
+	function toggleExpand(id: string) {
+		if (expanded.has(id)) expanded.delete(id);
+		else expanded.add(id);
+		expanded = new Set(expanded);
+	}
+
 	async function load(cursor?: string) {
 		if (cursor) loadingMore = true;
-		else { loading = true; items = []; nextCursor = null; }
+		else { loading = true; items = []; nextCursor = null; page = 0; }
 		error = '';
 		const res = await api.getAdminAuditLogs({
 			cursor,
@@ -39,6 +49,14 @@
 			)
 			: items
 	);
+
+	let totalPages = $derived(Math.ceil(filtered.length / LIMIT));
+	let paged = $derived(filtered.slice(page * LIMIT, (page + 1) * LIMIT));
+
+	$effect(() => {
+		search;
+		page = 0;
+	});
 
 	function fmtDate(ts: string): string {
 		try { return new Date(ts).toLocaleString(); }
@@ -100,29 +118,80 @@
 				<span style="flex:1">IP</span>
 				<span style="flex:1.8">Time</span>
 			</div>
-			{#each filtered as entry}
-				<div class="trow">
-					<div style="flex:1.8">
-						<span class="action-chip" style="color:{actionColor(entry.action)}">{entry.action}</span>
+			{#each paged as entry}
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div class="trow-wrapper">
+					<div class="trow" onclick={() => toggleExpand(entry.id)}>
+						<div style="flex:1.8;min-width:0;display:flex;align-items:center;gap:6px">
+							<span class="chevron" class:expanded={expanded.has(entry.id)}>▶</span>
+							<span class="action-chip" style="color:{actionColor(entry.action)}">{entry.action}</span>
+						</div>
+						<div class="cell trunc" style="flex:1.2">{entry.resource_type}</div>
+						<div class="mono muted trunc" style="flex:2;font-size:11px">{entry.resource_id ?? '—'}</div>
+						<div class="mono muted trunc" style="flex:2;font-size:11px">{entry.user_id ?? '—'}</div>
+						<div class="mono muted trunc" style="flex:1;font-size:11px">{entry.ip_address ?? '—'}</div>
+						<div class="cell muted trunc" style="flex:1.8;font-size:11.5px">{fmtDate(entry.created_at)}</div>
 					</div>
-					<div class="cell" style="flex:1.2">{entry.resource_type}</div>
-					<div class="mono muted" style="flex:2;font-size:11px">{entry.resource_id ?? '—'}</div>
-					<div class="mono muted" style="flex:2;font-size:11px">{entry.user_id ?? '—'}</div>
-					<div class="mono muted" style="flex:1;font-size:11px">{entry.ip_address ?? '—'}</div>
-					<div class="cell muted" style="flex:1.8;font-size:11.5px">{fmtDate(entry.created_at)}</div>
+					{#if expanded.has(entry.id)}
+						<div class="details-panel">
+							<div class="details-grid">
+								<div><strong>Resource ID:</strong> <span class="mono">{entry.resource_id ?? '—'}</span></div>
+								<div><strong>User ID:</strong> <span class="mono">{entry.user_id ?? '—'}</span></div>
+								<div><strong>IP Address:</strong> <span class="mono">{entry.ip_address ?? '—'}</span></div>
+								{#if entry.metadata && Object.keys(entry.metadata).length > 0}
+									<div style="grid-column: 1 / -1">
+										<strong>Metadata Details:</strong>
+										<pre class="details-pre mono">{JSON.stringify(entry.metadata, null, 2)}</pre>
+									</div>
+								{/if}
+							</div>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>
 
-		{#if nextCursor}
-			<div class="load-more-wrap">
-				<button class="load-more" onclick={() => load(nextCursor!)} disabled={loadingMore}>
-					{loadingMore ? 'Loading…' : 'Load more'}
-				</button>
-			</div>
-		{/if}
+		<div class="card-list">
+			{#each paged as entry}
+				<div class="m-card">
+					<div class="m-card-title">
+						<span class="action-chip" style="color:{actionColor(entry.action)}">{entry.action}</span>
+					</div>
+					<div class="m-card-row"><span class="m-card-key">Type</span><span class="cell">{entry.resource_type}</span></div>
+					<div class="m-card-row"><span class="m-card-key">Resource ID</span><span class="mono cell">{entry.resource_id ?? '—'}</span></div>
+					<div class="m-card-row"><span class="m-card-key">User ID</span><span class="mono cell">{entry.user_id ?? '—'}</span></div>
+					<div class="m-card-row"><span class="m-card-key">IP Address</span><span class="mono cell">{entry.ip_address ?? '—'}</span></div>
+					<div class="m-card-row"><span class="m-card-key">Time</span><span class="cell muted" style="font-size:11.5px">{fmtDate(entry.created_at)}</span></div>
+					{#if entry.metadata && Object.keys(entry.metadata).length > 0}
+						<div style="margin-top: 8px">
+							<span class="m-card-key">Metadata Details</span>
+							<pre class="details-pre mono" style="font-size: 10px; padding: 6px">{JSON.stringify(entry.metadata, null, 2)}</pre>
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</div>
 
-		<div class="count-note">Showing {filtered.length} entries{search ? ' (filtered)' : ''}.</div>
+		<div class="pager-section">
+			{#if totalPages > 1}
+				<div class="pager">
+					<button class="pg-btn" disabled={page === 0} onclick={() => page--}>Prev</button>
+					<span class="pg-info">Page {page + 1} of {totalPages} &bull; {filtered.length} total</span>
+					<button class="pg-btn" disabled={page >= totalPages - 1} onclick={() => page++}>Next</button>
+				</div>
+			{/if}
+
+			{#if nextCursor}
+				<div class="load-more-wrap">
+					<button class="load-more" onclick={() => load(nextCursor!)} disabled={loadingMore}>
+						{loadingMore ? 'Loading…' : 'Load more from server'}
+					</button>
+				</div>
+			{/if}
+		</div>
+
+		<div class="count-note">Showing {filtered.length} entries loaded{search ? ' (filtered)' : ''}.</div>
 	{/if}
 </div>
 
@@ -147,12 +216,21 @@
 
 	.tbl { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.07); }
 	.thead { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:10.5px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.065em; }
-	.trow { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); transition:background .1s; }
-	.trow:last-child { border-bottom:none; }
+	.trow-wrapper { border-bottom:1px solid var(--border); display:flex; flex-direction:column; }
+	.trow-wrapper:last-child { border-bottom:none; }
+	.trow { display:flex; align-items:center; gap:10px; padding:10px 16px; transition:background .1s; cursor:pointer; }
 	.trow:hover { background:var(--row-hover); }
+	.chevron { display:inline-block; font-size:8px; color:var(--text-3); transition:transform .2s; margin-right:2px; flex-shrink:0; }
+	.chevron.expanded { transform:rotate(90deg); }
+
+	.details-panel { padding:14px 20px 16px; background:var(--surface-2); border-top:1px solid var(--border); font-size:12.5px; border-bottom:1px solid var(--border); }
+	.details-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+	.details-pre { margin-top:6px; padding:8px 12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:11px; max-height:220px; overflow-y:auto; color:var(--text); white-space:pre-wrap; word-break:break-all; }
+
 	.cell { font-size:12.5px; color:var(--text-2); }
 	.muted { color:var(--text-3); }
 	.mono { font-family:var(--mono); color:var(--text); }
+	.trunc { text-overflow:ellipsis; white-space:nowrap; overflow:hidden; min-width:0; }
 
 	.action-chip { font-size:12px; font-weight:600; font-family:var(--mono); }
 
@@ -164,10 +242,38 @@
 	.err-banner { padding:11px 14px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius); font-size:13px; color:var(--danger); }
 	.empty { padding:48px; text-align:center; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-3); font-size:13px; }
 
-	.load-more-wrap { display:flex; justify-content:center; padding:16px 0 4px; }
-	.load-more { padding:7px 24px; border-radius:var(--radius-sm); font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:background .15s; font-family:var(--font); }
+	.pager-section { display:flex; flex-direction:column; align-items:center; gap:8px; padding:16px 0 4px; }
+	.pager { display:flex; align-items:center; gap:10px; justify-content:center; }
+	.pg-btn { padding:5px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); transition:background .15s; }
+	.pg-btn:hover:not(:disabled) { background:var(--surface-2); }
+	.pg-btn:disabled { opacity:.4; cursor:not-allowed; }
+	.pg-info { font-size:12px; color:var(--text-3); }
+
+	.load-more-wrap { display:flex; justify-content:center; }
+	.load-more { padding:5px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:background .15s; font-family:var(--font); }
 	.load-more:hover:not(:disabled) { background:var(--surface-2); }
 	.load-more:disabled { opacity:.5; cursor:not-allowed; }
 
 	.count-note { font-size:11.5px; color:var(--text-3); padding:8px 0 0; text-align:right; }
+
+	.card-list { display:none; }
+	.m-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; }
+	.m-card-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px; }
+	.m-card-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--text-2); gap:8px; }
+	.m-card-row:last-child { border-bottom:none; }
+	.m-card-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; flex-shrink:0; }
+
+	@media (max-width: 860px) {
+		.tbl { display:none; }
+		.card-list { display:block; }
+		.org-filter { width: 100%; }
+		.org-inp { width: 100%; }
+		.filter-btn { width: 100%; }
+	}
+	@media (max-width: 768px) {
+		.p { padding:20px 14px; }
+	}
+	@media (max-width: 640px) {
+		.p { padding:16px 12px; }
+	}
 </style>

@@ -131,15 +131,15 @@
 						>
 							{patchingId === user.id ? '…' : user.is_suspended ? 'Unsuspend' : 'Suspend'}
 						</button>
-						<button
-							class="act"
-							class:act-primary={!user.is_superadmin}
-							class:act-danger={user.is_superadmin}
-							onclick={() => toggleAdmin(user)}
-							disabled={patchingId === user.id}
-						>
-							{patchingId === user.id ? '…' : user.is_superadmin ? 'Revoke' : 'Grant Admin'}
-						</button>
+						{#if user.is_superadmin}
+							<button
+								class="act act-danger"
+								onclick={() => toggleAdmin(user)}
+								disabled={patchingId === user.id}
+							>
+								{patchingId === user.id ? '…' : 'Revoke'}
+							</button>
+						{/if}
 					</div>
 				</div>
 			{/each}
@@ -179,15 +179,15 @@
 						>
 							{patchingId === user.id ? '…' : user.is_suspended ? 'Unsuspend' : 'Suspend'}
 						</button>
-						<button
-							class="act"
-							class:act-primary={!user.is_superadmin}
-							class:act-danger={user.is_superadmin}
-							onclick={() => toggleAdmin(user)}
-							disabled={patchingId === user.id}
-						>
-							{patchingId === user.id ? '…' : user.is_superadmin ? 'Revoke' : 'Grant Admin'}
-						</button>
+						{#if user.is_superadmin}
+							<button
+								class="act act-danger"
+								onclick={() => toggleAdmin(user)}
+								disabled={patchingId === user.id}
+							>
+								{patchingId === user.id ? '…' : 'Revoke'}
+							</button>
+						{/if}
 					</div>
 				</div>
 			{/each}

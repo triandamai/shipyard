@@ -111,6 +111,25 @@
 				</div>
 			{/each}
 		</div>
+
+		<div class="card-list">
+			{#each deps as d}
+				<div class="m-card">
+					<div class="m-card-title"><a class="link" href="/orgs/{d.org_slug}" target="_blank">{d.org_name}</a></div>
+					<div class="m-card-row"><span class="m-card-key">Service</span><span class="cell">{d.service_name}</span></div>
+					<div class="m-card-row">
+						<span class="m-card-key">Status</span>
+						<span>
+							<span class="dot" style="background:{statusColor(d.status)}"></span>
+							<span style="font-size:12px;color:{statusColor(d.status)};font-weight:500">{d.status}</span>
+						</span>
+					</div>
+					<div class="m-card-row"><span class="m-card-key">Triggered</span><span class="cell">{d.triggered_by ?? '—'}</span></div>
+					<div class="m-card-row"><span class="m-card-key">Started</span><span class="muted" style="font-size:11.5px">{relTime(d.created_at)}</span></div>
+				</div>
+			{/each}
+		</div>
+
 		{#if totalPages > 1}
 			<div class="pager">
 				<button class="pg-btn" disabled={page === 0} onclick={() => { page--; load(); }}>Prev</button>
@@ -160,4 +179,21 @@
 	.pg-btn:hover:not(:disabled) { background:var(--surface-2); }
 	.pg-btn:disabled { opacity:.4; cursor:not-allowed; }
 	.pg-info { font-size:12px; color:var(--text-3); }
+
+	.card-list { display:none; }
+	.m-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; }
+	.m-card-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px; }
+	.m-card-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--text-2); }
+	.m-card-row:last-child { border-bottom:none; }
+	.m-card-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
+
+	@media (max-width: 640px) {
+		.p { padding:20px 12px; }
+		.tbl { display:none; }
+		.card-list { display:block; }
+		.toolbar { gap:6px; }
+		.filter-inp { width:100%; }
+		.filter-sel { width:100%; }
+		.refresh-btn { width:100%; margin-left:0; }
+	}
 </style>

@@ -311,6 +311,7 @@
 			<div class="thead">
 				<span style="flex:1.5">Node ID</span>
 				<span style="flex:2">Hostname</span>
+				<span style="flex:1.2">IP Address</span>
 				<span style="flex:1">Role</span>
 				<span style="flex:1">State</span>
 				<span style="flex:1">Availability</span>
@@ -320,6 +321,7 @@
 				<div class="trow">
 					<div class="mono muted" style="flex:1.5;font-size:10.5px">{((node as any).id ?? '—').slice(0, 12)}</div>
 					<div class="mono" style="flex:2;font-size:12px">{(node as any).description?.hostname ?? (node as any).hostname ?? '—'}</div>
+					<div class="mono cell" style="flex:1.2;font-size:11.5px">{(node as any).addr ?? (node as any).status?.addr ?? '—'}</div>
 					<div style="flex:1">
 						{#if (node as any).spec?.role === 'manager' || (node as any).role === 'manager'}
 							<span class="role-mgr">Manager</span>
@@ -349,6 +351,7 @@
 							<span class="role-worker">Worker</span>
 						{/if}
 					</div>
+					<div class="m-card-row"><span class="m-card-key">IP Address</span><span class="mono cell">{(node as any).addr ?? (node as any).status?.addr ?? '—'}</span></div>
 					<div class="m-card-row"><span class="m-card-key">State</span><span style="color:{nodeStateColor((node as any).status?.state ?? (node as any).state ?? 'unknown')}">{(node as any).status?.state ?? (node as any).state ?? 'unknown'}</span></div>
 					<div class="m-card-row"><span class="m-card-key">Avail.</span><span>{(node as any).spec?.availability ?? (node as any).availability ?? '—'}</span></div>
 				</div>
