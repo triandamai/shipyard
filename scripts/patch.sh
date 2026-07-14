@@ -116,8 +116,114 @@ else
     info "SHIPYARD__REGISTRY__HOSTNAME already set to '${PATCH_REGISTRY_DOMAIN}' — skipping"
 fi
 
-# SHIPYARD__REGISTRY__STORAGE: storage backend for the artifact registry.
-append_if_missing "SHIPYARD__REGISTRY__STORAGE" "local"
+# ── Registry storage backend ───────────────────────────────────────────────────
+NEEDS_REGISTRY_STORAGE=false
+grep -qE "^SHIPYARD__REGISTRY__STORAGE=" "${ENV_FILE}" || NEEDS_REGISTRY_STORAGE=true
+
+if [[ "${NEEDS_REGISTRY_STORAGE}" == "true" ]]; then
+    echo ""
+    info "Configure the artifact registry storage backend."
+    echo -e "  ${BOLD}local${RESET}  — store artifacts on this server's disk (default, simplest)"
+    echo -e "  ${BOLD}s3${RESET}     — store artifacts in an S3-compatible bucket (AWS S3, MinIO, R2 …)"
+    echo ""
+    REGISTRY_STORAGE_INPUT=""
+    prompt_input "  Storage backend [local]: " REGISTRY_STORAGE_INPUT "local"
+    case "${REGISTRY_STORAGE_INPUT}" in
+        s3|S3)
+            REGISTRY_STORAGE_INPUT="s3"
+            echo ""
+            info "Enter S3 credentials. Leave endpoint blank to use AWS S3."
+
+            REGISTRY_S3_ENDPOINT=""
+            prompt_input "  S3 endpoint URL (blank = AWS S3, e.g. https://s3.amazonaws.com): " \
+                REGISTRY_S3_ENDPOINT ""
+
+            REGISTRY_S3_BUCKET=""
+            while [[ -z "${REGISTRY_S3_BUCKET}" ]]; do
+                prompt_input "  S3 bucket name: " REGISTRY_S3_BUCKET ""
+                [[ -z "${REGISTRY_S3_BUCKET}" ]] && warn "Bucket name is required."
+            done
+
+            REGISTRY_S3_ACCESS_KEY=""
+            while [[ -z "${REGISTRY_S3_ACCESS_KEY}" ]]; do
+                prompt_input "  S3 access key ID: " REGISTRY_S3_ACCESS_KEY ""
+                [[ -z "${REGISTRY_S3_ACCESS_KEY}" ]] && warn "Access key is required."
+            done
+
+            REGISTRY_S3_SECRET_KEY=""
+            while [[ -z "${REGISTRY_S3_SECRET_KEY}" ]]; do
+                prompt_input "  S3 secret access key: " REGISTRY_S3_SECRET_KEY ""
+                [[ -z "${REGISTRY_S3_SECRET_KEY}" ]] && warn "Secret key is required."
+            done
+
+            REGISTRY_S3_REGION=""
+            prompt_input "  S3 region [us-east-1]: " REGISTRY_S3_REGION "us-east-1"
+            [[ -z "${REGISTRY_S3_REGION}" ]] && REGISTRY_S3_REGION="us-east-1"
+
+            echo "SHIPYARD__REGISTRY__STORAGE=s3"             >> "${ENV_FILE}"
+            echo "SHIPYARD__REGISTRY__S3_BUCKET=${REGISTRY_S3_BUCKET}"         >> "${ENV_FILE}"
+            echo "SHIPYARD__REGISTRY__S3_ACCESS_KEY=${REGISTRY_S3_ACCESS_KEY}" >> "${ENV_FILE}"
+            echo "SHIPYARD__REGISTRY__S3_SECRET_KEY=${REGISTRY_S3_SECRET_KEY}" >> "${ENV_FILE}"
+            echo "SHIPYARD__REGISTRY__S3_REGION=${REGISTRY_S3_REGION}"         >> "${ENV_FILE}"
+            if [[ -n "${REGISTRY_S3_ENDPOINT}" ]]; then
+                echo "SHIPYARD__REGISTRY__S3_ENDPOINT=${REGISTRY_S3_ENDPOINT}" >> "${ENV_FILE}"
+            fi
+            success "Registry storage set to S3 (bucket: ${REGISTRY_S3_BUCKET})"
+            ;;
+        *)
+            echo "SHIPYARD__REGISTRY__STORAGE=local" >> "${ENV_FILE}"
+            success "Registry storage set to local disk"
+            ;;
+    esac
+else
+    info "SHIPYARD__REGISTRY__STORAGE already set to '${SHIPYARD__REGISTRY__STORAGE:-local}' — skipping"
+    # If storage is s3, also fill in any missing S3 vars interactively.
+    if [[ "${SHIPYARD__REGISTRY__STORAGE:-local}" == "s3" ]]; then
+        MISSING_S3=false
+        grep -qE "^SHIPYARD__REGISTRY__S3_BUCKET="      "${ENV_FILE}" || MISSING_S3=true
+        grep -qE "^SHIPYARD__REGISTRY__S3_ACCESS_KEY="  "${ENV_FILE}" || MISSING_S3=true
+        grep -qE "^SHIPYARD__REGISTRY__S3_SECRET_KEY="  "${ENV_FILE}" || MISSING_S3=true
+        if [[ "${MISSING_S3}" == "true" ]]; then
+            echo ""
+            warn "Registry storage is s3 but some S3 credentials are missing. Prompting now."
+            if ! grep -qE "^SHIPYARD__REGISTRY__S3_ENDPOINT=" "${ENV_FILE}"; then
+                REGISTRY_S3_ENDPOINT=""
+                prompt_input "  S3 endpoint URL (blank = AWS S3): " REGISTRY_S3_ENDPOINT ""
+                [[ -n "${REGISTRY_S3_ENDPOINT}" ]] && echo "SHIPYARD__REGISTRY__S3_ENDPOINT=${REGISTRY_S3_ENDPOINT}" >> "${ENV_FILE}"
+            fi
+            if ! grep -qE "^SHIPYARD__REGISTRY__S3_BUCKET=" "${ENV_FILE}"; then
+                REGISTRY_S3_BUCKET=""
+                while [[ -z "${REGISTRY_S3_BUCKET}" ]]; do
+                    prompt_input "  S3 bucket name: " REGISTRY_S3_BUCKET ""
+                    [[ -z "${REGISTRY_S3_BUCKET}" ]] && warn "Bucket name is required."
+                done
+                echo "SHIPYARD__REGISTRY__S3_BUCKET=${REGISTRY_S3_BUCKET}" >> "${ENV_FILE}"
+            fi
+            if ! grep -qE "^SHIPYARD__REGISTRY__S3_ACCESS_KEY=" "${ENV_FILE}"; then
+                REGISTRY_S3_ACCESS_KEY=""
+                while [[ -z "${REGISTRY_S3_ACCESS_KEY}" ]]; do
+                    prompt_input "  S3 access key ID: " REGISTRY_S3_ACCESS_KEY ""
+                    [[ -z "${REGISTRY_S3_ACCESS_KEY}" ]] && warn "Access key is required."
+                done
+                echo "SHIPYARD__REGISTRY__S3_ACCESS_KEY=${REGISTRY_S3_ACCESS_KEY}" >> "${ENV_FILE}"
+            fi
+            if ! grep -qE "^SHIPYARD__REGISTRY__S3_SECRET_KEY=" "${ENV_FILE}"; then
+                REGISTRY_S3_SECRET_KEY=""
+                while [[ -z "${REGISTRY_S3_SECRET_KEY}" ]]; do
+                    prompt_input "  S3 secret access key: " REGISTRY_S3_SECRET_KEY ""
+                    [[ -z "${REGISTRY_S3_SECRET_KEY}" ]] && warn "Secret key is required."
+                done
+                echo "SHIPYARD__REGISTRY__S3_SECRET_KEY=${REGISTRY_S3_SECRET_KEY}" >> "${ENV_FILE}"
+            fi
+            if ! grep -qE "^SHIPYARD__REGISTRY__S3_REGION=" "${ENV_FILE}"; then
+                REGISTRY_S3_REGION=""
+                prompt_input "  S3 region [us-east-1]: " REGISTRY_S3_REGION "us-east-1"
+                [[ -z "${REGISTRY_S3_REGION}" ]] && REGISTRY_S3_REGION="us-east-1"
+                echo "SHIPYARD__REGISTRY__S3_REGION=${REGISTRY_S3_REGION}" >> "${ENV_FILE}"
+            fi
+        fi
+    fi
+fi
 
 # SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL: use the prompted API domain.
 if [[ -n "${PATCH_API_DOMAIN}" ]]; then
@@ -357,6 +463,12 @@ echo ""
 echo -e "  ${BOLD}API domain${RESET}           = ${SHIPYARD__API_DOMAIN:-<not set>}"
 echo -e "  ${BOLD}Registry domain${RESET}      = ${SHIPYARD__REGISTRY__HOSTNAME:-<not set>}"
 echo -e "  ${BOLD}Registry storage${RESET}     = ${SHIPYARD__REGISTRY__STORAGE:-local}"
+if [[ "${SHIPYARD__REGISTRY__STORAGE:-local}" == "s3" ]]; then
+echo -e "  ${BOLD}S3 endpoint${RESET}          = ${SHIPYARD__REGISTRY__S3_ENDPOINT:-<AWS default>}"
+echo -e "  ${BOLD}S3 bucket${RESET}            = ${SHIPYARD__REGISTRY__S3_BUCKET:-<not set>}"
+echo -e "  ${BOLD}S3 region${RESET}            = ${SHIPYARD__REGISTRY__S3_REGION:-us-east-1}"
+echo -e "  ${BOLD}S3 access key${RESET}        = ${SHIPYARD__REGISTRY__S3_ACCESS_KEY:+<set>}${SHIPYARD__REGISTRY__S3_ACCESS_KEY:-<not set>}"
+fi
 echo -e "  ${BOLD}Edge runtime image${RESET}   = ${EDGE_RUNTIME_IMAGE:-<not set>}"
 echo -e "  ${BOLD}Runtime API URL${RESET}      = ${SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL:-<not set>}"
 echo -e "  ${BOLD}SCRIPTS_URL${RESET}          = ${SCRIPTS_URL:-<not set>}"
