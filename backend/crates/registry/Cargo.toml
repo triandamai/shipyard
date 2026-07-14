@@ -26,7 +26,7 @@ base64        = { workspace = true }
 jsonwebtoken  = { workspace = true }
 tokio-util    = { version = "0.7", features = ["io"] }
 
-# S3 backend — pinned to last versions with MSRV = 1.91.1 (matching rust-toolchain.toml).
+# S3 backend — pinned to last versions with MSRV = 1.91.1 (matching _rust-toolchain.toml).
 # aws-sdk-s3 1.138.0 / aws-config 1.9.0 / credential-types 1.3.0 bumped to MSRV 1.94.1.
 rust-s3 = {version = "0.37.2",default-features = false,features = ["tokio-rustls-tls"]}
 
