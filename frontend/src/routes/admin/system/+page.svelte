@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 
+	type SwarmNode = { id: string; hostname: string; role: string; status: string; availability: string; engine_version: string | null; addr: string | null };
+
 	let config = $state<Record<string, unknown>>({});
 	let edits = $state<Record<string, string>>({});
 	let saving = $state<string | null>(null);
@@ -10,17 +12,32 @@
 	let error = $state<string | null>(null);
 	let saveErrors = $state<Record<string, string>>({});
 
+	let swarmNodes = $state<SwarmNode[]>([]);
+	let swarmLoading = $state(true);
+	let swarmError = $state<string | null>(null);
+
 	onMount(async () => {
-		const res = await api.getSystemConfig();
-		if (res.data) {
-			config = res.data;
-			for (const [k, v] of Object.entries(res.data)) {
+		const [configRes, swarmRes] = await Promise.all([
+			api.getSystemConfig(),
+			api.getSwarmNodes(),
+		]);
+
+		if (configRes.data) {
+			config = configRes.data;
+			for (const [k, v] of Object.entries(configRes.data)) {
 				edits[k] = JSON.stringify(v, null, 2);
 			}
 		} else {
-			error = res.error?.message ?? 'Failed to load system config';
+			error = configRes.error?.message ?? 'Failed to load system config';
 		}
 		loading = false;
+
+		if (swarmRes.data) {
+			swarmNodes = swarmRes.data;
+		} else {
+			swarmError = swarmRes.error?.message ?? 'Failed to load swarm nodes';
+		}
+		swarmLoading = false;
 	});
 
 	async function save(key: string) {
@@ -62,6 +79,57 @@
 </script>
 
 <div class="p">
+	<!-- Swarm Nodes -->
+	<section class="section">
+		<h2 class="sec-ttl">Swarm Nodes</h2>
+		{#if swarmLoading}
+			<div class="tbl-shell">
+				{#each [0,1] as _}
+					<div class="sk-row">
+						<div class="sk sk-host"></div>
+						<div class="sk sk-role"></div>
+						<div class="sk sk-ip"></div>
+					</div>
+				{/each}
+			</div>
+		{:else if swarmError}
+			<div class="err">
+				<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+				{swarmError}
+			</div>
+		{:else if swarmNodes.length === 0}
+			<div class="empty">No swarm nodes found.</div>
+		{:else}
+			<div class="tbl-shell">
+				<div class="tbl-head">
+					<span>Hostname</span>
+					<span>Role</span>
+					<span>Status</span>
+					<span>Availability</span>
+					<span>IP Address</span>
+					<span>Engine</span>
+				</div>
+				{#each swarmNodes as node}
+					<div class="tbl-row">
+						<span class="node-host">
+							<code class="node-id">{node.id.slice(0, 12)}</code>
+							<span class="node-name">{node.hostname}</span>
+						</span>
+						<span>
+							<span class="badge {node.role === 'manager' ? 'badge-mgr' : 'badge-wkr'}">{node.role}</span>
+						</span>
+						<span>
+							<span class="badge {node.status === 'ready' ? 'badge-ok' : 'badge-err'}">{node.status}</span>
+						</span>
+						<span class="cell-muted">{node.availability}</span>
+						<span class="cell-ip">{node.addr ?? '—'}</span>
+						<span class="cell-muted">{node.engine_version ?? '—'}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</section>
+
 	<header class="hdr">
 		<div>
 			<h1 class="ttl">System Config</h1>
@@ -141,7 +209,48 @@
 </div>
 
 <style>
-	.p { max-width:800px; margin:0 auto; padding:40px 36px; }
+	.p { max-width:900px; margin:0 auto; padding:40px 36px; }
+
+	/* Swarm nodes section */
+	.section { margin-bottom:36px; }
+	.sec-ttl { font-size:14px; font-weight:700; color:var(--text); margin:0 0 12px; letter-spacing:-0.01em; }
+
+	.tbl-shell { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+	.tbl-head {
+		display:grid; grid-template-columns:1fr 90px 90px 100px 140px 90px;
+		gap:12px; padding:9px 14px;
+		background:var(--surface-2); border-bottom:1px solid var(--border);
+		font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:0.07em;
+	}
+	.tbl-row {
+		display:grid; grid-template-columns:1fr 90px 90px 100px 140px 90px;
+		gap:12px; padding:11px 14px; align-items:center;
+		border-bottom:1px solid var(--border); font-size:12.5px;
+	}
+	.tbl-row:last-child { border-bottom:none; }
+	.tbl-row:hover { background:var(--row-hover); }
+
+	.node-host { display:flex; flex-direction:column; gap:2px; }
+	.node-id { font-size:10px; color:var(--text-3); font-family:var(--mono); }
+	.node-name { font-size:12.5px; font-weight:600; color:var(--text); }
+
+	.badge {
+		display:inline-flex; align-items:center; padding:2px 7px;
+		border-radius:99px; font-size:10.5px; font-weight:600;
+		text-transform:capitalize; white-space:nowrap;
+	}
+	.badge-mgr { background:var(--accent-soft,rgba(99,102,241,.1)); color:var(--accent); border:1px solid rgba(99,102,241,.2); }
+	.badge-wkr { background:var(--surface-2); color:var(--text-2); border:1px solid var(--border); }
+	.badge-ok  { background:var(--ok-soft); color:var(--ok); border:1px solid rgba(22,163,74,.2); }
+	.badge-err { background:var(--danger-soft); color:var(--danger); border:1px solid rgba(220,38,38,.2); }
+
+	.cell-muted { color:var(--text-3); font-size:12px; }
+	.cell-ip { font-family:var(--mono); font-size:12px; color:var(--text); }
+
+	/* Swarm skeleton */
+	.sk-host { width:120px; height:13px; }
+	.sk-role { width:60px; height:20px; border-radius:99px; }
+	.sk-ip   { width:100px; height:13px; }
 
 	.hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:24px; }
 	.ttl { font-size:18px; font-weight:700; color:var(--text); margin:0 0 4px; letter-spacing:-0.02em; }

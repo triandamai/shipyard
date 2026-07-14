@@ -85,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/mqtt/logs/stream", get(mqtt_log_stream))
         .route("/redis/info", get(get_redis_info))
         .route("/payments", get(list_payments))
+        .route("/swarm/nodes", get(list_swarm_nodes))
 }
 
 // ─── GET /admin/stats ─────────────────────────────────────────────────────────
@@ -1224,6 +1225,41 @@ async fn docker_prune(
         "pruned": what,
         "space_reclaimed_bytes": freed,
     }))))
+}
+
+// ─── GET /admin/swarm/nodes ───────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SwarmNodeRow {
+    id:             String,
+    hostname:       String,
+    role:           String,
+    status:         String,
+    availability:   String,
+    engine_version: Option<String>,
+    addr:           Option<String>,
+}
+
+async fn list_swarm_nodes(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<SwarmNodeRow>>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:infra:view").await?;
+
+    let nodes = state.docker.list_nodes().await
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+
+    let rows = nodes.into_iter().map(|n| SwarmNodeRow {
+        id:             n.id,
+        hostname:       n.hostname,
+        role:           n.role,
+        status:         n.status,
+        availability:   n.availability,
+        engine_version: n.engine_version,
+        addr:           n.addr,
+    }).collect();
+
+    Ok(Json(ApiResponse::ok(rows)))
 }
 
 // ─── GET /admin/payments ──────────────────────────────────────────────────────
