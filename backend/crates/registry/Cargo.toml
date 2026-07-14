@@ -36,3 +36,4 @@ rust-s3 = {version = "0.37.2",default-features = false,features = ["tokio-rustls
 default = ["local"]
 local   = []
 s3      = []
+
