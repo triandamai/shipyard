@@ -467,26 +467,36 @@
 
 	/* ── Delete modal ── */
 	.modal-backdrop {
-		position: fixed; inset: 0; background: rgba(0,0,0,.45);
-		display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px;
+		position: fixed; inset: 0; background: rgba(0,0,0,.65);
+		display: flex; align-items: center; justify-content: center; z-index: 300; padding: 16px;
 	}
 	.modal {
-		background: var(--surface); border: 1px solid var(--border);
+		background: var(--surface, #ffffff);
+		border: 1px solid var(--border, #e3e3e3);
 		border-radius: 10px; width: 100%; max-width: 420px; overflow: hidden;
-		box-shadow: 0 20px 60px rgba(0,0,0,.25);
+		box-shadow: 0 8px 40px rgba(0,0,0,.45);
+		color: var(--text, #111);
 	}
 	.modal-header {
 		display: flex; align-items: center; gap: 10px;
-		padding: 14px 16px; border-bottom: 1px solid var(--border);
+		padding: 14px 16px; border-bottom: 1px solid var(--border, #e3e3e3);
+		background: var(--surface, #ffffff);
 	}
-	.modal-header h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
-	.modal-body { padding: 16px; font-size: 13px; color: var(--text-2); line-height: 1.6; }
+	.modal-header h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; color: var(--text, #111); }
+	.modal-body {
+		padding: 16px; font-size: 13px; color: var(--text-2, #555); line-height: 1.6;
+		background: var(--surface, #ffffff);
+	}
 	.modal-body p { margin: 0 0 8px; }
 	.modal-body p:last-child { margin: 0; }
-	.modal-body code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
-	.modal-footer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
-	.icon-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-2); cursor: pointer; border-radius: 4px; margin-left: auto; }
-	.icon-btn:hover { background: var(--surface-2); }
+	.modal-body strong { color: var(--text, #111); }
+	.modal-body code { font-family: var(--mono); font-size: 12px; background: var(--surface-2, #f0f0f0); padding: 1px 5px; border-radius: 4px; color: var(--text, #111); }
+	.modal-footer {
+		display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border, #e3e3e3);
+		background: var(--surface, #ffffff);
+	}
+	.icon-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-2, #555); cursor: pointer; border-radius: 4px; margin-left: auto; }
+	.icon-btn:hover { background: var(--surface-2, #f0f0f0); }
 
 	.btn-danger {
 		padding: 6px 14px; background: #ef4444; color: #fff;
@@ -494,8 +504,8 @@
 	}
 	.btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
 	.btn-ghost {
-		padding: 6px 14px; background: transparent; color: var(--text-2);
-		border: 1px solid var(--border); border-radius: 6px; font-size: 13px; cursor: pointer;
+		padding: 6px 14px; background: transparent; color: var(--text-2, #555);
+		border: 1px solid var(--border, #e3e3e3); border-radius: 6px; font-size: 13px; cursor: pointer;
 	}
 	.delete-error { color: #ef4444; font-size: 12px; margin-top: 8px; }
 

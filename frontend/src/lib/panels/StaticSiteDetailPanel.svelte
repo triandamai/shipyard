@@ -1585,13 +1585,13 @@ export default &#123;
 
 	/* ── Delete modal ── */
 	.modal-backdrop {
-		position: absolute;
+		position: fixed;
 		inset: 0;
-		background: rgba(0,0,0,0.55);
+		background: rgba(0,0,0,0.6);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		z-index: 30;
+		z-index: 200;
 		padding: 16px;
 	}
 
