@@ -1527,22 +1527,27 @@ impl DeploymentEngine {
             .execute(&self.db)
             .await;
 
-        // Record docker image in registry if it's an internal image (best-effort, non-fatal).
-        if let Some(pusher) = &self.registry {
-            let is_internal = !self.registry_hostname.is_empty() && resolved_image_ref.starts_with(&self.registry_hostname);
-            if is_internal {
-                let tag = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
-                    deployment_id.to_string()
-                } else {
-                    source_ref.to_string()
-                };
-                let repo = self.service_slug_or_id(service_id).await;
-                if let Err(e) = pusher.record_docker_image(
-                    org_id, project_id,
-                    &repo, &tag,
-                    &resolved_image_ref,
-                ).await {
-                    tracing::warn!(deployment_id = %deployment_id, "docker image registry record failed (non-fatal): {e}");
+        // Only record git-built images that were pushed to the internal registry.
+        // Registry (external) and ShipyardArtifact sources are never re-recorded here:
+        // external images don't belong in the artifact store, and ShipyardArtifact images
+        // are already present — recording again would create spurious duplicate entries.
+        if matches!(&image_source, ImageSource::Git { .. }) {
+            if let Some(pusher) = &self.registry {
+                let is_internal = !self.registry_hostname.is_empty() && resolved_image_ref.starts_with(&self.registry_hostname);
+                if is_internal {
+                    let tag = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
+                        deployment_id.to_string()
+                    } else {
+                        source_ref.to_string()
+                    };
+                    let repo = self.service_slug_or_id(service_id).await;
+                    if let Err(e) = pusher.record_docker_image(
+                        org_id, project_id,
+                        &repo, &tag,
+                        &resolved_image_ref,
+                    ).await {
+                        tracing::warn!(deployment_id = %deployment_id, "docker image registry record failed (non-fatal): {e}");
+                    }
                 }
             }
         }

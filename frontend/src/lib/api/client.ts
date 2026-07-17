@@ -775,7 +775,7 @@ class ApiClient {
 		return this.request('GET', '/admin/nodes');
 	}
 
-	getSwarmNodes(): Promise<ApiResponse<{ id: string; hostname: string; role: string; status: string; availability: string; engine_version: string | null; addr: string | null }[]>> {
+	getAdminSwarmNodes(): Promise<ApiResponse<{ id: string; hostname: string; role: string; status: string; availability: string; engine_version: string | null; addr: string | null }[]>> {
 		return this.request('GET', '/admin/swarm/nodes');
 	}
 

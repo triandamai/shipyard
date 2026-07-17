@@ -86,6 +86,7 @@ pub fn routes() -> Router<AppState> {
         .route("/redis/info", get(get_redis_info))
         .route("/payments", get(list_payments))
         .route("/swarm/nodes", get(list_swarm_nodes))
+        .route("/storage/buckets", get(list_storage_buckets))
         .route("/storage/list", get(list_storage))
         .route("/storage/preview", get(preview_storage))
 }
@@ -1352,6 +1353,37 @@ async fn list_payments(
         "page": page,
         "per_page": per_page,
     }))))
+}
+
+#[derive(Serialize)]
+struct StorageBucketInfo {
+    backend: String,
+    bucket: String,
+    endpoint: String,
+}
+
+async fn list_storage_buckets(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<ApiResponse<Vec<StorageBucketInfo>>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "infra:read").await?;
+
+    let cfg = &state.config.registry;
+    let info = if cfg.storage == "s3" {
+        StorageBucketInfo {
+            backend: "s3".to_string(),
+            bucket: cfg.s3_bucket.clone().unwrap_or_else(|| "shipyard-registry".to_string()),
+            endpoint: cfg.s3_endpoint.clone().unwrap_or_default(),
+        }
+    } else {
+        StorageBucketInfo {
+            backend: "local".to_string(),
+            bucket: "shipyard-registry".to_string(),
+            endpoint: cfg.local_path.clone(),
+        }
+    };
+
+    Ok(Json(ApiResponse::ok(vec![info])))
 }
 
 #[derive(Deserialize)]

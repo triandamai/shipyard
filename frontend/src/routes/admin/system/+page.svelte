@@ -19,7 +19,7 @@
 	onMount(async () => {
 		const [configRes, swarmRes] = await Promise.all([
 			api.getSystemConfig(),
-			api.getSwarmNodes(),
+			api.getAdminSwarmNodes(),
 		]);
 
 		if (configRes.data) {
