@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
@@ -96,6 +95,9 @@
 		url.searchParams.set('bucket', bucket.bucket);
 		url.searchParams.delete('prefix');
 		goto(url.toString(), { keepFocus: true });
+		// Explicitly load — don't rely solely on $effect since $derived→$effect
+		// chaining can miss the first navigation on the same page.
+		loadList('');
 	}
 
 	function navigateTo(prefix: string) {
@@ -106,6 +108,7 @@
 			url.searchParams.delete('prefix');
 		}
 		goto(url.toString(), { keepFocus: true });
+		loadList(prefix);
 	}
 
 	function backToBuckets() {
@@ -113,17 +116,18 @@
 		url.searchParams.delete('bucket');
 		url.searchParams.delete('prefix');
 		goto(url.toString(), { keepFocus: true });
+		loadBuckets();
 	}
 
-	// Load bucket list on mount
+	// Single effect: re-runs whenever page.url changes (direct read — no $derived indirection).
+	// Handles the initial load and back/forward navigation.
 	$effect(() => {
-		loadBuckets();
-	});
-
-	// Trigger list load whenever bucket/prefix changes
-	$effect(() => {
-		if (selectedBucket) {
-			loadList(currentPrefix);
+		const bucket = page.url.searchParams.get('bucket');
+		const prefix = page.url.searchParams.get('prefix') ?? '';
+		if (bucket) {
+			loadList(prefix);
+		} else {
+			loadBuckets();
 		}
 	});
 
@@ -217,9 +221,6 @@
 		})
 	);
 
-	onMount(() => {
-		loadBuckets();
-	});
 </script>
 
 <svelte:head>
