@@ -290,6 +290,10 @@ pub struct RegistryConfig {
     pub s3_access_key: Option<String>,
     pub s3_secret_key: Option<String>,
     pub s3_region:     Option<String>,
+    /// Force S3 path-style requests (e.g. https://endpoint/bucket/key).
+    /// Defaults to true for any non-AWS custom endpoint; set to false only
+    /// for providers that require virtual-host style (bucket.endpoint/key).
+    pub s3_path_style: Option<bool>,
 }
 
 fn default_registry_storage() -> String { "local".to_string() }
@@ -305,6 +309,7 @@ impl Default for RegistryConfig {
             s3_access_key: None,
             s3_secret_key: None,
             s3_region:     None,
+            s3_path_style: None,
         }
     }
 }

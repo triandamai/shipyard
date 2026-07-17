@@ -417,7 +417,8 @@ async fn async_main() {
             let access_key = config.registry.s3_access_key.as_deref().unwrap_or_default();
             let secret_key = config.registry.s3_secret_key.as_deref().unwrap_or_default();
             let region     = config.registry.s3_region.as_deref().unwrap_or("us-east-1");
-            match S3Storage::new(endpoint, bucket, access_key, secret_key, region).await {
+            let path_style = config.registry.s3_path_style;
+            match S3Storage::new(endpoint, bucket, access_key, secret_key, region, path_style).await {
                 Ok(s3) => {
                     tracing::info!("Registry storage: S3/MinIO at {endpoint} bucket={bucket}");
                     Arc::new(s3) as Arc<dyn StorageBackend>

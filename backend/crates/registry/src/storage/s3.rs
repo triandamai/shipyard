@@ -12,6 +12,8 @@ pub struct S3Storage {
     access_key: String,
     secret_key: String,
     region: String,
+    /// Explicit path-style override. None = auto-detect.
+    path_style: Option<bool>,
 }
 
 #[cfg(feature = "s3")]
@@ -23,6 +25,7 @@ impl S3Storage {
         access_key: &str,
         secret_key: &str,
         region: &str,
+        path_style: Option<bool>,
     ) -> Result<Self, StorageError> {
         Ok(Self {
             endpoint: endpoint.to_string(),
@@ -30,6 +33,7 @@ impl S3Storage {
             access_key: access_key.to_string(),
             secret_key: secret_key.to_string(),
             region: region.to_string(),
+            path_style,
         })
     }
 
@@ -45,7 +49,7 @@ impl S3Storage {
             return Err(StorageError::Backend(credentials.unwrap_err().to_string()));
         }
         let credentials = credentials.unwrap();
-        let  bucket = Bucket::new(
+        let bucket = Bucket::new(
             self.bucket.as_str(),
             Region::Custom {
                 region: self.region.to_string(),
@@ -58,12 +62,16 @@ impl S3Storage {
         }
 
         let mut bucket = bucket.unwrap();
-        let endpoint_lower = self.endpoint.to_lowercase();
-        let use_path_style = endpoint_lower.contains("localhost")
-            || endpoint_lower.contains("127.0.0.1")
-            || endpoint_lower.contains("::1")
-            || endpoint_lower.contains("192.168.")
-            || endpoint_lower.contains("10.");
+
+        // Determine whether to use path-style requests.
+        // Explicit config wins; otherwise auto-detect: use path-style for any
+        // non-AWS custom endpoint (MinIO, NOS, Cloudflare R2, Backblaze, etc.)
+        // because virtual-host style requires DNS wildcard support on the provider.
+        let use_path_style = self.path_style.unwrap_or_else(|| {
+            let ep = self.endpoint.to_lowercase();
+            // AWS native endpoints use virtual-host style; everything else defaults to path.
+            !ep.contains("amazonaws.com")
+        });
 
         if use_path_style {
             bucket.set_path_style();
