@@ -2976,13 +2976,14 @@ impl DeploymentEngine {
                             let pushed_msg = format!("Successfully pushed Docker image layers to internal registry storage");
                             self.insert_log(deployment_id, Some(step_id), "info", &pushed_msg).await;
                             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pushed_msg).await;
-                            registry_tag // use registry ref as the authoritative ref
+                            registry_tag
                         }
                         Err(e) => {
-                            tracing::warn!(deployment_id = %deployment_id, "direct docker push to registry failed (non-fatal): {e}");
-                            let err_msg = format!("Registry push warning (non-fatal): {e}");
-                            self.insert_log(deployment_id, Some(step_id), "warn", &err_msg).await;
-                            local_tag
+                            let err_msg = format!("Failed to push Docker image to internal registry storage: {e}");
+                            tracing::error!(deployment_id = %deployment_id, "{err_msg}");
+                            self.insert_log(deployment_id, Some(step_id), "error", &err_msg).await;
+                            self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "error", &err_msg).await;
+                            return Err(AppError::Internal(err_msg));
                         }
                     }
                 } else {
