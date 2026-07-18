@@ -65,12 +65,19 @@ pub struct AppConfig {
     pub edge_functions: EdgeFunctionsConfig,
     #[serde(default)]
     pub registry: RegistryConfig,
+    /// Shared secret for node agent authentication. Set via SHIPYARD__NODE_AGENT_TOKEN.
+    #[serde(default)]
+    pub node_agent_token: String,
+    /// Port where node agents listen. Default: 7070. Set via SHIPYARD__NODE_AGENT_PORT.
+    #[serde(default = "default_node_agent_port")]
+    pub node_agent_port: u16,
 }
 
 fn default_app_url() -> String {
     "http://localhost:5173".to_string()
 }
 
+fn default_node_agent_port() -> u16 { 7070 }
 fn default_hetzner_server_type() -> String { "cpx21".to_string() }
 fn default_hetzner_region() -> String { "eu-central".to_string() }
 fn default_cloud_provider() -> String { "hetzner".to_string() }
@@ -405,6 +412,8 @@ impl Default for AppConfig {
             stripe_price_max: None,
             edge_functions: EdgeFunctionsConfig::default(),
             registry: RegistryConfig::default(),
+            node_agent_token: String::new(),
+            node_agent_port: default_node_agent_port(),
         }
     }
 }

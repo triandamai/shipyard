@@ -53,6 +53,8 @@ async-trait = { workspace = true }
 zip = { workspace = true }
 tempfile = "3.27.0"
 aes-gcm = { workspace = true }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+async-stream = "0.3"
 
 [features]
 default = ["s3"]

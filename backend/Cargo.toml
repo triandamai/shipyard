@@ -8,6 +8,7 @@ members = [
     "crates/engine",
     "crates/git",
     "crates/mqtt_broker",
+    "crates/node_agent",
     "crates/openapi",
     "crates/registry",
     "crates/traefik",

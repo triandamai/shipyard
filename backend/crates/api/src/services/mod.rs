@@ -1760,18 +1760,7 @@ async fn handle_exec_socket(
 
         if let Some((Some(ref node_id),)) = row {
             if !node_id.is_empty() && node_id != &local_node_id {
-                let _ = ws_sink.send(Message::Text(
-                    serde_json::json!({
-                        "type": "error",
-                        "message": format!(
-                            "This container is running on a different Swarm node ({}). \
-                             Terminal is only available for containers on the manager node.",
-                            &node_id[..node_id.len().min(12)]
-                        )
-                    })
-                    .to_string(),
-                ))
-                .await;
+                proxy_exec_to_agent(ws_sink, ws_stream, &state, node_id, &params).await;
                 return;
             }
         }
@@ -1847,5 +1836,96 @@ async fn handle_exec_socket(
         _ = &mut in_task => {
             out_task.abort();
         }
+    }
+}
+
+// ─── Node agent exec proxy ────────────────────────────────────────────────────
+
+
+type WsSink = futures::stream::SplitSink<WebSocket, Message>;
+type WsStream = futures::stream::SplitStream<WebSocket>;
+
+async fn proxy_exec_to_agent(
+    mut ws_sink: WsSink,
+    mut ws_stream: WsStream,
+    state: &AppState,
+    swarm_node_id: &str,
+    params: &ExecParams,
+) {
+    // Resolve this node's IP via the Swarm node list.
+    let node_addr = match state.docker.list_nodes().await {
+        Ok(nodes) => nodes
+            .into_iter()
+            .find(|n| n.id == swarm_node_id)
+            .and_then(|n| n.addr),
+        Err(e) => {
+            let _ = ws_sink.send(Message::Text(
+                serde_json::json!({"type":"error","message": format!("Failed to resolve node: {e}")}).to_string(),
+            )).await;
+            return;
+        }
+    };
+
+    let addr = match node_addr {
+        Some(a) => a,
+        None => {
+            let _ = ws_sink.send(Message::Text(
+                serde_json::json!({"type":"error","message":"Node agent address not available"}).to_string(),
+            )).await;
+            return;
+        }
+    };
+
+    let agent_port = state.config.node_agent_port;
+    let agent_token = &state.config.node_agent_token;
+    let cmd_enc = urlencoding::encode(&params.cmd);
+    let url = format!(
+        "ws://{addr}:{agent_port}/containers/{}/exec?cmd={cmd_enc}&cols={}&rows={}&token={agent_token}",
+        params.container_id, params.cols, params.rows,
+    );
+
+    let agent_ws = match tokio_tungstenite::connect_async(&url).await {
+        Ok((ws, _)) => ws,
+        Err(e) => {
+            let _ = ws_sink.send(Message::Text(
+                serde_json::json!({"type":"error","message": format!("Failed to connect to node agent: {e}")}).to_string(),
+            )).await;
+            return;
+        }
+    };
+
+    let (mut agent_sink, mut agent_stream) = agent_ws.split();
+
+    // client → agent
+    let mut to_agent = tokio::spawn(async move {
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+        while let Some(Ok(msg)) = ws_stream.next().await {
+            let tmsg = match msg {
+                Message::Binary(b) => TMsg::Binary(b.into()),
+                Message::Text(t)   => TMsg::Text(t.into()),
+                Message::Close(_)  => break,
+                _                  => continue,
+            };
+            if agent_sink.send(tmsg).await.is_err() { break; }
+        }
+    });
+
+    // agent → client
+    let mut from_agent = tokio::spawn(async move {
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+        while let Some(Ok(msg)) = agent_stream.next().await {
+            let amsg = match msg {
+                TMsg::Binary(b) => Message::Binary(b.into()),
+                TMsg::Text(t)   => Message::Text(t.to_string()),
+                TMsg::Close(_)  => break,
+                _               => continue,
+            };
+            if ws_sink.send(amsg).await.is_err() { break; }
+        }
+    });
+
+    tokio::select! {
+        _ = &mut to_agent   => { from_agent.abort(); }
+        _ = &mut from_agent => { to_agent.abort(); }
     }
 }

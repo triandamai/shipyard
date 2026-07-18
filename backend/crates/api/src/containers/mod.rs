@@ -1,16 +1,21 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
+use futures::StreamExt;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::{ApiResponse, MqttPayload, Paginated};
 use shipyard_db::models::{Container, DockerEvent};
-use shipyard_docker::types::ContainerDetail;
+use shipyard_docker::types::{ContainerDetail, LogOpts};
 use shipyard_mqtt::topics;
 
 use crate::auth::AuthUser;
@@ -70,6 +75,14 @@ pub fn routes() -> Router<AppState> {
             get(list_project_containers),
         )
         .route("/docker-events", get(list_docker_events))
+        .route(
+            "/services/:service_id/containers/:container_id/logs/live",
+            get(container_logs_live),
+        )
+        .route(
+            "/services/:service_id/containers/:container_id/stats/live",
+            get(container_stats_live),
+        )
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -577,4 +590,162 @@ async fn list_docker_events(
         per_page,
         total,
     })))
+}
+
+// ─── Live logs SSE ────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LiveLogsQuery {
+    #[serde(default = "default_live_tail")]
+    tail: String,
+    #[serde(default = "default_live_follow")]
+    follow: bool,
+}
+fn default_live_tail() -> String { "100".to_string() }
+fn default_live_follow() -> bool { true }
+
+type SseStream = Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>;
+
+async fn resolve_agent_addr(state: &AppState, swarm_node_id: &str) -> Option<String> {
+    state.docker.list_nodes().await.ok()?.into_iter()
+        .find(|n| n.id == swarm_node_id)
+        .and_then(|n| n.addr)
+}
+
+async fn container_logs_live(
+    auth_user: AuthUser,
+    Path((service_id, container_id)): Path<(Uuid, Uuid)>,
+    Query(q): Query<LiveLogsQuery>,
+    State(state): State<AppState>,
+) -> Result<SseStream, ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+
+    let (docker_id, container_node_id) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT docker_container_id, node_id FROM containers WHERE id = $1 AND service_id = $2",
+    )
+    .bind(container_id)
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Container '{container_id}' not found"))))?;
+
+    let local_node_id = state.docker.swarm_info().await.map(|i| i.node_id).unwrap_or_default();
+    let remote_node = container_node_id.filter(|n| !n.is_empty() && *n != local_node_id);
+
+    let boxed: futures::stream::BoxStream<'static, Result<Event, Infallible>> =
+        if let Some(ref swarm_node_id) = remote_node {
+            let addr = resolve_agent_addr(&state, swarm_node_id).await
+                .ok_or_else(|| ApiAppError(AppError::Internal("Node agent address not available".into())))?;
+            let agent_port = state.config.node_agent_port;
+            let agent_token = state.config.node_agent_token.clone();
+            let url = format!(
+                "http://{addr}:{agent_port}/containers/{docker_id}/logs?tail={}&follow={}",
+                q.tail, q.follow,
+            );
+            let resp = state.http_client.get(&url)
+                .header("x-agent-token", &agent_token)
+                .send()
+                .await
+                .map_err(|e| ApiAppError(AppError::Internal(format!("Agent request failed: {e}"))))?;
+            Box::pin(resp.bytes_stream().map(|chunk| {
+                let data = chunk.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+                Ok::<Event, Infallible>(Event::default().data(data))
+            }))
+        } else {
+            let opts = LogOpts {
+                stdout: true,
+                stderr: true,
+                follow: q.follow,
+                tail: Some(q.tail),
+                ..Default::default()
+            };
+            let docker = state.docker.clone();
+            Box::pin(async_stream::stream! {
+                match docker.container_logs(&docker_id, opts).await {
+                    Ok(lines) => {
+                        for line in lines {
+                            let data = serde_json::json!({"stream":"stdout","line":line});
+                            yield Ok(Event::default().data(data.to_string()));
+                        }
+                    }
+                    Err(e) => {
+                        let data = serde_json::json!({"error": e.to_string()});
+                        yield Ok(Event::default().event("error").data(data.to_string()));
+                    }
+                }
+            })
+        };
+
+    Ok(Sse::new(boxed).keep_alive(KeepAlive::default()))
+}
+
+// ─── Live stats SSE ───────────────────────────────────────────────────────────
+
+async fn container_stats_live(
+    auth_user: AuthUser,
+    Path((service_id, container_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<SseStream, ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+
+    let (docker_id, container_node_id) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT docker_container_id, node_id FROM containers WHERE id = $1 AND service_id = $2",
+    )
+    .bind(container_id)
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Container '{container_id}' not found"))))?;
+
+    let local_node_id = state.docker.swarm_info().await.map(|i| i.node_id).unwrap_or_default();
+    let remote_node = container_node_id.filter(|n| !n.is_empty() && *n != local_node_id);
+
+    let boxed: futures::stream::BoxStream<'static, Result<Event, Infallible>> =
+        if let Some(ref swarm_node_id) = remote_node {
+            let addr = resolve_agent_addr(&state, swarm_node_id).await
+                .ok_or_else(|| ApiAppError(AppError::Internal("Node agent address not available".into())))?;
+            let agent_port = state.config.node_agent_port;
+            let agent_token = state.config.node_agent_token.clone();
+            let url = format!("http://{addr}:{agent_port}/containers/{docker_id}/stats");
+            let resp = state.http_client.get(&url)
+                .header("x-agent-token", &agent_token)
+                .send()
+                .await
+                .map_err(|e| ApiAppError(AppError::Internal(format!("Agent request failed: {e}"))))?;
+            Box::pin(resp.bytes_stream().map(|chunk| {
+                let data = chunk.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+                Ok::<Event, Infallible>(Event::default().data(data))
+            }))
+        } else {
+            let docker = state.docker.clone();
+            Box::pin(async_stream::stream! {
+                loop {
+                    match docker.container_resource_stats(&docker_id).await {
+                        Ok(Some(stats)) => {
+                            let data = serde_json::json!({
+                                "cpu_pct":      stats.cpu_pct,
+                                "mem_used_mb":  stats.mem_used_mb,
+                                "mem_limit_mb": stats.mem_limit_mb,
+                                "mem_pct":      stats.mem_pct,
+                            });
+                            yield Ok(Event::default().data(data.to_string()));
+                        }
+                        Ok(None) => {
+                            yield Ok(Event::default().event("error").data(r#"{"error":"container not running"}"#));
+                            break;
+                        }
+                        Err(e) => {
+                            let data = serde_json::json!({"error": e.to_string()});
+                            yield Ok(Event::default().event("error").data(data.to_string()));
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            })
+        };
+
+    Ok(Sse::new(boxed).keep_alive(KeepAlive::default()))
 }

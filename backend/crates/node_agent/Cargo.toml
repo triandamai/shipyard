@@ -1,0 +1,23 @@
+[package]
+name = "shipyard-node-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "shipyard-node-agent"
+path = "src/main.rs"
+
+[dependencies]
+axum = { workspace = true }
+bollard = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+dotenvy = { workspace = true }
+async-stream = "0.3"
+url = "2"
