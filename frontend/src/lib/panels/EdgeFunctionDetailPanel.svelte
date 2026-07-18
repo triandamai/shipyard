@@ -11,6 +11,8 @@
 	import EdgeFnDomainAddPanel from './resources/EdgeFnDomainAddPanel.svelte';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
 	import type { LogColumn } from '$lib/components/LogViewerOverlay.svelte';
+	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
+	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import { EditorView, basicSetup } from 'codemirror';
 	import { javascript } from '@codemirror/lang-javascript';
 	import { oneDark } from '@codemirror/theme-one-dark';
@@ -19,13 +21,14 @@
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 
 	interface Props {
-		groupId:   string;
-		orgId:     string;
-		projectId: string;
+		groupId:    string;
+		orgId:      string;
+		projectId:  string;
+		serviceId?: string;
 		onDeleted?: () => void;
 	}
 
-	let { groupId, orgId, projectId, onDeleted }: Props = $props();
+	let { groupId, orgId, projectId, serviceId, onDeleted }: Props = $props();
 
 	function portal(node: HTMLElement) {
 		document.body.appendChild(node);
@@ -112,6 +115,12 @@
 	// Logs overlay (powered by LogViewerOverlay)
 	let logsOverlayOpen = $state(false);
 	let logsOverlayFn   = $state<EFn | null>(null);
+
+	// Monitor overlay
+	let monitorOpen = $state(false);
+
+	// Env overlay
+	let envOpen = $state(false);
 
 	// Domain DNS check
 	let dnsState = $state<Record<string, 'idle' | 'checking' | 'ok' | 'fail'>>({});
@@ -534,6 +543,29 @@
 	/>
 </div>
 
+<!-- ── Monitor overlay ────────────────────────────────────────────────────────── -->
+{#if serviceId}
+	<div use:portal>
+		<MonitorViewOverlay
+			open={monitorOpen}
+			onClose={() => { monitorOpen = false; }}
+			{serviceId}
+		/>
+	</div>
+{/if}
+
+<!-- ── Env overlay ───────────────────────────────────────────────────────────── -->
+{#if serviceId}
+	<div use:portal>
+		<EnvManagerOverlay
+			open={envOpen}
+			onClose={() => { envOpen = false; }}
+			{serviceId}
+			{projectId}
+		/>
+	</div>
+{/if}
+
 <!-- ── Delete modal ──────────────────────────────────────────────────────────── -->
 {#if showDeleteModal}
 	<div class="modal-backdrop" role="dialog" aria-modal="true">
@@ -654,6 +686,14 @@
 						{#if redeploying}<div class="spinner-xs"></div> Redeploying…
 						{:else}<RefreshCw size={13} /> Redeploy Now{/if}
 					</button>
+					{#if serviceId}
+						<button class="btn btn-secondary" onclick={() => { monitorOpen = true; }}>
+							Monitor
+						</button>
+						<button class="btn btn-secondary" onclick={() => { envOpen = true; }}>
+							Env Vars
+						</button>
+					{/if}
 					<a class="btn btn-secondary" href="/docs/edge-functions" target="_blank" rel="noopener">
 						<BookOpen size={12} /> Docs
 					</a>

@@ -6,7 +6,7 @@
 		GitBranch, Box, FileCode, Terminal, Settings, X,
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
-		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database
+		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database, Activity
 	} from '@lucide/svelte';
 	import DbClientModal from '$lib/components/DbClientModal.svelte';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
@@ -25,14 +25,15 @@
 	import { can, permProject } from '$lib/auth/permissions';
 	import { subscribeToService, subscribeToDeployment } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
-	import EnvManagerPanel from './EnvManagerPanel.svelte';
 	import ExecPanel from './ExecPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
+	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
+	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
-		DeploymentLog, MqttPayload, ContainerStatus, Domain, ContainerStats,
+		DeploymentLog, MqttPayload, ContainerStatus, Domain,
 		Network as NetworkType, SwarmNode, ConnectionInfo
 	} from '$lib/api/types';
 
@@ -62,7 +63,7 @@
 	let canDelete = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'delete')));
 
 	// ── Tabs ─────────────────────────────────────────────────────────
-	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings' | 'monitor';
+	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings';
 	let activeTab = $state<Tab>('overview');
 
 	// ── Core state ───────────────────────────────────────────────────
@@ -129,8 +130,9 @@
 
 	// ── Env panel ────────────────────────────────────────────────────
 	let showEnvPanel    = $state(false);
-let showExecPanel   = $state(false);
-let showDbClient    = $state(false);
+	let showExecPanel   = $state(false);
+	let showDbClient    = $state(false);
+	let showMonitor     = $state(false);
 
 	// ── Settings edit state ──────────────────────────────────────────
 	let editReplicas = $state(1);
@@ -199,124 +201,6 @@ let showDbClient    = $state(false);
 	// ── MQTT cleanup ─────────────────────────────────────────────────
 	let unsubscribeService: (() => void) | null = null;
 	let unsubscribeDeployment: (() => void) | null = null;
-
-	// ── Monitor tab ───────────────────────────────────────────────────────────
-	const HISTORY_LEN = 30;
-
-	let monitorTarget    = $state<Container | null>(null);
-	let statsSource: EventSource | null = null;
-	let currentStats     = $state<ContainerStats | null>(null);
-	let monitorLoading   = $state(false);
-	let monitorError     = $state('');
-	let netRxDeltaPerSec = $state(0);
-	let netTxDeltaPerSec = $state(0);
-
-	let cpuHistory      = $state<number[]>([]);
-	let memHistory      = $state<number[]>([]);
-	let netRxHistory    = $state<number[]>([]);
-	let netTxHistory    = $state<number[]>([]);
-	let blkReadHistory  = $state<number[]>([]);
-	let blkWriteHistory = $state<number[]>([]);
-
-	function addToHistory(hist: number[], val: number): number[] {
-		const next = [...hist, val];
-		return next.length > HISTORY_LEN ? next.slice(-HISTORY_LEN) : next;
-	}
-
-	function formatBytes(bytes: number, decimals = 1): string {
-		if (bytes <= 0) return '0 B';
-		const k = 1024;
-		const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-		const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-		return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i]}`;
-	}
-
-	function sparklinePaths(data: number[]): { line: string; area: string } {
-		if (data.length < 2) return { line: '', area: '' };
-		const max = Math.max(...data, 0.001);
-		const W = 200, H = 50, PAD = 4;
-		const pts = data.map((v, i) => ({
-			x: (i / (data.length - 1)) * W,
-			y: (H - PAD) - (v / max) * (H - PAD * 2) + PAD
-		}));
-		const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-		const area = `${line} L${W},${H} L0,${H} Z`;
-		return { line, area };
-	}
-
-	function connectStats(c: Container) {
-		disconnectStats();
-		monitorLoading = true;
-		monitorError   = '';
-
-		const cid = c.docker_container_id;
-		const es  = new EventSource(`/api/services/${serviceId}/containers/${cid}/stats`);
-		statsSource = es;
-
-		es.onmessage = (e) => {
-			if (!e.data?.trim()) return;
-			let stats: ContainerStats;
-			try { stats = JSON.parse(e.data); } catch { return; }
-
-			const prev = currentStats;
-			const rxDelta = prev ? Math.max(0, stats.net_rx_bytes - prev.net_rx_bytes) : 0;
-			const txDelta = prev ? Math.max(0, stats.net_tx_bytes - prev.net_tx_bytes) : 0;
-
-			cpuHistory      = addToHistory(cpuHistory,      stats.cpu_percent);
-			memHistory      = addToHistory(memHistory,      stats.memory_percent);
-			netRxHistory    = addToHistory(netRxHistory,    rxDelta);
-			netTxHistory    = addToHistory(netTxHistory,    txDelta);
-			blkReadHistory  = addToHistory(blkReadHistory,  stats.block_read_bytes);
-			blkWriteHistory = addToHistory(blkWriteHistory, stats.block_write_bytes);
-
-			netRxDeltaPerSec = rxDelta;
-			netTxDeltaPerSec = txDelta;
-			currentStats     = stats;
-			monitorLoading   = false;
-			monitorError     = '';
-		};
-
-		es.addEventListener('error', (e: MessageEvent) => {
-			monitorError   = e.data ?? 'Stats stream error';
-			monitorLoading = false;
-		});
-
-		es.addEventListener('remote', (e: MessageEvent) => {
-			monitorError   = e.data ?? 'Container is on a remote Swarm node — live stats unavailable';
-			monitorLoading = false;
-			es.close();
-			statsSource = null;
-		});
-
-		es.onerror = () => {
-			if (monitorLoading) {
-				monitorError   = 'Could not connect to stats stream';
-				monitorLoading = false;
-				es.close();
-				statsSource = null;
-			}
-		};
-	}
-
-	function disconnectStats() {
-		statsSource?.close();
-		statsSource = null;
-	}
-
-	function selectMonitorTarget(c: Container) {
-		monitorTarget    = c;
-		currentStats     = null;
-		cpuHistory       = [];
-		memHistory       = [];
-		netRxHistory     = [];
-		netTxHistory     = [];
-		blkReadHistory   = [];
-		blkWriteHistory  = [];
-		netRxDeltaPerSec = 0;
-		netTxDeltaPerSec = 0;
-		monitorError     = '';
-		connectStats(c);
-	}
 
 	// ── Derived ──────────────────────────────────────────────────────
 	let latestDeployment = $derived(deployments[0] ?? null);
@@ -993,7 +877,6 @@ let showDbClient    = $state(false);
 
 	// ── Tab change ───────────────────────────────────────────────────
 	async function switchTab(tab: Tab) {
-		if (activeTab === 'monitor' && tab !== 'monitor') disconnectStats();
 		activeTab = tab;
 		if (tab === 'overview' && !connInfo && !connInfoLoading) void loadConnectionInfo();
 		if (tab === 'replicas') { if (containers.length === 0) await loadContainers(); await ensureNodes(); }
@@ -1011,15 +894,6 @@ let showDbClient    = $state(false);
 			editVolumeMounts = [];
 			editNetworks = [];
 			await Promise.all([loadSettingsEnvs(), loadSettingsNetworks()]);
-		}
-		if (tab === 'monitor') {
-			if (containers.length === 0) await loadContainers();
-			if (monitorTarget) {
-				connectStats(monitorTarget);
-			} else {
-				const first = containers.find(c => c.status === 'running');
-				if (first) selectMonitorTarget(first);
-			}
 		}
 	}
 
@@ -1075,7 +949,6 @@ let showDbClient    = $state(false);
 		unsubscribeService?.();
 		unsubscribeDeployment?.();
 		clogSource?.close();
-		disconnectStats();
 		if (_stopTimeoutId) { clearTimeout(_stopTimeoutId); _stopTimeoutId = null; }
 		if (serviceStatusTopic) eventBus.off(serviceStatusTopic, handleServiceStatus);
 		if (serviceContainersTopic) eventBus.off(serviceContainersTopic, handleContainers);
@@ -1088,7 +961,6 @@ let showDbClient    = $state(false);
 		{ id: 'logs',      label: 'Logs'      },
 		{ id: 'replicas',  label: 'Replicas'  },
 		{ id: 'domains',   label: 'Domains'   },
-		{ id: 'monitor',   label: 'Monitor'   },
 		{ id: 'settings',  label: 'Settings'  },
 	];
 	let tabs = $derived(
@@ -1100,7 +972,6 @@ let showDbClient    = $state(false);
 				{ id: 'git'      as Tab, label: 'Git'      },
 				{ id: 'replicas' as Tab, label: 'Replicas' },
 				{ id: 'domains'  as Tab, label: 'Domains'  },
-				{ id: 'monitor'  as Tab, label: 'Monitor'  },
 				{ id: 'settings' as Tab, label: 'Settings' },
 			]
 			: baseTabs
@@ -1127,18 +998,27 @@ let showDbClient    = $state(false);
 	/>
 {/if}
 
-<!-- ─── Env Manager Overlay ───────────────────────────────────────────── -->
-{#if showEnvPanel && service}
-	<div class="env-overlay">
-		<div class="env-overlay-header">
-			<span>Environment Variables — {service.name}</span>
-			<button class="icon-btn" onclick={() => showEnvPanel = false}><X size={16} /></button>
-		</div>
-		<div class="env-overlay-body">
-			<EnvManagerPanel serviceId={serviceId} projectId={projectId} serviceName={service.name} />
-		</div>
+<!-- ─── Container Monitor Overlay ───────────────────────────────────────── -->
+{#if showMonitor}
+	<div use:portal>
+		<MonitorViewOverlay
+			open={showMonitor}
+			onClose={() => showMonitor = false}
+			{serviceId}
+		/>
 	</div>
 {/if}
+
+<!-- ─── Env Manager Overlay ───────────────────────────────────────────── -->
+<div use:portal>
+	<EnvManagerOverlay
+		open={showEnvPanel}
+		onClose={() => showEnvPanel = false}
+		{serviceId}
+		{projectId}
+		serviceName={service?.name ?? ''}
+	/>
+</div>
 
 <!-- ─── Container Logs Overlay ─────────────────────────────────────────── -->
 {#if containerLogsTarget}
@@ -1274,14 +1154,14 @@ let showDbClient    = $state(false);
 						<Terminal size={12} />
 						Terminal
 					</button>
+					<button class="btn btn-secondary btn-xs" onclick={() => showMonitor = true} title="View container metrics">
+						<Activity size={12} />
+						Monitor
+					</button>
 				{/if}
 				<button class="btn btn-secondary btn-xs" onclick={() => showDbClient = true} title="Open database client">
 					<Database size={12} />
 					DB Client
-				</button>
-				<button class="btn btn-secondary btn-xs" onclick={() => showEnvPanel = true} title="Manage env vars">
-					<Settings size={12} />
-					Env
 				</button>
 			</div>
 		</div>
@@ -1909,147 +1789,6 @@ let showDbClient    = $state(false);
 						</ul>
 					{/if}
 				</div>
-			<!-- ── Monitor ── -->
-			{:else if activeTab === 'monitor'}
-				<div class="monitor-section">
-
-					<!-- Container replica selector (only shown when > 1 running) -->
-					{#if runningContainers.length > 1}
-						<div class="monitor-selector">
-							{#each runningContainers as c (c.id)}
-								<button
-									class="monitor-sel-btn"
-									class:active={monitorTarget?.id === c.id}
-									onclick={() => selectMonitorTarget(c)}
-								>
-									replica-{c.replica_index ?? '?'}
-								</button>
-							{/each}
-						</div>
-					{/if}
-
-					{#if runningContainers.length === 0}
-						<div class="empty-state-msg">No running replicas to monitor.</div>
-
-					{:else if monitorError}
-						<div class="monitor-error">{monitorError}</div>
-
-					{:else if monitorLoading && !currentStats}
-						<div class="loading-inline" style="padding:20px 16px">
-							<div class="spinner-sm"></div><span>Fetching metrics…</span>
-						</div>
-
-					{:else}
-						<!-- 2×2 metric grid -->
-						<div class="metric-grid">
-
-							<!-- CPU Usage -->
-							<div class="metric-card">
-								<div class="metric-header">
-									<span class="metric-label">CPU</span>
-									<span class="metric-value cpu">{currentStats ? `${currentStats.cpu_percent.toFixed(1)}%` : '—'}</span>
-								</div>
-								{#each [sparklinePaths(cpuHistory)] as cpu}
-									<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
-										{#if cpu.line}
-											<path d={cpu.area} fill="rgba(37,99,235,0.13)" />
-											<path d={cpu.line} fill="none" stroke="#3B82F6" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									</svg>
-								{/each}
-								<div class="metric-sub">
-									{cpuHistory.length > 1
-										? `avg ${(cpuHistory.reduce((a, b) => a + b, 0) / cpuHistory.length).toFixed(1)}%`
-										: 'collecting…'}
-								</div>
-							</div>
-
-							<!-- Memory Usage -->
-							<div class="metric-card">
-								<div class="metric-header">
-									<span class="metric-label">Memory</span>
-									<span class="metric-value mem">{currentStats ? `${currentStats.memory_percent.toFixed(1)}%` : '—'}</span>
-								</div>
-								{#each [sparklinePaths(memHistory)] as mem}
-									<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
-										{#if mem.line}
-											<path d={mem.area} fill="rgba(16,185,129,0.13)" />
-											<path d={mem.line} fill="none" stroke="#10B981" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									</svg>
-								{/each}
-								<div class="metric-sub">
-									{currentStats
-										? `${formatBytes(currentStats.memory_usage_bytes)} / ${formatBytes(currentStats.memory_limit_bytes)}`
-										: 'collecting…'}
-								</div>
-							</div>
-
-							<!-- Network I/O -->
-							<div class="metric-card">
-								<div class="metric-header">
-									<span class="metric-label">Network I/O</span>
-								</div>
-								<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
-									{#each [sparklinePaths(netRxHistory)] as netRx}
-										{#if netRx.line}
-											<path d={netRx.area} fill="rgba(99,102,241,0.10)" />
-											<path d={netRx.line} fill="none" stroke="#6366F1" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									{/each}
-									{#each [sparklinePaths(netTxHistory)] as netTx}
-										{#if netTx.line}
-											<path d={netTx.area} fill="rgba(244,114,182,0.10)" />
-											<path d={netTx.line} fill="none" stroke="#F472B6" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									{/each}
-								</svg>
-								<div class="metric-net-row">
-									<span class="net-chip rx">↓ {formatBytes(netRxDeltaPerSec)}/s</span>
-									<span class="net-chip tx">↑ {formatBytes(netTxDeltaPerSec)}/s</span>
-								</div>
-							</div>
-
-							<!-- Block I/O -->
-							<div class="metric-card">
-								<div class="metric-header">
-									<span class="metric-label">Block I/O</span>
-								</div>
-								<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
-									{#each [sparklinePaths(blkReadHistory)] as blkR}
-										{#if blkR.line}
-											<path d={blkR.area} fill="rgba(251,191,36,0.10)" />
-											<path d={blkR.line} fill="none" stroke="#FBBF24" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									{/each}
-									{#each [sparklinePaths(blkWriteHistory)] as blkW}
-										{#if blkW.line}
-											<path d={blkW.area} fill="rgba(249,115,22,0.10)" />
-											<path d={blkW.line} fill="none" stroke="#F97316" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
-										{/if}
-									{/each}
-								</svg>
-								<div class="metric-net-row">
-									<span class="net-chip blk-r">R {formatBytes(currentStats?.block_read_bytes ?? 0)}</span>
-									<span class="net-chip blk-w">W {formatBytes(currentStats?.block_write_bytes ?? 0)}</span>
-								</div>
-							</div>
-						</div>
-
-						<!-- Footer: PIDs + last-updated -->
-						<div class="monitor-footer">
-							{#if currentStats}
-								<span class="monitor-footer-pids">
-									{currentStats.pids} PID{currentStats.pids !== 1 ? 's' : ''}
-								</span>
-								<span class="monitor-footer-ts">
-									Updated {formatTime(currentStats.timestamp)}
-								</span>
-							{/if}
-						</div>
-					{/if}
-				</div>
-
 			<!-- ── Settings ── -->
 			{:else if activeTab === 'settings'}
 				<div class="settings-section">
@@ -3630,29 +3369,6 @@ let showDbClient    = $state(false);
 		font-size: 13px;
 	}
 
-	/* ── Env overlay ── */
-	.env-overlay {
-		position: absolute;
-		inset: 0;
-		background: var(--bg-base);
-		display: flex;
-		flex-direction: column;
-		z-index: 20;
-	}
-	.env-overlay-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 14px;
-		border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-		background: var(--bg-surface);
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-	.env-overlay-body { flex: 1; overflow: hidden; }
-
 	/* ── Delete modal (global — node is portalled to body) ── */
 	:global(.sdp-modal-backdrop) {
 		position: fixed;
@@ -3972,142 +3688,6 @@ let showDbClient    = $state(false);
 		border: 1px solid rgba(16,185,129,0.25);
 	}
 
-	/* ── Monitor tab ── */
-	.monitor-section {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-	}
-
-	.monitor-selector {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		padding: 8px 12px;
-		border-bottom: 1px solid var(--border);
-		background: var(--bg-surface);
-		flex-shrink: 0;
-	}
-	.monitor-sel-btn {
-		font-size: 11px; font-weight: 500; font-family: var(--font-mono);
-		padding: 3px 10px;
-		border-radius: 99px;
-		border: 1px solid var(--border);
-		background: var(--bg-base);
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.monitor-sel-btn:hover { border-color: var(--accent); color: var(--accent); }
-	.monitor-sel-btn.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: rgba(37,99,235,0.07);
-	}
-
-	.metric-grid {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1px;
-		background: var(--border);
-		flex: 1;
-		align-content: start;
-	}
-
-	.metric-card {
-		background: var(--bg-base);
-		padding: 12px 12px 10px;
-		display: flex;
-		flex-direction: column;
-		gap: 7px;
-	}
-
-	.metric-header {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 6px;
-	}
-	.metric-label {
-		font-size: 10px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
-		flex-shrink: 0;
-	}
-	.metric-value {
-		font-size: 17px;
-		font-weight: 700;
-		font-family: var(--font-mono);
-		line-height: 1;
-	}
-	.metric-value.cpu  { color: #3B82F6; }
-	.metric-value.mem  { color: #10B981; }
-
-	.spark {
-		width: 100%;
-		height: 46px;
-		display: block;
-		border-radius: 4px;
-		background: var(--bg-elevated);
-		overflow: visible;
-	}
-
-	.metric-sub {
-		font-size: 10px;
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-	}
-
-	.metric-net-row {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		flex-wrap: wrap;
-	}
-	.net-chip {
-		font-size: 10px;
-		font-weight: 600;
-		font-family: var(--font-mono);
-		padding: 2px 7px;
-		border-radius: 99px;
-	}
-	.net-chip.rx    { background: rgba(99,102,241,0.12);  color: #4F46E5; border: 1px solid rgba(99,102,241,0.25); }
-	.net-chip.tx    { background: rgba(219,39,119,0.10);  color: #BE185D; border: 1px solid rgba(219,39,119,0.25); }
-	.net-chip.blk-r { background: rgba(217,119,6,0.10);   color: #B45309; border: 1px solid rgba(217,119,6,0.25); }
-	.net-chip.blk-w { background: rgba(234,88,12,0.10);   color: #C2410C; border: 1px solid rgba(234,88,12,0.25); }
-
-	.monitor-footer {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 6px 12px;
-		border-top: 1px solid var(--border);
-		background: var(--bg-surface);
-		flex-shrink: 0;
-	}
-	.monitor-footer-pids {
-		font-size: 10px;
-		font-weight: 600;
-		color: var(--text-dim);
-		font-family: var(--font-mono);
-	}
-	.monitor-footer-ts {
-		font-size: 10px;
-		color: var(--text-dim);
-	}
-
-	.monitor-error {
-		margin: 12px;
-		padding: 8px 10px;
-		font-size: 12px;
-		color: #EF4444;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-	}
-
 	@media (max-width: 639px) {
 		.tabs-row {
 			-webkit-overflow-scrolling: touch;
@@ -4117,8 +3697,7 @@ let showDbClient    = $state(false);
 			flex-wrap: wrap;
 		}
 
-		.overview-grid,
-		.metric-grid {
+		.overview-grid {
 			grid-template-columns: 1fr;
 		}
 	}

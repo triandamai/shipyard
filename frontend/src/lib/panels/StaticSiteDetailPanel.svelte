@@ -10,6 +10,8 @@
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
 	import DeploymentLogsPanel from './DeploymentLogsPanel.svelte';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
+	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
+	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
 	import type { StaticSiteConfig, Service, Deployment, Domain } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
@@ -40,6 +42,12 @@
 
 	// ── Visitor Logs overlay ──────────────────────────────────────────────────
 	let logOverlayOpen = $state(false);
+
+	// ── Monitor overlay ────────────────────────────────────────────────────────
+	let monitorOpen = $state(false);
+
+	// ── Env overlay ────────────────────────────────────────────────────────────
+	let envOpen = $state(false);
 
 	// ── Delete state ───────────────────────────────────────────────────────────
 	let showDeleteModal  = $state(false);
@@ -591,6 +599,26 @@
 			/>
 		</div>
 
+		<!-- Monitor overlay -->
+		<div use:portal>
+			<MonitorViewOverlay
+				open={monitorOpen}
+				onClose={() => { monitorOpen = false; }}
+				{serviceId}
+			/>
+		</div>
+
+		<!-- Env overlay -->
+		<div use:portal>
+			<EnvManagerOverlay
+				open={envOpen}
+				onClose={() => { envOpen = false; }}
+				{serviceId}
+				{projectId}
+				serviceName={service?.name ?? serviceId}
+			/>
+		</div>
+
 		<!-- Tabs -->
 		<div class="tabs">
 			{#each [
@@ -632,6 +660,12 @@
 					{/if}
 					<button class="btn-visitor-logs" onclick={() => { logOverlayOpen = true; }}>
 						<AlertCircle size={12} /> Visitor Logs
+					</button>
+					<button class="btn-visitor-logs" onclick={() => { monitorOpen = true; }}>
+						Monitor
+					</button>
+					<button class="btn-visitor-logs" onclick={() => { envOpen = true; }}>
+						Env Vars
 					</button>
 				</div>
 			</section>
