@@ -613,6 +613,14 @@ http:
       tls:
         certResolver: letsencrypt
 
+    shipyard-exec-ws:
+      rule: "Host(\`${DOMAIN}\`) && PathRegexp(\`^/api/projects/[^/]+/services/[^/]+/exec\`)"
+      priority: 100
+      entryPoints: [websecure]
+      service: shipyard-backend
+      tls:
+        certResolver: letsencrypt
+
     shipyard-backend:
       rule: "Host(\`api-${DOMAIN}\`)"
       entryPoints: [websecure]
