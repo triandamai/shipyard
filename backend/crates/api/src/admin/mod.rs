@@ -89,6 +89,7 @@ pub fn routes() -> Router<AppState> {
         .route("/storage/buckets", get(list_storage_buckets))
         .route("/storage/list", get(list_storage))
         .route("/storage/preview", get(preview_storage))
+        .route("/storage/test", get(test_storage))
 }
 
 // ─── GET /admin/stats ─────────────────────────────────────────────────────────
@@ -1360,6 +1361,63 @@ struct StorageBucketInfo {
     backend: String,
     bucket: String,
     endpoint: String,
+}
+
+#[derive(Serialize)]
+struct StorageTestResult {
+    put_ok: bool,
+    put_error: Option<String>,
+    exists_after_put: bool,
+    list_objects: Vec<String>,
+    list_prefixes: Vec<String>,
+    list_error: Option<String>,
+    delete_ok: bool,
+}
+
+async fn test_storage(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<ApiResponse<StorageTestResult>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "infra:read").await?;
+
+    let test_key = "shipyard-storage-test/probe.txt";
+    let test_data = axum::body::Bytes::from("shipyard-storage-test");
+
+    let (put_ok, put_error) = match state.registry_storage.put(test_key, test_data).await {
+        Ok(_) => (true, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    let exists_after_put = if put_ok {
+        state.registry_storage.exists(test_key).await.unwrap_or(false)
+    } else {
+        false
+    };
+
+    let (list_objects, list_prefixes, list_error) = match state
+        .registry_storage
+        .list("", "/")
+        .await
+    {
+        Ok(r) => (
+            r.objects.into_iter().map(|o| o.key).collect(),
+            r.common_prefixes,
+            None,
+        ),
+        Err(e) => (vec![], vec![], Some(e.to_string())),
+    };
+
+    let delete_ok = state.registry_storage.delete(test_key).await.is_ok();
+
+    Ok(Json(ApiResponse::ok(StorageTestResult {
+        put_ok,
+        put_error,
+        exists_after_put,
+        list_objects,
+        list_prefixes,
+        list_error,
+        delete_ok,
+    })))
 }
 
 async fn list_storage_buckets(
