@@ -6,6 +6,7 @@ use axum::{
 
 use crate::AppState;
 use crate::admin;
+use crate::alerts;
 use crate::auth;
 use crate::compose;
 use crate::setup;
@@ -95,6 +96,8 @@ pub fn api_router() -> Router<AppState> {
         .nest("/orgs/:org_id/edge-functions", edge_functions::routes())
         // Internal: runtime container endpoints — /internal/...
         .nest("/internal", edge_functions::internal_routes())
+        // Internal: node agent callbacks — /internal/node-agent/...
+        .nest("/internal", alerts::internal_routes())
         // Plans — GET /plans (public, no auth)
         .merge(plans::routes())
         // Artifactory — /orgs/:org_id/registry/...

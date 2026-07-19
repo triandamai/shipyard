@@ -7,7 +7,9 @@
 	import { initMqtt } from '$lib/mqtt/client';
 	import { initDeploymentHandler } from '$lib/mqtt/handlers/deployment.handler';
 	import { initToastHandler } from '$lib/mqtt/handlers/toast.handler';
+	import { initAlertsHandler } from '$lib/mqtt/handlers/alerts.handler';
 	import Toast from '$lib/components/Toast.svelte';
+	import AlertToast from '$lib/components/AlertToast.svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { authStore } from '$lib/stores/auth.store';
@@ -48,6 +50,7 @@
 		initMqtt();
 		initDeploymentHandler();
 		initToastHandler();
+		initAlertsHandler();
 	});
 
 	$effect(() => {
@@ -127,6 +130,7 @@
 
 {@render children()}
 <Toast />
+<AlertToast />
 <CommandPalette open={$uiStore.commandPaletteOpen} onClose={() => uiStore.closeCommandPalette()} />
 <PermissionDeniedDialog
 	open={$authStore.forbidden}

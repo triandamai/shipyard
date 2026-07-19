@@ -29,6 +29,7 @@ use middleware::rate_limit::SharedRateLimiter;
 use tokio::sync::Notify;
 
 mod admin;
+mod alerts;
 mod auth;
 mod cache;
 mod compose;

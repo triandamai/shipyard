@@ -71,6 +71,11 @@ pub struct AppConfig {
     /// Port where node agents listen. Default: 7070. Set via SHIPYARD__NODE_AGENT_PORT.
     #[serde(default = "default_node_agent_port")]
     pub node_agent_port: u16,
+    /// Minimum seconds between consecutive alerts for the same (metric, node, container).
+    /// Prevents alert floods when a resource stays above threshold for a long time.
+    /// Default: 30. Set via SHIPYARD__ALERT_COOLDOWN_SECS.
+    #[serde(default = "default_alert_cooldown_secs")]
+    pub alert_cooldown_secs: u64,
 }
 
 fn default_app_url() -> String {
@@ -78,6 +83,7 @@ fn default_app_url() -> String {
 }
 
 fn default_node_agent_port() -> u16 { 7070 }
+fn default_alert_cooldown_secs() -> u64 { 30 }
 fn default_hetzner_server_type() -> String { "cpx21".to_string() }
 fn default_hetzner_region() -> String { "eu-central".to_string() }
 fn default_cloud_provider() -> String { "hetzner".to_string() }
@@ -414,6 +420,7 @@ impl Default for AppConfig {
             registry: RegistryConfig::default(),
             node_agent_token: String::new(),
             node_agent_port: default_node_agent_port(),
+            alert_cooldown_secs: default_alert_cooldown_secs(),
         }
     }
 }

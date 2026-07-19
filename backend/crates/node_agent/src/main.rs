@@ -4,7 +4,7 @@ use std::convert::Infallible;
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
-    http::{HeaderMap, Request, StatusCode},
+    http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::get,
@@ -16,6 +16,16 @@ use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
+
+struct SpikeConfig {
+    callback_url: String,
+    node_id: String,
+    token: String,
+    cpu_threshold: f64,
+    mem_threshold: f64,
+    disk_threshold: f64,
+    net_threshold_mbps: f64,
+}
 
 #[derive(Clone)]
 struct AgentState {
@@ -43,9 +53,11 @@ async fn main() {
 
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker socket");
 
+    let docker = Arc::new(docker);
+
     let state = AgentState {
-        docker: Arc::new(docker),
-        token: Arc::new(token),
+        docker: Arc::clone(&docker),
+        token: Arc::new(token.clone()),
     };
 
     let auth_state = state.clone();
@@ -56,6 +68,31 @@ async fn main() {
         .route("/containers/:docker_id/exec", get(container_exec))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .with_state(state);
+
+    // Spawn spike-detection loop if a callback URL is configured.
+    if let Ok(callback_url) = std::env::var("AGENT_CALLBACK_URL") {
+        let spike_cfg = SpikeConfig {
+            callback_url,
+            node_id: std::env::var("AGENT_NODE_ID").unwrap_or_else(|_| {
+                hostname::get()
+                    .ok()
+                    .and_then(|h| h.into_string().ok())
+                    .unwrap_or_else(|| "unknown".to_string())
+            }),
+            token: token.clone(),
+            cpu_threshold: std::env::var("AGENT_CPU_THRESHOLD")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(80.0),
+            mem_threshold: std::env::var("AGENT_MEM_THRESHOLD")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(85.0),
+            disk_threshold: std::env::var("AGENT_DISK_THRESHOLD")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(90.0),
+            net_threshold_mbps: std::env::var("AGENT_NET_THRESHOLD_MBPS")
+                .ok().and_then(|v| v.parse().ok()).unwrap_or(100.0),
+        };
+        let spike_docker = Arc::clone(&docker);
+        let http = reqwest::Client::new();
+        tokio::spawn(spike_loop(spike_cfg, spike_docker, http));
+    }
 
     let addr = format!("{bind}:{port}");
     tracing::info!("shipyard-node-agent listening on {addr}");
@@ -314,5 +351,111 @@ async fn handle_exec(socket: WebSocket, docker: Arc<Docker>, docker_id: String, 
     tokio::select! {
         _ = &mut out_task => { in_task.abort(); }
         _ = &mut in_task => { out_task.abort(); }
+    }
+}
+
+async fn spike_loop(cfg: SpikeConfig, docker: Arc<Docker>, http: reqwest::Client) {
+    use bollard::container::ListContainersOptions;
+    use sysinfo::{Disks, System};
+    use std::collections::HashMap;
+
+    let post_url = format!("{}/api/internal/node-agent/spike", cfg.callback_url.trim_end_matches('/'));
+    let mut prev_net: HashMap<String, (u64, u64)> = HashMap::new();
+
+    loop {
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // ── Host metrics (blocking, run on dedicated thread) ─────────────────
+        let (cpu_pct, mem_pct, disk_pct) = tokio::task::spawn_blocking(|| {
+            let mut sys = System::new_all();
+            sys.refresh_all();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            sys.refresh_cpu_all();
+            sys.refresh_memory();
+
+            let cpu = {
+                let cpus = sys.cpus();
+                if cpus.is_empty() { 0.0 }
+                else { cpus.iter().map(|c| c.cpu_usage() as f64).sum::<f64>() / cpus.len() as f64 }
+            };
+            let mem = if sys.total_memory() > 0 {
+                sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0
+            } else { 0.0 };
+            let disk = Disks::new_with_refreshed_list()
+                .iter()
+                .filter(|d| d.mount_point().to_str() == Some("/"))
+                .map(|d| {
+                    let total = d.total_space();
+                    let used  = total.saturating_sub(d.available_space());
+                    if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 }
+                })
+                .next()
+                .unwrap_or(0.0);
+            (cpu, mem, disk)
+        }).await.unwrap_or((0.0, 0.0, 0.0));
+
+        let mut spikes: Vec<(String, f64, f64, Option<String>)> = Vec::new();
+
+        if cpu_pct >= cfg.cpu_threshold {
+            spikes.push(("cpu".into(), cpu_pct, cfg.cpu_threshold, None));
+        }
+        if mem_pct >= cfg.mem_threshold {
+            spikes.push(("mem".into(), mem_pct, cfg.mem_threshold, None));
+        }
+        if disk_pct >= cfg.disk_threshold {
+            spikes.push(("disk".into(), disk_pct, cfg.disk_threshold, None));
+        }
+
+        // ── Per-container network check ───────────────────────────────────────
+        let list_opts = ListContainersOptions::<String> { all: false, ..Default::default() };
+        if let Ok(containers) = docker.list_containers(Some(list_opts)).await {
+            for c in &containers {
+                let id = match c.id.as_deref() { Some(id) => id, None => continue };
+                let opts = StatsOptions { stream: false, one_shot: true };
+                let mut s = docker.stats(id, Some(opts));
+                if let Some(Ok(stat)) = s.next().await {
+                    let rx = stat.networks.as_ref()
+                        .map(|n| n.values().map(|v| v.rx_bytes).sum::<u64>())
+                        .unwrap_or(0);
+                    let tx = stat.networks.as_ref()
+                        .map(|n| n.values().map(|v| v.tx_bytes).sum::<u64>())
+                        .unwrap_or(0);
+
+                    if let Some(&(prev_rx, prev_tx)) = prev_net.get(id) {
+                        let delta_bytes = (rx.saturating_sub(prev_rx) + tx.saturating_sub(prev_tx)) as f64;
+                        let mbps = delta_bytes * 8.0 / 1_000_000.0 / 10.0; // per-second over 10s window
+                        if mbps >= cfg.net_threshold_mbps {
+                            spikes.push(("net".into(), mbps, cfg.net_threshold_mbps, Some(id.to_string())));
+                        }
+                    }
+                    prev_net.insert(id.to_string(), (rx, tx));
+                }
+            }
+        }
+
+        // ── POST each spike to the main API ──────────────────────────────────
+        for (metric, value, threshold, container_id) in spikes {
+            let body = serde_json::json!({
+                "metric": metric,
+                "value": value,
+                "threshold": threshold,
+                "container_id": container_id,
+                "node_id": cfg.node_id,
+                "ts": now_ts,
+            });
+            if let Err(e) = http.post(&post_url)
+                .header("x-agent-token", &cfg.token)
+                .json(&body)
+                .send()
+                .await
+            {
+                tracing::warn!("spike_loop: failed to POST spike to API: {e}");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
 }
