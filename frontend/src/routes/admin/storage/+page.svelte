@@ -17,6 +17,10 @@
 		Check,
 		Database,
 		Server,
+		FlaskConical,
+		CircleCheck,
+		CircleX,
+		Loader,
 	} from '@lucide/svelte';
 
 	interface StorageObject {
@@ -50,6 +54,34 @@
 	let loading = $state(false);
 	let error = $state('');
 	let search = $state('');
+
+	// Diagnostics
+	interface DiagResult {
+		put_ok: boolean;
+		put_error: string | null;
+		exists_after_put: boolean;
+		list_objects: string[];
+		list_prefixes: string[];
+		list_error: string | null;
+		delete_ok: boolean;
+	}
+	let diagOpen = $state(false);
+	let diagLoading = $state(false);
+	let diagResult = $state<DiagResult | null>(null);
+	let diagError = $state('');
+
+	async function runDiagnostics() {
+		diagLoading = true;
+		diagResult = null;
+		diagError = '';
+		const r = await api.get<DiagResult>('/admin/storage/test');
+		if (r.data) {
+			diagResult = r.data;
+		} else {
+			diagError = r.error?.message ?? 'Diagnostics request failed';
+		}
+		diagLoading = false;
+	}
 
 	// Preview overlay state
 	let previewKey = $state<string | null>(null);
@@ -233,10 +265,74 @@
 			<h1 class="ttl">Storage Browser</h1>
 			<p class="sub">Registry content store explorer (S3 / Local storage backend)</p>
 		</div>
-		<button class="refresh-btn" onclick={() => selectedBucket ? loadList(currentPrefix) : loadBuckets()} title="Refresh">
-			<RefreshCw width="14" height="14" class={(loading || bucketsLoading) ? 'spin' : ''} />
-		</button>
+		<div style="display:flex;gap:8px;align-items:center;">
+			<button class="diag-btn" onclick={() => { diagOpen = !diagOpen; if (diagOpen && !diagResult) runDiagnostics(); }} title="Run storage diagnostics">
+				<FlaskConical width="14" height="14" />
+				Diagnostics
+			</button>
+			<button class="refresh-btn" onclick={() => selectedBucket ? loadList(currentPrefix) : loadBuckets()} title="Refresh">
+				<RefreshCw width="14" height="14" class={(loading || bucketsLoading) ? 'spin' : ''} />
+			</button>
+		</div>
 	</div>
+
+	{#if diagOpen}
+		<div class="diag-panel">
+			<div class="diag-header">
+				<span class="diag-title">Storage Diagnostics</span>
+				<div style="display:flex;gap:8px;align-items:center;">
+					<button class="diag-rerun" onclick={runDiagnostics} disabled={diagLoading}>
+						<RefreshCw width="12" height="12" class={diagLoading ? 'spin' : ''} />
+						Re-run
+					</button>
+					<button class="diag-close" onclick={() => diagOpen = false}><X width="14" height="14" /></button>
+				</div>
+			</div>
+			{#if diagLoading && !diagResult}
+				<div class="diag-loading"><Loader width="14" height="14" class="spin" /> Running storage probe…</div>
+			{:else if diagError}
+				<div class="diag-row diag-fail"><CircleX width="14" height="14" /> Request failed: {diagError}</div>
+			{:else if diagResult}
+				<div class="diag-rows">
+					<div class="diag-row" class:diag-ok={diagResult.put_ok} class:diag-fail={!diagResult.put_ok}>
+						{#if diagResult.put_ok}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
+						<span>PUT test object</span>
+						{#if diagResult.put_error}<span class="diag-detail">{diagResult.put_error}</span>{/if}
+					</div>
+					<div class="diag-row" class:diag-ok={diagResult.exists_after_put} class:diag-fail={!diagResult.exists_after_put}>
+						{#if diagResult.exists_after_put}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
+						<span>EXISTS check after PUT</span>
+					</div>
+					<div class="diag-row" class:diag-ok={!diagResult.list_error} class:diag-fail={!!diagResult.list_error}>
+						{#if !diagResult.list_error}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
+						<span>LIST bucket root</span>
+						{#if diagResult.list_error}<span class="diag-detail">{diagResult.list_error}</span>{/if}
+					</div>
+					{#if !diagResult.list_error}
+						<div class="diag-info">
+							Prefixes found: <span class="mono">{diagResult.list_prefixes.length > 0 ? diagResult.list_prefixes.join(', ') : '(none)'}</span>
+							&nbsp;·&nbsp;
+							Objects found: <span class="mono">{diagResult.list_objects.length > 0 ? diagResult.list_objects.join(', ') : '(none)'}</span>
+						</div>
+					{/if}
+					<div class="diag-row" class:diag-ok={diagResult.delete_ok} class:diag-fail={!diagResult.delete_ok}>
+						{#if diagResult.delete_ok}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
+						<span>DELETE test object</span>
+					</div>
+				</div>
+				{#if diagResult.put_ok && !diagResult.list_error}
+					{@const hasRealContent = diagResult.list_prefixes.some(p => p !== 'shipyard-storage-test/') || diagResult.list_objects.some(k => !k.startsWith('shipyard-storage-test/'))}
+					<div class="diag-summary" class:diag-summary-warn={!hasRealContent}>
+						{#if hasRealContent}
+							Storage is working and has content. If the browser view is empty, try refreshing after selecting a bucket.
+						{:else}
+							S3 connection is healthy but the bucket has no artifact data yet. Trigger a static site, edge function, or Git-built service deployment to populate storage.
+						{/if}
+					</div>
+				{/if}
+			{/if}
+		</div>
+	{/if}
 
 	{#if selectedBucket}
 		<!-- ── File Browser View ── -->
@@ -547,6 +643,31 @@
 
 	.download-link { display: inline-flex; align-items: center; padding: 8px 16px; background: var(--accent); color: #000; font-size: 13px; font-weight: 600; text-decoration: none; border-radius: var(--radius-sm); transition: opacity .15s; }
 	.download-link:hover { opacity: 0.9; }
+
+	/* Diagnostics panel */
+	.diag-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; font-family: var(--font); }
+	.diag-btn:hover { background: var(--surface-2); color: var(--text); }
+
+	.diag-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; overflow: hidden; }
+	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
+	.diag-rerun { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; color: var(--text-2); cursor: pointer; font-family: var(--font); }
+	.diag-rerun:hover { background: var(--surface-2); }
+	.diag-rerun:disabled { opacity: .5; cursor: not-allowed; }
+	.diag-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: none; border: none; cursor: pointer; color: var(--text-3); border-radius: 4px; }
+	.diag-close:hover { background: var(--surface-2); color: var(--text-2); }
+
+	.diag-loading { display: flex; align-items: center; gap: 8px; padding: 14px; font-size: 13px; color: var(--text-3); }
+
+	.diag-rows { display: flex; flex-direction: column; padding: 8px 0; }
+	.diag-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 13px; }
+	.diag-ok  { color: var(--ok, #22c55e); }
+	.diag-fail { color: var(--danger, #ef4444); }
+	.diag-detail { font-size: 11px; color: var(--text-3); font-family: var(--mono); word-break: break-all; }
+	.diag-info { padding: 4px 14px 8px 36px; font-size: 12px; color: var(--text-3); }
+
+	.diag-summary { padding: 10px 14px; font-size: 12px; border-top: 1px solid var(--border); color: var(--ok, #22c55e); background: rgba(34,197,94,.06); }
+	.diag-summary-warn { color: var(--warn, #f59e0b); background: rgba(245,158,11,.06); }
 
 	/* Responsiveness */
 	@media (max-width: 768px) {

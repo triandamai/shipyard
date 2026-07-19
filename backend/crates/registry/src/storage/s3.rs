@@ -85,62 +85,78 @@ impl S3Storage {
 #[async_trait::async_trait]
 impl super::StorageBackend for S3Storage {
     async fn put(&self, key: &str, data: bytes::Bytes) -> Result<(), StorageError> {
-        let bucket = self.build_bucket();
-        if bucket.is_err() {
-            return Err(StorageError::Backend(bucket.unwrap_err().to_string()));
-        }
-        bucket
-            .unwrap()
+        let resp = self
+            .build_bucket()?
             .put_object(key, &data.to_vec())
             .await
             .map_err(|e| StorageError::Backend(e.to_string()))?;
+        if resp.status_code() >= 400 {
+            return Err(StorageError::Backend(format!(
+                "S3 PUT {} returned HTTP {}: {}",
+                key,
+                resp.status_code(),
+                resp.to_string().unwrap_or_default()
+            )));
+        }
         Ok(())
     }
 
     async fn get(&self, key: &str) -> Result<ByteStream, StorageError> {
-        let bucket = self.build_bucket();
-        if bucket.is_err() {
-            return Err(StorageError::Backend(bucket.unwrap_err().to_string()));
-        }
+        let bucket = self.build_bucket()?;
         let resp = bucket
-            .unwrap()
             .get_object(key.to_string())
             .await
-            .map_err(|e| StorageError::NotFound(e.to_string()));
+            .map_err(|e| StorageError::NotFound(e.to_string()))?;
 
-        if resp.is_err() {
-            return Err(StorageError::NotFound(resp.unwrap_err().to_string()));
+        if resp.status_code() == 404 {
+            return Err(StorageError::NotFound(key.to_string()));
         }
-        let data = resp.unwrap();
-        // Convert the data into Bytes
-        let bytes = data.into_bytes();
+        if resp.status_code() >= 400 {
+            return Err(StorageError::Backend(format!(
+                "S3 GET {} returned HTTP {}",
+                key,
+                resp.status_code()
+            )));
+        }
 
-        // Create a stream that emits this single item wrapped in an Ok()
+        let bytes = resp.into_bytes();
         let stream = stream::once(async move { Ok(bytes) });
-
         Ok(Box::pin(stream))
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
-        self.build_bucket()?
+        let resp = self
+            .build_bucket()?
             .delete_object(key.to_string())
             .await
             .map_err(|e| StorageError::Backend(e.to_string()))?;
+        if resp.status_code() >= 400 {
+            return Err(StorageError::Backend(format!(
+                "S3 DELETE {} returned HTTP {}",
+                key,
+                resp.status_code()
+            )));
+        }
         Ok(())
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        let result = self.build_bucket()?.head_object(key.to_string()).await;
-        Ok(result.is_ok())
+        match self.build_bucket()?.head_object(key.to_string()).await {
+            Ok((_, status)) => Ok(status == 200),
+            Err(_) => Ok(false),
+        }
     }
 
     async fn size(&self, key: &str) -> Result<u64, StorageError> {
-        let resp = self
+        let (meta, status) = self
             .build_bucket()?
             .head_object(key.to_string())
             .await
             .map_err(|_| StorageError::NotFound(key.to_string()))?;
-        Ok(resp.0.content_length.unwrap_or(0) as u64)
+        if status != 200 {
+            return Err(StorageError::NotFound(key.to_string()));
+        }
+        Ok(meta.content_length.unwrap_or(0) as u64)
     }
 
     async fn list(
