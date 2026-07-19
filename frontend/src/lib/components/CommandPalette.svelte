@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { X, Search, LayoutDashboard, Settings, Users, Server, LogOut, Moon, Sun, GitBranch, Box } from '@lucide/svelte';
+	import { X, Search, LayoutDashboard, Settings, Users, LogOut, Moon, Sun, GitBranch, Box } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { authStore } from '$lib/stores/auth.store';
@@ -74,14 +74,6 @@
 				shortcut: ['G', 'M'],
 				icon: Users,
 				action: () => { goto(`/orgs/${orgSlug}/settings/members`); onClose(); },
-				category: 'Navigation'
-			},
-			{
-				id: 'nav-traefik',
-				label: 'Traefik Settings',
-				description: 'View routing config & logs',
-				icon: Server,
-				action: () => { goto(`/orgs/${orgSlug}/settings/traefik`); onClose(); },
 				category: 'Navigation'
 			},
 		] : []),
