@@ -2172,9 +2172,9 @@
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 		display: flex;
+		flex-direction: column;
 		align-items: flex-start;
-		justify-content: space-between;
-		gap: 8px;
+		gap: 10px;
 	}
 	.svc-identity-container {
 		display: flex;
