@@ -1,6 +1,6 @@
 import { subscribeTopic } from '../client';
 import { eventBus } from '../eventBus';
-import { alertsStore, type SpikeAlert } from '$lib/stores/alerts.store';
+import { alertsStore, type SpikeAlert } from '$lib/stores/alerts.store.svelte';
 import type { MqttPayload } from '$lib/api/types';
 
 const SPIKE_TOPIC = 'platform/alerts/spike';

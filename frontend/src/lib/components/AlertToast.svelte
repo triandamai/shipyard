@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Cpu, MemoryStick, HardDrive, Wifi, X } from 'lucide-svelte';
-	import { alertsStore, type SpikeAlert } from '$lib/stores/alerts.store';
+	import { Cpu, MemoryStick, HardDrive, Wifi, X } from '@lucide/svelte';
+	import { alertsStore, type SpikeAlert } from '$lib/stores/alerts.store.svelte';
 
 	const ICONS = {
 		cpu:  Cpu,
@@ -36,7 +36,6 @@
 	}
 
 	$effect(() => {
-		// Schedule auto-dismiss for the 3 most recent (visible) alerts
 		alertsStore.alerts.slice(0, 3).forEach(schedule);
 	});
 

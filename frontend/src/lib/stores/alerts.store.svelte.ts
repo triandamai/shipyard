@@ -14,7 +14,7 @@ function createAlertsStore() {
 	let alerts = $state<SpikeAlert[]>([]);
 
 	function add(raw: Omit<SpikeAlert, 'id'>) {
-		const alert: SpikeAlert = { ...raw, id: crypto.randomUUID() };
+		const alert: SpikeAlert = { ...raw, id: `${Date.now()}-${Math.random()}` };
 		alerts = [alert, ...alerts].slice(0, MAX_ALERTS);
 	}
 
