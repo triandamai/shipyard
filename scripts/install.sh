@@ -614,7 +614,7 @@ http:
         certResolver: letsencrypt
 
     shipyard-exec-ws:
-      rule: "Host(\`${DOMAIN}\`) && PathRegexp(\`^/api/projects/[^/]+/services/[^/]+/exec\`)"
+      rule: "Host(\`${DOMAIN}\`) && PathRegexp(\`^/api/projects/[^/]+/services/[^/]+/exec$\`)"
       priority: 100
       entryPoints: [websecure]
       service: shipyard-backend
