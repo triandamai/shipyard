@@ -18,6 +18,11 @@ pub struct ProvisioningWorker {
     providers: HashMap<String, Box<dyn ComputeProvider>>,
     mqtt: Arc<MqttPublisher>,
     label_prefix: String,
+    default_provider: String,
+    hetzner_server_type: String,
+    hetzner_region: String,
+    do_server_type: String,
+    do_region: String,
 }
 
 impl ProvisioningWorker {
@@ -28,6 +33,11 @@ impl ProvisioningWorker {
         do_api_key: Option<String>,
         mqtt: Arc<MqttPublisher>,
         label_prefix: String,
+        default_provider: String,
+        hetzner_server_type: String,
+        hetzner_region: String,
+        do_server_type: String,
+        do_region: String,
     ) -> Self {
         let mut providers: HashMap<String, Box<dyn ComputeProvider>> = HashMap::new();
 
@@ -38,7 +48,15 @@ impl ProvisioningWorker {
             providers.insert("digitalocean".to_string(), Box::new(DigitalOceanProvider::new(client.clone(), key)));
         }
 
-        Self { db, http_client: client, providers, mqtt, label_prefix }
+        Self { db, http_client: client, providers, mqtt, label_prefix, default_provider, hetzner_server_type, hetzner_region, do_server_type, do_region }
+    }
+
+    /// Returns (server_type, region) defaults for the given provider name.
+    fn provider_defaults(&self, provider: &str) -> (&str, &str) {
+        match provider {
+            "digitalocean" => (&self.do_server_type, &self.do_region),
+            _ => (&self.hetzner_server_type, &self.hetzner_region),
+        }
     }
 
     fn get_provider(&self, name: &str) -> Option<&dyn ComputeProvider> {
@@ -103,10 +121,11 @@ impl ProvisioningWorker {
             name: String,
             provider: String,
             region: String,
+            server_type: String,
         }
 
         let nodes: Vec<PendingNode> = sqlx::query_as::<_, PendingNode>(
-            r#"SELECT id, name, provider, region
+            r#"SELECT id, name, provider, region, server_type
                FROM compute_nodes
                WHERE status = 'provisioning'::node_status
                  AND provider_vm_id IS NULL
@@ -137,7 +156,7 @@ impl ProvisioningWorker {
             let opts = CreateVmOptions {
                 name: &node.name,
                 region: &node.region,
-                server_type: "cpx21",
+                server_type: &node.server_type,
                 cloud_init: &cloud_init,
             };
 
@@ -496,23 +515,32 @@ impl ProvisioningWorker {
     }
 
     async fn reconcile_missing_nodes(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Find paid orgs that have no compute node in a live state.
-        // "Live" = provisioning, cloud_init_running, wireguard_joined, active, degraded.
+        // Prefer the provider/region/server_type from the org's most recent node
+        // (even if failed/stopped) so retries land on the same provider. Fall back
+        // to the configured defaults when the org has never had a node.
         #[derive(sqlx::FromRow)]
         struct MissingNodeOrg {
             org_id: Uuid,
             org_name: String,
-            provider: String,
-            region: String,
             upgraded_at: chrono::DateTime<chrono::Utc>,
+            last_provider: Option<String>,
+            last_region: Option<String>,
+            last_server_type: Option<String>,
         }
 
         let orgs: Vec<MissingNodeOrg> = sqlx::query_as::<_, MissingNodeOrg>(
             r#"SELECT ob.org_id,
                       o.name AS org_name,
-                      'hetzner'::text AS provider,
-                      'eu-central'::text AS region,
-                      ob.updated_at AS upgraded_at
+                      ob.updated_at AS upgraded_at,
+                      (SELECT cn.provider FROM compute_nodes cn
+                       WHERE cn.org_id = ob.org_id
+                       ORDER BY cn.created_at DESC LIMIT 1) AS last_provider,
+                      (SELECT cn.region FROM compute_nodes cn
+                       WHERE cn.org_id = ob.org_id
+                       ORDER BY cn.created_at DESC LIMIT 1) AS last_region,
+                      (SELECT cn.server_type FROM compute_nodes cn
+                       WHERE cn.org_id = ob.org_id
+                       ORDER BY cn.created_at DESC LIMIT 1) AS last_server_type
                FROM org_billing ob
                JOIN organizations o ON o.id = ob.org_id
                WHERE ob.tier != 'free'
@@ -540,19 +568,32 @@ impl ProvisioningWorker {
                 continue;
             }
 
-            // Within the 30-minute window — retry provisioning.
+            // Use the org's previous provider/region/server_type if known; otherwise
+            // fall back to the platform defaults from config.
+            let provider = org.last_provider.as_deref().unwrap_or(&self.default_provider).to_string();
+            let (default_type, default_region) = self.provider_defaults(&provider);
+            let server_type = org.last_server_type.as_deref().unwrap_or(default_type).to_string();
+            let region = org.last_region.as_deref().unwrap_or(default_region).to_string();
+
             let node_name = format!("{}-node-1", org.org_name.to_lowercase().replace(' ', "-"));
-            tracing::info!(org_id = %org.org_id, "reconciliation: queuing new provisioning node for paid org");
+            tracing::info!(
+                org_id = %org.org_id,
+                provider = %provider,
+                region = %region,
+                server_type = %server_type,
+                "reconciliation: queuing new provisioning node for paid org",
+            );
 
             sqlx::query(
                 r#"INSERT INTO compute_nodes
-                       (id, org_id, name, provider, region, status, cpu_cores, ram_mb, provision_attempts, created_at, updated_at)
-                   VALUES (gen_random_uuid(), $1, $2, $3, $4, 'provisioning'::node_status, 2, 4096, 0, NOW(), NOW())"#,
+                       (id, org_id, name, provider, region, server_type, status, cpu_cores, ram_mb, provision_attempts, created_at, updated_at)
+                   VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'provisioning'::node_status, 2, 4096, 0, NOW(), NOW())"#,
             )
             .bind(org.org_id)
             .bind(&node_name)
-            .bind(&org.provider)
-            .bind(&org.region)
+            .bind(&provider)
+            .bind(&region)
+            .bind(&server_type)
             .execute(&self.db)
             .await?;
         }

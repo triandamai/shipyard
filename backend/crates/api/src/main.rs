@@ -592,6 +592,11 @@ async fn async_main() {
             do_key,
             provision_mqtt,
             label_prefix,
+            state.config.default_cloud_provider.clone(),
+            state.config.hetzner_server_type.clone(),
+            state.config.hetzner_region.clone(),
+            state.config.do_size.clone(),
+            state.config.do_region.clone(),
         ));
 
         let worker_clone = Arc::clone(&worker);
