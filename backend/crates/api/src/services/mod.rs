@@ -75,6 +75,8 @@ pub struct CreateServiceRequest {
     /// Number of replicas (default 1)
     #[serde(default = "default_replicas")]
     pub replicas: i32,
+    pub cpu_limit: Option<f64>,
+    pub memory_limit_mb: Option<i64>,
     pub git_provider_id: Option<Uuid>,
     pub icon: Option<String>,
 }
@@ -292,7 +294,7 @@ async fn create_service(
     let replicas = body.replicas.max(1);
     let service = sqlx::query_as::<_, Service>(
         "INSERT INTO services (id, project_id, name, slug, type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, true, $9, $10, 'stopped', $11, NULL, NULL, NULL, 'push', NULL, NULL, $12, $13, NOW(), NOW())
+         VALUES ($1, $2, $3, $4, $5::service_type, $6, $7, $8, true, $9, $10, 'stopped', $11, $12, $13, NULL, 'push', NULL, NULL, $14, $15, NOW(), NOW())
          RETURNING id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, git_provider_id, icon, created_at, updated_at",
     )
     .bind(service_id)
@@ -306,6 +308,8 @@ async fn create_service(
     .bind(&directory_path)
     .bind(&ports)
     .bind(replicas)
+    .bind(body.cpu_limit)
+    .bind(body.memory_limit_mb)
     .bind(body.git_provider_id)
     .bind(&body.icon)
     .fetch_one(&state.db)

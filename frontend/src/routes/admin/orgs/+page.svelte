@@ -24,7 +24,7 @@
 		max_orgs: number;
 		node_count: number;
 		cpu_cores: number;
-		memory_gb: number;
+		memory_mb: number;
 	};
 
 	let quotaForm = $state<QuotaForm>({
@@ -36,7 +36,7 @@
 		max_orgs: 1,
 		node_count: 1,
 		cpu_cores: 1,
-		memory_gb: 2,
+		memory_mb: 2048,
 	});
 
 	onMount(() => load());
@@ -73,7 +73,7 @@
 				max_orgs: q.max_orgs,
 				node_count: q.node_count,
 				cpu_cores: q.cpu_cores,
-				memory_gb: q.memory_gb,
+				memory_mb: q.memory_mb,
 			};
 		} else {
 			quotaError = res.error?.message ?? 'Failed to load quota';
@@ -147,7 +147,7 @@
 		{ key: 'max_orgs',                 label: 'Max Orgs',                 hint: '-1 = unlimited' },
 		{ key: 'node_count',               label: 'Node Count',               hint: 'compute nodes allowed' },
 		{ key: 'cpu_cores',                label: 'CPU Cores',                hint: 'total cores' },
-		{ key: 'memory_gb',                label: 'Memory (GB)',              hint: 'total RAM' },
+		{ key: 'memory_mb',                label: 'Memory (MB)',              hint: 'total RAM in MB, e.g. 2048 = 2 GB' },
 	];
 </script>
 

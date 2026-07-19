@@ -107,6 +107,12 @@
 		return v === -1 ? '∞' : String(v);
 	}
 
+	function fmtMem(mb: number): string {
+		if (mb < 1024) return `${mb} MB`;
+		const gb = mb / 1024;
+		return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
+	}
+
 	const stepLabels = ['Welcome', 'Create Admin', 'Select Plan', 'Done'];
 	const stepIndex = $derived(
 		step === 'welcome' ? 0 : step === 'account' ? 1 : step === 'plan' ? 2 : 3
@@ -272,7 +278,7 @@
 										<div class="ps"><span class="ps-l">Members</span><span class="ps-v">{formatLimit(plan.max_members)}</span></div>
 										<div class="ps"><span class="ps-l">Replicas</span><span class="ps-v">{formatLimit(plan.max_replicas)}</span></div>
 										<div class="ps"><span class="ps-l">CPU Cores</span><span class="ps-v">{plan.cpu_cores}</span></div>
-										<div class="ps"><span class="ps-l">Memory</span><span class="ps-v">{plan.memory_gb} GB</span></div>
+										<div class="ps"><span class="ps-l">Memory</span><span class="ps-v">{fmtMem(plan.memory_mb)}</span></div>
 										<div class="ps"><span class="ps-l">Git Providers</span><span class="ps-v">{formatLimit(plan.max_git_providers)}</span></div>
 									</div>
 								</div>

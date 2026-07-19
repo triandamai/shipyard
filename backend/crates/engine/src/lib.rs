@@ -3583,7 +3583,9 @@ impl DeploymentEngine {
         .ok()
         .flatten();
 
-        let is_free_tier = billing_tier.as_deref().map(|t| t == "free").unwrap_or(true);
+        // Only cap resources when billing tier is explicitly "free".
+        // No billing row (self-hosted / admin orgs) = uncapped.
+        let is_free_tier = billing_tier.as_deref() == Some("free");
 
         // Free tier: cap at 0.5 vCPU and 512 MB. Pro/Max: use the service config as-is.
         let (effective_cpu, effective_mem): (Option<f64>, Option<i64>) = if is_free_tier {

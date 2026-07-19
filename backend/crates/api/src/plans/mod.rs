@@ -12,7 +12,7 @@ pub struct PlanResponse {
     pub name: String,
     pub enabled: bool,
     pub cpu_cores: i32,
-    pub memory_gb: i32,
+    pub memory_mb: i32,
     pub max_replicas: i32,
     pub node_count: i32,
     pub max_members: i32,
@@ -33,7 +33,7 @@ async fn list_plans(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<PlanResponse>>>, ApiAppError> {
     let plans: Vec<PlanResponse> = sqlx::query_as::<_, PlanResponse>(
-        r#"SELECT id, name, enabled, cpu_cores, memory_gb, max_replicas, node_count,
+        r#"SELECT id, name, enabled, cpu_cores, memory_mb, max_replicas, node_count,
                   max_members, max_projects, max_orgs, max_parallel_deployments,
                   max_git_providers, price_monthly
            FROM plans

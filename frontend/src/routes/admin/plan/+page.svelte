@@ -7,7 +7,7 @@
 		name: string;
 		enabled: boolean;
 		cpu_cores: number;
-		memory_gb: number;
+		memory_mb: number;
 		max_replicas: number;
 		node_count: number;
 		max_members: number;
@@ -16,6 +16,12 @@
 		max_parallel_deployments: number;
 		max_git_providers: number;
 		price_monthly: number;
+	}
+
+	function fmtMem(mb: number): string {
+		if (mb < 1024) return `${mb} MB`;
+		const gb = mb / 1024;
+		return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
 	}
 
 	let plans = $state<Plan[]>([]);
@@ -61,7 +67,7 @@
 		name: '',
 		enabled: true,
 		cpu_cores: 1,
-		memory_gb: 1,
+		memory_mb: 1024,
 		max_replicas: 2,
 		node_count: 1,
 		max_members: 5,
@@ -106,7 +112,7 @@
 	const planFields: FieldDef[] = [
 		{ key: 'price_monthly',            label: 'Price / Month ($)',        hint: '0 = free' },
 		{ key: 'cpu_cores',                label: 'CPU Cores' },
-		{ key: 'memory_gb',                label: 'Memory (GB)' },
+		{ key: 'memory_mb',                label: 'Memory (MB)' },
 		{ key: 'max_replicas',             label: 'Max Replicas',             hint: '-1 = unlimited' },
 		{ key: 'node_count',               label: 'Node Count' },
 		{ key: 'max_members',              label: 'Max Members',              hint: '-1 = unlimited' },
@@ -171,7 +177,7 @@
 					{/if}
 					<div class="plan-grid">
 						<div class="plan-stat"><span class="stat-l">CPU Cores</span><span class="stat-v">{plan.cpu_cores}</span></div>
-						<div class="plan-stat"><span class="stat-l">Memory</span><span class="stat-v">{plan.memory_gb} GB</span></div>
+						<div class="plan-stat"><span class="stat-l">Memory</span><span class="stat-v">{fmtMem(plan.memory_mb)}</span></div>
 						<div class="plan-stat"><span class="stat-l">Max Replicas</span><span class="stat-v">{plan.max_replicas === -1 ? '∞' : plan.max_replicas}</span></div>
 						<div class="plan-stat"><span class="stat-l">Nodes</span><span class="stat-v">{plan.node_count}</span></div>
 						<div class="plan-stat"><span class="stat-l">Members</span><span class="stat-v">{plan.max_members === -1 ? '∞' : plan.max_members}</span></div>
@@ -273,7 +279,7 @@
 					</div>
 					<div class="field">
 						<label class="lbl">Memory (GB)</label>
-						<input class="inp" type="number" min="1" bind:value={form.memory_gb} />
+						<input class="inp" type="number" min="1" bind:value={form.memory_mb} />
 					</div>
 					<div class="field">
 						<label class="lbl">Max Replicas</label>

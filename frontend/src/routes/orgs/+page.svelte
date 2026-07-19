@@ -134,6 +134,12 @@
 		return val === -1 ? 'Unlimited' : String(val);
 	}
 
+	function fmtMem(mb: number): string {
+		if (mb < 1024) return `${mb} MB`;
+		const gb = mb / 1024;
+		return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
+	}
+
 	function goToOrg(org: Organization) {
 		orgStore.setActiveOrg(org);
 		goto(`/orgs/${org.slug}/projects`);
@@ -307,7 +313,7 @@
 										</span>
 									</div>
 									<ul class="plan-features">
-										<li>{plan.cpu_cores} CPU · {plan.memory_gb} GB RAM</li>
+										<li>{plan.cpu_cores} CPU · {fmtMem(plan.memory_mb)} RAM</li>
 										<li>{formatLimit(plan.max_members)} members</li>
 										<li>{formatLimit(plan.max_projects)} projects</li>
 										<li>{formatLimit(plan.max_replicas)} replicas</li>

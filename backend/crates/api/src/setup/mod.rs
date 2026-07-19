@@ -375,12 +375,12 @@ async fn init(
         "INSERT INTO org_quota (
              org_id, plan_id,
              max_projects, max_members, max_replicas, max_parallel_deployments,
-             max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+             max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
              applied_at, updated_at
          )
          SELECT $1, id,
                 max_projects, max_members, max_replicas, max_parallel_deployments,
-                max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+                max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
                 NOW(), NOW()
          FROM plans WHERE id = $2
          ON CONFLICT (org_id) DO UPDATE SET
@@ -393,7 +393,7 @@ async fn init(
              max_orgs                 = EXCLUDED.max_orgs,
              node_count               = EXCLUDED.node_count,
              cpu_cores                = EXCLUDED.cpu_cores,
-             memory_gb                = EXCLUDED.memory_gb,
+             memory_mb                = EXCLUDED.memory_mb,
              applied_at               = NOW(), updated_at = NOW()",
     )
     .bind(org_id)

@@ -123,7 +123,7 @@
 		sub_status: string;
 		plan?: {
 			cpu_cores: number;
-			memory_gb: number;
+			memory_mb: number;
 			max_replicas: number;
 			node_count: number;
 			max_members: number;

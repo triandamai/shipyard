@@ -535,12 +535,12 @@ async fn create_org(
         r#"INSERT INTO org_quota (
                org_id, plan_id,
                max_projects, max_members, max_replicas, max_parallel_deployments,
-               max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
                applied_at, updated_at
            )
            SELECT $1, id,
                max_projects, max_members, max_replicas, max_parallel_deployments,
-               max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
                NOW(), NOW()
            FROM plans WHERE id = $2
            ON CONFLICT (org_id) DO UPDATE
@@ -553,7 +553,7 @@ async fn create_org(
                    max_orgs = EXCLUDED.max_orgs,
                    node_count = EXCLUDED.node_count,
                    cpu_cores = EXCLUDED.cpu_cores,
-                   memory_gb = EXCLUDED.memory_gb,
+                   memory_mb = EXCLUDED.memory_mb,
                    applied_at = NOW(),
                    updated_at = NOW()"#,
     )
@@ -1717,7 +1717,7 @@ pub struct OrgQuotaResponse {
     pub max_orgs: i32,
     pub node_count: i32,
     pub cpu_cores: i32,
-    pub memory_gb: i32,
+    pub memory_mb: i32,
     // Current usage
     pub projects_used: i64,
     pub members_used: i64,
@@ -1735,7 +1735,7 @@ async fn get_org_quota(
         sqlx::query_as(
             "SELECT org_id, plan_id,
                     max_projects, max_members, max_replicas, max_parallel_deployments,
-                    max_git_providers, max_orgs, node_count, cpu_cores, memory_gb
+                    max_git_providers, max_orgs, node_count, cpu_cores, memory_mb
              FROM org_quota WHERE org_id = $1",
         )
         .bind(org_id)
@@ -1744,7 +1744,7 @@ async fn get_org_quota(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     let (plan_id, max_projects, max_members, max_replicas, max_parallel_deployments,
-         max_git_providers, max_orgs, node_count, cpu_cores, memory_gb) = match row {
+         max_git_providers, max_orgs, node_count, cpu_cores, memory_mb) = match row {
         Some((_, p, a, b, c, d, e, f, g, h, i)) => (p, a, b, c, d, e, f, g, h, i),
         None => (None, 3, 5, 1, 1, 1, 1, 1, 1, 2), // free defaults
     };
@@ -1774,7 +1774,7 @@ async fn get_org_quota(
         max_orgs,
         node_count,
         cpu_cores,
-        memory_gb,
+        memory_mb,
         projects_used,
         members_used,
     })))

@@ -213,7 +213,7 @@ struct AdminOrgQuota {
     max_orgs: i32,
     node_count: i32,
     cpu_cores: i32,
-    memory_gb: i32,
+    memory_mb: i32,
 }
 
 async fn get_org_quota(
@@ -226,7 +226,7 @@ async fn get_org_quota(
     let row: Option<AdminOrgQuota> = sqlx::query_as(
         "SELECT org_id, plan_id,
                 max_projects, max_members, max_replicas, max_parallel_deployments,
-                max_git_providers, max_orgs, node_count, cpu_cores, memory_gb
+                max_git_providers, max_orgs, node_count, cpu_cores, memory_mb
          FROM org_quota WHERE org_id = $1",
     )
     .bind(org_id)
@@ -245,7 +245,7 @@ async fn get_org_quota(
         max_orgs: 1,
         node_count: 1,
         cpu_cores: 1,
-        memory_gb: 2,
+        memory_mb: 2048,
     });
 
     Ok(Json(ApiResponse::ok(quota)))
@@ -263,7 +263,7 @@ struct PutOrgQuotaRequest {
     max_orgs: i32,
     node_count: i32,
     cpu_cores: i32,
-    memory_gb: i32,
+    memory_mb: i32,
 }
 
 async fn put_org_quota(
@@ -277,7 +277,7 @@ async fn put_org_quota(
     sqlx::query(
         "INSERT INTO org_quota
              (org_id, max_projects, max_members, max_replicas, max_parallel_deployments,
-              max_git_providers, max_orgs, node_count, cpu_cores, memory_gb,
+              max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
               applied_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
          ON CONFLICT (org_id) DO UPDATE SET
@@ -289,7 +289,7 @@ async fn put_org_quota(
              max_orgs                 = EXCLUDED.max_orgs,
              node_count               = EXCLUDED.node_count,
              cpu_cores                = EXCLUDED.cpu_cores,
-             memory_gb                = EXCLUDED.memory_gb,
+             memory_mb                = EXCLUDED.memory_mb,
              updated_at               = NOW()",
     )
     .bind(org_id)
@@ -301,7 +301,7 @@ async fn put_org_quota(
     .bind(body.max_orgs)
     .bind(body.node_count)
     .bind(body.cpu_cores)
-    .bind(body.memory_gb)
+    .bind(body.memory_mb)
     .execute(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -858,7 +858,7 @@ struct Plan {
     name:                     String,
     enabled:                  bool,
     cpu_cores:                i32,
-    memory_gb:                i32,
+    memory_mb:                i32,
     max_replicas:             i32,
     node_count:               i32,
     max_members:              i32,
@@ -894,7 +894,7 @@ struct CreatePlanRequest {
     name:                     String,
     enabled:                  Option<bool>,
     cpu_cores:                Option<i32>,
-    memory_gb:                Option<i32>,
+    memory_mb:                Option<i32>,
     max_replicas:             Option<i32>,
     node_count:               Option<i32>,
     max_members:              Option<i32>,
@@ -914,7 +914,7 @@ async fn create_plan(
 
     let plan: Plan = sqlx::query_as::<_, Plan>(
         r#"INSERT INTO plans
-               (name, enabled, cpu_cores, memory_gb, max_replicas, node_count,
+               (name, enabled, cpu_cores, memory_mb, max_replicas, node_count,
                 max_members, max_projects, max_orgs, max_parallel_deployments,
                 max_git_providers, price_monthly)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -923,7 +923,7 @@ async fn create_plan(
     .bind(&body.name)
     .bind(body.enabled.unwrap_or(true))
     .bind(body.cpu_cores.unwrap_or(2))
-    .bind(body.memory_gb.unwrap_or(4))
+    .bind(body.memory_mb.unwrap_or(4096))
     .bind(body.max_replicas.unwrap_or(3))
     .bind(body.node_count.unwrap_or(1))
     .bind(body.max_members.unwrap_or(5))
@@ -945,7 +945,7 @@ async fn create_plan(
 struct UpdatePlanRequest {
     enabled:                  Option<bool>,
     cpu_cores:                Option<i32>,
-    memory_gb:                Option<i32>,
+    memory_mb:                Option<i32>,
     max_replicas:             Option<i32>,
     node_count:               Option<i32>,
     max_members:              Option<i32>,
@@ -974,8 +974,8 @@ async fn update_plan(
             .bind(plan_id).bind(v).execute(&state.db).await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
-    if let Some(v) = body.memory_gb {
-        sqlx::query("UPDATE plans SET memory_gb = $2, updated_at = NOW() WHERE id = $1")
+    if let Some(v) = body.memory_mb {
+        sqlx::query("UPDATE plans SET memory_mb = $2, updated_at = NOW() WHERE id = $1")
             .bind(plan_id).bind(v).execute(&state.db).await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }

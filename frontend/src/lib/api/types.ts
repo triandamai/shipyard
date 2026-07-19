@@ -113,7 +113,7 @@ export interface Plan {
 	name: string;
 	enabled: boolean;
 	cpu_cores: number;
-	memory_gb: number;
+	memory_mb: number;
 	max_replicas: number;
 	node_count: number;
 	max_members: number;
@@ -148,7 +148,7 @@ export interface OrgQuota {
 	max_orgs: number;
 	node_count: number;
 	cpu_cores: number;
-	memory_gb: number;
+	memory_mb: number;
 	projects_used: number;
 	members_used: number;
 }
