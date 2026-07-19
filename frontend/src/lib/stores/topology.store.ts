@@ -67,7 +67,7 @@ function toFlowEdge(edge: TopologyEdge): FlowEdge {
 		source: edge.source,
 		target: edge.target,
 		label: isEnvRef ? 'env ref' : edge.type,
-		type: 'default',
+		type: 'smoothstep',
 		...(isEnvRef && {
 			style: 'stroke: #7c3aed; stroke-dasharray: 6,3;',
 			labelStyle: 'fill: #7c3aed; font-size: 9px; font-weight: 600;',
