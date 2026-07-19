@@ -4,7 +4,9 @@ export async function GET() {
 	const pages = [
 		{ path: '', changefreq: 'daily', priority: '1.0' },
 		{ path: 'docs', changefreq: 'weekly', priority: '0.8' },
-		{ path: 'docs/api', changefreq: 'weekly', priority: '0.7' }
+		{ path: 'docs/api', changefreq: 'weekly', priority: '0.7' },
+		{ path: 'docs/edge-functions', changefreq: 'weekly', priority: '0.7' },
+		{ path: 'docs/registry', changefreq: 'weekly', priority: '0.7' }
 	];
 
 	const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
