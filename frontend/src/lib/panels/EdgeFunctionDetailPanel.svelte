@@ -619,6 +619,7 @@
 			{/each}
 		</div>
 
+		<div class="tab-content">
 		<!-- ── Overview ── -->
 		{#if activeTab === 'overview'}
 			<section class="section">
@@ -1010,6 +1011,7 @@
 				</div>
 			</section>
 		{/if}
+		</div><!-- .tab-content -->
 
 	{/if}
 </div>
@@ -1017,24 +1019,32 @@
 <style>
 	/* ── Panel body ── */
 	.panel-body {
-		padding: 16px;
+		padding: 16px 16px 0;
 		display: flex;
 		flex-direction: column;
 		gap: 0;
 		height: 100%;
-		overflow-y: auto;
+		overflow: hidden;
 	}
 
 	/* ── Tabs ── */
 	.tabs {
 		display: flex;
+		flex-shrink: 0;
 		gap: 2px;
 		border-bottom: 1px solid var(--border);
-		margin-bottom: 16px;
+		margin-bottom: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
 	.tabs::-webkit-scrollbar { display: none; }
+
+	.tab-content {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		padding: 16px 0;
+	}
 
 	.tab {
 		display: flex; align-items: center; gap: 5px;
