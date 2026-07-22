@@ -44,24 +44,18 @@ impl S3Storage {
             None,
             None,
             Some("shipyard"),
-        );
-        if credentials.is_err() {
-            return Err(StorageError::Backend(credentials.unwrap_err().to_string()));
-        }
-        let credentials = credentials.unwrap();
-        let bucket = Bucket::new(
+        )
+        .map_err(|e| StorageError::Backend(e.to_string()))?;
+
+        let mut bucket = Bucket::new(
             self.bucket.as_str(),
             Region::Custom {
                 region: self.region.to_string(),
                 endpoint: self.endpoint.to_string(),
             },
             credentials.clone(),
-        );
-        if bucket.is_err() {
-            return Err(StorageError::Backend(bucket.unwrap_err().to_string()));
-        }
-
-        let mut bucket = bucket.unwrap();
+        )
+        .map_err(|e| StorageError::Backend(e.to_string()))?;
 
         // Determine whether to use path-style requests.
         // Explicit config wins; otherwise auto-detect: use path-style for any

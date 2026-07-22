@@ -790,3 +790,90 @@ fn sanitize_zip_path(raw: &str) -> AppResult<PathBuf> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_zip_path_rejects_parent_dir_traversal() {
+        assert!(sanitize_zip_path("../../etc/passwd").is_err());
+        assert!(sanitize_zip_path("assets/../../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn sanitize_zip_path_rejects_absolute_paths() {
+        assert!(sanitize_zip_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn sanitize_zip_path_accepts_normal_relative_paths() {
+        assert_eq!(
+            sanitize_zip_path("assets/logo.png").unwrap(),
+            PathBuf::from("assets/logo.png")
+        );
+        assert_eq!(sanitize_zip_path("index.html").unwrap(), PathBuf::from("index.html"));
+    }
+
+    #[test]
+    fn sanitize_zip_path_strips_current_dir_components() {
+        assert_eq!(
+            sanitize_zip_path("./assets/./logo.png").unwrap(),
+            PathBuf::from("assets/logo.png")
+        );
+    }
+
+    #[test]
+    fn nginx_escape_location_exact_match_for_plain_paths() {
+        assert_eq!(nginx_escape_location("/old-page"), "= /old-page");
+    }
+
+    #[test]
+    fn nginx_escape_location_regex_for_wildcard_patterns() {
+        assert_eq!(nginx_escape_location("/old/(.*)"), "~ /old/(.*)");
+        assert_eq!(nginx_escape_location("/api/*"), "~ /api/*");
+    }
+
+    #[test]
+    fn render_default_nginx_conf_includes_error_page_and_sites_base() {
+        let conf = render_default_nginx_conf("/opt/shipyard/data/static");
+        assert!(conf.contains("listen 80 default_server;"));
+        assert!(conf.contains("error_page 404 /_errors/404.html;"));
+        assert!(conf.contains("root /opt/shipyard/data/static;"));
+    }
+
+    #[test]
+    #[should_panic(expected = "render_nginx_site_conf called with empty domains")]
+    fn render_nginx_site_conf_empty_domains_panics_in_debug_builds() {
+        let config = DeployConfig::default();
+        let _ = render_nginx_site_conf("svc-1", &[], "/data/current/public", "/data", &config);
+    }
+
+    #[test]
+    fn render_nginx_site_conf_spa_uses_try_files_fallback() {
+        let mut config = DeployConfig::default();
+        config.spa = true;
+        let domains = vec!["app.example.com".to_string()];
+        let out = render_nginx_site_conf("svc-1", &domains, "/data/current/public", "/data", &config);
+        assert!(out.contains("server_name app.example.com;"));
+        assert!(out.contains("try_files $uri $uri/ /index.html;"));
+    }
+
+    #[test]
+    fn render_nginx_site_conf_non_spa_returns_404() {
+        let config = DeployConfig::default();
+        let domains = vec!["app.example.com".to_string()];
+        let out = render_nginx_site_conf("svc-1", &domains, "/data/current/public", "/data", &config);
+        assert!(out.contains("try_files $uri $uri/ =404;"));
+    }
+
+    #[test]
+    fn render_nginx_site_conf_includes_redirect_rules() {
+        let mut config = DeployConfig::default();
+        config.redirects.push(Redirect { src: "/old".to_string(), dest: "/new".to_string(), status: 301 });
+        let domains = vec!["app.example.com".to_string()];
+        let out = render_nginx_site_conf("svc-1", &domains, "/data/current/public", "/data", &config);
+        assert!(out.contains("location = /old {"));
+        assert!(out.contains("return 301 /new;"));
+    }
+}

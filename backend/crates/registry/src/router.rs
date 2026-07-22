@@ -19,7 +19,7 @@ use crate::{
 /// whose state implements `FromRef<S> for RegistryState`.  Callers that own
 /// `RegistryState` directly can pass `S = RegistryState`.
 ///
-/// ```rust
+/// ```text
 /// // In the API crate (where RegistryState: FromRef<AppState>):
 /// let app = Router::new()
 ///     .merge(registry_router::<AppState>())

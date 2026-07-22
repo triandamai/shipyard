@@ -1068,6 +1068,53 @@ fn extract_platform_slugs(value: &str) -> Vec<String> {
     slugs
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_single_platform_slug() {
+        assert_eq!(
+            extract_platform_slugs("DATABASE_URL=postgres://platform-postgres:5432/db"),
+            vec!["postgres".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_and_sorts_multiple_unique_slugs() {
+        let value = "platform-redis and platform-postgres and platform-redis again";
+        assert_eq!(
+            extract_platform_slugs(value),
+            vec!["postgres".to_string(), "redis".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignores_platform_prefix_inside_larger_word() {
+        // "not-a-platform-postgres" — prev char before "platform-" is '-', which is
+        // explicitly excluded from prev_ok, so this should NOT match.
+        assert_eq!(extract_platform_slugs("not-a-platform-postgres"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn no_match_returns_empty_vec() {
+        assert_eq!(extract_platform_slugs("no references here"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn stops_slug_at_first_non_alphanumeric_non_dash_char() {
+        assert_eq!(
+            extract_platform_slugs("platform-my-db:5432/name"),
+            vec!["my-db".to_string()]
+        );
+    }
+
+    #[test]
+    fn lowercases_extracted_slug() {
+        assert_eq!(extract_platform_slugs("platform-MyDB"), vec!["mydb".to_string()]);
+    }
+}
+
 /// Re-scan ALL envs for this service, resolve `platform-{slug}` references
 /// to services / networks / volumes in the same org, and rewrite `service_env_refs`.
 pub(crate) async fn detect_and_store_platform_refs(db: &sqlx::PgPool, service_id: Uuid, project_id: Uuid, secret_key: &str) {

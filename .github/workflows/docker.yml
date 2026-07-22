@@ -16,9 +16,15 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ── CI (fmt/clippy/build/test + frontend/landing typecheck) ────────────────
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   # ── Backend ────────────────────────────────────────────────────────────────
   backend:
     name: Backend
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -177,6 +183,7 @@ jobs:
   # ── Edge Runtime ───────────────────────────────────────────────────────────
   edge-runtime:
     name: Edge Runtime
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

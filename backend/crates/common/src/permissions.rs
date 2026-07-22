@@ -123,3 +123,46 @@ pub fn has_permission(permissions: &[String], required: &str) -> bool {
         false
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_match_grants_permission() {
+        let perms = vec![PERM_ORGS_VIEW.to_string()];
+        assert!(has_permission(&perms, PERM_ORGS_VIEW));
+    }
+
+    #[test]
+    fn missing_permission_is_denied() {
+        let perms = vec![PERM_ORGS_VIEW.to_string()];
+        assert!(!has_permission(&perms, PERM_ORGS_EDIT));
+    }
+
+    #[test]
+    fn empty_permission_list_denies_everything() {
+        assert!(!has_permission(&[], PERM_ORGS_VIEW));
+    }
+
+    #[test]
+    fn suffix_wildcard_matches_prefixed_permissions() {
+        let perms = vec!["shipyard:settings:*".to_string()];
+        assert!(has_permission(&perms, PERM_SETTINGS_INFRA_VIEW));
+        assert!(has_permission(&perms, PERM_SETTINGS_MQTT_EDIT));
+        assert!(!has_permission(&perms, PERM_ORGS_VIEW));
+    }
+
+    #[test]
+    fn wildcard_does_not_match_without_shared_prefix() {
+        let perms = vec!["shipyard:admin:*".to_string()];
+        assert!(!has_permission(&perms, PERM_ORGS_VIEW));
+    }
+
+    #[test]
+    fn superadmin_permissions_covers_all_declared_constants() {
+        let perms = superadmin_permissions();
+        assert_eq!(perms.len(), SUPERADMIN_PERMISSIONS.len());
+        assert!(perms.contains(&PERM_BILLING_MANAGE.to_string()));
+    }
+}

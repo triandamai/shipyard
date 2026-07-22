@@ -97,4 +97,31 @@ mod tests {
         assert_eq!(labels.get("traefik.enable").unwrap(), "true");
         assert!(labels.get("traefik.http.routers.nginx.tls.certresolver").is_none());
     }
+
+    #[test]
+    fn test_generate_labels_without_tls_has_no_entrypoints_label() {
+        let gen = TraefikLabelGenerator::new("websecure", "letsencrypt");
+        let labels = gen.generate_labels("nginx", "nginx.local", 80, false);
+
+        assert!(labels.get("traefik.http.routers.nginx.entrypoints").is_none());
+        assert_eq!(
+            labels.get("traefik.http.services.nginx.loadbalancer.server.port").unwrap(),
+            "80"
+        );
+    }
+
+    #[test]
+    fn test_generate_labels_uses_configured_entrypoint_and_resolver() {
+        let gen = TraefikLabelGenerator::new("custom-https", "custom-resolver");
+        let labels = gen.generate_labels("svc", "svc.example.com", 3000, true);
+
+        assert_eq!(
+            labels.get("traefik.http.routers.svc.entrypoints").unwrap(),
+            "custom-https"
+        );
+        assert_eq!(
+            labels.get("traefik.http.routers.svc.tls.certresolver").unwrap(),
+            "custom-resolver"
+        );
+    }
 }

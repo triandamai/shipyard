@@ -341,13 +341,14 @@ async fn update_settings(
     get_settings(auth, State(state)).await
 }
 
-async fn require_keys_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
+async fn require_keys_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<uuid::Uuid, ApiAppError> {
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let suffix = if write { "keys:write" } else { "keys:read" };
     let perm = format!("shipyard:{org_id}:{suffix}");
     crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &perm)
         .await
-        .map_err(ApiAppError)
+        .map_err(ApiAppError)?;
+    Ok(org_id)
 }
 
 async fn require_deployments_perm(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>, write: bool) -> Result<(), ApiAppError> {
@@ -1811,8 +1812,7 @@ async fn create_api_key(
     Query(q): Query<OrgPermQuery>,
     Json(body): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<CreatedApiKey>>), ApiAppError> {
-    require_keys_perm(&state.db, &auth, q.org_id, true).await?;
-    let org_id = q.org_id.unwrap();
+    let org_id = require_keys_perm(&state.db, &auth, q.org_id, true).await?;
 
     if body.name.trim().is_empty() {
         return Err(ApiAppError(AppError::Validation("Key name must not be empty".to_string())));
@@ -1879,8 +1879,7 @@ async fn revoke_api_key(
     State(state): State<AppState>,
     Query(q): Query<OrgPermQuery>,
 ) -> Result<StatusCode, ApiAppError> {
-    require_keys_perm(&state.db, &auth, q.org_id, true).await?;
-    let org_id = q.org_id.unwrap();
+    let org_id = require_keys_perm(&state.db, &auth, q.org_id, true).await?;
 
     let result = sqlx::query(
         "DELETE FROM api_keys WHERE id = $1 AND org_id = $2",
@@ -2451,4 +2450,63 @@ async fn nginx_static_log_stream(
     });
 
     Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_yaml_matches_yml_and_yaml_extensions() {
+        assert!(is_yaml("docker-compose.yml"));
+        assert!(is_yaml("config.yaml"));
+        assert!(!is_yaml("config.json"));
+        assert!(!is_yaml("readme.md"));
+    }
+
+    #[test]
+    fn parse_image_ref_splits_on_last_colon() {
+        assert_eq!(
+            parse_image_ref("shipyard/backend:latest"),
+            Some(("shipyard/backend".to_string(), "latest".to_string()))
+        );
+        assert_eq!(
+            parse_image_ref("registry.example.com:5000/shipyard/backend:v1.2.3"),
+            Some(("registry.example.com:5000/shipyard/backend".to_string(), "v1.2.3".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_image_ref_defaults_to_latest_without_tag() {
+        assert_eq!(
+            parse_image_ref("shipyard/backend"),
+            Some(("shipyard/backend".to_string(), "latest".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_image_ref_rejects_empty_string() {
+        assert_eq!(parse_image_ref(""), None);
+        assert_eq!(parse_image_ref("   "), None);
+    }
+
+    #[test]
+    fn read_dotenv_key_extracts_matching_line() {
+        let content = "BACKEND_IMAGE=shipyard/backend:latest\nFRONTEND_IMAGE=shipyard/frontend:latest\n";
+        assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "shipyard/backend:latest");
+        assert_eq!(read_dotenv_key(content, "FRONTEND_IMAGE"), "shipyard/frontend:latest");
+    }
+
+    #[test]
+    fn read_dotenv_key_returns_empty_when_missing() {
+        let content = "OTHER_KEY=value\n";
+        assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "");
+    }
+
+    #[test]
+    fn read_dotenv_key_does_not_match_key_prefix_collisions() {
+        // "BACKEND_IMAGE_EXTRA=foo" must not be picked up when looking for "BACKEND_IMAGE"
+        let content = "BACKEND_IMAGE_EXTRA=foo\nBACKEND_IMAGE=real-value\n";
+        assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "real-value");
+    }
 }

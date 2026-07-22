@@ -1055,7 +1055,11 @@ impl DeploymentEngine {
         step_id: Uuid,
     ) -> AppResult<()> {
         let version_dir = version_dir.to_path_buf();
-        let service_dir = store.current_path(service_id).parent().unwrap().to_path_buf();
+        let service_dir = store
+            .current_path(service_id)
+            .parent()
+            .ok_or_else(|| AppError::Internal("static artifact path has no parent directory".to_string()))?
+            .to_path_buf();
 
         tokio::task::spawn_blocking(move || {
             crate::static_site::atomic_swap_symlink(
@@ -1071,7 +1075,10 @@ impl DeploymentEngine {
         // Prune old versions (non-fatal).
         let pruned = {
             let data_dir = store.current_path(service_id);
-            let parent = data_dir.parent().unwrap().to_path_buf();
+            let parent = data_dir
+                .parent()
+                .expect("static artifact path has no parent directory")
+                .to_path_buf();
             let retention = self.static_retention;
             tokio::task::spawn_blocking(move || {
                 crate::static_site::prune_old_versions(&parent, retention)
@@ -2962,7 +2969,9 @@ impl DeploymentEngine {
                     self.insert_log(deployment_id, Some(step_id), "info", &push_msg).await;
                     self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &push_msg).await;
 
-                    let pusher = self.registry.as_ref().unwrap();
+                    let pusher = self.registry.as_ref().ok_or_else(|| {
+                        AppError::Internal("internal registry not configured".to_string())
+                    })?;
                     let push_result = pusher.push_docker_image(
                         org_id,
                         project_id,
@@ -3716,7 +3725,8 @@ impl DeploymentEngine {
             return Ok(());
         }
 
-        let published_ports: Vec<&PortSpec> = ports.iter().filter(|p| p.published.is_some()).collect();
+        let published_ports: Vec<(&PortSpec, u16)> =
+            ports.iter().filter_map(|p| p.published.map(|hp| (p, hp))).collect();
         if published_ports.is_empty() {
             return Ok(());
         }
@@ -3724,8 +3734,7 @@ impl DeploymentEngine {
         // Pull socat image; ignore error if already present or if offline
         let _ = self.docker.pull_image("alpine/socat", "latest", None).await;
 
-        for p in published_ports {
-            let host_port = p.published.unwrap();
+        for (p, host_port) in published_ports {
             let container_port = p.target;
             let proxy_name = format!("proxy-{svc_name}-{host_port}");
 

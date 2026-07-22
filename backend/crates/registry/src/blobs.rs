@@ -29,7 +29,7 @@ pub async fn initiate_upload(
     sqlx::query(
         "INSERT INTO registry_upload_sessions (id, storage_key) VALUES ($1, $2)",
     )
-    .bind(Uuid::parse_str(&session_id).unwrap())
+    .bind(Uuid::parse_str(&session_id).expect("session_id is a freshly generated UUID"))
     .bind(&key)
     .execute(&state.db)
     .await?;
@@ -211,9 +211,12 @@ pub async fn get_blob(
     let (size, storage_key) = row;
     let stream = state.storage.get(&storage_key).await?;
 
+    let digest_header = HeaderValue::from_str(&digest)
+        .map_err(|_| RegistryError::InvalidDigest(digest.clone()))?;
+
     let mut headers = HeaderMap::new();
     headers.insert("Content-Length", HeaderValue::from(size as u64));
-    headers.insert("Docker-Content-Digest", HeaderValue::from_str(&digest).unwrap());
+    headers.insert("Docker-Content-Digest", digest_header);
     headers.insert("Content-Type", HeaderValue::from_static("application/octet-stream"));
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())

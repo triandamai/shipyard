@@ -399,7 +399,9 @@ impl ArtifactPusher {
 
         // Increment ref count for each layer
         for layer_val in layers {
-            let layer_rel_path = layer_val.as_str().unwrap();
+            let layer_rel_path = layer_val.as_str().ok_or_else(|| {
+                PushError::Storage(StorageError::Backend("Invalid layer path".into()))
+            })?;
             let layer_path = extract_dir.join(layer_rel_path);
             let layer_bytes = tokio::fs::read(&layer_path).await
                 .map_err(|e| PushError::Storage(StorageError::Io(e)))?;

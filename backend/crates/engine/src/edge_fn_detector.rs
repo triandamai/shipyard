@@ -130,4 +130,17 @@ mod tests {
         assert_eq!(to_kebab_case("hello"), "hello");
         assert_eq!(to_kebab_case("my_function"), "my-function");
     }
+
+    #[test]
+    fn detects_default_export() {
+        assert!(has_default_export("export default function handler(req) {}"));
+        assert!(has_default_export("const fn = () => {};\nexport default fn;"));
+    }
+
+    #[test]
+    fn rejects_missing_default_export() {
+        assert!(!has_default_export("export function handler(req) {}"));
+        assert!(!has_default_export("module.exports = function() {};"));
+        assert!(!has_default_export(""));
+    }
 }

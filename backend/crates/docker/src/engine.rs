@@ -315,20 +315,20 @@ impl BollardDockerEngine {
         let endpoint_ports: Vec<EndpointPortConfig> = spec
             .ports
             .iter()
-            .filter(|p| p.published.is_some())
-            .map(|p| {
+            .filter_map(|p| {
+                let published = p.published?;
                 let proto = match p.protocol.to_ascii_lowercase().as_str() {
                     "udp" => EndpointPortConfigProtocolEnum::UDP,
                     "sctp" => EndpointPortConfigProtocolEnum::SCTP,
                     _ => EndpointPortConfigProtocolEnum::TCP,
                 };
-                EndpointPortConfig {
+                Some(EndpointPortConfig {
                     protocol: Some(proto),
                     target_port: Some(p.target as i64),
-                    published_port: Some(p.published.unwrap() as i64),
+                    published_port: Some(published as i64),
                     publish_mode: Some(EndpointPortConfigPublishModeEnum::HOST),
                     ..Default::default()
-                }
+                })
             })
             .collect();
 

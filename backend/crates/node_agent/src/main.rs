@@ -96,8 +96,12 @@ async fn main() {
 
     let addr = format!("{bind}:{port}");
     tracing::info!("shipyard-node-agent listening on {addr}");
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .unwrap_or_else(|e| panic!("failed to bind node-agent listener on {addr}: {e}"));
+    axum::serve(listener, app)
+        .await
+        .expect("node-agent HTTP server exited unexpectedly");
 }
 
 async fn health() -> Json<serde_json::Value> {

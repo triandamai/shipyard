@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'landing/**'
+      - '.github/workflows/ci.yml'
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'landing/**'
+      - '.github/workflows/ci.yml'
+  workflow_call:
+
+jobs:
+  # ── Backend ────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shipyard
+          POSTGRES_PASSWORD: shipyard
+          POSTGRES_DB: shipyard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shipyard"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://shipyard:shipyard@localhost:5432/shipyard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # The codebase isn't yet rustfmt-clean or clippy-clean repo-wide — report
+      # both without blocking the pipeline until that debt is paid down.
+      - name: Check formatting (informational)
+        working-directory: backend
+        run: cargo fmt --all -- --check
+        continue-on-error: true
+
+      - name: Clippy (informational)
+        working-directory: backend
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+
+      - name: Build
+        working-directory: backend
+        run: cargo build --workspace
+
+      - name: Test
+        working-directory: backend
+        run: cargo test --workspace -- --include-ignored
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  frontend-check:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run check
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ── Landing ────────────────────────────────────────────────────────────────
+  landing-check:
+    name: Landing (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync scripts
+        run: |
+          cp scripts/install.sh landing/static/install.sh
+          cp scripts/worker-setup.sh landing/static/worker-setup.sh
+          cp scripts/update.sh landing/static/update.sh
+          cp scripts/patch.sh landing/static/patch.sh
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: landing/package-lock.json
+
+      - name: Install dependencies
+        working-directory: landing
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: landing
+        run: npm run check
+
+      - name: Build
+        working-directory: landing
+        run: npm run build
