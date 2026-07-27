@@ -124,6 +124,14 @@ async fn async_main() {
 
     tracing::info!("Starting Shipyard PaaS Platform");
 
+    // Install a process-wide rustls crypto provider before any TLS client or
+    // server is constructed (reqwest's rustls-tls and the node-mTLS stack
+    // both need one; without an explicit choice, mixing crates that default
+    // to different providers — aws-lc-rs vs ring — panics at first use).
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     // Load configuration
     let mut config = AppConfig::load().unwrap_or_else(|e| {
         tracing::warn!("Failed to load config, using defaults: {e}");
@@ -585,7 +593,7 @@ async fn async_main() {
         let do_key = state.config.do_api_key.clone();
         let provision_mqtt = Arc::clone(&state.mqtt);
         let label_prefix = state.config.docker.label_prefix.clone();
-        let worker = Arc::new(provisioning::ProvisioningWorker::new(
+        let worker = provisioning::ProvisioningWorker::new(
             provision_db,
             provision_client,
             hetzner_key,
@@ -597,13 +605,23 @@ async fn async_main() {
             state.config.hetzner_region.clone(),
             state.config.do_size.clone(),
             state.config.do_region.clone(),
-        ));
+            state.config.node_agent_image.clone(),
+            &state.config.node_mtls,
+        );
 
-        let worker_clone = Arc::clone(&worker);
-        tokio::spawn(async move { worker_clone.run().await });
+        match worker {
+            Ok(worker) => {
+                let worker = Arc::new(worker);
+                let worker_clone = Arc::clone(&worker);
+                tokio::spawn(async move { worker_clone.run().await });
 
-        // Reconciliation loop: every 5 min, detect paid orgs with no live node.
-        tokio::spawn(async move { worker.run_reconciliation().await });
+                // Reconciliation loop: every 5 min, detect paid orgs with no live node.
+                tokio::spawn(async move { worker.run_reconciliation().await });
+            }
+            Err(e) => {
+                tracing::error!("failed to start provisioning worker: {e}");
+            }
+        }
     }
 
     // Edge runtime worker: ensures Deno containers exist per org with active functions.

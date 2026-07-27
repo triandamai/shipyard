@@ -318,6 +318,7 @@ pub struct ComputeNode {
     pub tls_ca_cert: Option<String>,
     pub tls_client_cert: Option<String>,
     pub tls_client_key: Option<String>,
+    pub agent_callback_token: Option<String>,
     pub provision_error: Option<String>,
     pub provision_attempts: i32,
     pub created_at: DateTime<Utc>,

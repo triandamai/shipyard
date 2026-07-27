@@ -4,12 +4,12 @@ use std::convert::Infallible;
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
-    http::{Request, StatusCode},
-    middleware::{self, Next},
-    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
-    routing::get,
+    http::StatusCode,
+    response::{IntoResponse, sse::{Event, KeepAlive, Sse}},
+    routing::{get, post},
     Json, Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use bollard::Docker;
 use bollard::container::{LogsOptions, StatsOptions};
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
@@ -20,7 +20,10 @@ use tokio::io::AsyncWriteExt;
 struct SpikeConfig {
     callback_url: String,
     node_id: String,
-    token: String,
+    /// Per-node callback token (compute_nodes.agent_callback_token) — auths
+    /// this agent's outbound spike POST to the API. Unrelated to the mTLS
+    /// that protects this agent's own inbound endpoints.
+    callback_token: String,
     cpu_threshold: f64,
     mem_threshold: f64,
     disk_threshold: f64,
@@ -30,7 +33,21 @@ struct SpikeConfig {
 #[derive(Clone)]
 struct AgentState {
     docker: Arc<Docker>,
-    token: Arc<String>,
+}
+
+/// Directory containing this agent's own TLS server material (server-cert.pem,
+/// server-key.pem) plus the platform CA (ca.pem) it trusts for client-cert
+/// verification. Baked into cloud-init at VM creation — see
+/// `provisioning::build_cloud_init`.
+fn agent_tls_dir() -> String {
+    std::env::var("AGENT_TLS_CERT_DIR").unwrap_or_else(|_| "/etc/shipyard/agent-tls".to_string())
+}
+
+/// Directory this agent writes dockerd's TLS material into once the API
+/// pushes it via `/install-docker-tls`. Host-mounted so a systemd path unit
+/// on the host (not this container) can restart dockerd to pick it up.
+fn docker_tls_dir() -> String {
+    std::env::var("AGENT_DOCKER_TLS_DIR").unwrap_or_else(|_| "/etc/shipyard/docker-tls".to_string())
 }
 
 #[tokio::main]
@@ -44,7 +61,10 @@ async fn main() {
         )
         .init();
 
-    let token = std::env::var("AGENT_TOKEN").expect("AGENT_TOKEN env var required");
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     let port: u16 = std::env::var("AGENT_PORT")
         .unwrap_or_else(|_| "7070".into())
         .parse()
@@ -52,21 +72,16 @@ async fn main() {
     let bind = std::env::var("AGENT_BIND").unwrap_or_else(|_| "0.0.0.0".into());
 
     let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker socket");
-
     let docker = Arc::new(docker);
 
-    let state = AgentState {
-        docker: Arc::clone(&docker),
-        token: Arc::new(token.clone()),
-    };
+    let state = AgentState { docker: Arc::clone(&docker) };
 
-    let auth_state = state.clone();
     let app = Router::new()
         .route("/health", get(health))
         .route("/containers/:docker_id/logs", get(container_logs))
         .route("/containers/:docker_id/stats", get(container_stats))
         .route("/containers/:docker_id/exec", get(container_exec))
-        .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
+        .route("/install-docker-tls", post(install_docker_tls))
         .with_state(state);
 
     // Spawn spike-detection loop if a callback URL is configured.
@@ -79,7 +94,7 @@ async fn main() {
                     .and_then(|h| h.into_string().ok())
                     .unwrap_or_else(|| "unknown".to_string())
             }),
-            token: token.clone(),
+            callback_token: std::env::var("AGENT_CALLBACK_TOKEN").unwrap_or_default(),
             cpu_threshold: std::env::var("AGENT_CPU_THRESHOLD")
                 .ok().and_then(|v| v.parse().ok()).unwrap_or(80.0),
             mem_threshold: std::env::var("AGENT_MEM_THRESHOLD")
@@ -94,44 +109,123 @@ async fn main() {
         tokio::spawn(spike_loop(spike_cfg, spike_docker, http));
     }
 
-    let addr = format!("{bind}:{port}");
-    tracing::info!("shipyard-node-agent listening on {addr}");
-    let listener = tokio::net::TcpListener::bind(&addr)
+    let tls_config = build_server_tls_config().expect("failed to load agent TLS material");
+
+    let addr: std::net::SocketAddr = format!("{bind}:{port}")
+        .parse()
+        .expect("invalid AGENT_BIND/AGENT_PORT");
+    tracing::info!("shipyard-node-agent listening on {addr} (mTLS)");
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service())
         .await
-        .unwrap_or_else(|e| panic!("failed to bind node-agent listener on {addr}: {e}"));
-    axum::serve(listener, app)
-        .await
-        .expect("node-agent HTTP server exited unexpectedly");
+        .expect("node-agent HTTPS server exited unexpectedly");
+}
+
+/// Build this agent's rustls ServerConfig: presents its own server cert
+/// (baked in via cloud-init), and requires every client to present a cert
+/// signed by the platform CA — the TLS handshake itself is the auth control,
+/// replacing the old shared-static-token `auth_middleware`.
+fn build_server_tls_config() -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+    let dir = agent_tls_dir();
+    let ca_pem = std::fs::read(format!("{dir}/ca.pem"))?;
+    let cert_pem = std::fs::read(format!("{dir}/server-cert.pem"))?;
+    let key_pem = std::fs::read(format!("{dir}/server-key.pem"))?;
+
+    let mut ca_reader = std::io::Cursor::new(&ca_pem);
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut ca_reader) {
+        roots.add(cert?)?;
+    }
+
+    let mut cert_reader = std::io::Cursor::new(&cert_pem);
+    let certs: Vec<_> = rustls_pemfile::certs(&mut cert_reader).collect::<Result<_, _>>()?;
+    let mut key_reader = std::io::Cursor::new(&key_pem);
+    let key = rustls_pemfile::private_key(&mut key_reader)?
+        .ok_or("no private key found in server-key.pem")?;
+
+    let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| format!("build client cert verifier: {e}"))?;
+
+    let mut server_config = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(certs, key)?;
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    Ok(RustlsConfig::from_config(Arc::new(server_config)))
 }
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"ok": true}))
 }
 
-async fn auth_middleware(
-    State(state): State<AgentState>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    // Allow token via header or query param (query param needed for WS upgrade)
-    let header_token = req
-        .headers()
-        .get("x-agent-token")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+#[derive(Deserialize)]
+struct InstallDockerTlsRequest {
+    ca_pem: String,
+    cert_pem: String,
+    key_pem: String,
+}
 
-    let query_token = req.uri().query().and_then(|q| {
-        url::form_urlencoded::parse(q.as_bytes())
-            .find(|(k, _)| k == "token")
-            .map(|(_, v)| v.into_owned())
-    });
+/// One-shot push of dockerd's IP-SAN'd server cert (generated by the API
+/// once this node's public IP is known — see
+/// `provisioning::advance_booting_nodes`). Idempotent-by-design: refuses to
+/// overwrite already-installed material rather than silently re-keying a
+/// live node from an unexpected retry. Reachable only over this agent's own
+/// mTLS listener, so it's already authenticated by the time this runs.
+async fn install_docker_tls(Json(body): Json<InstallDockerTlsRequest>) -> impl IntoResponse {
+    let dir = docker_tls_dir();
+    let cert_path = format!("{dir}/server-cert.pem");
 
-    let provided = header_token.or(query_token);
-
-    match provided {
-        Some(t) if t == *state.token => next.run(req).await,
-        _ => StatusCode::UNAUTHORIZED.into_response(),
+    if std::path::Path::new(&cert_path).exists() {
+        return (StatusCode::CONFLICT, "docker TLS already installed").into_response();
     }
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir {dir}: {e}")).into_response();
+    }
+
+    let writes = [
+        (format!("{dir}/ca.pem"), &body.ca_pem, 0o644),
+        (format!("{dir}/server-cert.pem"), &body.cert_pem, 0o644),
+        (format!("{dir}/server-key.pem"), &body.key_pem, 0o600),
+    ];
+    for (path, content, mode) in writes {
+        if let Err(e) = write_file_with_mode(&path, content, mode) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("write {path}: {e}")).into_response();
+        }
+    }
+
+    let daemon_json = serde_json::json!({
+        "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2376"],
+        "tlsverify": true,
+        "tlscacert": format!("{dir}/ca.pem"),
+        "tlscert": format!("{dir}/server-cert.pem"),
+        "tlskey": format!("{dir}/server-key.pem"),
+    });
+    let daemon_json_str = serde_json::to_string_pretty(&daemon_json).unwrap_or_default();
+    if let Err(e) = std::fs::write("/etc/docker/daemon.json", daemon_json_str) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("write daemon.json: {e}")).into_response();
+    }
+
+    // Host-level systemd path unit (installed by cloud-init) watches for this
+    // and restarts dockerd — TLS settings aren't hot-reloadable via SIGHUP.
+    if let Err(e) = std::fs::write(format!("{dir}/.reload"), b"") {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("touch reload marker: {e}")).into_response();
+    }
+
+    tracing::info!("dockerd TLS material installed, reload requested");
+    StatusCode::OK.into_response()
+}
+
+fn write_file_with_mode(path: &str, content: &str, mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut file = std::fs::File::create(path)?;
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    file.write_all(content.as_bytes())
 }
 
 #[derive(Deserialize)]
@@ -241,8 +335,6 @@ struct ExecQuery {
     cols: u16,
     #[serde(default = "default_rows")]
     rows: u16,
-    #[allow(dead_code)]
-    token: Option<String>,
 }
 fn default_cmd() -> String { "/bin/sh".to_string() }
 fn default_cols() -> u16 { 80 }
@@ -451,7 +543,7 @@ async fn spike_loop(cfg: SpikeConfig, docker: Arc<Docker>, http: reqwest::Client
                 "ts": now_ts,
             });
             if let Err(e) = http.post(&post_url)
-                .header("x-agent-token", &cfg.token)
+                .header("x-agent-token", &cfg.callback_token)
                 .json(&body)
                 .send()
                 .await

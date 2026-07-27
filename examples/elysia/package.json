@@ -1,0 +1,21 @@
+{
+  "name": "elysia-example",
+  "version": "1.0.0",
+  "description": "Example Elysia.js application with Docker and GitHub Actions workflows",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --minify --target bun"
+  },
+  "dependencies": {
+    "elysia": "^1.1.3",
+    "@elysiajs/cors": "^1.1.0",
+    "@elysiajs/swagger": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rcgen::{Certificate, KeyPair};
 use reqwest::Client;
+use shipyard_common::config::NodeMtlsConfig;
+use shipyard_common::error::AppError;
 use shipyard_mqtt::publisher::MqttPublisher;
 use sqlx::PgPool;
 use tokio::time::{Duration, sleep};
@@ -12,9 +15,11 @@ use shipyard_docker::engine::DockerEngine;
 
 use crate::compute::{ComputeProvider, CreateVmOptions, DigitalOceanProvider, HetznerProvider, VmStatus};
 
+mod tls;
+use tls::{generate_client_identity, generate_docker_server_identity};
+
 pub struct ProvisioningWorker {
     db: PgPool,
-    http_client: Client,
     providers: HashMap<String, Box<dyn ComputeProvider>>,
     mqtt: Arc<MqttPublisher>,
     label_prefix: String,
@@ -23,6 +28,9 @@ pub struct ProvisioningWorker {
     hetzner_region: String,
     do_server_type: String,
     do_region: String,
+    node_agent_image: String,
+    ca_cert: Certificate,
+    ca_key: KeyPair,
 }
 
 impl ProvisioningWorker {
@@ -38,7 +46,9 @@ impl ProvisioningWorker {
         hetzner_region: String,
         do_server_type: String,
         do_region: String,
-    ) -> Self {
+        node_agent_image: String,
+        node_mtls: &NodeMtlsConfig,
+    ) -> Result<Self, AppError> {
         let mut providers: HashMap<String, Box<dyn ComputeProvider>> = HashMap::new();
 
         if let Some(key) = hetzner_api_key.filter(|k| !k.is_empty()) {
@@ -48,7 +58,45 @@ impl ProvisioningWorker {
             providers.insert("digitalocean".to_string(), Box::new(DigitalOceanProvider::new(client.clone(), key)));
         }
 
-        Self { db, http_client: client, providers, mqtt, label_prefix, default_provider, hetzner_server_type, hetzner_region, do_server_type, do_region }
+        let (ca_cert, ca_key) = tls::load_or_generate_ca(node_mtls)?;
+
+        Ok(Self {
+            db,
+            providers,
+            mqtt,
+            label_prefix,
+            default_provider,
+            hetzner_server_type,
+            hetzner_region,
+            do_server_type,
+            do_region,
+            node_agent_image,
+            ca_cert,
+            ca_key,
+        })
+    }
+
+    /// Build a reqwest client authenticated as the API's stored per-node client
+    /// identity, trusting only the platform CA. Used for all outbound calls to
+    /// a tenant node's node_agent (health check, cert bootstrap push).
+    /// node_agent's server cert is DNS-named (not IP-SAN'd, since it's minted
+    /// before the VM's IP is known), so hostname verification is intentionally
+    /// disabled here — chain-of-trust to our exclusive platform CA is the real
+    /// authentication, not hostname-matches-dialed-IP.
+    fn node_agent_client(&self, client_cert_pem: &str, client_key_pem: &str) -> Result<Client, AppError> {
+        let ca = reqwest::Certificate::from_pem(self.ca_cert.pem().as_bytes())
+            .map_err(|e| AppError::Internal(format!("parse platform CA for reqwest: {e}")))?;
+        let identity_pem = format!("{client_cert_pem}\n{client_key_pem}");
+        let identity = reqwest::Identity::from_pem(identity_pem.as_bytes())
+            .map_err(|e| AppError::Internal(format!("build node client identity: {e}")))?;
+
+        Client::builder()
+            .add_root_certificate(ca)
+            .identity(identity)
+            .danger_accept_invalid_hostnames(true)
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| AppError::Internal(format!("build node_agent mTLS client: {e}")))
     }
 
     /// Returns (server_type, region) defaults for the given provider name.
@@ -152,7 +200,52 @@ impl ProvisioningWorker {
                 }
             };
 
-            let cloud_init = build_cloud_init();
+            // Generate this node's mTLS material up front: the API's own client
+            // identity (used against both node_agent and, later, dockerd) and
+            // node_agent's own server identity (DNS-named — no IP dependency,
+            // so it can be baked into cloud-init before the VM exists). The
+            // dockerd server cert is IP-SAN'd and generated later, once the
+            // VM's public IP is known (see `advance_booting_nodes`).
+            let client_identity = match generate_client_identity(&self.ca_cert, &self.ca_key, node.id) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(node_id = %node.id, error = %e, "failed to generate node client identity");
+                    continue;
+                }
+            };
+            let agent_identity = match tls::generate_agent_server_identity(&self.ca_cert, &self.ca_key, node.id) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(node_id = %node.id, error = %e, "failed to generate node_agent server identity");
+                    continue;
+                }
+            };
+            let callback_token = generate_random_token();
+            let ca_cert_pem = self.ca_cert.pem();
+            tracing::debug!(node_id = %node.id, agent_server_name = %agent_identity.server_name, "generated node mTLS identities");
+
+            sqlx::query(
+                r#"UPDATE compute_nodes
+                   SET tls_ca_cert = $2, tls_client_cert = $3, tls_client_key = $4,
+                       agent_callback_token = $5, updated_at = NOW()
+                   WHERE id = $1"#,
+            )
+            .bind(node.id)
+            .bind(&ca_cert_pem)
+            .bind(&client_identity.cert_pem)
+            .bind(&client_identity.key_pem)
+            .bind(&callback_token)
+            .execute(&self.db)
+            .await?;
+
+            let cloud_init = build_cloud_init(
+                node.id,
+                &ca_cert_pem,
+                &agent_identity.cert_pem,
+                &agent_identity.key_pem,
+                &callback_token,
+                &self.node_agent_image,
+            );
             let opts = CreateVmOptions {
                 name: &node.name,
                 region: &node.region,
@@ -199,10 +292,12 @@ impl ProvisioningWorker {
             id: Uuid,
             provider: String,
             provider_vm_id: String,
+            tls_client_cert: Option<String>,
+            tls_client_key: Option<String>,
         }
 
         let nodes: Vec<BootingNode> = sqlx::query_as::<_, BootingNode>(
-            r#"SELECT id, provider, provider_vm_id
+            r#"SELECT id, provider, provider_vm_id, tls_client_cert, tls_client_key
                FROM compute_nodes
                WHERE status = 'cloud_init_running'::node_status
                  AND provider_vm_id IS NOT NULL
@@ -220,30 +315,97 @@ impl ProvisioningWorker {
                 }
             };
 
-            match provider.get_vm_status(&node.provider_vm_id).await {
-                Ok(VmStatus::Running { public_ip }) => {
-                    // VM is up — advance to wireguard_joined (stub: real WireGuard check TBD).
-                    sqlx::query(
-                        r#"UPDATE compute_nodes
-                           SET status = 'wireguard_joined'::node_status,
-                               public_ip = COALESCE(NULLIF($2, ''), public_ip),
-                               updated_at = NOW()
-                           WHERE id = $1"#,
-                    )
-                    .bind(node.id)
-                    .bind(&public_ip)
-                    .execute(&self.db)
-                    .await?;
-                    tracing::info!(node_id = %node.id, "VM running — advanced to wireguard_joined");
-                }
-                Ok(_) => {
-                    // Still booting — leave in cloud_init_running.
-                    tracing::debug!(node_id = %node.id, "VM still booting");
-                }
+            let vm_status = match provider.get_vm_status(&node.provider_vm_id).await {
+                Ok(s) => s,
                 Err(e) => {
                     tracing::warn!(node_id = %node.id, error = %e, "VM status check failed");
+                    continue;
                 }
+            };
+
+            let public_ip = match vm_status {
+                VmStatus::Running { public_ip } if !public_ip.is_empty() => public_ip,
+                _ => {
+                    tracing::debug!(node_id = %node.id, "VM still booting");
+                    continue;
+                }
+            };
+
+            let (client_cert, client_key) = match (&node.tls_client_cert, &node.tls_client_key) {
+                (Some(c), Some(k)) if !c.is_empty() && !k.is_empty() => (c, k),
+                _ => {
+                    tracing::error!(node_id = %node.id, "node reached cloud_init_running with no client identity — skipping (should be impossible)");
+                    continue;
+                }
+            };
+
+            let agent_client = match self.node_agent_client(client_cert, client_key) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(node_id = %node.id, error = %e, "failed to build node_agent client");
+                    continue;
+                }
+            };
+
+            // node_agent up yet? (proves cloud-init actually completed, not
+            // just that the VM powered on — much stronger than the old
+            // "VM status == Running" stub.)
+            let health_url = format!("https://{public_ip}:7070/health");
+            let healthy = agent_client.get(&health_url).send().await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !healthy {
+                tracing::debug!(node_id = %node.id, ip = %public_ip, "node_agent not yet reachable");
+                continue;
             }
+
+            // Generate dockerd's server cert now that the IP is known, and
+            // push it to the VM over the already-mTLS-secured node_agent
+            // channel — bollard's TLS client (used from here on) does strict
+            // IP verification with no override, unlike node_agent's client.
+            let docker_id = match generate_docker_server_identity(&self.ca_cert, &self.ca_key, node.id, &public_ip) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(node_id = %node.id, error = %e, "failed to generate dockerd server identity");
+                    continue;
+                }
+            };
+            let install_url = format!("https://{public_ip}:7070/install-docker-tls");
+            let push_result = agent_client.post(&install_url)
+                .json(&serde_json::json!({
+                    "ca_pem": self.ca_cert.pem(),
+                    "cert_pem": docker_id.cert_pem,
+                    "key_pem": docker_id.key_pem,
+                }))
+                .send()
+                .await;
+            let pushed = match push_result {
+                Ok(r) if r.status().is_success() => true,
+                Ok(r) => {
+                    tracing::warn!(node_id = %node.id, status = %r.status(), "install-docker-tls rejected");
+                    false
+                }
+                Err(e) => {
+                    tracing::debug!(node_id = %node.id, error = %e, "install-docker-tls call failed, will retry");
+                    false
+                }
+            };
+            if !pushed {
+                continue;
+            }
+
+            sqlx::query(
+                r#"UPDATE compute_nodes
+                   SET status = 'wireguard_joined'::node_status,
+                       public_ip = $2,
+                       updated_at = NOW()
+                   WHERE id = $1"#,
+            )
+            .bind(node.id)
+            .bind(&public_ip)
+            .execute(&self.db)
+            .await?;
+            tracing::info!(node_id = %node.id, "node_agent live and dockerd TLS installed — advanced to wireguard_joined");
         }
         Ok(())
     }
@@ -255,10 +417,13 @@ impl ProvisioningWorker {
             org_id: Uuid,
             name: String,
             public_ip: Option<String>,
+            tls_ca_cert: Option<String>,
+            tls_client_cert: Option<String>,
+            tls_client_key: Option<String>,
         }
 
         let nodes: Vec<ReadyNode> = sqlx::query_as::<_, ReadyNode>(
-            r#"SELECT id, org_id, name, public_ip
+            r#"SELECT id, org_id, name, public_ip, tls_ca_cert, tls_client_cert, tls_client_key
                FROM compute_nodes
                WHERE status = 'wireguard_joined'::node_status
                  AND public_ip IS NOT NULL
@@ -273,18 +438,9 @@ impl ProvisioningWorker {
                 _ => continue,
             };
 
-            // Ping Docker daemon — use public_ip for now (WireGuard overlay pending).
-            let ping_url = format!("http://{}:2375/_ping", ip);
-            let ok = self.http_client
-                .get(&ping_url)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-
+            let ok = docker_tls_ping(&ip, &node.tls_ca_cert, &node.tls_client_cert, &node.tls_client_key).await;
             if !ok {
-                tracing::debug!(node_id = %node.id, ip = %ip, "Docker not yet ready on wireguard_joined node");
+                tracing::debug!(node_id = %node.id, ip = %ip, "Docker TLS not yet ready on wireguard_joined node");
                 continue;
             }
 
@@ -345,10 +501,14 @@ impl ProvisioningWorker {
             node_id: Uuid,
             service_id: Uuid,
             public_ip: Option<String>,
+            tls_ca_cert: Option<String>,
+            tls_client_cert: Option<String>,
+            tls_client_key: Option<String>,
         }
 
         let assignments: Vec<DrainableAssignment> = sqlx::query_as::<_, DrainableAssignment>(
-            r#"SELECT cn.id AS node_id, sna.service_id, cn.public_ip
+            r#"SELECT cn.id AS node_id, sna.service_id, cn.public_ip,
+                      cn.tls_ca_cert, cn.tls_client_cert, cn.tls_client_key
                FROM service_node_assignments sna
                JOIN compute_nodes cn ON cn.id = sna.node_id
                WHERE cn.status = 'stopped'::node_status
@@ -362,10 +522,12 @@ impl ProvisioningWorker {
         }
 
         for asgn in &assignments {
-            if let Some(ip) = &asgn.public_ip {
-                if !ip.is_empty() {
-                    let addr = format!("tcp://{}:2375", ip);
-                    if let Ok(engine) = BollardDockerEngine::with_http(&addr) {
+            if let (Some(ip), Some(ca), Some(cert), Some(key)) =
+                (&asgn.public_ip, &asgn.tls_ca_cert, &asgn.tls_client_cert, &asgn.tls_client_key)
+            {
+                if !ip.is_empty() && !ca.is_empty() {
+                    let addr = format!("tcp://{}:2376", ip);
+                    if let Ok(engine) = BollardDockerEngine::with_tls(&addr, ca, cert, key) {
                         let svc_name = format!("{}-{}", self.label_prefix, asgn.service_id);
                         if let Err(e) = engine.scale_service(&svc_name, 0).await {
                             tracing::debug!(
@@ -433,6 +595,7 @@ impl ProvisioningWorker {
                                tls_ca_cert = NULL,
                                tls_client_cert = NULL,
                                tls_client_key = NULL,
+                               agent_callback_token = NULL,
                                updated_at = NOW()
                            WHERE id = $1"#,
                     )
@@ -456,10 +619,13 @@ impl ProvisioningWorker {
         struct ActiveNode {
             id: Uuid,
             public_ip: Option<String>,
+            tls_ca_cert: Option<String>,
+            tls_client_cert: Option<String>,
+            tls_client_key: Option<String>,
         }
 
         let nodes: Vec<ActiveNode> = sqlx::query_as::<_, ActiveNode>(
-            r#"SELECT id, public_ip
+            r#"SELECT id, public_ip, tls_ca_cert, tls_client_cert, tls_client_key
                FROM compute_nodes
                WHERE status IN ('active'::node_status, 'degraded'::node_status)
                  AND public_ip IS NOT NULL
@@ -475,14 +641,7 @@ impl ProvisioningWorker {
                 _ => continue,
             };
 
-            let ping_url = format!("http://{}:2375/_ping", ip);
-            let reachable = self.http_client
-                .get(&ping_url)
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
+            let reachable = docker_tls_ping(&ip, &node.tls_ca_cert, &node.tls_client_cert, &node.tls_client_key).await;
 
             if reachable {
                 // Update heartbeat and ensure status is active.
@@ -602,34 +761,102 @@ impl ProvisioningWorker {
     }
 }
 
+/// mTLS `_ping` against a tenant node's dockerd (port 2376). Returns `false`
+/// (never panics/errors out) on any missing TLS material or connection
+/// failure — callers treat that identically to "not ready yet".
+async fn docker_tls_ping(
+    ip: &str,
+    ca: &Option<String>,
+    cert: &Option<String>,
+    key: &Option<String>,
+) -> bool {
+    let (ca, cert, key) = match (ca, cert, key) {
+        (Some(ca), Some(cert), Some(key)) if !ca.is_empty() && !cert.is_empty() && !key.is_empty() => {
+            (ca, cert, key)
+        }
+        _ => return false,
+    };
+    let addr = format!("tcp://{ip}:2376");
+    match BollardDockerEngine::with_tls(&addr, ca, cert, key) {
+        Ok(engine) => engine.ping().await.is_ok(),
+        Err(_) => false,
+    }
+}
+
 // ─── Cloud-init script for new tenant VMs ─────────────────────────────────────
 
-fn build_cloud_init() -> String {
-    r#"#!/bin/bash
+/// Random per-node secret: authenticates node_agent's outbound spike-alert
+/// callback to the API. 256 bits from two v4 UUIDs (avoids adding a `rand`
+/// dependency purely for this — uuid's v4 generator is already CSPRNG-backed).
+fn generate_random_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+/// Cloud-init for a fresh tenant VM. Docker is installed local-socket-only —
+/// it is never exposed on any network port until `advance_booting_nodes`
+/// pushes an IP-SAN'd server cert over the (already mTLS-secured) node_agent
+/// channel and the docker-tls-reload path unit picks it up. node_agent itself
+/// comes up in full mTLS mode from first boot (its own server cert is baked
+/// in here, DNS-named so it doesn't depend on the not-yet-known public IP).
+fn build_cloud_init(
+    node_id: Uuid,
+    ca_cert_pem: &str,
+    agent_cert_pem: &str,
+    agent_key_pem: &str,
+    agent_callback_token: &str,
+    node_agent_image: &str,
+) -> String {
+    format!(
+        r#"#!/bin/bash
 set -e
 apt-get update -y
-apt-get install -y docker.io wireguard curl
+apt-get install -y docker.io curl
 
 systemctl enable docker
 systemctl start docker
 
-# Open Docker daemon on port 2375 for WireGuard-internal access.
-mkdir -p /etc/docker
-cat > /etc/docker/daemon.json <<'DAEMON'
-{
-  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"]
-}
-DAEMON
+mkdir -p /etc/shipyard/agent-tls /etc/shipyard/docker-tls
+cat > /etc/shipyard/agent-tls/ca.pem <<'CA_PEM'
+{ca_cert_pem}
+CA_PEM
+cat > /etc/shipyard/agent-tls/server-cert.pem <<'AGENT_CERT'
+{agent_cert_pem}
+AGENT_CERT
+cat > /etc/shipyard/agent-tls/server-key.pem <<'AGENT_KEY'
+{agent_key_pem}
+AGENT_KEY
+chmod 600 /etc/shipyard/agent-tls/server-key.pem
 
-# Reload systemd drop-in to suppress -H fd:// default.
-mkdir -p /etc/systemd/system/docker.service.d
-cat > /etc/systemd/system/docker.service.d/override.conf <<'OVERRIDE'
+# dockerd's TLS settings can't be hot-reloaded via SIGHUP — node_agent writes
+# new cert material + touches .reload under /etc/shipyard/docker-tls once the
+# API pushes it (see advance_booting_nodes); this unit restarts dockerd to
+# pick it up. Docker itself is never exposed on a TCP port until that happens.
+cat > /etc/systemd/system/shipyard-docker-tls-reload.path <<'PATHUNIT'
+[Path]
+PathExists=/etc/shipyard/docker-tls/.reload
+[Install]
+WantedBy=multi-user.target
+PATHUNIT
+cat > /etc/systemd/system/shipyard-docker-tls-reload.service <<'SVCUNIT'
 [Service]
-ExecStart=
-ExecStart=/usr/bin/dockerd
-OVERRIDE
-
+Type=oneshot
+ExecStart=/bin/bash -c 'rm -f /etc/shipyard/docker-tls/.reload; systemctl restart docker'
+SVCUNIT
 systemctl daemon-reload
-systemctl restart docker
-"#.to_string()
+systemctl enable --now shipyard-docker-tls-reload.path
+
+docker pull {node_agent_image}
+docker run -d --restart=always --name shipyard-node-agent \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/shipyard/agent-tls:/etc/shipyard/agent-tls:ro \
+  -v /etc/shipyard/docker-tls:/etc/shipyard/docker-tls \
+  -v /etc/docker:/etc/docker \
+  --network host \
+  -e AGENT_TLS_CERT_DIR=/etc/shipyard/agent-tls \
+  -e AGENT_DOCKER_TLS_DIR=/etc/shipyard/docker-tls \
+  -e AGENT_NODE_ID={node_id} \
+  -e AGENT_CALLBACK_TOKEN={agent_callback_token} \
+  {node_agent_image}
+"#
+    )
 }

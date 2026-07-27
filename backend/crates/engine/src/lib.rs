@@ -149,14 +149,19 @@ impl DeploymentEngine {
     }
 
     /// Returns the DockerEngine that should be used for a given service.
-    /// Uses public_ip for now (WireGuard overlay ip_address is not yet populated).
+    /// Dedicated tenant nodes are reached over mTLS on port 2376 — an `active`
+    /// node missing any of its TLS material falls back to the local docker
+    /// engine (safe/inert: the org's node just stops being used until
+    /// re-provisioned) rather than ever falling back to a plaintext connection.
     async fn resolve_docker_for_service(
         &self,
         service_id: Uuid,
     ) -> Arc<dyn DockerEngine> {
-        let row = sqlx::query_as::<_, (String, String)>(
+        #[allow(clippy::type_complexity)]
+        let row = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, Option<String>)>(
             r#"
-            SELECT COALESCE(cn.ip_address, cn.public_ip, ''), cn.status::text
+            SELECT COALESCE(cn.ip_address, cn.public_ip, ''), cn.status::text,
+                   cn.tls_ca_cert, cn.tls_client_cert, cn.tls_client_key
             FROM service_node_assignments sna
             JOIN compute_nodes cn ON cn.id = sna.node_id
             WHERE sna.service_id = $1
@@ -167,9 +172,18 @@ impl DeploymentEngine {
         .await;
 
         match row {
-            Ok(Some((ip, status))) if status == "active" && !ip.is_empty() => {
-                let addr = format!("tcp://{}:2375", ip);
-                match BollardDockerEngine::with_http(&addr) {
+            Ok(Some((ip, status, ca, cert, key))) if status == "active" && !ip.is_empty() => {
+                let (ca, cert, key) = match (ca, cert, key) {
+                    (Some(ca), Some(cert), Some(key)) if !ca.is_empty() && !cert.is_empty() && !key.is_empty() => {
+                        (ca, cert, key)
+                    }
+                    _ => {
+                        tracing::warn!(service_id = %service_id, node_ip = %ip, "active node missing TLS material — refusing plaintext fallback, using local docker");
+                        return Arc::clone(&self.docker);
+                    }
+                };
+                let addr = format!("tcp://{}:2376", ip);
+                match BollardDockerEngine::with_tls(&addr, &ca, &cert, &key) {
                     Ok(engine) => {
                         tracing::debug!(service_id = %service_id, node_ip = %ip, "routing deploy to dedicated node");
                         Arc::new(engine) as Arc<dyn DockerEngine>
@@ -180,7 +194,7 @@ impl DeploymentEngine {
                     }
                 }
             }
-            Ok(Some((_, status))) => {
+            Ok(Some((_, status, ..))) => {
                 tracing::debug!(service_id = %service_id, node_status = %status, "node not active, using local docker");
                 Arc::clone(&self.docker)
             }

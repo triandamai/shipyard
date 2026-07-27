@@ -55,6 +55,10 @@ tempfile = "3.27.0"
 aes-gcm = { workspace = true }
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 async-stream = "0.3"
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+time = { workspace = true }
 
 [features]
 default = ["s3"]

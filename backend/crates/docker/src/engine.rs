@@ -193,6 +193,11 @@ pub trait DockerEngine: Send + Sync {
 /// Bollard-backed implementation of [`DockerEngine`].
 pub struct BollardDockerEngine {
     client: Docker,
+    /// Backing directory for `with_tls`'s cert/key files. Bollard's client-cert
+    /// resolver re-reads these paths from disk on every TLS handshake (lazily,
+    /// not just once at connect time) — this must outlive `client`, so it's
+    /// never `None` after `with_tls` and never read again, just kept alive.
+    _tls_dir: Option<tempfile::TempDir>,
 }
 
 impl BollardDockerEngine {
@@ -201,7 +206,7 @@ impl BollardDockerEngine {
         let client = Docker::connect_with_local_defaults()
             .map_err(|e| AppError::Docker(format!("Failed to connect to Docker: {e}")))?;
         tracing::info!("Connected to Docker daemon");
-        Ok(Self { client })
+        Ok(Self { client, _tls_dir: None })
     }
 
     /// Connect to a specific Docker socket path.
@@ -214,16 +219,55 @@ impl BollardDockerEngine {
                     ))
                 })?;
         tracing::info!("Connected to Docker daemon at {}", socket_path);
-        Ok(Self { client })
+        Ok(Self { client, _tls_dir: None })
     }
 
-    /// Connect to a remote Docker daemon over a plain HTTP TCP connection.
-    /// Intended for WireGuard overlay connections where the tunnel itself
-    /// provides encryption — use port 2375 on the remote host.
-    pub fn with_http(addr: &str) -> AppResult<Self> {
-        let client = Docker::connect_with_http(addr, 120, bollard::API_DEFAULT_VERSION)
-            .map_err(|e| AppError::Internal(format!("Docker HTTP connect '{}': {}", addr, e)))?;
-        Ok(Self { client })
+    /// Connect to a remote tenant compute node's Docker daemon over mTLS
+    /// (port 2376, Docker's standard `--tlsverify` scheme). `ca_pem`/`cert_pem`/
+    /// `key_pem` are the node's stored `compute_nodes.tls_ca_cert` /
+    /// `tls_client_cert` / `tls_client_key` values.
+    ///
+    /// Bollard's SSL API is path-based, not in-memory, so this writes the PEM
+    /// material to a mode-0600 temp directory kept alive for the lifetime of
+    /// the returned engine (bollard's client-cert resolver re-reads these
+    /// files from disk on every handshake, not just once at connect time).
+    pub fn with_tls(addr: &str, ca_pem: &str, cert_pem: &str, key_pem: &str) -> AppResult<Self> {
+        use std::io::Write;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::Builder::new()
+            .prefix("shipyard-node-tls-")
+            .tempdir()
+            .map_err(|e| AppError::Internal(format!("create TLS temp dir: {e}")))?;
+
+        let write_pem = |name: &str, pem: &str| -> AppResult<std::path::PathBuf> {
+            let path = dir.path().join(name);
+            let mut file = std::fs::File::create(&path)
+                .map_err(|e| AppError::Internal(format!("write {name}: {e}")))?;
+            #[cfg(unix)]
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| AppError::Internal(format!("chmod {name}: {e}")))?;
+            file.write_all(pem.as_bytes())
+                .map_err(|e| AppError::Internal(format!("write {name}: {e}")))?;
+            Ok(path)
+        };
+
+        let ca_path = write_pem("ca.pem", ca_pem)?;
+        let cert_path = write_pem("cert.pem", cert_pem)?;
+        let key_path = write_pem("key.pem", key_pem)?;
+
+        let client = Docker::connect_with_ssl(
+            addr,
+            &key_path,
+            &cert_path,
+            &ca_path,
+            120,
+            bollard::API_DEFAULT_VERSION,
+        )
+        .map_err(|e| AppError::Internal(format!("Docker TLS connect '{addr}': {e}")))?;
+
+        Ok(Self { client, _tls_dir: Some(dir) })
     }
 
     /// Return a reference to the underlying bollard `Docker` client.

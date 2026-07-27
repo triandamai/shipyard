@@ -71,11 +71,30 @@ pub struct AppConfig {
     /// Port where node agents listen. Default: 7070. Set via SHIPYARD__NODE_AGENT_PORT.
     #[serde(default = "default_node_agent_port")]
     pub node_agent_port: u16,
+    /// Docker image for the node_agent container installed on tenant compute
+    /// nodes via cloud-init. Set via SHIPYARD__NODE_AGENT_IMAGE.
+    #[serde(default = "default_node_agent_image")]
+    pub node_agent_image: String,
     /// Minimum seconds between consecutive alerts for the same (metric, node, container).
     /// Prevents alert floods when a resource stays above threshold for a long time.
     /// Default: 30. Set via SHIPYARD__ALERT_COOLDOWN_SECS.
     #[serde(default = "default_alert_cooldown_secs")]
     pub alert_cooldown_secs: u64,
+    /// Platform CA used to sign mTLS material for tenant compute nodes (Docker
+    /// daemon + node_agent). Distinct from `tls` above, which is this API's own
+    /// inbound HTTPS listener. Normally loaded from the `shipyard_node_ca` Docker
+    /// secret via `apply_docker_secrets`; dev/test override via
+    /// SHIPYARD__NODE_MTLS__CA_CERT_PEM / SHIPYARD__NODE_MTLS__CA_KEY_PEM.
+    #[serde(default)]
+    pub node_mtls: NodeMtlsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct NodeMtlsConfig {
+    #[serde(default)]
+    pub ca_cert_pem: String,
+    #[serde(default)]
+    pub ca_key_pem: String,
 }
 
 fn default_app_url() -> String {
@@ -83,6 +102,7 @@ fn default_app_url() -> String {
 }
 
 fn default_node_agent_port() -> u16 { 7070 }
+fn default_node_agent_image() -> String { "triandamai827/shipyard-node-agent:latest".to_string() }
 fn default_alert_cooldown_secs() -> u64 { 30 }
 fn default_hetzner_server_type() -> String { "cpx21".to_string() }
 fn default_hetzner_region() -> String { "eu-central".to_string() }
@@ -420,7 +440,9 @@ impl Default for AppConfig {
             registry: RegistryConfig::default(),
             node_agent_token: String::new(),
             node_agent_port: default_node_agent_port(),
+            node_agent_image: default_node_agent_image(),
             alert_cooldown_secs: default_alert_cooldown_secs(),
+            node_mtls: NodeMtlsConfig::default(),
         }
     }
 }
@@ -474,6 +496,7 @@ impl AppConfig {
             .set_default("default_cloud_provider", "hetzner")?
             .set_default("do_size", "s-2vcpu-4gb")?
             .set_default("do_region", "fra1")?
+            .set_default("node_agent_image", "triandamai827/shipyard-node-agent:latest")?
             .set_default("edge_functions.enabled", false)?
             .set_default("edge_functions.runtime_image", "triandamai827/shipyard-edge-runtime:latest")?
             .set_default("edge_functions.max_bundle_kb_free", 128)?
@@ -511,5 +534,70 @@ impl AppConfig {
                 tracing::info!("Loaded secret from /run/secrets/{filename}");
             }
         }
+
+        // Node mTLS CA — cert and key ship together as one Docker secret bundle
+        // (both PEM blocks concatenated in a single file), since the CA is the
+        // root of trust for every tenant compute node and shouldn't be split
+        // across two separately-mountable secrets with independent lifecycles.
+        let ca_path = "/run/secrets/shipyard_node_ca";
+        if let Ok(bundle) = std::fs::read_to_string(ca_path) {
+            match split_pem_bundle(&bundle) {
+                Some((cert, key)) => {
+                    self.node_mtls.ca_cert_pem = cert;
+                    self.node_mtls.ca_key_pem = key;
+                    tracing::info!("Loaded node mTLS CA from /run/secrets/shipyard_node_ca");
+                }
+                None => {
+                    tracing::error!(
+                        "/run/secrets/shipyard_node_ca is present but doesn't contain both a \
+                         CERTIFICATE and a PRIVATE KEY PEM block — ignoring it"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Split a PEM bundle containing one CERTIFICATE block and one PRIVATE KEY
+/// block (in either order) into (cert_pem, key_pem).
+fn split_pem_bundle(bundle: &str) -> Option<(String, String)> {
+    fn extract_block(bundle: &str, label: &str) -> Option<String> {
+        let begin = format!("-----BEGIN {label}-----");
+        let end = format!("-----END {label}-----");
+        let start = bundle.find(&begin)?;
+        let stop = bundle[start..].find(&end)? + start + end.len();
+        Some(bundle[start..stop].trim().to_string())
+    }
+
+    let cert = extract_block(bundle, "CERTIFICATE")?;
+    let key = extract_block(bundle, "PRIVATE KEY")
+        .or_else(|| extract_block(bundle, "EC PRIVATE KEY"))?;
+    Some((cert, key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_pem_bundle_extracts_cert_and_key_in_either_order() {
+        let cert = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----";
+        let key = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----";
+
+        let cert_first = format!("{cert}\n{key}\n");
+        let (c, k) = split_pem_bundle(&cert_first).unwrap();
+        assert_eq!(c, cert);
+        assert_eq!(k, key);
+
+        let key_first = format!("{key}\n{cert}\n");
+        let (c, k) = split_pem_bundle(&key_first).unwrap();
+        assert_eq!(c, cert);
+        assert_eq!(k, key);
+    }
+
+    #[test]
+    fn split_pem_bundle_rejects_missing_blocks() {
+        assert!(split_pem_bundle("not a pem file").is_none());
+        assert!(split_pem_bundle("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----").is_none());
     }
 }

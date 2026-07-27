@@ -43,7 +43,7 @@ sqlx = { version = "0.8", features = [
 ] }
 
 # Docker
-bollard = "0.17"
+bollard = { version = "0.17", features = ["ssl"] }
 
 # MQTT
 rumqttc = "0.24"
@@ -109,6 +109,13 @@ futures = "0.3"
 bytes = "1"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
+
+# mTLS (tenant compute node provisioning)
+rcgen = { version = "0.13", features = ["x509-parser"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }
+rustls-pemfile = "2"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 
 [profile.release]
 opt-level     = "z"   # optimize for size — smaller binary text segment in RSS
