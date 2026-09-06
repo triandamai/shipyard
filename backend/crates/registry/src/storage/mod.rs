@@ -79,3 +79,42 @@ pub fn blob_key(digest: &str) -> String {
 pub fn upload_key(session_id: &str) -> String {
     format!("uploads/{}", session_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blob_key_shards_by_first_two_hex_chars() {
+        let digest = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        assert_eq!(
+            blob_key(digest),
+            "blobs/sha256/ab/abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        );
+    }
+
+    #[test]
+    fn blob_key_strips_only_the_algo_prefix() {
+        // rfind-free splitn(2, ':') means only the FIRST colon is treated as the
+        // algo separator — the hex payload itself never contains one, but this
+        // documents that a second colon (if it ever appeared) would stay in the key.
+        let digest = "sha256:aa11";
+        assert_eq!(blob_key(digest), "blobs/sha256/aa/aa11");
+    }
+
+    #[test]
+    #[should_panic]
+    fn blob_key_panics_on_hex_shorter_than_two_chars() {
+        // Documents current behavior: a malformed/truncated digest panics on the
+        // `&hex[..2]` slice rather than erroring gracefully. Every real caller
+        // passes a digest produced by `compute_digest` (always 64 hex chars) or
+        // already validated on the way in, so this is reachable only via a bug
+        // elsewhere — but it's worth pinning down explicitly.
+        blob_key("sha256:a");
+    }
+
+    #[test]
+    fn upload_key_prefixes_the_session_id() {
+        assert_eq!(upload_key("abc-123"), "uploads/abc-123");
+    }
+}

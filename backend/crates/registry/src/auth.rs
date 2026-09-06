@@ -200,3 +200,89 @@ fn verify_shipyard_token(token: &str, secret: &str) -> Option<String> {
         .ok()
         .map(|d| d.claims.sub)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    #[test]
+    fn filter_scope_parses_type_name_actions() {
+        let entries = filter_scope("artifact:myorg/myproject/api:pull,push", None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, "artifact");
+        assert_eq!(entries[0].name, "myorg/myproject/api");
+        assert_eq!(entries[0].actions, vec!["pull", "push"]);
+    }
+
+    #[test]
+    fn filter_scope_intersects_with_allowed_actions() {
+        let allowed = vec!["pull".to_string()];
+        let entries = filter_scope("artifact:myorg/api:pull,push", Some(&allowed));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].actions, vec!["pull"]);
+    }
+
+    #[test]
+    fn filter_scope_returns_empty_when_no_actions_allowed() {
+        let allowed = vec!["push".to_string()];
+        let entries = filter_scope("artifact:myorg/api:pull", Some(&allowed));
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn filter_scope_rejects_malformed_scope_strings() {
+        assert!(filter_scope("not-enough-parts", None).is_empty());
+        assert!(filter_scope("only:two", None).is_empty());
+        assert!(filter_scope("", None).is_empty());
+    }
+
+    fn sign(claims: &serde_json::Value, secret: &str) -> String {
+        encode(&Header::new(Algorithm::HS256), claims, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
+    }
+
+    #[test]
+    fn verify_shipyard_token_roundtrips_a_valid_token() {
+        let now = Utc::now().timestamp();
+        let claims = serde_json::json!({ "sub": "user-123", "exp": now + 3600, "iat": now });
+        let token = sign(&claims, "test-secret");
+        assert_eq!(verify_shipyard_token(&token, "test-secret"), Some("user-123".to_string()));
+    }
+
+    #[test]
+    fn verify_shipyard_token_rejects_wrong_secret() {
+        let now = Utc::now().timestamp();
+        let claims = serde_json::json!({ "sub": "user-123", "exp": now + 3600, "iat": now });
+        let token = sign(&claims, "test-secret");
+        assert_eq!(verify_shipyard_token(&token, "wrong-secret"), None);
+    }
+
+    #[test]
+    fn verify_shipyard_token_rejects_expired_token() {
+        // Well past jsonwebtoken's default 60s leeway, so this is unambiguously expired.
+        let now = Utc::now().timestamp();
+        let claims = serde_json::json!({ "sub": "user-123", "exp": now - 3700, "iat": now - 7200 });
+        let token = sign(&claims, "test-secret");
+        assert_eq!(verify_shipyard_token(&token, "test-secret"), None);
+    }
+
+    #[test]
+    fn verify_registry_token_roundtrips_full_claims() {
+        let now = Utc::now().timestamp();
+        let claims = RegistryClaims {
+            sub: "svc-account".to_string(),
+            iss: "registry.example.com".to_string(),
+            aud: "registry.example.com".to_string(),
+            exp: now + 900,
+            iat: now,
+            access: vec![],
+        };
+        let token = sign(&serde_json::to_value(&claims).unwrap(), "reg-secret");
+        assert_eq!(verify_registry_token(&token, "reg-secret"), Some("svc-account".to_string()));
+    }
+
+    #[test]
+    fn verify_registry_token_rejects_garbage_input() {
+        assert_eq!(verify_registry_token("not-a-jwt", "any-secret"), None);
+    }
+}

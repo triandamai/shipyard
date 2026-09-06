@@ -104,3 +104,78 @@ pub fn wrap_single_blob(
         "annotations": annotations
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_kind_metadata_defaults_to_docker_image_when_no_annotation() {
+        let manifest = serde_json::json!({ "layers": [{}, {}, {}] });
+        let (kind, meta) = extract_kind_metadata(&manifest);
+        assert_eq!(kind, kind::DOCKER_IMAGE);
+        assert_eq!(meta["layers"], 3);
+    }
+
+    #[test]
+    fn extract_kind_metadata_reads_static_bundle_annotations() {
+        let manifest = serde_json::json!({
+            "layers": [{}, {}],
+            "annotations": {
+                ANNOTATION_KIND: kind::STATIC_BUNDLE,
+                "org.shipyard.framework": "sveltekit",
+                "org.shipyard.build_command": "npm run build",
+                "org.shipyard.output_dir": "build",
+            }
+        });
+        let (kind, meta) = extract_kind_metadata(&manifest);
+        assert_eq!(kind, kind::STATIC_BUNDLE);
+        assert_eq!(meta["framework"], "sveltekit");
+        assert_eq!(meta["build_command"], "npm run build");
+        assert_eq!(meta["file_count"], 2);
+    }
+
+    #[test]
+    fn extract_kind_metadata_edge_function_defaults_runtime_to_js() {
+        let manifest = serde_json::json!({
+            "annotations": { ANNOTATION_KIND: kind::EDGE_FUNCTION }
+        });
+        let (kind, meta) = extract_kind_metadata(&manifest);
+        assert_eq!(kind, kind::EDGE_FUNCTION);
+        assert_eq!(meta["runtime"], "js");
+        assert!(meta["entry_point"].is_null());
+    }
+
+    #[test]
+    fn extract_kind_metadata_unknown_kind_yields_empty_metadata() {
+        let manifest = serde_json::json!({
+            "annotations": { ANNOTATION_KIND: "something_unrecognized" }
+        });
+        let (kind, meta) = extract_kind_metadata(&manifest);
+        assert_eq!(kind, "something_unrecognized");
+        assert_eq!(meta, serde_json::json!({}));
+    }
+
+    #[test]
+    fn wrap_single_blob_sets_kind_annotation_and_layer() {
+        let manifest = wrap_single_blob(
+            "sha256:abc123",
+            42,
+            kind::STATIC_BUNDLE,
+            serde_json::Map::new(),
+        );
+        assert_eq!(manifest["annotations"][ANNOTATION_KIND], kind::STATIC_BUNDLE);
+        assert_eq!(manifest["layers"][0]["digest"], "sha256:abc123");
+        assert_eq!(manifest["layers"][0]["size"], 42);
+        assert_eq!(manifest["schemaVersion"], 2);
+    }
+
+    #[test]
+    fn wrap_single_blob_preserves_extra_annotations() {
+        let mut extra = serde_json::Map::new();
+        extra.insert("custom.key".to_string(), serde_json::Value::String("value".to_string()));
+        let manifest = wrap_single_blob("sha256:def456", 10, kind::EDGE_FUNCTION, extra);
+        assert_eq!(manifest["annotations"]["custom.key"], "value");
+        assert_eq!(manifest["annotations"][ANNOTATION_KIND], kind::EDGE_FUNCTION);
+    }
+}

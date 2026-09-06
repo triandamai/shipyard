@@ -547,6 +547,50 @@ fn decode_chunked(input: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod decode_chunked_tests {
+    use super::decode_chunked;
+
+    #[test]
+    fn decodes_a_single_chunk() {
+        assert_eq!(decode_chunked("5\r\nhello\r\n0\r\n\r\n"), "hello");
+    }
+
+    #[test]
+    fn decodes_multiple_chunks_concatenated() {
+        assert_eq!(decode_chunked("4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n"), "Wikipedia");
+    }
+
+    #[test]
+    fn empty_input_yields_empty_string() {
+        assert_eq!(decode_chunked(""), "");
+    }
+
+    #[test]
+    fn input_with_no_crlf_yields_empty_string() {
+        assert_eq!(decode_chunked("not chunked at all"), "");
+    }
+
+    #[test]
+    fn zero_size_chunk_terminates_immediately() {
+        assert_eq!(decode_chunked("0\r\n\r\n"), "");
+    }
+
+    #[test]
+    fn declared_size_exceeding_available_bytes_stops_without_partial_data() {
+        // Size 0xa (10) declared but only 9 bytes follow — the decoder bails
+        // out rather than reading past the end of the buffer.
+        assert_eq!(decode_chunked("a\r\nhi\r\n0\r\n\r\n"), "");
+    }
+
+    #[test]
+    fn invalid_hex_size_falls_back_to_zero_and_terminates() {
+        // usize::from_str_radix on non-hex input fails -> unwrap_or(0) treats
+        // it as the terminating zero-chunk rather than panicking.
+        assert_eq!(decode_chunked("zz\r\nhello\r\n0\r\n\r\n"), "");
+    }
+}
+
 // ─── DockerEngine impl ────────────────────────────────────────────────────────
 
 #[async_trait::async_trait]

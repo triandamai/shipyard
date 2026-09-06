@@ -317,3 +317,51 @@ impl GitService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_creds_extracts_username_and_password() {
+        let url = "https://octocat:ghp_abc123@github.com/octocat/hello-world.git";
+        assert_eq!(
+            url_creds(url),
+            Some(("octocat".to_string(), "ghp_abc123".to_string()))
+        );
+    }
+
+    #[test]
+    fn url_creds_works_with_plain_http() {
+        let url = "http://user:pass@internal-git.local/repo.git";
+        assert_eq!(url_creds(url), Some(("user".to_string(), "pass".to_string())));
+    }
+
+    #[test]
+    fn url_creds_none_when_no_embedded_credentials() {
+        assert_eq!(url_creds("https://github.com/octocat/hello-world.git"), None);
+    }
+
+    #[test]
+    fn url_creds_none_for_non_http_schemes() {
+        assert_eq!(url_creds("git@github.com:octocat/hello-world.git"), None);
+        assert_eq!(url_creds("ssh://git@github.com/octocat/hello-world.git"), None);
+    }
+
+    #[test]
+    fn url_creds_none_when_username_has_no_password() {
+        // '@' present but no ':' before it inside the credential segment.
+        assert_eq!(url_creds("https://usernameonly@github.com/repo.git"), None);
+    }
+
+    #[test]
+    fn url_creds_splits_on_first_colon_in_credentials() {
+        // A password containing ':' stays intact after the first split point —
+        // only the first ':' (username separator) is treated specially.
+        let url = "https://user:pass:with:colons@host/repo.git";
+        assert_eq!(
+            url_creds(url),
+            Some(("user".to_string(), "pass:with:colons".to_string()))
+        );
+    }
+}

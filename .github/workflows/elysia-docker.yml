@@ -1,0 +1,87 @@
+name: Build & Push Elysia Docker Image
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'examples/elysia/**'
+      - '.github/workflows/elysia-docker.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'examples/elysia/**'
+      - '.github/workflows/elysia-docker.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        working-directory: examples/elysia
+        run: bun install --frozen-lockfile
+
+      - name: Type Check
+        working-directory: examples/elysia
+        run: bunx tsc --noEmit
+
+      - name: Build Application
+        working-directory: examples/elysia
+        run: bun run build
+
+  build-and-push-docker:
+    name: Build & Push Docker Image
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/elysia-example
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=ref,event=pr
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./examples/elysia
+          file: ./examples/elysia/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=elysia
+          cache-to: type=gha,mode=max,scope=elysia
