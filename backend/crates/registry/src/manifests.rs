@@ -73,15 +73,10 @@ pub async fn put_manifest(
         if layer_sum + config_size > 0 { layer_sum + config_size } else { size }
     };
 
-    // Resolve namespace slug → id.
-    let ns_id = sqlx::query_as::<_, (uuid::Uuid,)>(
-        "SELECT id FROM registry_namespaces WHERE slug = $1",
-    )
-    .bind(&namespace)
-    .fetch_optional(&state.db)
-    .await?;
+    // Resolve namespace slug → id, creating the namespace on first HTTP push.
+    let ns_id = resolve_or_create_namespace(&state, &org, &project, &namespace).await?;
 
-    if let Some((ns_id,)) = ns_id {
+    {
         let tag = reference.clone();
 
         sqlx::query(
@@ -214,6 +209,63 @@ pub async fn head_manifest(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Resolve the `registry_namespaces` row for an `<org>/<project>` OCI path,
+/// creating it on first push. Mirrors `push::ArtifactPusher::ensure_namespace`
+/// for images that arrive over HTTP (`docker push` from CI) rather than through
+/// the build engine.
+///
+/// Fails with `NAME_UNKNOWN` when the org/project slugs in the push path don't
+/// correspond to a real Shipyard project — without this the push returns 201 but
+/// the image never records an `artifacts` row and so never shows up in the UI.
+async fn resolve_or_create_namespace(
+    state: &RegistryState,
+    org_slug: &str,
+    project_slug: &str,
+    namespace: &str,
+) -> Result<uuid::Uuid> {
+    if let Some((id,)) = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT id FROM registry_namespaces WHERE slug = $1",
+    )
+    .bind(namespace)
+    .fetch_optional(&state.db)
+    .await?
+    {
+        return Ok(id);
+    }
+
+    let (org_id,) = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT id FROM organizations WHERE slug = $1",
+    )
+    .bind(org_slug)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| RegistryError::NameUnknown(namespace.to_string()))?;
+
+    let (project_id,) = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "SELECT id FROM projects WHERE slug = $1 AND org_id = $2",
+    )
+    .bind(project_slug)
+    .bind(org_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| RegistryError::NameUnknown(namespace.to_string()))?;
+
+    let (id,) = sqlx::query_as::<_, (uuid::Uuid,)>(
+        "INSERT INTO registry_namespaces (id, org_id, project_id, slug)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (org_id, project_id) DO UPDATE SET slug = EXCLUDED.slug
+         RETURNING id",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(org_id)
+    .bind(project_id)
+    .bind(namespace)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(id)
+}
 
 async fn bump_blob_refs(state: &RegistryState, manifest: &Value) -> Result<()> {
     let layers = manifest

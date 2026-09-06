@@ -12,6 +12,9 @@ pub enum RegistryError {
     #[error("manifest not found: {0}")]
     ManifestNotFound(String),
 
+    #[error("repository name unknown: {0}")]
+    NameUnknown(String),
+
     #[error("upload session not found: {0}")]
     UploadNotFound(String),
 
@@ -43,6 +46,7 @@ impl RegistryError {
         match self {
             Self::BlobNotFound(_)     => "BLOB_UNKNOWN",
             Self::ManifestNotFound(_) => "MANIFEST_UNKNOWN",
+            Self::NameUnknown(_)      => "NAME_UNKNOWN",
             Self::UploadNotFound(_)   => "BLOB_UPLOAD_UNKNOWN",
             Self::InvalidDigest(_)    => "DIGEST_INVALID",
             Self::DigestMismatch {..} => "DIGEST_INVALID",
@@ -60,6 +64,7 @@ impl IntoResponse for RegistryError {
             Self::Forbidden           => StatusCode::FORBIDDEN,
             Self::BlobNotFound(_)
             | Self::ManifestNotFound(_)
+            | Self::NameUnknown(_)
             | Self::UploadNotFound(_) => StatusCode::NOT_FOUND,
             Self::InvalidDigest(_)
             | Self::DigestMismatch {..} => StatusCode::BAD_REQUEST,
