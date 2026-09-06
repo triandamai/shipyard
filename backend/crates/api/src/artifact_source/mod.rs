@@ -31,11 +31,14 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Debug, Serialize)]
 pub struct ArtifactSourceResponse {
-    pub service_id:   Uuid,
-    pub namespace_id: Uuid,
-    pub repo:         String,
-    pub tag:          String,
-    pub updated_at:   DateTime<Utc>,
+    pub service_id:          Uuid,
+    pub namespace_id:        Uuid,
+    pub repo:                String,
+    pub tag:                 String,
+    /// When true, a push of `repo:tag` to the Shipyard registry auto-queues a
+    /// deployment for this service.
+    pub auto_deploy_on_push: bool,
+    pub updated_at:          DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +47,9 @@ pub struct UpsertArtifactSourceRequest {
     pub repo:         String,
     /// Defaults to "latest" when omitted.
     pub tag:          Option<String>,
+    /// Defaults to false when omitted.
+    #[serde(default)]
+    pub auto_deploy_on_push: bool,
 }
 
 // ─── RBAC helper ─────────────────────────────────────────────────────────────
@@ -67,8 +73,8 @@ async fn get_artifact_source(
 ) -> Result<Json<ApiResponse<ArtifactSourceResponse>>, ApiAppError> {
     require_service_write(&state.db, auth_user.user_id, service_id).await?;
 
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, DateTime<Utc>)>(
-        "SELECT service_id, namespace_id, repo, tag, updated_at
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, bool, DateTime<Utc>)>(
+        "SELECT service_id, namespace_id, repo, tag, auto_deploy_on_push, updated_at
          FROM service_artifact_sources
          WHERE service_id = $1",
     )
@@ -81,12 +87,13 @@ async fn get_artifact_source(
         None => Err(ApiAppError(AppError::NotFound(
             "No artifact source configured for this service".into(),
         ))),
-        Some((sid, namespace_id, repo, tag, updated_at)) => {
+        Some((sid, namespace_id, repo, tag, auto_deploy_on_push, updated_at)) => {
             Ok(Json(ApiResponse::ok(ArtifactSourceResponse {
                 service_id: sid,
                 namespace_id,
                 repo,
                 tag,
+                auto_deploy_on_push,
                 updated_at,
             })))
         }
@@ -130,25 +137,28 @@ async fn put_artifact_source(
     let tag = body.tag.unwrap_or_else(|| "latest".to_string());
 
     sqlx::query(
-        "INSERT INTO service_artifact_sources (service_id, namespace_id, repo, tag, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
+        "INSERT INTO service_artifact_sources
+             (service_id, namespace_id, repo, tag, auto_deploy_on_push, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
          ON CONFLICT (service_id) DO UPDATE
-           SET namespace_id = EXCLUDED.namespace_id,
-               repo         = EXCLUDED.repo,
-               tag          = EXCLUDED.tag,
-               updated_at   = NOW()",
+           SET namespace_id        = EXCLUDED.namespace_id,
+               repo                = EXCLUDED.repo,
+               tag                 = EXCLUDED.tag,
+               auto_deploy_on_push = EXCLUDED.auto_deploy_on_push,
+               updated_at          = NOW()",
     )
     .bind(service_id)
     .bind(body.namespace_id)
     .bind(&body.repo)
     .bind(&tag)
+    .bind(body.auto_deploy_on_push)
     .execute(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     // Re-fetch for the canonical response (includes server-set updated_at).
-    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, DateTime<Utc>)>(
-        "SELECT service_id, namespace_id, repo, tag, updated_at
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, bool, DateTime<Utc>)>(
+        "SELECT service_id, namespace_id, repo, tag, auto_deploy_on_push, updated_at
          FROM service_artifact_sources
          WHERE service_id = $1",
     )
@@ -162,7 +172,8 @@ async fn put_artifact_source(
         namespace_id: row.1,
         repo: row.2,
         tag: row.3,
-        updated_at: row.4,
+        auto_deploy_on_push: row.4,
+        updated_at: row.5,
     })))
 }
 

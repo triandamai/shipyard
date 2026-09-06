@@ -3052,10 +3052,11 @@ impl DeploymentEngine {
                         .map_err(|e| AppError::Database(format!("namespace not found: {e}")))?;
 
                         // Pull the image from the internal registry.
-                        let image_ref = format!(
-                            "{}/{}/{}:{}",
-                            self.registry_hostname, ns_slug, repo, tag
+                        let image_base = format!(
+                            "{}/{}/{}",
+                            self.registry_hostname, ns_slug, repo
                         );
+                        let image_ref = format!("{image_base}:{tag}");
                         let pull_msg = format!("Pulling image from internal registry: {image_ref}");
                         self.insert_log(deployment_id, Some(step_id), "info", &pull_msg).await;
                         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pull_msg).await;
@@ -3066,7 +3067,16 @@ impl DeploymentEngine {
                                 self.insert_log(deployment_id, Some(step_id), "info", line).await;
                             }
                         }
-                        Ok(image_ref)
+
+                        // Resolve to an immutable digest ref so Swarm sees a real
+                        // change when a moving tag like `:latest` is re-pushed —
+                        // otherwise the unchanged `:latest` ref won't restart the
+                        // running containers. Mirrors the `ImageSource::Registry` arm.
+                        let resolved = self.docker.resolve_image_digest(&image_base, tag).await?;
+                        let resolved_msg = format!("Resolved: {resolved}");
+                        self.insert_log(deployment_id, Some(step_id), "info", &resolved_msg).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &resolved_msg).await;
+                        Ok(resolved)
                     }
                     "static_bundle" => {
                         // Sentinel: the execute_deployment caller will short-circuit

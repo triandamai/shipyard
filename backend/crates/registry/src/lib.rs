@@ -6,6 +6,7 @@ pub mod kinds;
 pub mod auth;
 pub mod router;
 pub mod push;
+pub mod deploy_hook;
 
 use std::sync::Arc;
 use storage::StorageBackend;

@@ -412,6 +412,15 @@ export interface ServiceEnv {
 	created_at: string;
 }
 
+export interface ArtifactSource {
+	service_id: string;
+	namespace_id: string;
+	repo: string;
+	tag: string;
+	auto_deploy_on_push: boolean;
+	updated_at: string;
+}
+
 export interface Container {
 	id: string;
 	docker_container_id: string;

@@ -34,7 +34,7 @@
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain,
-		Network as NetworkType, SwarmNode, ConnectionInfo
+		Network as NetworkType, SwarmNode, ConnectionInfo, ArtifactSource
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -151,6 +151,12 @@
 	let isSavingSettings = $state(false);
 	let settingsSaveError = $state('');
 	let settingsSaveSuccess = $state(false);
+
+	// Artifact source (Shipyard registry binding) — only set for services deployed
+	// from the internal registry. `null` hides the settings section entirely.
+	let artifactSource = $state<ArtifactSource | null>(null);
+	let editAutoDeployOnPush = $state(false);
+	let isLoadingArtifactSource = $state(false);
 
 	// ── Danger zone / Delete ─────────────────────────────────────────
 	let showDeleteConfirm = $state(false);
@@ -697,6 +703,15 @@
 		isLoadingSettingsNetworks = false;
 	}
 
+	async function loadArtifactSource() {
+		isLoadingArtifactSource = true;
+		const res = await api.getArtifactSource(serviceId);
+		// 404 (no binding) is expected for git / external-registry services.
+		artifactSource = res.data ?? null;
+		editAutoDeployOnPush = artifactSource?.auto_deploy_on_push ?? false;
+		isLoadingArtifactSource = false;
+	}
+
 	function openNetworkPickerForSettings() {
 		uiStore.pushPanel({
 			component: NetworkPickerPanel,
@@ -766,6 +781,18 @@
 			value: JSON.stringify(validMounts),
 			is_secret: false,
 		});
+
+		// Persist the auto-deploy-on-push flag for artifact-source services,
+		// re-sending the unchanged namespace/repo/tag binding.
+		if (artifactSource && editAutoDeployOnPush !== artifactSource.auto_deploy_on_push) {
+			const res = await api.putArtifactSource(serviceId, {
+				namespace_id: artifactSource.namespace_id,
+				repo: artifactSource.repo,
+				tag: artifactSource.tag,
+				auto_deploy_on_push: editAutoDeployOnPush,
+			});
+			if (res.data) artifactSource = res.data;
+		}
 
 		settingsSaveSuccess = true;
 		setTimeout(() => { settingsSaveSuccess = false; }, 2500);
@@ -893,7 +920,7 @@
 			registryPassIsSet = false;
 			editVolumeMounts = [];
 			editNetworks = [];
-			await Promise.all([loadSettingsEnvs(), loadSettingsNetworks()]);
+			await Promise.all([loadSettingsEnvs(), loadSettingsNetworks(), loadArtifactSource()]);
 		}
 	}
 
@@ -1888,6 +1915,36 @@
 							</div>
 						{/if}
 					</div>
+
+					<!-- Artifact Source (Shipyard registry binding) -->
+					{#if isLoadingArtifactSource}
+						<div class="settings-group">
+							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						</div>
+					{:else if artifactSource}
+						<div class="settings-group">
+							<div class="settings-group-header">
+								<Box size={13} />
+								<span class="settings-group-title">Artifact Source</span>
+								<span class="settings-group-desc">Bound to an image in the Shipyard registry.</span>
+							</div>
+							<div class="settings-field">
+								<label class="settings-label">Image</label>
+								<div class="settings-static font-mono">{artifactSource.repo}:{artifactSource.tag}</div>
+							</div>
+							<label class="settings-checkbox">
+								<input type="checkbox" bind:checked={editAutoDeployOnPush} />
+								<span class="settings-checkbox-text">
+									Auto-deploy on push
+									<span class="settings-checkbox-hint">
+										Redeploy automatically when a new
+										<code>:{artifactSource.tag}</code>
+										image is pushed to the registry.
+									</span>
+								</span>
+							</label>
+						</div>
+					{/if}
 
 					<!-- Replicas -->
 					<div class="settings-group">
@@ -3619,6 +3676,28 @@
 	}
 	.settings-input:focus { border-color: var(--accent); }
 	.settings-input.font-mono { font-family: var(--font-mono); }
+
+	.settings-static {
+		min-height: 30px; display: flex; align-items: center;
+		padding: 0 10px; font-size: 12px; color: var(--text-secondary);
+		background: var(--bg-base); border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+	}
+
+	.settings-checkbox {
+		display: flex; align-items: flex-start; gap: 8px;
+		padding: 8px 10px; background: var(--bg-base);
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.settings-checkbox input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+	.settings-checkbox-text { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-primary); }
+	.settings-checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+	.settings-checkbox-hint code {
+		font-family: var(--font-mono); font-size: 10px;
+		background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px;
+		border: 1px solid var(--border);
+	}
 
 	.preset-btns { display: flex; flex-wrap: wrap; gap: 5px; }
 	.preset-btn {

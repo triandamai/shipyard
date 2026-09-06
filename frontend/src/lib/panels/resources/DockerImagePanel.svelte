@@ -48,6 +48,9 @@
 
 	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
 	let selectedArtifact = $state<SelectedArtifact | null>(null);
+	// Only meaningful for the Shipyard Artifactory source — auto-redeploy when a
+	// new image is pushed to the bound repo:tag.
+	let autoDeployOnPush = $state(false);
 
 	function openShipyardPicker() {
 		uiStore.pushPanel({
@@ -158,6 +161,18 @@
 				});
 			}
 
+			// Bind the service to the Shipyard registry repo:tag so deploys always
+			// resolve the newest push of that tag. The checkbox only controls
+			// whether a push also auto-triggers the deploy.
+			if (registrySource === 'shipyard' && selectedArtifact) {
+				await api.putArtifactSource(serviceId, {
+					namespace_id: selectedArtifact.namespace_id,
+					repo: selectedArtifact.repo,
+					tag: selectedArtifact.tag,
+					auto_deploy_on_push: autoDeployOnPush,
+				});
+			}
+
 			onCreated?.(res.data);
 			uiStore.clearPanels();
 			uiStore.pushPanel({ component: ServiceDetailPanel, props: { serviceId, projectId, orgId }, title: res.data.name });
@@ -214,6 +229,18 @@
 					<span class="field-hint">Registry: {registryHostname}</span>
 				{/if}
 			</div>
+
+			<label class="checkbox-row">
+				<input type="checkbox" bind:checked={autoDeployOnPush} />
+				<span class="checkbox-text">
+					Auto-deploy on push
+					<span class="checkbox-hint">
+						Redeploy this service automatically when a new
+						{#if selectedArtifact}<code class="font-mono">:{selectedArtifact.tag}</code>{:else}image{/if}
+						is pushed to the registry.
+					</span>
+				</span>
+			</label>
 		{:else}
 			<div class="form-group">
 				<label class="form-label" for="di-reg">Registry URL <span class="optional">(optional)</span></label>
@@ -376,6 +403,22 @@
 	.optional { font-weight: 400; text-transform: none; letter-spacing: 0; }
 	.field-hint { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	/* Auto-deploy checkbox */
+	.checkbox-row {
+		display: flex; align-items: flex-start; gap: 8px;
+		padding: 8px 10px; background: var(--bg-elevated);
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.checkbox-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+	.checkbox-text { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-primary); }
+	.checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+	.checkbox-hint code {
+		font-family: var(--font-mono); font-size: 10px;
+		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
+		border: 1px solid var(--border);
+	}
 
 	/* Picker button */
 	.picker-btn {

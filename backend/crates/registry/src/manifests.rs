@@ -122,6 +122,28 @@ pub async fn put_manifest(
         }
 
         bump_blob_refs(&state, &manifest_value).await?;
+
+        // Fire auto-deploys for any service bound to this (namespace, repo, tag)
+        // with `auto_deploy_on_push` enabled. Best-effort: the image is already
+        // stored, so a queue failure must not fail the push.
+        if !tag.starts_with("sha256:") {
+            let mut deploy_tags = vec![tag.clone()];
+            if tag != "latest" {
+                // A `latest` alias row was just written above — deploy those too.
+                deploy_tags.push("latest".to_string());
+            }
+            for t in deploy_tags {
+                if let Err(e) =
+                    crate::deploy_hook::enqueue_auto_deploys_for_push(&state.db, ns_id, &repo, &t)
+                        .await
+                {
+                    tracing::warn!(
+                        namespace_id = %ns_id, repo = %repo, tag = %t,
+                        "auto-deploy enqueue failed after manifest push: {e}"
+                    );
+                }
+            }
+        }
     }
 
     Ok((

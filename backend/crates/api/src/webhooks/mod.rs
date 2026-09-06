@@ -1,10 +1,12 @@
 //! Webhook receivers for Git providers.
 //!
-//! Routes (no auth — the token in the URL is the authentication mechanism):
+//! Routes (no auth — the token in the URL is the authentication mechanism),
+//! mounted under `/api`:
 //!
-//!   POST /webhooks/github/:service_id/:token
-//!   POST /webhooks/gitlab/:service_id/:token
-//!   POST /webhooks/gitea/:service_id/:token
+//!   POST /api/webhooks/github/:service_id/:token
+//!   POST /api/webhooks/gitlab/:service_id/:token
+//!   POST /api/webhooks/gitea/:service_id/:token
+//!   POST /api/webhooks/deploy/:service_id/:token   — provider-agnostic, no payload
 //!
 //! On a matching push event the handler triggers a deployment for the service,
 //! identical to `POST /projects/:project_id/services/:service_id/deploy`.
@@ -35,6 +37,8 @@ pub fn routes() -> Router<AppState> {
         .route("/github/:service_id/:token", post(github_webhook))
         .route("/gitlab/:service_id/:token", post(gitlab_webhook))
         .route("/gitea/:service_id/:token", post(gitea_webhook))
+        // Provider-agnostic deploy trigger — for CI to call after pushing an image.
+        .route("/deploy/:service_id/:token", post(deploy_webhook))
         // Edge function group webhooks
         .route("/github/fn/:group_id/:token", post(github_fn_webhook))
         .route("/gitlab/fn/:group_id/:token", post(gitlab_fn_webhook))
@@ -399,6 +403,45 @@ async fn gitea_webhook(
     }
 
     trigger_deploy(&state, service_id, pushed_branch).await
+}
+
+/// POST /api/webhooks/deploy/:service_id/:token
+///
+/// Provider-agnostic: no payload, no branch/tag logic. Queues one deployment for
+/// the service (coalescing if a deploy is already queued or running). Intended
+/// for CI to call right after pushing a new image to the Shipyard registry —
+/// the service resolves its image from `service_artifact_sources`, so the
+/// freshest push of the bound tag is what gets deployed.
+async fn deploy_webhook(
+    Path((service_id, token)): Path<(Uuid, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let webhook_secret = load_webhook_token(&state, service_id).await?;
+
+    if token != webhook_secret {
+        return Err(ApiAppError(AppError::Unauthorized(
+            "Invalid webhook token".to_string(),
+        )));
+    }
+
+    let queued = shipyard_registry::deploy_hook::enqueue_service_deploy(
+        &state.db,
+        service_id,
+        "webhook",
+        "deploy-webhook",
+    )
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    match queued {
+        Some(deployment_id) => Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "deployment queued",
+            "deployment_id": deployment_id,
+        })))),
+        None => Ok(Json(ApiResponse::ok(serde_json::json!({
+            "message": "a deployment is already queued or running for this service",
+        })))),
+    }
 }
 
 // ─── Shared logic ─────────────────────────────────────────────────────────────

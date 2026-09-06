@@ -13,6 +13,7 @@ import type {
 	Project,
 	Service,
 	ServiceEnv,
+	ArtifactSource,
 	Deployment,
 	DeploymentStep,
 	DeploymentLog,
@@ -412,6 +413,18 @@ class ApiClient {
 		envs: Array<{ key: string; value: string; is_secret: boolean }>
 	): Promise<ApiResponse<ServiceEnv[]>> {
 		return this.post(`/services/${serviceId}/env/bulk`, { envs });
+	}
+
+	// ─── Artifact Source (Shipyard registry binding) ─────────────────
+	async getArtifactSource(serviceId: string): Promise<ApiResponse<ArtifactSource>> {
+		return this.get(`/services/${serviceId}/artifact-source`);
+	}
+
+	async putArtifactSource(
+		serviceId: string,
+		data: { namespace_id: string; repo: string; tag?: string; auto_deploy_on_push?: boolean }
+	): Promise<ApiResponse<ArtifactSource>> {
+		return this.put(`/services/${serviceId}/artifact-source`, data);
 	}
 
 	// ─── Deployments ─────────────────────────────────────────────────
