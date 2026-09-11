@@ -86,6 +86,8 @@
 			if (meta.host)     host     = meta.host;
 			if (meta.port)     port     = meta.port;
 			if (meta.username) username = meta.username;
+			if (meta.password) password = meta.password;
+			if (meta.database) database = meta.database;
 		}
 	});
 
@@ -284,7 +286,10 @@
 					{:else if meta?.detected}
 						<div class="auto-detect-notice">
 							<Info size={13} />
-							<span>Auto-detected <strong>{meta.engine}</strong> at <code>{meta.host}:{meta.port}</code>. Enter credentials to connect.</span>
+							<span>
+								Auto-detected <strong>{meta.engine}</strong> at <code>{meta.host}:{meta.port}</code>.
+								{#if meta.password}Credentials prefilled from the service — just click Connect.{:else}Enter credentials to connect.{/if}
+							</span>
 						</div>
 					{/if}
 

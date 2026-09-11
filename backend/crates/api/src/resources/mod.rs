@@ -351,6 +351,10 @@ pub fn routes() -> Router<AppState> {
             "/services/:service_id/volumes/:volume_id",
             delete(delete_volume),
         )
+        .route(
+            "/services/:service_id/volumes/advice",
+            get(get_volume_advice),
+        )
         // Project-scoped standalone volumes
         .route(
             "/projects/:project_id/volumes",
@@ -1207,4 +1211,183 @@ async fn delete_network(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Network deleted successfully" }))))
+}
+
+// ─── Anonymous-volume advice ─────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct VolumeAdviceResponse {
+    /// False when the image isn't present locally yet (never deployed) — the
+    /// caller can't warn accurately until after the first deploy.
+    image_present: bool,
+    image_ref: String,
+    /// Image-declared VOLUME paths with no named volume or bind mount configured.
+    unmounted_volume_paths: Vec<String>,
+}
+
+/// Normalize a container path for comparison: drop a trailing slash unless the
+/// path is just `/`.
+fn normalize_mount_path(p: &str) -> &str {
+    let t = p.trim();
+    if t.len() > 1 { t.trim_end_matches('/') } else { t }
+}
+
+/// GET /services/:service_id/volumes/advice
+///
+/// Reports image-declared `VOLUME` paths that aren't backed by a named volume or
+/// bind mount — Docker gives those a fresh anonymous volume on every redeploy, so
+/// data written there is lost. Returns an empty list (and `image_present: false`)
+/// when the image can't be inspected locally.
+async fn get_volume_advice(
+    auth_user: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<VolumeAdviceResponse>>, ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+
+    // Resolve the image the service deploys: `services.image`, else the `__IMAGE__`
+    // env var written by some creation flows.
+    let image: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT NULLIF(image, '') FROM services WHERE id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .flatten();
+
+    let image = match image {
+        Some(i) => i,
+        None => sqlx::query_scalar::<_, String>(
+            "SELECT value_encrypted FROM service_envs WHERE service_id = $1 AND key = '__IMAGE__'",
+        )
+        .bind(service_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        .map(|v| shipyard_common::crypto::decrypt_or_passthrough(&state.config.auth.secret_key, &v))
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_default(),
+    };
+
+    if image.trim().is_empty() {
+        return Ok(Json(ApiResponse::ok(VolumeAdviceResponse {
+            image_present: false,
+            image_ref: String::new(),
+            unmounted_volume_paths: vec![],
+        })));
+    }
+
+    // Declared VOLUME paths — absent/uninspectable image is not an error here.
+    let declared = match state.docker.image_declared_volumes(&image).await {
+        Ok(paths) => paths,
+        Err(_) => {
+            return Ok(Json(ApiResponse::ok(VolumeAdviceResponse {
+                image_present: false,
+                image_ref: image,
+                unmounted_volume_paths: vec![],
+            })));
+        }
+    };
+
+    // Covered targets = named volumes (`volumes` table) ∪ `__VOLUME_MOUNTS__` entries.
+    let mut covered: Vec<String> = sqlx::query_scalar::<_, String>(
+        "SELECT mount_path FROM volumes WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some(raw) = sqlx::query_scalar::<_, String>(
+        "SELECT value_encrypted FROM service_envs WHERE service_id = $1 AND key = '__VOLUME_MOUNTS__'",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    {
+        let decrypted =
+            shipyard_common::crypto::decrypt_or_passthrough(&state.config.auth.secret_key, &raw);
+        if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&decrypted) {
+            for e in entries {
+                if let Some(t) = e.get("target").and_then(|v| v.as_str()) {
+                    if !t.trim().is_empty() {
+                        covered.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(ApiResponse::ok(VolumeAdviceResponse {
+        image_present: true,
+        unmounted_volume_paths: unmounted_volume_paths(&declared, &covered),
+        image_ref: image,
+    })))
+}
+
+/// Image-declared VOLUME paths (`declared`) that are not covered by any
+/// configured mount target (`covered`). Order follows `declared`.
+fn unmounted_volume_paths(declared: &[String], covered: &[String]) -> Vec<String> {
+    let covered_norm: std::collections::HashSet<&str> =
+        covered.iter().map(|c| normalize_mount_path(c)).collect();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    declared
+        .iter()
+        .filter_map(|d| {
+            let n = normalize_mount_path(d);
+            (!n.is_empty() && !covered_norm.contains(n) && seen.insert(n)).then(|| n.to_string())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn flags_declared_volume_with_no_mount() {
+        assert_eq!(
+            unmounted_volume_paths(&v(&["/var/lib/postgresql/data"]), &v(&[])),
+            v(&["/var/lib/postgresql/data"]),
+        );
+    }
+
+    #[test]
+    fn trailing_slash_differences_still_match() {
+        assert_eq!(
+            unmounted_volume_paths(&v(&["/data/"]), &v(&["/data"])),
+            Vec::<String>::new(),
+        );
+        assert_eq!(
+            unmounted_volume_paths(&v(&["/data"]), &v(&["/data/"])),
+            Vec::<String>::new(),
+        );
+    }
+
+    #[test]
+    fn returns_only_the_uncovered_paths() {
+        assert_eq!(
+            unmounted_volume_paths(&v(&["/a", "/b", "/c"]), &v(&["/b"])),
+            v(&["/a", "/c"]),
+        );
+    }
+
+    #[test]
+    fn empty_declared_is_empty() {
+        assert_eq!(unmounted_volume_paths(&v(&[]), &v(&["/x"])), Vec::<String>::new());
+    }
+
+    #[test]
+    fn deduplicates_repeated_declarations() {
+        assert_eq!(
+            unmounted_volume_paths(&v(&["/data", "/data/"]), &v(&[])),
+            v(&["/data"]),
+        );
+    }
 }

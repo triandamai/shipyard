@@ -517,6 +517,14 @@ export interface Volume {
 	created_at: string;
 }
 
+export interface VolumeAdvice {
+	/** False when the image can't be inspected locally yet (never deployed). */
+	image_present: boolean;
+	image_ref: string;
+	/** Image-declared VOLUME paths with no named volume or bind mount configured. */
+	unmounted_volume_paths: string[];
+}
+
 export interface Network {
 	id: string;
 	project_id: string;
@@ -727,6 +735,10 @@ export interface DbMeta {
 	host: string | null;
 	port: number | null;
 	username: string | null;
+	/** Prefilled from the service's own env vars (e.g. POSTGRES_PASSWORD). */
+	password: string | null;
+	/** Prefilled from POSTGRES_DB / MYSQL_DATABASE / etc. */
+	database: string | null;
 	detected: boolean;
 }
 

@@ -34,7 +34,7 @@
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain,
-		Network as NetworkType, SwarmNode, ConnectionInfo, ArtifactSource
+		Network as NetworkType, SwarmNode, ConnectionInfo, ArtifactSource, VolumeAdvice
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -157,6 +157,9 @@
 	let artifactSource = $state<ArtifactSource | null>(null);
 	let editAutoDeployOnPush = $state(false);
 	let isLoadingArtifactSource = $state(false);
+
+	// Anonymous-volume advice — image-declared VOLUME paths with no configured mount.
+	let volumeAdvice = $state<VolumeAdvice | null>(null);
 
 	// ── Danger zone / Delete ─────────────────────────────────────────
 	let showDeleteConfirm = $state(false);
@@ -712,6 +715,11 @@
 		isLoadingArtifactSource = false;
 	}
 
+	async function loadVolumeAdvice() {
+		const res = await api.getVolumeAdvice(serviceId);
+		volumeAdvice = res.data ?? null;
+	}
+
 	function openNetworkPickerForSettings() {
 		uiStore.pushPanel({
 			component: NetworkPickerPanel,
@@ -920,7 +928,12 @@
 			registryPassIsSet = false;
 			editVolumeMounts = [];
 			editNetworks = [];
-			await Promise.all([loadSettingsEnvs(), loadSettingsNetworks(), loadArtifactSource()]);
+			await Promise.all([
+				loadSettingsEnvs(),
+				loadSettingsNetworks(),
+				loadArtifactSource(),
+				loadVolumeAdvice(),
+			]);
 		}
 	}
 
@@ -2052,6 +2065,22 @@
 							<span class="settings-group-title">Volume Mounts</span>
 							<span class="settings-group-desc">Bind named volumes or host paths into the container.</span>
 						</div>
+						{#if volumeAdvice && volumeAdvice.unmounted_volume_paths.length > 0}
+							<div class="settings-warn">
+								<AlertTriangle size={13} />
+								<div>
+									This image declares
+									{volumeAdvice.unmounted_volume_paths.length === 1 ? 'a volume' : 'volumes'}
+									with no named volume or bind mount:
+									<span class="settings-warn-paths">
+										{#each volumeAdvice.unmounted_volume_paths as p}<code>{p}</code>{/each}
+									</span>
+									Docker creates a fresh anonymous volume there on every redeploy —
+									<strong>data written to {volumeAdvice.unmounted_volume_paths.length === 1 ? 'it' : 'them'} will not persist</strong>.
+									Add a mount below with a matching path.
+								</div>
+							</div>
+						{/if}
 						{#if isLoadingSettingsEnvs}
 							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
 						{:else}
@@ -3696,6 +3725,23 @@
 	.settings-checkbox-hint code {
 		font-family: var(--font-mono); font-size: 10px;
 		background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px;
+		border: 1px solid var(--border);
+	}
+
+	.settings-warn {
+		display: flex; align-items: flex-start; gap: 8px;
+		padding: 9px 11px; font-size: 12px; line-height: 1.5;
+		color: var(--text-secondary);
+		background: color-mix(in srgb, var(--accent-yellow) 9%, transparent);
+		border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
+		border-radius: var(--radius-sm);
+	}
+	.settings-warn :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--accent-yellow); }
+	.settings-warn strong { color: var(--text-primary); }
+	.settings-warn-paths { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 0 3px; }
+	.settings-warn-paths code {
+		font-family: var(--font-mono); font-size: 11px;
+		background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px;
 		border: 1px solid var(--border);
 	}
 

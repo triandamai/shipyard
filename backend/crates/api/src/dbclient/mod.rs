@@ -65,6 +65,12 @@ pub struct DbMetaResponse {
     pub host:     Option<String>,
     pub port:     Option<u16>,
     pub username: Option<String>,
+    /// Prefilled from the service's own env vars (e.g. `POSTGRES_PASSWORD`) so the
+    /// owner can connect to their database in one click. Only populated for a
+    /// detected DB engine; gated behind `service:write` like env-var reveal.
+    pub password: Option<String>,
+    /// Prefilled from `POSTGRES_DB` / `MYSQL_DATABASE` / etc. when present.
+    pub database: Option<String>,
     pub detected: bool,
 }
 
@@ -139,9 +145,9 @@ async fn get_db_meta(
     let (image,) = row;
     let engine = detect_engine(&image);
 
-    // Fetch all env var keys for this service (values are encrypted; we only need keys to detect).
-    // For username detection we need the plaintext value — but since these are service-owned env vars
-    // the user set themselves, we store the unencrypted value in value_encrypted for non-secret vars.
+    // Fetch the service's env vars and decrypt each value — secret vars (e.g.
+    // `POSTGRES_PASSWORD`) are stored encrypted; `decrypt_or_passthrough` handles
+    // both encrypted and plaintext transparently.
     let env_rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, value_encrypted FROM service_envs WHERE service_id = $1",
     )
@@ -150,7 +156,15 @@ async fn get_db_meta(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let username = engine.as_ref().and_then(|e| detect_username(e, &env_rows));
+    let secret_key = &state.config.auth.secret_key;
+    let envs: Vec<(String, String)> = env_rows
+        .into_iter()
+        .map(|(k, v)| (k, shipyard_common::crypto::decrypt_or_passthrough(secret_key, &v)))
+        .collect();
+
+    let username = engine.as_ref().and_then(|e| detect_username(e, &envs));
+    let password = engine.as_ref().and_then(|e| detect_password(e, &envs));
+    let database = engine.as_ref().and_then(|e| detect_database(e, &envs));
 
     // Always use the Docker-internal DNS hostname — the backend runs inside Docker
     // on the same overlay network so this resolves reliably in production.
@@ -164,18 +178,14 @@ async fn get_db_meta(
         host: Some(host),
         port,
         username,
+        password,
+        database,
         detected,
     })))
 }
 
-fn detect_username(engine: &DbEngine, envs: &[(String, String)]) -> Option<String> {
-    let candidates: &[&str] = match engine {
-        DbEngine::Postgres  => &["POSTGRES_USER", "PGUSER"],
-        DbEngine::Mysql     => &["MYSQL_USER", "MYSQL_ROOT_USER"],
-        DbEngine::Mariadb   => &["MARIADB_USER", "MYSQL_USER"],
-        DbEngine::Redis     => &["REDIS_USER"],
-        DbEngine::Mongodb   => &["MONGO_INITDB_ROOT_USERNAME", "MONGODB_ROOT_USERNAME", "MONGODB_USERNAME"],
-    };
+/// First non-blank value among `candidates`, looked up in the service's env vars.
+fn env_lookup(envs: &[(String, String)], candidates: &[&str]) -> Option<String> {
     for key in candidates {
         if let Some((_, val)) = envs.iter().find(|(k, _)| k == key) {
             let trimmed = val.trim();
@@ -185,6 +195,36 @@ fn detect_username(engine: &DbEngine, envs: &[(String, String)]) -> Option<Strin
         }
     }
     None
+}
+
+fn detect_username(engine: &DbEngine, envs: &[(String, String)]) -> Option<String> {
+    env_lookup(envs, match engine {
+        DbEngine::Postgres => &["POSTGRES_USER", "PGUSER"],
+        DbEngine::Mysql    => &["MYSQL_USER", "MYSQL_ROOT_USER"],
+        DbEngine::Mariadb  => &["MARIADB_USER", "MYSQL_USER"],
+        DbEngine::Redis    => &["REDIS_USER"],
+        DbEngine::Mongodb  => &["MONGO_INITDB_ROOT_USERNAME", "MONGODB_ROOT_USERNAME", "MONGODB_USERNAME"],
+    })
+}
+
+fn detect_password(engine: &DbEngine, envs: &[(String, String)]) -> Option<String> {
+    env_lookup(envs, match engine {
+        DbEngine::Postgres => &["POSTGRES_PASSWORD", "PGPASSWORD"],
+        DbEngine::Mysql    => &["MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"],
+        DbEngine::Mariadb  => &["MARIADB_PASSWORD", "MYSQL_PASSWORD", "MARIADB_ROOT_PASSWORD", "MYSQL_ROOT_PASSWORD"],
+        DbEngine::Redis    => &["REDIS_PASSWORD"],
+        DbEngine::Mongodb  => &["MONGO_INITDB_ROOT_PASSWORD", "MONGODB_ROOT_PASSWORD", "MONGODB_PASSWORD"],
+    })
+}
+
+fn detect_database(engine: &DbEngine, envs: &[(String, String)]) -> Option<String> {
+    env_lookup(envs, match engine {
+        DbEngine::Postgres => &["POSTGRES_DB"],
+        DbEngine::Mysql    => &["MYSQL_DATABASE"],
+        DbEngine::Mariadb  => &["MARIADB_DATABASE", "MYSQL_DATABASE"],
+        DbEngine::Redis    => &[],
+        DbEngine::Mongodb  => &["MONGO_INITDB_DATABASE"],
+    })
 }
 
 async fn run_db_query(
@@ -259,15 +299,35 @@ async fn run_postgres_query(
 }
 
 fn pg_value_to_json(row: &sqlx::postgres::PgRow, idx: usize, type_name: &str) -> serde_json::Value {
-    use sqlx::Row;
+    use sqlx::{Row, ValueRef};
+    use sqlx::types::chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    let null = serde_json::Value::Null;
     match type_name {
-        "INT2" | "INT4" => row.try_get::<i32, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "INT8" | "OID"  => row.try_get::<i64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "FLOAT4"        => row.try_get::<f32, _>(idx).ok().map(|v| serde_json::Value::from(v as f64)).unwrap_or(serde_json::Value::Null),
-        "FLOAT8"        => row.try_get::<f64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "BOOL"          => row.try_get::<bool, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
-        "JSON" | "JSONB" => row.try_get::<serde_json::Value, _>(idx).unwrap_or(serde_json::Value::Null),
-        _               => row.try_get::<String, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null),
+        "INT2" | "INT4" => row.try_get::<i32, _>(idx).ok().map(Into::into).unwrap_or(null),
+        "INT8" | "OID"  => row.try_get::<i64, _>(idx).ok().map(Into::into).unwrap_or(null),
+        "FLOAT4"        => row.try_get::<f32, _>(idx).ok().map(|v| serde_json::Value::from(v as f64)).unwrap_or(null),
+        "FLOAT8"        => row.try_get::<f64, _>(idx).ok().map(Into::into).unwrap_or(null),
+        "BOOL"          => row.try_get::<bool, _>(idx).ok().map(Into::into).unwrap_or(null),
+        "JSON" | "JSONB" => row.try_get::<serde_json::Value, _>(idx).unwrap_or(null),
+        // Types sqlx will not decode as `String` — without these arms every
+        // `uuid` / timestamp / date column renders as a misleading NULL.
+        "UUID"          => row.try_get::<sqlx::types::Uuid, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(null),
+        "TIMESTAMPTZ"   => row.try_get::<DateTime<Utc>, _>(idx).ok().map(|v| v.to_rfc3339().into()).unwrap_or(null),
+        "TIMESTAMP"     => row.try_get::<NaiveDateTime, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(null),
+        "DATE"          => row.try_get::<NaiveDate, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(null),
+        "TIME"          => row.try_get::<NaiveTime, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(null),
+        _ => {
+            if let Ok(v) = row.try_get::<String, _>(idx) { return v.into(); }
+            if let Ok(v) = row.try_get::<bool, _>(idx)   { return v.into(); }
+            if let Ok(v) = row.try_get::<i64, _>(idx)    { return v.into(); }
+            if let Ok(v) = row.try_get::<f64, _>(idx)    { return v.into(); }
+            // Distinguish a genuine SQL NULL from a type we can't decode, so the
+            // latter shows up as visible data rather than a phantom NULL.
+            match row.try_get_raw(idx) {
+                Ok(raw) if raw.is_null() => serde_json::Value::Null,
+                _ => serde_json::Value::String(format!("({})", type_name.to_lowercase())),
+            }
+        }
     }
 }
 
@@ -319,20 +379,35 @@ async fn run_mysql_query(
 }
 
 fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, type_name: &str) -> serde_json::Value {
-    use sqlx::Row;
+    use sqlx::{Row, ValueRef};
+    use sqlx::types::chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     let t = type_name.to_uppercase();
     if t.contains("BIGINT") {
         row.try_get::<i64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null)
     } else if t.contains("INT") {
         row.try_get::<i32, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null)
     } else if t.contains("DOUBLE") || t.contains("DECIMAL") || t.contains("NUMERIC") {
-        row.try_get::<f64, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null)
+        row.try_get::<f64, _>(idx).ok().map(Into::into)
+            .or_else(|| row.try_get::<String, _>(idx).ok().map(Into::into))
+            .unwrap_or(serde_json::Value::Null)
     } else if t.contains("FLOAT") {
         row.try_get::<f32, _>(idx).ok().map(|v| serde_json::Value::from(v as f64)).unwrap_or(serde_json::Value::Null)
     } else if t.contains("JSON") {
         row.try_get::<serde_json::Value, _>(idx).unwrap_or(serde_json::Value::Null)
+    } else if t == "DATETIME" || t == "TIMESTAMP" {
+        row.try_get::<NaiveDateTime, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(serde_json::Value::Null)
+    } else if t == "DATE" {
+        row.try_get::<NaiveDate, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(serde_json::Value::Null)
+    } else if t == "TIME" {
+        row.try_get::<NaiveTime, _>(idx).ok().map(|v| v.to_string().into()).unwrap_or(serde_json::Value::Null)
     } else {
-        row.try_get::<String, _>(idx).ok().map(Into::into).unwrap_or(serde_json::Value::Null)
+        row.try_get::<String, _>(idx).ok().map(Into::into)
+            .or_else(|| row.try_get::<i64, _>(idx).ok().map(Into::into))
+            .or_else(|| row.try_get::<f64, _>(idx).ok().map(Into::into))
+            .unwrap_or_else(|| match row.try_get_raw(idx) {
+                Ok(raw) if raw.is_null() => serde_json::Value::Null,
+                _ => serde_json::Value::String(format!("({})", t.to_lowercase())),
+            })
     }
 }
 
@@ -611,5 +686,113 @@ fn bson_to_json(val: Option<mongodb::bson::Bson>) -> serde_json::Value {
     match val {
         None => serde_json::Value::Null,
         Some(b) => serde_json::to_value(&b).unwrap_or(serde_json::Value::Null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn detect_username_reads_postgres_user() {
+        let e = envs(&[("POSTGRES_USER", "app"), ("POSTGRES_PASSWORD", "s3cr3t")]);
+        assert_eq!(detect_username(&DbEngine::Postgres, &e), Some("app".to_string()));
+    }
+
+    #[test]
+    fn detect_password_reads_engine_specific_env() {
+        let pg = envs(&[("POSTGRES_PASSWORD", "pgpw")]);
+        assert_eq!(detect_password(&DbEngine::Postgres, &pg), Some("pgpw".to_string()));
+
+        let redis = envs(&[("REDIS_PASSWORD", "rpw")]);
+        assert_eq!(detect_password(&DbEngine::Redis, &redis), Some("rpw".to_string()));
+    }
+
+    #[test]
+    fn detect_password_falls_back_to_root_password_for_mysql() {
+        let e = envs(&[("MYSQL_ROOT_PASSWORD", "rootpw")]);
+        assert_eq!(detect_password(&DbEngine::Mysql, &e), Some("rootpw".to_string()));
+    }
+
+    #[test]
+    fn detect_database_reads_db_name_env() {
+        let e = envs(&[("POSTGRES_DB", "orders")]);
+        assert_eq!(detect_database(&DbEngine::Postgres, &e), Some("orders".to_string()));
+    }
+
+    #[test]
+    fn detect_database_is_none_when_unset() {
+        let e = envs(&[("POSTGRES_USER", "app")]);
+        assert_eq!(detect_database(&DbEngine::Postgres, &e), None);
+    }
+
+    #[test]
+    fn detectors_ignore_blank_values() {
+        let e = envs(&[("POSTGRES_PASSWORD", "   "), ("POSTGRES_DB", "")]);
+        assert_eq!(detect_password(&DbEngine::Postgres, &e), None);
+        assert_eq!(detect_database(&DbEngine::Postgres, &e), None);
+    }
+
+    // ── Live Postgres value rendering ────────────────────────────────────────
+    // `#[ignore]` so `cargo test` stays DB-free; CI runs it with
+    // `--include-ignored` against its Postgres service container.
+
+    fn pg_request_from_env(sql: &str) -> DbQueryRequest {
+        let url = std::env::var("TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://shipyard:shipyard@localhost:5432/shipyard".to_string());
+        let rest = url
+            .strip_prefix("postgres://")
+            .or_else(|| url.strip_prefix("postgresql://"))
+            .expect("TEST_DATABASE_URL must be a postgres:// URL");
+        let (creds, host_part) = rest.split_once('@').expect("url has credentials");
+        let (user, pass) = creds.split_once(':').unwrap_or((creds, ""));
+        let (host_port, db) = host_part.split_once('/').expect("url has a database");
+        let (host, port) = host_port.split_once(':').unwrap_or((host_port, "5432"));
+        DbQueryRequest {
+            engine: DbEngine::Postgres,
+            host: host.to_string(),
+            port: port.parse().expect("port is numeric"),
+            database: db.split(['?', '&']).next().unwrap().to_string(),
+            username: user.to_string(),
+            password: pass.to_string(),
+            sql: sql.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a reachable Postgres database (see TEST_DATABASE_URL)"]
+    async fn pg_query_renders_uuid_and_temporal_columns_instead_of_null() {
+        for stmt in [
+            "DROP TABLE IF EXISTS _dbclient_render_test",
+            "CREATE TABLE _dbclient_render_test (\
+                 id uuid PRIMARY KEY DEFAULT gen_random_uuid(), \
+                 created_at timestamptz NOT NULL DEFAULT now(), \
+                 the_day date NOT NULL DEFAULT current_date, \
+                 n integer NOT NULL DEFAULT 7)",
+            "INSERT INTO _dbclient_render_test DEFAULT VALUES",
+        ] {
+            run_postgres_query(&pg_request_from_env(stmt))
+                .await
+                .unwrap_or_else(|e| panic!("setup stmt failed ({stmt}): {e}"));
+        }
+
+        let res = run_postgres_query(&pg_request_from_env(
+            "SELECT id, created_at, the_day, n FROM _dbclient_render_test",
+        ))
+        .await
+        .expect("select failed");
+
+        assert_eq!(res.row_count, 1);
+        let row = &res.rows[0];
+        assert!(row[0].is_string(), "uuid id should render as a string, got {:?}", row[0]);
+        assert!(row[1].is_string(), "timestamptz should render, got {:?}", row[1]);
+        assert!(row[2].is_string(), "date should render, got {:?}", row[2]);
+        assert_eq!(row[3], serde_json::json!(7));
+
+        let _ = run_postgres_query(&pg_request_from_env("DROP TABLE _dbclient_render_test")).await;
     }
 }

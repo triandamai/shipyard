@@ -78,6 +78,11 @@ pub trait DockerEngine: Send + Sync {
     /// Falls back to `image:tag` if the digest cannot be resolved.
     async fn resolve_image_digest(&self, image: &str, tag: &str) -> AppResult<String>;
 
+    /// The `VOLUME` paths declared in an image's config
+    /// (e.g. `["/var/lib/postgresql/data"]`). Errors if the image is not
+    /// present locally (never pulled).
+    async fn image_declared_volumes(&self, image_ref: &str) -> AppResult<Vec<String>>;
+
     /// Build an image from a local directory context.
     /// `tag` is the full image reference (e.g. `shipyard/my-svc:abc1234`).
     /// `context_path` is the absolute path to the build context directory.
@@ -960,6 +965,21 @@ impl DockerEngine for BollardDockerEngine {
                 Ok(image_ref)
             }
         }
+    }
+
+    async fn image_declared_volumes(&self, image_ref: &str) -> AppResult<Vec<String>> {
+        let info = self
+            .client
+            .inspect_image(image_ref)
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_image failed: {e}")))?;
+
+        let paths = info
+            .config
+            .and_then(|c| c.volumes)
+            .map(|v| v.into_keys().collect())
+            .unwrap_or_default();
+        Ok(paths)
     }
 
     // ── Image build ───────────────────────────────────────────────────────────

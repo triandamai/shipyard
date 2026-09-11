@@ -509,6 +509,10 @@ class ApiClient {
 		return this.get(`/services/${serviceId}/volumes`);
 	}
 
+	async getVolumeAdvice(serviceId: string): Promise<ApiResponse<import('./types').VolumeAdvice>> {
+		return this.get(`/services/${serviceId}/volumes/advice`);
+	}
+
 	async getNetworks(projectId: string): Promise<ApiResponse<Network[]>> {
 		return this.get(`/projects/${projectId}/networks`);
 	}
