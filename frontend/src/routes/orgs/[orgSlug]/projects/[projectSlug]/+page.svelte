@@ -19,7 +19,6 @@
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
 	import VolumeNode from '$lib/flows/VolumeNode.svelte';
 	import DomainNode from '$lib/flows/DomainNode.svelte';
-	import ContainerNode from '$lib/flows/ContainerNode.svelte';
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
@@ -27,7 +26,6 @@
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
-	import ContainerDetailPanel from '$lib/panels/ContainerDetailPanel.svelte';
 	import DomainDetailPanel from '$lib/panels/DomainDetailPanel.svelte';
 	import StaticSiteDetailPanel from '$lib/panels/StaticSiteDetailPanel.svelte';
 	import AddResourcePanel from '$lib/panels/AddResourcePanel.svelte';
@@ -89,7 +87,6 @@
 		network:       NetworkNode as any,
 		volume:        VolumeNode as any,
 		domain:        DomainNode as any,
-		container:     ContainerNode as any,
 		static_site:   StaticSiteNode as any,
 		portal:        PortalNode as any,
 		add_resource:  AddResourceNode as any,
@@ -104,11 +101,12 @@
 		});
 	}
 
-	function handleNodeClick({ node }: { node: Node; event: MouseEvent | TouchEvent }) {
+	function handleNodeClick({ node, event }: { node: Node; event: MouseEvent | TouchEvent }) {
 		if (node.type === 'add_resource') {
 			openAddResource();
 		} else if (node.type === 'service') {
 			const serviceId = node.id.replace(/^svc_/, '');
+			const clickedStack = event.target instanceof Element && event.target.closest('.replica-stack-peek');
 			uiStore.pushPanel({
 				key: `service:${serviceId}`,
 				component: ServiceDetailPanel,
@@ -116,6 +114,7 @@
 					serviceId,
 					projectId,
 					orgId,
+					initialTab: clickedStack ? 'replicas' : undefined,
 					onDeleted: () => {
 						uiStore.popPanel();
 						syncTopology(orgId, projectId);
@@ -163,17 +162,6 @@
 					onDeleted: () => syncTopology(orgId, projectId),
 				},
 				title: (node.data?.name as string) || 'Volume'
-			});
-		} else if (node.type === 'container') {
-			const containerId = node.id.replace(/^ctr_/, '');
-			// service_id in node.data uses the canvas node-ID format ("svc_{uuid}")
-			// — strip the prefix to get the raw API service UUID.
-			const svcId = ((node.data?.service_id as string) || '').replace(/^svc_/, '');
-			uiStore.pushPanel({
-				key: `container:${containerId}`,
-				component: ContainerDetailPanel,
-				props: { containerId, serviceId: svcId },
-				title: `Replica #${node.data?.replica_index ?? ''}`
 			});
 		} else if (node.type === 'static_site') {
 			const serviceId = node.id.replace(/^svc_/, '');
@@ -252,8 +240,8 @@
 
 	function handleTopologyMqtt(payload: MqttPayload) {
 		if (payload.event === 'service.deleted') {
-			// Optimistically remove the deleted service node and its container replicas
-			// immediately, then sync in the background to catch any dangling edges/nodes.
+			// Optimistically remove the deleted service node and its edges
+			// immediately, then sync in the background to catch any dangling nodes.
 			const serviceId = payload.meta?.service_id as string | undefined;
 			if (serviceId) {
 				topologyStore.removeNode(`svc_${serviceId}`);

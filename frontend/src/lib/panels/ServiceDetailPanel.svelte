@@ -51,9 +51,10 @@
 		projectId: string;
 		orgId: string;
 		onDeleted?: () => void;
+		initialTab?: Tab;
 	}
 
-	let { serviceId, projectId, orgId, onDeleted }: Props = $props();
+	let { serviceId, projectId, orgId, onDeleted, initialTab }: Props = $props();
 
 	// ── Permission gates ─────────────────────────────────────────────
 	let myRole  = $derived($orgStore.myMembership?.role ?? null);
@@ -64,7 +65,7 @@
 
 	// ── Tabs ─────────────────────────────────────────────────────────
 	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings';
-	let activeTab = $state<Tab>('overview');
+	let activeTab = $state<Tab>(initialTab ?? 'overview');
 
 	// ── Core state ───────────────────────────────────────────────────
 	let service = $state<Service | null>(null);
@@ -978,6 +979,7 @@
 		serviceContainersTopic = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/containers`;
 		await loadService();
 		await Promise.all([loadDeployments(), loadContainers()]);
+		if (activeTab === 'replicas') await ensureNodes();
 		if (latestDeployment) await loadStepsForLatest();
 		void loadConnectionInfo();
 		unsubscribeService = subscribeToService(orgId, projectId, serviceId);

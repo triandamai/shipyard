@@ -9,12 +9,19 @@
 
 	let { data, selected = false }: Props = $props();
 
-	let name     = $derived((data.name as string)     ?? 'Service');
-	let slug     = $derived((data.slug as string)     ?? '');
-	let status   = $derived((data.status as string)   ?? 'stopped');
-	let replicas = $derived((data.replicas as number) ?? 0);
-	let svcType  = $derived((data.type as string)     ?? '');
-	let ports    = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
+	let name            = $derived((data.name as string)            ?? 'Service');
+	let slug            = $derived((data.slug as string)            ?? '');
+	let status          = $derived((data.status as string)          ?? 'stopped');
+	let replicas        = $derived((data.replicas as number)        ?? 0);
+	let runningReplicas = $derived((data.running_replicas as number) ?? 0);
+	let svcType         = $derived((data.type as string)            ?? '');
+	let ports           = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
+
+	// Sneak-peek stack behind the card: 0 layers for <=1 replica, 1 for two,
+	// capped at 2 so the deck reads the same for 3 vs. 30 replicas — the
+	// exact count is still shown via the replicas chip and stack tooltip.
+	let stackLayers = $derived(replicas <= 1 ? 0 : replicas === 2 ? 1 : 2);
+	let stackTitle  = $derived(`${runningReplicas}/${replicas} replica${replicas === 1 ? '' : 's'} running`);
 
 	type StatusKey = 'running' | 'deploying' | 'stopping' | 'pending' | 'failed' | 'need_attention' | 'stopped';
 
@@ -46,51 +53,99 @@
 
 <Handle type="target" position={Position.Left} />
 
-<div class="service-node"
-	class:selected
-	class:deploying={status === 'deploying'}
-	class:stopping={status === 'stopping'}
-	class:need-attention={status === 'need_attention'}
->
-	<div class="node-header">
-		<BrandLogo icon={data.icon as string | null} type={svcType} size={24} iconSize={13} class="node-icon" />
-		<div class="node-title">
-			<span class="node-name" title={name}>{name}</span>
-			{#if slug}
-				<span class="node-slug">{slug}</span>
-			{/if}
-		</div>
-	</div>
+<div class="node-stack-wrapper">
+	{#if stackLayers >= 2}
+		<div class="replica-stack-peek layer-2" aria-hidden="true"></div>
+	{/if}
+	{#if stackLayers >= 1}
+		<div class="replica-stack-peek layer-1" title={stackTitle}></div>
+	{/if}
 
-	<div class="node-body">
-		<div class="node-status">
-			<span class="status-dot {statusClass(status)}"></span>
-			<span class="status-text">{statusLabel(status)}</span>
-		</div>
-
-		<div class="node-meta">
-			{#if svcType}
-				<span class="meta-chip">{svcType}</span>
-			{/if}
-			<span class="meta-chip replicas-chip">
-				{replicas} replica{replicas === 1 ? '' : 's'}
-			</span>
-		</div>
-
-		{#if ports.length > 0}
-			<div class="port-row">
-				{#each ports as port (port)}
-					<span class="port-chip">{port}</span>
-				{/each}
+	<div class="service-node"
+		class:selected
+		class:deploying={status === 'deploying'}
+		class:stopping={status === 'stopping'}
+		class:need-attention={status === 'need_attention'}
+	>
+		<div class="node-header">
+			<BrandLogo icon={data.icon as string | null} type={svcType} size={24} iconSize={13} class="node-icon" />
+			<div class="node-title">
+				<span class="node-name" title={name}>{name}</span>
+				{#if slug}
+					<span class="node-slug">{slug}</span>
+				{/if}
 			</div>
-		{/if}
+		</div>
+
+		<div class="node-body">
+			<div class="node-status">
+				<span class="status-dot {statusClass(status)}"></span>
+				<span class="status-text">{statusLabel(status)}</span>
+			</div>
+
+			<div class="node-meta">
+				{#if svcType}
+					<span class="meta-chip">{svcType}</span>
+				{/if}
+				<span class="meta-chip replicas-chip" title={stackTitle}>
+					{replicas} replica{replicas === 1 ? '' : 's'}
+				</span>
+			</div>
+
+			{#if ports.length > 0}
+				<div class="port-row">
+					{#each ports as port (port)}
+						<span class="port-chip">{port}</span>
+					{/each}
+				</div>
+			{/if}
+		</div>
 	</div>
 </div>
 
 <Handle type="source" position={Position.Right} />
 
 <style>
+	.node-stack-wrapper {
+		position: relative;
+	}
+
+	.replica-stack-peek {
+		position: absolute;
+		inset: 0;
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		box-shadow: var(--shadow-sm);
+		cursor: pointer;
+		transition: transform var(--transition-fast), opacity var(--transition-fast);
+	}
+
+	.replica-stack-peek.layer-1 {
+		transform: translate(6px, 6px);
+		opacity: 0.85;
+		z-index: 0;
+	}
+
+	.replica-stack-peek.layer-2 {
+		transform: translate(12px, 12px);
+		opacity: 0.6;
+		z-index: -1;
+	}
+
+	.node-stack-wrapper:hover .replica-stack-peek.layer-1 {
+		transform: translate(8px, 8px);
+		opacity: 1;
+	}
+
+	.node-stack-wrapper:hover .replica-stack-peek.layer-2 {
+		transform: translate(16px, 16px);
+		opacity: 0.8;
+	}
+
 	.service-node {
+		position: relative;
+		z-index: 1;
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);

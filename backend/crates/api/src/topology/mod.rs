@@ -79,17 +79,6 @@ struct DomainRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct ContainerRow {
-    id: Uuid,
-    service_id: Uuid,
-    docker_container_id: String,
-    replica_index: Option<i32>,
-    status: String,
-    image: Option<String>,
-    node_id: Option<String>,
-}
-
-#[derive(Debug, sqlx::FromRow)]
 struct ServiceNetworkRow {
     service_id: Uuid,
     network_id: Uuid,
@@ -317,48 +306,7 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 8. Query live containers for container replica nodes.
-    // Use ROW_NUMBER per (service_id, replica_index) slot so that during a
-    // rolling START_FIRST update — where Docker creates the new container
-    // BEFORE stopping the old one — only the newest container per slot is
-    // returned.  Unslotted containers (replica_index IS NULL) are each
-    // unique and returned via the UNION ALL branch.
-    let containers = sqlx::query_as::<_, ContainerRow>(
-        "WITH ranked AS (
-             SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
-                    c.status::text AS status, c.image, c.node_id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY c.service_id, c.replica_index
-                        ORDER BY c.created_at DESC
-                    ) AS rn
-             FROM containers c
-             JOIN services s ON s.id = c.service_id
-             WHERE s.project_id = $1
-               AND c.status::text IN ('running', 'pending')
-               AND c.replica_index IS NOT NULL
-         ),
-         unslotted AS (
-             SELECT c.id, c.service_id, c.docker_container_id, c.replica_index,
-                    c.status::text AS status, c.image, c.node_id
-             FROM containers c
-             JOIN services s ON s.id = c.service_id
-             WHERE s.project_id = $1
-               AND c.status::text IN ('running', 'pending')
-               AND c.replica_index IS NULL
-         )
-         SELECT id, service_id, docker_container_id, replica_index, status, image, node_id
-         FROM ranked WHERE rn = 1
-         UNION ALL
-         SELECT id, service_id, docker_container_id, replica_index, status, image, node_id
-         FROM unslotted
-         ORDER BY service_id, replica_index ASC NULLS LAST",
-    )
-    .bind(project_id)
-    .fetch_all(db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    // 9. Edge function groups associated with this project
+    // 8. Edge function groups associated with this project
     let org_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT org_id FROM projects WHERE id = $1",
     )
@@ -470,26 +418,6 @@ async fn get_topology(
         });
     }
 
-    for ctr in &containers {
-        let short_id = if ctr.docker_container_id.len() >= 12 {
-            ctr.docker_container_id[..12].to_string()
-        } else {
-            ctr.docker_container_id.clone()
-        };
-        nodes.push(TopologyNode {
-            id: format!("ctr_{}", ctr.id),
-            node_type: "container".to_string(),
-            data: serde_json::json!({
-                "container_id": short_id,
-                "replica_index": ctr.replica_index,
-                "status": ctr.status,
-                "image": ctr.image,
-                "node_id": ctr.node_id,
-                "service_id": format!("svc_{}", ctr.service_id),
-            }),
-        });
-    }
-
     for grp in &edge_fn_groups {
         let repo_name = grp.repo_url
             .trim_end_matches('/')
@@ -527,9 +455,7 @@ async fn get_topology(
 
     // ── Build edges ───────────────────────────────────────────────────────────
 
-    // stable_edges are persisted to topology_edges; replica_edges are dynamic (not persisted)
     let mut stable_edges: Vec<TopologyEdge> = Vec::new();
-    let mut replica_edges: Vec<TopologyEdge> = Vec::new();
 
     // parent → child service edges (docker_compose stacks)
     for svc in &services {
@@ -571,16 +497,6 @@ async fn get_topology(
             source: format!("dom_{}", dom.id),
             target: format!("svc_{}", dom.service_id),
             edge_type: "domain".to_string(),
-        });
-    }
-
-    // service → container replica edges (dynamic, not persisted)
-    for ctr in &containers {
-        replica_edges.push(TopologyEdge {
-            id: format!("e_ctr_{}", ctr.id),
-            source: format!("svc_{}", ctr.service_id),
-            target: format!("ctr_{}", ctr.id),
-            edge_type: "replica".to_string(),
         });
     }
 
@@ -628,7 +544,6 @@ async fn get_topology(
     }
 
     // ── Persist stable edges to topology_edges table ──────────────────────────
-    // Container replica edges are transient and excluded from persistence.
 
     sqlx::query("DELETE FROM topology_edges WHERE project_id = $1")
         .bind(project_id)
@@ -651,8 +566,6 @@ async fn get_topology(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     }
 
-    let edges: Vec<TopologyEdge> = stable_edges.into_iter().chain(replica_edges).collect();
-
-    let response = TopologyResponse { nodes, edges };
+    let response = TopologyResponse { nodes, edges: stable_edges };
     Ok(Json(ApiResponse::ok(response)))
 }
