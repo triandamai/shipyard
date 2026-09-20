@@ -332,7 +332,7 @@ volumes:
 	});
 </script>
 
-<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canSettingsRead} />
+<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canSettingsRead} onDismiss={() => history.back()} />
 
 {#if loading}
 	<div class="loading"><div class="spinner"></div><span>Loading…</span></div>

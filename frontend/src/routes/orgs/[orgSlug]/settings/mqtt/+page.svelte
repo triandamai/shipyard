@@ -105,7 +105,7 @@
 	onMount(() => loadClients());
 </script>
 
-<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canViewMqtt} />
+<PermissionDeniedDialog open={membershipLoaded && !!orgId && !canViewMqtt} onDismiss={() => history.back()} />
 
 {#if canViewMqtt}
 <div class="mqtt-page">

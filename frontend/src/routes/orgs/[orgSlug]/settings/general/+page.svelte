@@ -302,15 +302,17 @@
 			{#if loadingVersion}
 				<span class="version-loading">Checking version…</span>
 			{:else if versionInfo}
+				{@const v = versionInfo as VersionInfo}
 				<div class="version-chip">
 					<span class="version-label">Running</span>
-					<code class="version-sha">{versionInfo.git_sha}</code>
-					{#if versionInfo.build_date && versionInfo.build_date !== 'unknown'}
-						<span class="version-date">{formatBuildDate(versionInfo.build_date)}</span>
+					<code class="version-sha">{v.git_sha}</code>
+					{#if v.build_date && v.build_date !== 'unknown'}
+						<span class="version-date">{formatBuildDate(v.build_date)}</span>
 					{/if}
 				</div>
-				{#if versionInfo.update_available && versionInfo.remote_sha}
-					<span class="version-badge update-avail">Update available → <code>{versionInfo.remote_sha}</code></span>
+				{#if v.update_available && v.remote_sha}
+					{@const remoteSha = v.remote_sha}
+					<span class="version-badge update-avail">Update available → <code>{remoteSha}</code></span>
 				{:else}
 					<span class="version-badge up-to-date">Up to date</span>
 				{/if}
