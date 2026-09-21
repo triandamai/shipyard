@@ -18,7 +18,6 @@
 	import ServiceNode from '$lib/flows/ServiceNode.svelte';
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
 	import VolumeNode from '$lib/flows/VolumeNode.svelte';
-	import DomainNode from '$lib/flows/DomainNode.svelte';
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
@@ -26,7 +25,6 @@
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
-	import DomainDetailPanel from '$lib/panels/DomainDetailPanel.svelte';
 	import StaticSiteDetailPanel from '$lib/panels/StaticSiteDetailPanel.svelte';
 	import AddResourcePanel from '$lib/panels/AddResourcePanel.svelte';
 	import EdgeFunctionDetailPanel from '$lib/panels/EdgeFunctionDetailPanel.svelte';
@@ -86,7 +84,6 @@
 		service:       ServiceNode as any,
 		network:       NetworkNode as any,
 		volume:        VolumeNode as any,
-		domain:        DomainNode as any,
 		static_site:   StaticSiteNode as any,
 		portal:        PortalNode as any,
 		add_resource:  AddResourceNode as any,
@@ -106,7 +103,11 @@
 			openAddResource();
 		} else if (node.type === 'service') {
 			const serviceId = node.id.replace(/^svc_/, '');
-			const clickedStack = event.target instanceof Element && event.target.closest('.replica-stack-peek');
+			const target = event.target instanceof Element ? event.target : null;
+			let initialTab: 'replicas' | 'volumes' | 'domains' | undefined;
+			if (target?.closest('.replica-stack-peek')) initialTab = 'replicas';
+			else if (target?.closest('.volume-stack-peek')) initialTab = 'volumes';
+			else if (target?.closest('.domain-stack-peek')) initialTab = 'domains';
 			uiStore.pushPanel({
 				key: `service:${serviceId}`,
 				component: ServiceDetailPanel,
@@ -114,30 +115,13 @@
 					serviceId,
 					projectId,
 					orgId,
-					initialTab: clickedStack ? 'replicas' : undefined,
+					initialTab,
 					onDeleted: () => {
 						uiStore.popPanel();
 						syncTopology(orgId, projectId);
 					}
 				},
 				title: (node.data?.name as string) || 'Service'
-			});
-		} else if (node.type === 'domain') {
-			const domainId = node.id.replace(/^dom_/, '');
-			const svcId    = ((node.data?.service_id as string) || '').replace(/^svc_/, '');
-			uiStore.pushPanel({
-				key: `domain:${domainId}`,
-				component: DomainDetailPanel,
-				props: {
-					domainId,
-					serviceId: svcId,
-					projectId,
-					onDeleted: () => {
-						uiStore.popPanel();
-						syncTopology(orgId, projectId);
-					},
-				},
-				title: (node.data?.hostname as string) || 'Domain'
 			});
 		} else if (node.type === 'network') {
 			const networkId = node.id.replace(/^net_/, '');

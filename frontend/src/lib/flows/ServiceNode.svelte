@@ -14,14 +14,24 @@
 	let status          = $derived((data.status as string)          ?? 'stopped');
 	let replicas        = $derived((data.replicas as number)        ?? 0);
 	let runningReplicas = $derived((data.running_replicas as number) ?? 0);
+	let domainCount     = $derived((data.domain_count as number)    ?? 0);
+	let volumeCount     = $derived((data.volume_count as number)    ?? 0);
 	let svcType         = $derived((data.type as string)            ?? '');
 	let ports           = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
 
-	// Sneak-peek stack behind the card: 0 layers for <=1 replica, 1 for two,
-	// capped at 2 so the deck reads the same for 3 vs. 30 replicas — the
-	// exact count is still shown via the replicas chip and stack tooltip.
-	let stackLayers = $derived(replicas <= 1 ? 0 : replicas === 2 ? 1 : 2);
-	let stackTitle  = $derived(`${runningReplicas}/${replicas} replica${replicas === 1 ? '' : 's'} running`);
+	// Sneak-peek cards behind the node, one per resource category, stacked in
+	// a fixed order (nearest → furthest): replicas, volumes, domains. Each is
+	// hidden when its count is 0 and always carries a count label — no hover
+	// needed to read it.
+	let showReplicaStack = $derived(replicas > 0);
+	let showVolumeStack  = $derived(volumeCount > 0);
+	let showDomainStack  = $derived(domainCount > 0);
+	let replicaCountLabel = $derived(`${replicas} replica${replicas === 1 ? '' : 's'}`);
+	let volumeCountLabel  = $derived(`${volumeCount} volume${volumeCount === 1 ? '' : 's'}`);
+	let domainCountLabel  = $derived(`${domainCount} domain${domainCount === 1 ? '' : 's'}`);
+	let replicaStackTitle = $derived(`${runningReplicas}/${replicas} replica${replicas === 1 ? '' : 's'} running`);
+	let volumeStackTitle  = $derived(`${volumeCount} volume${volumeCount === 1 ? '' : 's'} attached`);
+	let domainStackTitle  = $derived(`${domainCount} domain${domainCount === 1 ? '' : 's'} configured`);
 
 	type StatusKey = 'running' | 'deploying' | 'stopping' | 'pending' | 'failed' | 'need_attention' | 'stopped';
 
@@ -54,11 +64,20 @@
 <Handle type="target" position={Position.Left} />
 
 <div class="node-stack-wrapper">
-	{#if stackLayers >= 2}
-		<div class="replica-stack-peek layer-2" aria-hidden="true"></div>
+	{#if showDomainStack}
+		<div class="stack-layer domain-stack-peek" title={domainStackTitle}>
+			<span class="stack-count-label">{domainCountLabel}</span>
+		</div>
 	{/if}
-	{#if stackLayers >= 1}
-		<div class="replica-stack-peek layer-1" title={stackTitle}></div>
+	{#if showVolumeStack}
+		<div class="stack-layer volume-stack-peek" title={volumeStackTitle}>
+			<span class="stack-count-label">{volumeCountLabel}</span>
+		</div>
+	{/if}
+	{#if showReplicaStack}
+		<div class="stack-layer replica-stack-peek" title={replicaStackTitle}>
+			<span class="stack-count-label">{replicaCountLabel}</span>
+		</div>
 	{/if}
 
 	<div class="service-node"
@@ -87,7 +106,7 @@
 				{#if svcType}
 					<span class="meta-chip">{svcType}</span>
 				{/if}
-				<span class="meta-chip replicas-chip" title={stackTitle}>
+				<span class="meta-chip replicas-chip" title={replicaStackTitle}>
 					{replicas} replica{replicas === 1 ? '' : 's'}
 				</span>
 			</div>
@@ -110,7 +129,7 @@
 		position: relative;
 	}
 
-	.replica-stack-peek {
+	.stack-layer {
 		position: absolute;
 		inset: 0;
 		border-radius: var(--radius-md);
@@ -119,29 +138,29 @@
 		box-shadow: var(--shadow-sm);
 		cursor: pointer;
 		transition: transform var(--transition-fast), opacity var(--transition-fast);
+		display: flex;
+		align-items: flex-end;
+		justify-content: center;
+		padding-bottom: 3px;
 	}
 
-	.replica-stack-peek.layer-1 {
-		transform: translate(6px, 6px);
-		opacity: 0.85;
-		z-index: 0;
+	/* Stack order (nearest → furthest behind the card): replicas, volumes,
+	   domains. Offset is vertical-only so left/right edges stay flush/hidden
+	   behind the main card — only a bottom sliver peeks out. */
+	.replica-stack-peek { transform: translate(0, 14px); opacity: 0.8;  z-index: -1; }
+	.volume-stack-peek  { transform: translate(0, 28px); opacity: 0.65; z-index: -2; }
+	.domain-stack-peek  { transform: translate(0, 42px); opacity: 0.5;  z-index: -3; }
+
+	.stack-count-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-dim);
+		white-space: nowrap;
 	}
 
-	.replica-stack-peek.layer-2 {
-		transform: translate(12px, 12px);
-		opacity: 0.6;
-		z-index: -1;
-	}
-
-	.node-stack-wrapper:hover .replica-stack-peek.layer-1 {
-		transform: translate(8px, 8px);
-		opacity: 1;
-	}
-
-	.node-stack-wrapper:hover .replica-stack-peek.layer-2 {
-		transform: translate(16px, 16px);
-		opacity: 0.8;
-	}
+	.node-stack-wrapper:hover .replica-stack-peek { transform: translate(0, 18px); opacity: 1; }
+	.node-stack-wrapper:hover .volume-stack-peek  { transform: translate(0, 34px); opacity: 0.85; }
+	.node-stack-wrapper:hover .domain-stack-peek  { transform: translate(0, 50px); opacity: 0.7; }
 
 	.service-node {
 		position: relative;

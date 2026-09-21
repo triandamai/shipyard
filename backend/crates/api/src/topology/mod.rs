@@ -48,6 +48,8 @@ struct ServiceRow {
     status: String,
     replicas: i32,
     running_replicas: i64,
+    domain_count: i64,
+    volume_count: i64,
     #[sqlx(rename = "type")]
     service_type: String,
     ports: serde_json::Value,
@@ -71,23 +73,14 @@ struct VolumeRow {
 
 #[derive(Debug, sqlx::FromRow)]
 struct DomainRow {
-    id: Uuid,
     service_id: Uuid,
     hostname: String,
-    tls_enabled: bool,
-    port: Option<i32>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
 struct ServiceNetworkRow {
     service_id: Uuid,
     network_id: Uuid,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct VolumeServiceRow {
-    id: Uuid,
-    service_id: Uuid,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -152,15 +145,23 @@ async fn get_topology(
         ))));
     }
 
-    // 1. Query all services in the project, joining live running-container count.
+    // 1. Query all services in the project, joining live running-container count
+    // plus attached domain/volume counts (each fed to ServiceNode's stack peeks).
     // Exclude 'edge_functions' — those synthetic rows are handled by the edge
     // function group query (query 9) which emits richer node data.
+    // COUNT(DISTINCT ...) is required because the three LEFT JOINs fan out
+    // independently — without DISTINCT, e.g. 2 containers × 3 domains would
+    // inflate the domain count to 6.
     let services = sqlx::query_as::<_, ServiceRow>(
         "SELECT s.id, s.name, s.slug, s.status, s.replicas, s.type::text AS type,
                 s.ports, s.service_parent_id, s.icon,
-                COUNT(c.id) FILTER (WHERE c.status = 'running'::container_status) AS running_replicas
+                COUNT(DISTINCT c.id) FILTER (WHERE c.status = 'running'::container_status) AS running_replicas,
+                COUNT(DISTINCT d.id) AS domain_count,
+                COUNT(DISTINCT v.id) AS volume_count
          FROM services s
          LEFT JOIN containers c ON c.service_id = s.id
+         LEFT JOIN domains d ON d.service_id = s.id
+         LEFT JOIN volumes v ON v.service_id = s.id
          WHERE s.project_id = $1
            AND s.type::text != 'edge_functions'
          GROUP BY s.id
@@ -183,13 +184,14 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 3. Query all volumes in the project (standalone or via service)
+    // 3. Query standalone volumes only (service_id IS NULL) — volumes attached
+    // to a service are represented by that service's volume-count stack peek
+    // instead of a separate node.
     let volumes = sqlx::query_as::<_, VolumeRow>(
         "SELECT v.id, v.name, v.mount_path
          FROM volumes v
-         LEFT JOIN services s ON s.id = v.service_id
          WHERE v.project_id = $1
-            OR s.project_id = $1
+           AND v.service_id IS NULL
          ORDER BY v.created_at ASC",
     )
     .bind(project_id)
@@ -197,11 +199,13 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 4. Query all domains in the project (via service → project join).
+    // 4. Query all domains in the project (via service → project join), used
+    // only to build each static site's inline domain list below — regular
+    // services get a domain_count instead (see the services query above).
     // Edge function group domains are included automatically because each group
     // now has a synthetic services row (type='edge_functions').
     let domains = sqlx::query_as::<_, DomainRow>(
-        "SELECT d.id, d.service_id, d.hostname, d.tls_enabled, d.port
+        "SELECT d.service_id, d.hostname
          FROM domains d
          JOIN services s ON s.id = d.service_id
          WHERE s.project_id = $1
@@ -224,20 +228,7 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 6. Query service-attached volumes for service ↔ volume edges
-    let volume_services = sqlx::query_as::<_, VolumeServiceRow>(
-        "SELECT v.id, v.service_id
-         FROM volumes v
-         JOIN services s ON s.id = v.service_id
-         WHERE s.project_id = $1
-           AND v.service_id IS NOT NULL",
-    )
-    .bind(project_id)
-    .fetch_all(db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    // 7a. Query static site configs for static services in this project
+    // 6a. Query static site configs for static services in this project
     let static_configs: Vec<(Uuid, String, Option<serde_json::Value>)> = sqlx::query_as::<_, (Uuid, String, Option<serde_json::Value>)>(
         "SELECT sc.service_id, sc.source, sc.deploy_config
          FROM static_site_configs sc
@@ -278,7 +269,7 @@ async fn get_topology(
         static_domain_map.entry(dom.service_id).or_default().push(dom.hostname.clone());
     }
 
-    // 7. Query env-based platform references for this project's services
+    // 6b. Query env-based platform references for this project's services
     let env_refs = sqlx::query_as::<_, EnvRefRow>(
         "SELECT
              er.service_id,
@@ -306,7 +297,7 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 8. Edge function groups associated with this project
+    // 7. Edge function groups associated with this project
     let org_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT org_id FROM projects WHERE id = $1",
     )
@@ -374,6 +365,8 @@ async fn get_topology(
                     "status":            svc.status,
                     "replicas":          svc.replicas,
                     "running_replicas":  svc.running_replicas,
+                    "domain_count":      svc.domain_count,
+                    "volume_count":      svc.volume_count,
                     "type":              svc.service_type,
                     "ports":             svc.ports,
                     "service_parent_id": svc.service_parent_id.map(|id| format!("svc_{id}")),
@@ -401,19 +394,6 @@ async fn get_topology(
             data: serde_json::json!({
                 "name": vol.name,
                 "mount_path": vol.mount_path,
-            }),
-        });
-    }
-
-    for dom in &domains {
-        nodes.push(TopologyNode {
-            id: format!("dom_{}", dom.id),
-            node_type: "domain".to_string(),
-            data: serde_json::json!({
-                "hostname":    dom.hostname,
-                "tls_enabled": dom.tls_enabled,
-                "port":        dom.port,
-                "service_id":  format!("svc_{}", dom.service_id),
             }),
         });
     }
@@ -476,27 +456,6 @@ async fn get_topology(
             source: format!("svc_{}", sn.service_id),
             target: format!("net_{}", sn.network_id),
             edge_type: "network".to_string(),
-        });
-    }
-
-    // service ↔ volume edges
-    for vs in &volume_services {
-        stable_edges.push(TopologyEdge {
-            id: format!("e_{}", Uuid::now_v7()),
-            source: format!("svc_{}", vs.service_id),
-            target: format!("vol_{}", vs.id),
-            edge_type: "volume".to_string(),
-        });
-    }
-
-    // domain → service edges (includes edge function group domains since they
-    // now have a real service_id pointing to their synthetic service row)
-    for dom in &domains {
-        stable_edges.push(TopologyEdge {
-            id: format!("e_{}", Uuid::now_v7()),
-            source: format!("dom_{}", dom.id),
-            target: format!("svc_{}", dom.service_id),
-            edge_type: "domain".to_string(),
         });
     }
 

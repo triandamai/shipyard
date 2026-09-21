@@ -8,7 +8,7 @@ export type ContainerStatus = 'pending' | 'preparing' | 'running' | 'complete' |
 export type DeploymentStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 export type StepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-export type EdgeType = 'network' | 'volume' | 'domain' | 'depends_on' | 'compose_child' | 'env_ref';
+export type EdgeType = 'network' | 'depends_on' | 'compose_child' | 'env_ref';
 
 // Traefik file reading
 export interface TraefikFileResponse {
@@ -537,7 +537,7 @@ export interface Network {
 // Topology
 export interface TopologyNode {
 	id: string;
-	type: 'service' | 'network' | 'volume' | 'domain' | 'static_site' | 'portal';
+	type: 'service' | 'network' | 'volume' | 'static_site' | 'portal' | 'edge_function';
 	data: Record<string, unknown>;
 }
 

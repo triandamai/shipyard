@@ -34,7 +34,7 @@
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain,
-		Network as NetworkType, SwarmNode, ConnectionInfo, ArtifactSource, VolumeAdvice
+		Network as NetworkType, SwarmNode, ConnectionInfo, ArtifactSource, VolumeAdvice, Volume
 	} from '$lib/api/types';
 
 	// Portal action — moves the node to document.body so position:fixed works
@@ -64,7 +64,7 @@
 	let canDelete = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'delete')));
 
 	// ── Tabs ─────────────────────────────────────────────────────────
-	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'domains' | 'settings';
+	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'volumes' | 'domains' | 'settings';
 	let activeTab = $state<Tab>(initialTab ?? 'overview');
 
 	// ── Core state ───────────────────────────────────────────────────
@@ -100,6 +100,11 @@
 	let domainError = $state('');
 	let dnsCheckState = $state<Record<string, 'idle' | 'checking' | 'ok' | 'fail'>>({});
 	let dnsCheckAddresses = $state<Record<string, string[]>>({});
+
+	// ── Volumes ──────────────────────────────────────────────────────
+	let volumes = $state<Volume[]>([]);
+	let isLoadingVolumes = $state(false);
+	let volumeError = $state('');
 
 	// ── Container logs ────────────────────────────────────────────────
 	let containerLogsTarget = $state<Container | null>(null);
@@ -339,6 +344,19 @@
 		if (res.data) domains = res.data;
 		else if (res.error) domainError = res.error.message;
 		isLoadingDomains = false;
+	}
+
+	async function loadVolumes() {
+		isLoadingVolumes = true;
+		volumeError = '';
+		const res = await api.getVolumes(serviceId);
+		if (res.data) volumes = res.data;
+		else if (res.error) volumeError = res.error.message;
+		isLoadingVolumes = false;
+	}
+
+	function fmtVolumeSize(mb: number): string {
+		return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
 	}
 
 	function openAddDomainPanel() {
@@ -920,6 +938,7 @@
 		if (tab === 'logs') void loadWebhookToken();
 		if (tab === 'git') { initGitConfig(); void loadWebhookToken(); void loadGitProviders(); }
 		if (tab === 'deploy' && latestDeployment && steps.length === 0) await loadStepsForLatest();
+		if (tab === 'volumes' && volumes.length === 0) await loadVolumes();
 		if (tab === 'domains' && domains.length === 0) await loadDomains();
 		if (tab === 'settings') {
 			initSettingsFromService();
@@ -980,6 +999,8 @@
 		await loadService();
 		await Promise.all([loadDeployments(), loadContainers()]);
 		if (activeTab === 'replicas') await ensureNodes();
+		if (activeTab === 'volumes') await loadVolumes();
+		if (activeTab === 'domains') await loadDomains();
 		if (latestDeployment) await loadStepsForLatest();
 		void loadConnectionInfo();
 		unsubscribeService = subscribeToService(orgId, projectId, serviceId);
@@ -1002,6 +1023,7 @@
 		{ id: 'deploy',    label: 'Deploy'    },
 		{ id: 'logs',      label: 'Logs'      },
 		{ id: 'replicas',  label: 'Replicas'  },
+		{ id: 'volumes',   label: 'Volumes'   },
 		{ id: 'domains',   label: 'Domains'   },
 		{ id: 'settings',  label: 'Settings'  },
 	];
@@ -1013,6 +1035,7 @@
 				{ id: 'logs'     as Tab, label: 'Logs'     },
 				{ id: 'git'      as Tab, label: 'Git'      },
 				{ id: 'replicas' as Tab, label: 'Replicas' },
+				{ id: 'volumes'  as Tab, label: 'Volumes'  },
 				{ id: 'domains'  as Tab, label: 'Domains'  },
 				{ id: 'settings' as Tab, label: 'Settings' },
 			]
@@ -1733,6 +1756,42 @@
 												{/if}
 											</button>
 										{/if}
+									</div>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</div>
+
+			<!-- ── Volumes ── -->
+			{:else if activeTab === 'volumes'}
+				<div class="volumes-section">
+					{#if volumeError}
+						<div class="domain-error">{volumeError}</div>
+					{/if}
+
+					{#if isLoadingVolumes}
+						<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+					{:else if volumes.length === 0}
+						<div class="domain-empty">
+							<HardDrive size={28} style="color:var(--text-dim);margin-bottom:8px" />
+							<span>No volumes attached.</span>
+						</div>
+					{:else}
+						<ul class="domain-list">
+							{#each volumes as v (v.id)}
+								<li class="domain-item">
+									<div class="domain-item-top">
+										<HardDrive size={13} style="flex-shrink:0;color:var(--text-dim);margin-top:1px" />
+										<div class="domain-info">
+											<span class="domain-hostname">{v.name}</span>
+											<div class="domain-badges">
+												<span class="badge badge-dim font-mono">{v.mount_path}</span>
+												{#if v.size_mb != null}
+													<span class="badge badge-blue">{fmtVolumeSize(v.size_mb)}</span>
+												{/if}
+											</div>
+										</div>
 									</div>
 								</li>
 							{/each}
@@ -2916,6 +2975,9 @@
 	}
 	.node-role-manager { background: #6366f1; }
 	.node-role-worker  { background: #16a34a; }
+
+	/* ── Volumes ── */
+	.volumes-section { display: flex; flex-direction: column; }
 
 	/* ── Domains ── */
 	.domains-section { display: flex; flex-direction: column; }

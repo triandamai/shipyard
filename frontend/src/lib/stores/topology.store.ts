@@ -77,8 +77,7 @@ function toFlowEdge(edge: TopologyEdge): FlowEdge {
 }
 
 // Column X positions — left to right:
-//   domain → root_service → child_service → network → volume → portal
-const DOMAIN_X    = -300;
+//   root_service → child_service → network → volume → portal
 const ROOT_SVC_X  = 0;
 const CHILD_SVC_X = 270;
 const NETWORK_X   = 540;
@@ -92,14 +91,13 @@ const SVC_GAP     = 50;    // extra vertical padding between root-service slots
  * Compute auto-layout positions for nodes that don't have a saved position.
  *
  * Column order (left → right):
- *   domain | root_service | child_service (compose) | network | volume | portal
+ *   root_service | child_service (compose) | network | volume | portal
  *
  * Algorithm:
  *   Pass 0 — index all nodes into lookup maps
  *   Pass 1 — place root services (stacking vertically, slot-sized by their subtree)
  *   Pass 2 — place child services (compose children) grouped under their root
- *   Pass 3 — place domains relative to their root service
- *   Pass 4 — stack network / volume / portal nodes in their global columns
+ *   Pass 3 — stack network / volume / portal nodes in their global columns
  */
 function autoLayoutPositions(
 	nodes: TopologyNode[],
@@ -115,7 +113,6 @@ function autoLayoutPositions(
 
 	// --- Pass 0: build lookup maps ---
 	const childSvcsByParent: Record<string, string[]> = {}; // parent node-id → [child svc node-ids]
-	const domainsBySvc:      Record<string, string[]> = {}; // svc node-id   → [domain node-ids]
 	const rootSvcIds:        string[] = [];
 	const networkIds:    string[] = [];
 	const volumeIds:     string[] = [];
@@ -131,9 +128,6 @@ function autoLayoutPositions(
 			} else {
 				rootSvcIds.push(n.id);
 			}
-		} else if (n.type === 'domain') {
-			const svcId = (d?.service_id as string) ?? '';
-			(domainsBySvc[svcId] ??= []).push(n.id);
 		} else if (n.type === 'network') {
 			networkIds.push(n.id);
 		} else if (n.type === 'volume') {
@@ -155,9 +149,7 @@ function autoLayoutPositions(
 			// Sum of all child sub-slots
 			return children.reduce((sum, cid) => sum + childSubSlot(cid), 0) + SVC_GAP;
 		}
-		// No compose children — size by own domains
-		const nd = (domainsBySvc[rootId] ?? []).length;
-		return Math.max(1, nd) * Y_STEP + SVC_GAP;
+		return Y_STEP + SVC_GAP;
 	}
 
 	// --- Pass 1: assign Y positions to root service nodes ---
@@ -188,18 +180,7 @@ function autoLayoutPositions(
 		}
 	}
 
-	// --- Pass 3: place domains to the left of their root service ---
-	for (const rootId of rootSvcIds) {
-		const doms = domainsBySvc[rootId] ?? [];
-		const baseY = rootY[rootId] ?? Y_START;
-		for (let i = 0; i < doms.length; i++) {
-			if (!result[doms[i]]) {
-				result[doms[i]] = { x: DOMAIN_X, y: baseY + i * Y_STEP };
-			}
-		}
-	}
-
-	// --- Pass 4: stack network, volume, and portal columns ---
+	// --- Pass 3: stack network, volume, and portal columns ---
 	const placedNetMaxY = networkIds
 		.filter((id) => result[id])
 		.reduce((max, id) => Math.max(max, result[id].y), -Infinity);
