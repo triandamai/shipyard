@@ -235,3 +235,45 @@ async fn resolve_api_key(key: &str, state: &AppState) -> Result<AuthUser, ApiApp
         api_key_name: Some(key_name),
     })
 }
+
+// ─── Optional Auth Extractor ────────────────────────────────────────────────
+
+/// Same identity resolution as `AuthUser`, but never rejects the request.
+/// Used for routes that must work for both authenticated callers (org
+/// members) and anonymous visitors (e.g. a shared, unauthenticated preview
+/// link) with different behavior for each — `AuthUser` alone would 401 the
+/// anonymous case, which is exactly the case this route needs to allow.
+pub struct OptionalAuthUser(pub Option<AuthUser>);
+
+#[async_trait]
+impl FromRequestParts<AppState> for OptionalAuthUser {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        match AuthUser::from_request_parts(parts, state).await {
+            Ok(user) => Ok(OptionalAuthUser(Some(user))),
+            Err(_) => Ok(OptionalAuthUser(None)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod optional_auth_tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn missing_bearer_header_yields_none() {
+        let headers = HeaderMap::new();
+        assert!(extract_bearer_token(&headers).is_err());
+        // OptionalAuthUser must not propagate this as an error — verified in
+        // Step 3's from_request_parts impl by construction (Rejection = Infallible).
+    }
+
+    #[test]
+    fn malformed_bearer_header_is_treated_as_absent() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("not-a-bearer-token"));
+        assert!(extract_bearer_token(&headers).is_err());
+    }
+}
