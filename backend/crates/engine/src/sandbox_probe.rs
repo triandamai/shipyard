@@ -107,9 +107,9 @@ has_req=false; [ -f requirements.txt ] && has_req=true
 has_manage=false; [ -f manage.py ] && has_manage=true
 has_index=false; [ -f index.html ] && has_index=true
 printf '{"has_package_json":%s,"package_json":%s,"has_requirements_txt":%s,"has_manage_py":%s,"has_index_html":%s,"shipyard_json":%s}\n' \
-  "$has_pkg" "$( [ -n "$pkg" ] && printf '%s' "$pkg" | sed 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )" \
+  "$has_pkg" "$( [ -n "$pkg" ] && printf '%s' "$pkg" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )" \
   "$has_req" "$has_manage" "$has_index" \
-  "$( [ -n "$sj" ] && printf '%s' "$sj" | sed 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )"
+  "$( [ -n "$sj" ] && printf '%s' "$sj" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )"
 "#;
 
 fn dev_script_from_package_json(package_json: &str) -> Option<String> {
