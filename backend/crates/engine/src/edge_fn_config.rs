@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Default)]
 pub struct ShipyardConfig {
     pub functions: Option<FunctionsConfig>,
+    pub app: Option<SandboxAppManifest>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +27,14 @@ pub struct FunctionEntry {
     /// Whitelist of env var keys injected into the isolate.
     /// Empty = all org env vars are available.
     pub env: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SandboxAppManifest {
+    pub runtime: String,
+    pub install: Option<String>,
+    pub dev: String,
+    pub port: u16,
 }
 
 impl ShipyardConfig {
