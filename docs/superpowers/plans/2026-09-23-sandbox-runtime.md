@@ -251,15 +251,24 @@ mod container_spec_tests {
     }
 
     #[test]
-    fn build_container_config_sets_network_alias() {
+    fn build_container_config_sets_network_mode() {
         let config = build_container_config(&sample_spec());
         let host_config = config.host_config.expect("host_config must be set");
-        let endpoints = host_config
-            .network_mode
-            .as_deref();
-        // network_mode carries the network name; aliases live on the
-        // per-network endpoint config set separately by create_container.
-        assert_eq!(endpoints, Some("shipyard-net"));
+        assert_eq!(host_config.network_mode.as_deref(), Some("shipyard-net"));
+    }
+
+    #[test]
+    fn build_container_config_sets_network_alias() {
+        let config = build_container_config(&sample_spec());
+        let networking_config = config.networking_config.expect("networking_config must be set");
+        let endpoint = networking_config
+            .endpoints_config
+            .get("shipyard-net")
+            .expect("endpoint config for the spec's network must be present");
+        assert_eq!(
+            endpoint.aliases.as_deref(),
+            Some(["shipyard-sandbox-abcd1234".to_string()].as_slice())
+        );
     }
 
     #[test]
@@ -562,9 +571,9 @@ has_req=false; [ -f requirements.txt ] && has_req=true
 has_manage=false; [ -f manage.py ] && has_manage=true
 has_index=false; [ -f index.html ] && has_index=true
 printf '{"has_package_json":%s,"package_json":%s,"has_requirements_txt":%s,"has_manage_py":%s,"has_index_html":%s,"shipyard_json":%s}\n' \
-  "$has_pkg" "$( [ -n "$pkg" ] && printf '%s' "$pkg" | sed 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )" \
+  "$has_pkg" "$( [ -n "$pkg" ] && printf '%s' "$pkg" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )" \
   "$has_req" "$has_manage" "$has_index" \
-  "$( [ -n "$sj" ] && printf '%s' "$sj" | sed 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )"
+  "$( [ -n "$sj" ] && printf '%s' "$sj" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )"
 "#;
 
 fn dev_script_from_package_json(package_json: &str) -> Option<String> {
