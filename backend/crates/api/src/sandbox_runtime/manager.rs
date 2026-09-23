@@ -1,63 +1,11 @@
-use std::sync::Arc;
-
 use sqlx::PgPool;
 use uuid::Uuid;
-use shipyard_common::config::AppConfig;
 use shipyard_common::error::{AppError, AppResult};
-use shipyard_docker::engine::DockerEngine;
 use shipyard_docker::types::{ContainerSpec, MountSpec, MountType, ResourceSpec};
 
+use crate::AppState;
 use super::models::{SandboxAppConfigRow, SandboxInstanceRow};
 use super::quota;
-
-// NOTE ON `AppState`: the brief for this task specifies `start_sandbox(state:
-// &AppState, service_id: Uuid)`. `AppState` is defined in
-// `backend/crates/api/src/main.rs`, which is the `[[bin]]` target of this
-// package. `sandbox_runtime` (this module tree) is owned by
-// `backend/crates/api/src/lib.rs` — a *separate* compilation unit, added in
-// Task 6 specifically so `backend/crates/api/tests/*.rs` integration tests
-// could reach `sandbox_runtime::quota::check_quota` without linking the
-// binary. A `[[bin]]` target may depend on its package's lib target, but not
-// the reverse — `crate::AppState` genuinely does not exist from inside this
-// file (confirmed by compiling: `error[E0432]: unresolved import
-// crate::AppState — no AppState in the root`). So `start_sandbox` here takes
-// the three pieces of `AppState` it actually needs (`&state.db`,
-// `&state.docker`, `&state.config`) instead of the aggregate struct. Thanks
-// to `Arc`'s `Deref`, a future caller inside `main.rs` can pass
-// `&state.db, &state.docker, &state.config` directly — no unpacking required
-// at the call site.
-//
-// A second, non-decomposable instance of the same crate-boundary issue:
-// `crate::resources::sync_traefik_dynamic_config` (declared
-// `pub(crate) mod resources;` inside `main.rs`) is likewise unreachable from
-// this file (confirmed: `error[E0433]: cannot find resources in the crate
-// root`). Unlike `AppState`, this isn't a struct we can decompose into
-// primitives — it's a private function with real logic (DB read + YAML file
-// write) living in the sibling binary crate. There is no way to call it from
-// here without either moving/re-exposing it out of `main.rs` (a change to a
-// file outside this task's scope) or introducing a generic callback
-// injection seam whose complexity/fragility isn't justified for one call.
-// So: `start_sandbox` performs every DB and Docker side effect described in
-// the brief, including upserting the preview `domains` row via
-// `ensure_preview_domain`, but does **not** call
-// `sync_traefik_dynamic_config` itself. The caller — which necessarily lives
-// in the binary crate (e.g. Task 9's HTTP handler) — MUST call it
-// immediately after a successful `start_sandbox`, using the returned row's
-// `container_name` as the upstream override, e.g.:
-//
-// ```ignore
-// let instance = sandbox_runtime::manager::start_sandbox(&state.db, &state.docker, &state.config, service_id).await?;
-// crate::resources::sync_traefik_dynamic_config(
-//     &state.db, service_id, &state.config.docker.label_prefix,
-//     &state.config.traefik.entrypoint_http, &state.config.traefik.entrypoint_https,
-//     state.config.traefik.dynamic_config_dir.as_deref(),
-//     instance.container_name.as_deref(), false,
-// ).await;
-// ```
-//
-// Until that follow-up call is wired in (Task 9), a freshly-started sandbox's
-// DB state (service, sandbox_instances, domains rows) is correct but Traefik
-// will not yet be routing to it.
 
 pub fn sandbox_container_name(service_id: Uuid) -> String {
     format!("shipyard-sandbox-{}", &service_id.to_string()[..8])
@@ -74,45 +22,37 @@ fn preview_hostname(slug: &str, base_domain: &str) -> String {
 /// Starts (or returns the already-running) sandbox for `service_id`. Enforces
 /// the org's dedicated sandbox quota, resolves the app's stack on first start
 /// (probe container → detect_stack), launches the gVisor-isolated sandbox
-/// container, and upserts the preview `domains` row.
-///
-/// Does **not** sync Traefik's dynamic config file — see the module-level
-/// note above. The caller must do that immediately after this returns Ok.
-pub async fn start_sandbox(
-    db: &PgPool,
-    docker: &Arc<dyn DockerEngine>,
-    config: &AppConfig,
-    service_id: Uuid,
-) -> AppResult<SandboxInstanceRow> {
+/// container, and points the app's Traefik route at it.
+pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<SandboxInstanceRow> {
     let (org_id, slug): (Uuid, String) = sqlx::query_as(
         "SELECT p.org_id, s.slug FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )
     .bind(service_id)
-    .fetch_optional(db)
+    .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?
     .ok_or_else(|| AppError::NotFound(format!("Service '{service_id}' not found")))?;
 
     // Idempotent: already starting/running just returns current state.
-    if let Some(existing) = fetch_instance(db, service_id).await? {
+    if let Some(existing) = fetch_instance(&state.db, service_id).await? {
         if existing.status == "starting" || existing.status == "running" {
             return Ok(existing);
         }
     }
 
-    match quota::check_quota(db, org_id).await? {
+    match quota::check_quota(&state.db, org_id).await? {
         Ok(()) => {}
         Err(message) => return Err(AppError::BadRequest(message)),
     }
 
-    upsert_instance_status(db, service_id, "starting", None, None).await?;
+    upsert_instance_status(&state.db, service_id, "starting", None, None).await?;
 
     let volume_name = sandbox_volume_name(service_id);
-    docker.create_volume(&volume_name, "local").await.ok(); // idempotent: ignore "already exists"
+    state.docker.create_volume(&volume_name, "local").await.ok(); // idempotent: ignore "already exists"
 
-    let mut app_config = fetch_config(db, service_id).await?;
-    if app_config.is_none() {
-        let stack = probe_and_detect(docker, config, &volume_name).await.map_err(|e| {
+    let mut config = fetch_config(&state.db, service_id).await?;
+    if config.is_none() {
+        let stack = probe_and_detect(state, &volume_name).await.map_err(|e| {
             AppError::BadRequest(format!("Could not start sandbox: {e}"))
         })?;
         sqlx::query(
@@ -130,45 +70,46 @@ pub async fn start_sandbox(
             shipyard_engine::sandbox_probe::DetectionSource::Manifest => "manifest",
         })
         .bind(&volume_name)
-        .execute(db)
+        .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
-        app_config = fetch_config(db, service_id).await?;
+        config = fetch_config(&state.db, service_id).await?;
     }
-    let app_config = app_config.ok_or_else(|| AppError::Internal("sandbox config missing after insert".to_string()))?;
+    let config = config.ok_or_else(|| AppError::Internal("sandbox config missing after insert".to_string()))?;
 
     let container_name = sandbox_container_name(service_id);
-    docker.remove_container(&container_name, true).await.ok(); // clean slate
+    state.docker.remove_container(&container_name, true).await.ok(); // clean slate
 
     let (cpu_cores, memory_gb): (f64, f64) = sqlx::query_as(
         "SELECT p.sandbox_cpu_cores, p.sandbox_memory_gb
          FROM organizations o JOIN plans p ON p.id = o.plan_id WHERE o.id = $1",
     )
     .bind(org_id)
-    .fetch_one(db)
+    .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    let install_and_dev = match &app_config.install_cmd {
-        Some(install) => format!("{install} && {}", app_config.dev_cmd.as_deref().unwrap_or("")),
-        None => app_config.dev_cmd.clone().unwrap_or_default(),
+    let install_and_dev = match &config.install_cmd {
+        Some(install) => format!("{install} && {}", config.dev_cmd.as_deref().unwrap_or("")),
+        None => config.dev_cmd.clone().unwrap_or_default(),
     };
 
-    let container_id = docker
+    let container_id = state
+        .docker
         .create_container(ContainerSpec {
             name: container_name.clone(),
-            image: app_config.base_image.clone().unwrap_or_default(),
+            image: config.base_image.clone().unwrap_or_default(),
             cmd: Some(vec!["sh".to_string(), "-c".to_string(), install_and_dev]),
-            env: vec![format!("PORT={}", app_config.port.unwrap_or(3000))],
+            env: vec![format!("PORT={}", config.port.unwrap_or(3000))],
             mounts: vec![MountSpec {
                 source: volume_name.clone(),
                 target: "/app".to_string(),
                 mount_type: MountType::Volume,
                 readonly: false,
             }],
-            network: Some(config.traefik.network.clone()),
+            network: Some(state.config.traefik.network.clone()),
             network_aliases: vec![container_name.clone()],
-            runtime_class: Some(config.sandbox.runtime_class.clone()),
+            runtime_class: Some(state.config.sandbox.runtime_class.clone()),
             resources: Some(ResourceSpec {
                 cpu_limit: Some(cpu_cores),
                 memory_limit_mb: Some((memory_gb * 1024.0) as u64),
@@ -178,37 +119,48 @@ pub async fn start_sandbox(
         })
         .await?;
 
-    docker.start_container(&container_id).await?;
+    state.docker.start_container(&container_id).await?;
 
-    let hostname = preview_hostname(&slug, &config.sandbox.preview_base_domain);
-    ensure_preview_domain(db, service_id, &hostname, app_config.port.unwrap_or(3000)).await?;
+    let hostname = preview_hostname(&slug, &state.config.sandbox.preview_base_domain);
+    ensure_preview_domain(&state.db, service_id, &hostname, config.port.unwrap_or(3000)).await?;
+    crate::resources::sync_traefik_dynamic_config(
+        &state.db,
+        service_id,
+        &state.config.docker.label_prefix,
+        &state.config.traefik.entrypoint_http,
+        &state.config.traefik.entrypoint_https,
+        state.config.traefik.dynamic_config_dir.as_deref(),
+        Some(&container_name),
+        false,
+    )
+    .await;
 
     let preview_url = format!("https://{hostname}");
-    upsert_instance_status(db, service_id, "running", Some(&container_id), Some(&container_name)).await?;
+    upsert_instance_status(&state.db, service_id, "running", Some(&container_id), Some(&container_name)).await?;
     sqlx::query("UPDATE sandbox_instances SET preview_url = $2, started_at = NOW(), last_heartbeat_at = NOW() WHERE service_id = $1")
         .bind(service_id)
         .bind(&preview_url)
-        .execute(db)
+        .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-    fetch_instance(db, service_id)
+    fetch_instance(&state.db, service_id)
         .await?
         .ok_or_else(|| AppError::Internal("sandbox_instances row missing after start".to_string()))
 }
 
 async fn probe_and_detect(
-    docker: &Arc<dyn DockerEngine>,
-    config: &AppConfig,
+    state: &AppState,
     volume_name: &str,
 ) -> Result<shipyard_engine::sandbox_probe::DetectedStack, String> {
     use shipyard_engine::sandbox_probe::{detect_stack, ProbeResult, SANDBOX_PROBE_SCRIPT};
 
     let probe_name = format!("shipyard-probe-{}", Uuid::new_v4().simple());
-    let container_id = docker
+    let container_id = state
+        .docker
         .create_container(ContainerSpec {
             name: probe_name.clone(),
-            image: config.sandbox.probe_image.clone(),
+            image: state.config.sandbox.probe_image.clone(),
             cmd: Some(vec!["sh".to_string(), "-c".to_string(), SANDBOX_PROBE_SCRIPT.to_string()]),
             env: vec![],
             mounts: vec![MountSpec {
@@ -219,19 +171,20 @@ async fn probe_and_detect(
             }],
             network: None,
             network_aliases: vec![],
-            runtime_class: Some(config.sandbox.runtime_class.clone()),
+            runtime_class: Some(state.config.sandbox.runtime_class.clone()),
             resources: None,
         })
         .await
         .map_err(|e| e.to_string())?;
 
-    docker.start_container(&container_id).await.map_err(|e| e.to_string())?;
-    docker.wait_container(&container_id).await.map_err(|e| e.to_string())?;
-    let logs = docker
+    state.docker.start_container(&container_id).await.map_err(|e| e.to_string())?;
+    state.docker.wait_container(&container_id).await.map_err(|e| e.to_string())?;
+    let logs = state
+        .docker
         .container_logs(&container_id, shipyard_docker::types::LogOpts { stdout: true, stderr: false, ..Default::default() })
         .await
         .map_err(|e| e.to_string())?;
-    docker.remove_container(&container_id, true).await.ok();
+    state.docker.remove_container(&container_id, true).await.ok();
 
     let output = logs.join("");
     let probe: ProbeResult = serde_json::from_str(output.trim())
