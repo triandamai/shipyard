@@ -48,11 +48,36 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
     upsert_instance_status(&state.db, service_id, "starting", None, None).await?;
 
     let volume_name = sandbox_volume_name(service_id);
-    state.docker.create_volume(&volume_name, "local").await.ok(); // idempotent: ignore "already exists"
+
+    match provision_sandbox(state, service_id, &volume_name, org_id, &slug).await {
+        Ok(row) => Ok(row),
+        Err(e) => {
+            // Reset so a retry isn't permanently blocked by the idempotency
+            // check above — otherwise a single failed first-start would wedge
+            // the service in "starting" forever.
+            upsert_instance_status(&state.db, service_id, "stopped", None, None).await.ok();
+            Err(e)
+        }
+    }
+}
+
+/// Everything that can fail once `sandbox_instances.status` has already been
+/// written as `"starting"`: volume creation, first-start stack
+/// detection/config insert, container launch, and the preview
+/// domain/Traefik sync. Split out of `start_sandbox` so any `Err` here can be
+/// caught by the caller and turned into a status reset back to `"stopped"`.
+async fn provision_sandbox(
+    state: &AppState,
+    service_id: Uuid,
+    volume_name: &str,
+    org_id: Uuid,
+    slug: &str,
+) -> AppResult<SandboxInstanceRow> {
+    state.docker.create_volume(volume_name, "local").await.ok(); // idempotent: ignore "already exists"
 
     let mut config = fetch_config(&state.db, service_id).await?;
     if config.is_none() {
-        let stack = probe_and_detect(state, &volume_name).await.map_err(|e| {
+        let stack = probe_and_detect(state, volume_name).await.map_err(|e| {
             AppError::BadRequest(format!("Could not start sandbox: {e}"))
         })?;
         sqlx::query(
@@ -69,7 +94,7 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
             shipyard_engine::sandbox_probe::DetectionSource::Detected => "detected",
             shipyard_engine::sandbox_probe::DetectionSource::Manifest => "manifest",
         })
-        .bind(&volume_name)
+        .bind(volume_name)
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -102,7 +127,7 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
             cmd: Some(vec!["sh".to_string(), "-c".to_string(), install_and_dev]),
             env: vec![format!("PORT={}", config.port.unwrap_or(3000))],
             mounts: vec![MountSpec {
-                source: volume_name.clone(),
+                source: volume_name.to_string(),
                 target: "/app".to_string(),
                 mount_type: MountType::Volume,
                 readonly: false,
@@ -121,7 +146,7 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
 
     state.docker.start_container(&container_id).await?;
 
-    let hostname = preview_hostname(&slug, &state.config.sandbox.preview_base_domain);
+    let hostname = preview_hostname(slug, &state.config.sandbox.preview_base_domain);
     ensure_preview_domain(&state.db, service_id, &hostname, config.port.unwrap_or(3000)).await?;
     crate::resources::sync_traefik_dynamic_config(
         &state.db,
@@ -177,18 +202,27 @@ async fn probe_and_detect(
         .await
         .map_err(|e| e.to_string())?;
 
-    state.docker.start_container(&container_id).await.map_err(|e| e.to_string())?;
-    state.docker.wait_container(&container_id).await.map_err(|e| e.to_string())?;
-    let logs = state
-        .docker
-        .container_logs(&container_id, shipyard_docker::types::LogOpts { stdout: true, stderr: false, ..Default::default() })
-        .await
-        .map_err(|e| e.to_string())?;
+    // From here on the container exists and must be cleaned up regardless of
+    // whether start/wait/logs succeed — a probe container is only ever
+    // needed for a single log line, and each one gets a fresh random name,
+    // so a leaked one is never reaped.
+    let result: Result<ProbeResult, String> = async {
+        state.docker.start_container(&container_id).await.map_err(|e| e.to_string())?;
+        state.docker.wait_container(&container_id).await.map_err(|e| e.to_string())?;
+        let logs = state
+            .docker
+            .container_logs(&container_id, shipyard_docker::types::LogOpts { stdout: true, stderr: false, ..Default::default() })
+            .await
+            .map_err(|e| e.to_string())?;
+        let output = logs.join("");
+        serde_json::from_str(output.trim())
+            .map_err(|e| format!("probe output was not valid JSON: {e} (output: {output})"))
+    }
+    .await;
+
     state.docker.remove_container(&container_id, true).await.ok();
 
-    let output = logs.join("");
-    let probe: ProbeResult = serde_json::from_str(output.trim())
-        .map_err(|e| format!("probe output was not valid JSON: {e} (output: {output})"))?;
+    let probe = result?;
     detect_stack(&probe)
 }
 
