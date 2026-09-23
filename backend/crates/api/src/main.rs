@@ -62,6 +62,10 @@ mod edge_functions;
 mod artifactory;
 mod artifact_source;
 
+// Consumed by Task 7's start_sandbox handler; not yet wired into routes.
+#[allow(unused_imports)]
+use shipyard_api::sandbox_runtime;
+
 use shipyard_registry::{
     router::registry_router,
     storage::{local::LocalStorage, StorageBackend},
