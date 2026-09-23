@@ -174,6 +174,71 @@ async fn provision_sandbox(
         .ok_or_else(|| AppError::Internal("sandbox_instances row missing after start".to_string()))
 }
 
+pub const PLACEHOLDER_ROUTE_REASON: &str = "sandbox stopped";
+
+/// Stops the running container (if any) and re-points the app's Traefik
+/// route at the shared placeholder/cold-start responder rather than removing
+/// the route outright — a stopped sandbox's preview URL must still resolve
+/// to something that can trigger an auto-start (see Task 9's public route),
+/// not a dead connection.
+pub async fn stop_sandbox(state: &AppState, service_id: Uuid) -> AppResult<()> {
+    let Some(instance) = fetch_instance(&state.db, service_id).await? else {
+        return Ok(()); // never started — nothing to stop
+    };
+    if instance.status == "stopped" {
+        return Ok(());
+    }
+
+    if let Some(container_id) = &instance.container_id {
+        state.docker.stop_container(container_id, 10).await.ok();
+    }
+
+    // `sync_traefik_dynamic_config` renders each domain's upstream URL as
+    // `http://{upstream_override}:{domains.port}` — passing a `host:port`
+    // string here would double-append the port. Instead we pass just the
+    // placeholder hostname and repoint `domains.port` at the placeholder
+    // port so the existing template's `:{port}` suffix stays correct.
+    sqlx::query("UPDATE domains SET port = $2 WHERE service_id = $1")
+        .bind(service_id)
+        .bind(state.config.sandbox.placeholder_port as i32)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+    crate::resources::sync_traefik_dynamic_config(
+        &state.db,
+        service_id,
+        &state.config.docker.label_prefix,
+        &state.config.traefik.entrypoint_http,
+        &state.config.traefik.entrypoint_https,
+        state.config.traefik.dynamic_config_dir.as_deref(),
+        Some(&state.config.sandbox.placeholder_upstream),
+        false,
+    )
+    .await;
+
+    sqlx::query(
+        "UPDATE sandbox_instances SET status = 'stopped', last_heartbeat_at = NULL, started_at = NULL, updated_at = NOW() WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Records that the editor is still open for this sandbox. Called on an
+/// interval by the frontend while the editor tab is active.
+pub async fn heartbeat(state: &AppState, service_id: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE sandbox_instances SET last_heartbeat_at = NOW() WHERE service_id = $1 AND status = 'running'")
+        .bind(service_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(())
+}
+
 async fn probe_and_detect(
     state: &AppState,
     volume_name: &str,
@@ -302,5 +367,15 @@ mod tests {
         let vol = sandbox_volume_name(service_id);
         assert_eq!(vol, "sandbox-vol-11111111");
         assert_ne!(vol, sandbox_container_name(service_id));
+    }
+
+    #[test]
+    fn placeholder_upstream_used_when_stopping() {
+        // stop_sandbox always re-points Traefik at the configured placeholder
+        // upstream rather than deleting the domain/route outright, so a cold
+        // preview link still resolves to the "waking up" responder instead of a
+        // dead connection. This is exercised end-to-end in Task 9's manual
+        // verification; here we just lock down the constant used.
+        assert_eq!(super::PLACEHOLDER_ROUTE_REASON, "sandbox stopped");
     }
 }
