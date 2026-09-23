@@ -19,6 +19,27 @@ pub struct ServiceSpec {
     pub resources: Option<ResourceSpec>,
 }
 
+/// Specification for creating a single plain (non-Swarm) container — used for
+/// sandbox runtime containers and short-lived stack-detection probe containers,
+/// neither of which need Swarm's declarative reconciliation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerSpec {
+    pub name: String,
+    pub image: String,
+    pub cmd: Option<Vec<String>>,
+    pub env: Vec<String>,
+    pub mounts: Vec<MountSpec>,
+    pub network: Option<String>,
+    /// DNS aliases this container is reachable by on `network` — used so a
+    /// sandbox's Traefik upstream target stays stable across container
+    /// recreation (same alias, new container each start).
+    pub network_aliases: Vec<String>,
+    /// Docker runtime class, e.g. Some("runsc") for gVisor isolation.
+    /// None uses the daemon's default runtime.
+    pub runtime_class: Option<String>,
+    pub resources: Option<ResourceSpec>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MountSpec {
     pub source: String,
