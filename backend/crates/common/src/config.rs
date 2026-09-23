@@ -64,6 +64,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub edge_functions: EdgeFunctionsConfig,
     #[serde(default)]
+    pub sandbox: SandboxConfig,
+    #[serde(default)]
     pub registry: RegistryConfig,
     /// Shared secret for node agent authentication. Set via SHIPYARD__NODE_AGENT_TOKEN.
     #[serde(default)]
@@ -298,6 +300,58 @@ impl Default for EdgeFunctionsConfig {
     }
 }
 
+/// Sandbox runtime feature configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SandboxConfig {
+    /// Set true to enable the sandbox runtime feature.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Seconds without a heartbeat before the idle reaper stops a sandbox.
+    #[serde(default = "default_sandbox_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+    /// How often (seconds) the idle reaper scans for stale sandboxes.
+    #[serde(default = "default_sandbox_reaper_interval_secs")]
+    pub reaper_interval_secs: u64,
+    /// Base domain preview URLs are minted under, e.g. "shipyard-apps.dev"
+    /// produces "preview-<slug>.shipyard-apps.dev".
+    pub preview_base_domain: String,
+    /// Docker runtime class used for sandbox and probe containers.
+    #[serde(default = "default_sandbox_runtime_class")]
+    pub runtime_class: String,
+    /// Image used for the short-lived stack-detection probe container.
+    #[serde(default = "default_sandbox_probe_image")]
+    pub probe_image: String,
+    /// Traefik upstream (network-alias hostname) of the always-running
+    /// placeholder/cold-start responder service, used while a sandbox is stopped.
+    #[serde(default = "default_sandbox_placeholder_upstream")]
+    pub placeholder_upstream: String,
+    /// Port the placeholder responder listens on.
+    #[serde(default = "default_sandbox_placeholder_port")]
+    pub placeholder_port: u16,
+}
+
+fn default_sandbox_idle_timeout_secs() -> u64 { 1200 }
+fn default_sandbox_reaper_interval_secs() -> u64 { 60 }
+fn default_sandbox_runtime_class() -> String { "runsc".to_string() }
+fn default_sandbox_probe_image() -> String { "alpine:3.19".to_string() }
+fn default_sandbox_placeholder_upstream() -> String { "shipyard-sandbox-placeholder".to_string() }
+fn default_sandbox_placeholder_port() -> u16 { 8080 }
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            idle_timeout_secs: default_sandbox_idle_timeout_secs(),
+            reaper_interval_secs: default_sandbox_reaper_interval_secs(),
+            preview_base_domain: "shipyard-apps.dev".to_string(),
+            runtime_class: default_sandbox_runtime_class(),
+            probe_image: default_sandbox_probe_image(),
+            placeholder_upstream: default_sandbox_placeholder_upstream(),
+            placeholder_port: default_sandbox_placeholder_port(),
+        }
+    }
+}
+
 fn default_static_service_name() -> String { "shipyard-static".to_string() }
 fn default_max_upload_mb() -> u64 { 256 }
 fn default_retention_versions() -> usize { 5 }
@@ -437,6 +491,7 @@ impl Default for AppConfig {
             stripe_price_pro: None,
             stripe_price_max: None,
             edge_functions: EdgeFunctionsConfig::default(),
+            sandbox: SandboxConfig::default(),
             registry: RegistryConfig::default(),
             node_agent_token: String::new(),
             node_agent_port: default_node_agent_port(),
@@ -599,5 +654,20 @@ mod tests {
     fn split_pem_bundle_rejects_missing_blocks() {
         assert!(split_pem_bundle("not a pem file").is_none());
         assert!(split_pem_bundle("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----").is_none());
+    }
+}
+
+#[cfg(test)]
+mod sandbox_config_tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_config_defaults_are_sane() {
+        let cfg = SandboxConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.idle_timeout_secs, 1200);
+        assert_eq!(cfg.reaper_interval_secs, 60);
+        assert_eq!(cfg.runtime_class, "runsc");
+        assert_eq!(cfg.probe_image, "alpine:3.19");
     }
 }
