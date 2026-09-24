@@ -6,15 +6,24 @@
     <p id="msg">Waking up this app…</p>
   </div>
   <script>
-    const slug = window.location.hostname.split('.')[0].replace(/^preview-/, '');
+    // The preview hostname is `preview-<token>.<base domain>`, where <token>
+    // is the first 8 hex chars of the app's service_id — not its slug, which
+    // is only unique per project.
+    const token = window.location.hostname.split('.')[0].replace(/^preview-/, '');
     async function poll() {
-      const res = await fetch(`/apps/preview/${slug}/start`, { method: 'POST' });
-      const body = await res.json();
-      if (body.data && body.data.status === 'running') {
-        window.location.reload();
-      } else {
-        setTimeout(poll, 2000);
+      // A transient failure (backend restarting, brief network blip) must not
+      // end the loop — always reschedule.
+      try {
+        const res = await fetch(`/apps/preview/${token}/start`, { method: 'POST' });
+        const body = await res.json();
+        if (body.data && body.data.status === 'running') {
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        // fall through to the retry below
       }
+      setTimeout(poll, 2000);
     }
     poll();
   </script>

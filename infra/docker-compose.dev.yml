@@ -102,6 +102,24 @@ services:
       - "traefik.http.routers.static-sites-https.middlewares=shipyard-error-pages@file"
       - "traefik.http.services.static-sites.loadbalancer.server.port=80"
 
+  # ─── Sandbox cold-start responder ────────────────────────────
+  # Traefik points a *stopped* sandbox app's preview host at this service
+  # (SandboxConfig.placeholder_upstream / placeholder_port), so the preview
+  # URL serves a "waking up" page instead of a 502. The page's auto-start
+  # POST arrives on the preview host too, so nginx.conf proxies /apps/
+  # through to the backend. No host port: Traefik reaches it internally.
+  sandbox-placeholder:
+    image: nginx:alpine
+    container_name: shipyard-sandbox-placeholder
+    restart: unless-stopped
+    volumes:
+      - ./sandbox-placeholder/index.html:/usr/share/nginx/html/index.html:ro
+      - ./sandbox-placeholder/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      platform_proxy:
+        aliases:
+          - shipyard-sandbox-placeholder
+
 networks:
   platform_proxy:
     name: platform_proxy
