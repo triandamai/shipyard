@@ -313,7 +313,7 @@ pub struct SandboxConfig {
     #[serde(default = "default_sandbox_reaper_interval_secs")]
     pub reaper_interval_secs: u64,
     /// Base domain preview URLs are minted under, e.g. "shipyard-apps.dev"
-    /// produces "preview-<slug>.shipyard-apps.dev".
+    /// produces "preview-<8-char service id prefix>.shipyard-apps.dev".
     pub preview_base_domain: String,
     /// Docker runtime class used for sandbox and probe containers.
     #[serde(default = "default_sandbox_runtime_class")]
