@@ -50,6 +50,7 @@ redis = { workspace = true }
 mongodb = { workspace = true }
 sysinfo = "0.32"
 async-trait = { workspace = true }
+base64 = { workspace = true }
 zip = { workspace = true }
 tempfile = "3.27.0"
 aes-gcm = { workspace = true }
