@@ -9,6 +9,9 @@ pub fn validate_sandbox_path(raw: &str) -> Result<String, String> {
     if raw.contains('\n') || raw.contains('\r') {
         return Err("path contains a newline".to_string());
     }
+    if raw.contains('\'') {
+        return Err("path contains a single quote".to_string());
+    }
 
     let stripped = raw.strip_prefix('/').unwrap_or(raw);
     if stripped.is_empty() || stripped == "." {
@@ -62,6 +65,17 @@ mod path_tests {
         // presence of a leading slash or path segments that resemble a
         // system directory name.
         assert_eq!(validate_sandbox_path("/etc/passwd").unwrap(), "etc/passwd");
+    }
+
+    #[test]
+    fn rejects_single_quote_to_prevent_shell_quote_breakout() {
+        // Every file-op handler that consumes this validated path interpolates
+        // it into a single-quoted shell string (e.g. `cat -- '/app/{path}'`).
+        // In POSIX sh, a literal `'` is the only character that can terminate
+        // a single-quoted string, so rejecting it here — the one place path
+        // safety is checked — closes a shell command-injection path before
+        // any handler is built on top of this function.
+        assert!(validate_sandbox_path("foo'; id #").is_err());
     }
 
     #[test]
