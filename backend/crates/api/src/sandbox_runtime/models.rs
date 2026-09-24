@@ -10,6 +10,7 @@ pub struct SandboxAppConfigRow {
     pub port: Option<i32>,
     pub manifest_source: String,
     pub volume_name: String,
+    pub seed_script_b64: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]

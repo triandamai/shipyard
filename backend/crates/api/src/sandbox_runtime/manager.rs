@@ -32,6 +32,20 @@ fn sandbox_traefik_config_name(service_id: Uuid) -> String {
     format!("sbx-{}", &service_id.to_string()[..8])
 }
 
+/// Wraps `install_and_dev` with a conditional first-boot seed step when
+/// `seed_script_b64` is present. The check is unconditionally cheap and
+/// idempotent (`ls -A` on a non-empty /app is a no-op), so this same helper
+/// applies to every sandbox start, not just template-created ones — a
+/// probe-detected app simply never has a seed script to run.
+fn build_startup_command(seed_script_b64: Option<&str>, install_and_dev: &str) -> String {
+    match seed_script_b64 {
+        Some(b64) => format!(
+            "if [ -z \"$(ls -A /app 2>/dev/null)\" ]; then echo '{b64}' | base64 -d | sh; fi; {install_and_dev}"
+        ),
+        None => install_and_dev.to_string(),
+    }
+}
+
 /// Splits a combined `image:tag` reference into the `(image, tag)` pair
 /// `DockerEngine::pull_image` expects. A `:` that appears before a `/` is a
 /// registry port, not a tag, so those fall back to the `latest` tag.
@@ -219,6 +233,7 @@ async fn provision_sandbox(
         Some(install) => format!("{install} && {}", config.dev_cmd.as_deref().unwrap_or("")),
         None => config.dev_cmd.clone().unwrap_or_default(),
     };
+    let install_and_dev = build_startup_command(config.seed_script_b64.as_deref(), &install_and_dev);
 
     // Docker's create API never auto-pulls (only the CLI's `docker run` does),
     // so a daemon without the base image cached would fail every first start.
@@ -520,6 +535,23 @@ mod tests {
 
         let simulated_exited: Result<String, String> = Ok("exited".to_string());
         assert!(is_container_dead(&simulated_exited));
+    }
+
+    #[test]
+    fn startup_command_wraps_seed_script_when_present() {
+        let seed_b64 = "bWtkaXIgLXAgL2FwcA=="; // base64("mkdir -p /app")
+        let install_and_dev = "npm install && npm run dev";
+        let full_cmd = build_startup_command(Some(seed_b64), install_and_dev);
+        assert!(full_cmd.contains("if [ -z \"$(ls -A /app 2>/dev/null)\" ]"));
+        assert!(full_cmd.contains(seed_b64));
+        assert!(full_cmd.ends_with(install_and_dev));
+    }
+
+    #[test]
+    fn startup_command_is_unwrapped_when_no_seed_script() {
+        let install_and_dev = "npm install && npm run dev";
+        let full_cmd = build_startup_command(None, install_and_dev);
+        assert_eq!(full_cmd, install_and_dev);
     }
 
     #[test]
