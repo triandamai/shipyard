@@ -17,11 +17,19 @@ use crate::AppState;
 use super::exec;
 use super::files;
 use super::manager;
+use super::templates::{template_runtime, template_seed_script_b64, Template};
 
 #[derive(Debug, Serialize)]
 struct SandboxStatusResponse {
     status: String,
     preview_url: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CreateAppRequest {
+    name: String,
+    slug: String,
+    template: String,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -31,6 +39,80 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/:service_id/sandbox/heartbeat", post(heartbeat))
         .merge(files::routes())
         .merge(exec::routes())
+}
+
+/// Project-scoped routes for the sandbox runtime — as opposed to `routes()`
+/// above, whose routes are all scoped by `:service_id`. Kept as a separate
+/// router so it can be `.merge()`d alongside `/projects/:project_id/...`
+/// route groups in the top-level `api_router()`.
+pub fn project_routes() -> Router<AppState> {
+    Router::new().route("/projects/:project_id/apps", post(create_app))
+}
+
+/// POST /projects/:project_id/apps
+///
+/// Creates a brand-new `sandbox_app` service straight from a template,
+/// skipping probe detection: the template already declares the runtime,
+/// base image, install/dev commands and port, so there is nothing to
+/// detect on this first-ever start. `sandbox_app_configs.manifest_source`
+/// is set to `'manifest'` (not `'undetected'`) to reflect that.
+async fn create_app(
+    auth_user: AuthUser,
+    Path(project_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(body): Json<CreateAppRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    crate::middleware::rbac::require_project_access(&state.db, auth_user.user_id, project_id)
+        .await
+        .map_err(ApiAppError)?;
+
+    let template = Template::from_str(&body.template).ok_or_else(|| {
+        ApiAppError(AppError::BadRequest(format!(
+            "Unknown template '{}'",
+            body.template
+        )))
+    })?;
+    let (runtime, base_image, install_cmd, dev_cmd, port) = template_runtime(template);
+    let seed_script_b64 = template_seed_script_b64(template);
+
+    let service_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO services (id, project_id, name, slug, type, status, replicas, ports)
+         VALUES ($1, $2, $3, $4, 'sandbox_app', 'stopped', 0, '[]'::jsonb)",
+    )
+    .bind(service_id)
+    .bind(project_id)
+    .bind(&body.name)
+    .bind(&body.slug)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let volume_name = super::manager::sandbox_volume_name(service_id);
+    sqlx::query(
+        "INSERT INTO sandbox_app_configs
+             (service_id, runtime, base_image, install_cmd, dev_cmd, port, manifest_source, volume_name, seed_script_b64)
+         VALUES ($1, $2, $3, $4, $5, $6, 'manifest', $7, $8)",
+    )
+    .bind(service_id)
+    .bind(runtime)
+    .bind(base_image)
+    .bind(install_cmd)
+    .bind(dev_cmd)
+    .bind(port as i32)
+    .bind(&volume_name)
+    .bind(&seed_script_b64)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "id": service_id,
+        "project_id": project_id,
+        "name": body.name,
+        "slug": body.slug,
+        "type": "sandbox_app",
+    }))))
 }
 
 async fn start(
@@ -112,4 +194,15 @@ async fn public_start(
         status: instance.status,
         preview_url: instance.preview_url,
     })))
+}
+
+#[cfg(test)]
+mod create_app_tests {
+    use super::super::templates::Template;
+
+    #[test]
+    fn unknown_template_string_is_rejected() {
+        assert!(Template::from_str("rust").is_none());
+        assert!(Template::from_str("node").is_some());
+    }
 }

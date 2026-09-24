@@ -87,6 +87,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(artifact_source::routes())
         // Sandbox runtime — /apps/:service_id/sandbox/{start,stop,heartbeat}
         .merge(sandbox_runtime::routes::routes())
+        // Sandbox runtime — /projects/:project_id/apps (create app from template)
+        .merge(sandbox_runtime::routes::project_routes())
         // Git providers — org-scoped Git integrations
         .merge(git_providers::routes())
         // Billing webhook — /billing/webhooks
