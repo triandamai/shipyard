@@ -51,6 +51,11 @@ fn hostname_to_router_name(hostname: &str) -> String {
 ///   host (use for edge functions: `"shipyard-edge-{short}"`).
 /// * `include_error_pages` — set `false` for services whose 404 responses
 ///   must not be intercepted by the branded error-page middleware (edge fns).
+/// * `filename_override` — when `Some(name)`, writes `{dir}/{name}.yml`
+///   instead of the default `{dir}/{slug}.yml`. `services.slug` is only
+///   unique per project, so callers whose service type can collide across
+///   tenants (sandbox apps) pass a `service_id`-derived name here to avoid
+///   clobbering an unrelated service's routing file.
 pub async fn sync_traefik_dynamic_config(
     db: &sqlx::PgPool,
     service_id: Uuid,
@@ -60,6 +65,7 @@ pub async fn sync_traefik_dynamic_config(
     dynamic_config_dir: Option<&str>,
     upstream_override: Option<&str>,
     include_error_pages: bool,
+    filename_override: Option<&str>,
 ) {
     let Some(dir) = dynamic_config_dir else { return };
 
@@ -74,7 +80,8 @@ pub async fn sync_traefik_dynamic_config(
     .flatten()
     .unwrap_or_else(|| (service_id.to_string(), String::new()));
 
-    let path = std::path::Path::new(dir).join(format!("{slug}.yml"));
+    let file_stem = filename_override.unwrap_or(slug.as_str());
+    let path = std::path::Path::new(dir).join(format!("{file_stem}.yml"));
 
     // Fetch all current domains for this service
     let rows: Vec<(String, bool, String, Option<i32>, String)> = match sqlx::query_as(
@@ -486,6 +493,7 @@ async fn create_domain(
         state.config.traefik.dynamic_config_dir.as_deref(),
         None,
         true,
+        None,
     ).await;
 
     // For static sites: update the nginx server_name so the site responds on the new domain immediately.
@@ -545,6 +553,7 @@ async fn delete_domain(
         state.config.traefik.dynamic_config_dir.as_deref(),
         None,
         true,
+        None,
     ).await;
 
     // For static sites: update nginx server_name after the domain is removed.

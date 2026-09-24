@@ -1,9 +1,13 @@
-use bollard::container::{InspectContainerOptions, LogsOptions, RestartContainerOptions, StopContainerOptions};
+use bollard::container::{
+    Config as ContainerConfig, CreateContainerOptions, InspectContainerOptions, LogsOptions,
+    NetworkingConfig, RemoveContainerOptions, RestartContainerOptions, StopContainerOptions,
+    WaitContainerOptions,
+};
 use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{
     EndpointPortConfig, EndpointPortConfigProtocolEnum, EndpointPortConfigPublishModeEnum,
-    EndpointSpec, EndpointSpecModeEnum, Limit, Mount, MountTypeEnum,
+    EndpointSettings, EndpointSpec, EndpointSpecModeEnum, HostConfig, Limit, Mount, MountTypeEnum,
     NetworkAttachmentConfig, ResourceObject, ServiceSpec as BollardServiceSpec,
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig,
     ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
@@ -67,6 +71,23 @@ pub trait DockerEngine: Send + Sync {
 
     /// Remove a named volume.
     async fn remove_volume(&self, name: &str) -> AppResult<()>;
+
+    /// Create (but do not start) a plain, non-Swarm container. Used for
+    /// sandbox runtime containers and short-lived detection probes — neither
+    /// needs Swarm's declarative reconciliation, and Swarm has no per-service
+    /// runtime-class selection, which gVisor isolation requires.
+    async fn create_container(&self, spec: ContainerSpec) -> AppResult<String>;
+
+    /// Start a previously created container.
+    async fn start_container(&self, container_id: &str) -> AppResult<()>;
+
+    /// Remove a container. `force` also stops it first if still running.
+    async fn remove_container(&self, container_id: &str, force: bool) -> AppResult<()>;
+
+    /// Block until the container exits, returning its exit code. Used for
+    /// short-lived probe containers whose stdout is read via `container_logs`
+    /// after this returns.
+    async fn wait_container(&self, container_id: &str) -> AppResult<i64>;
 
     /// Pull an image; returns the status lines emitted by the daemon.
     /// Pass `auth` as `Some((username, password, server_address))` for private registries.
@@ -524,6 +545,59 @@ impl BollardDockerEngine {
     }
 }
 
+/// Build a bollard container `Config` from our domain `ContainerSpec` — pure
+/// and unit-testable, used by `create_container`.
+fn build_container_config(spec: &ContainerSpec) -> ContainerConfig<String> {
+    let mounts: Vec<Mount> = spec
+        .mounts
+        .iter()
+        .map(|m| Mount {
+            source: Some(m.source.clone()),
+            target: Some(m.target.clone()),
+            typ: Some(match m.mount_type {
+                MountType::Volume => MountTypeEnum::VOLUME,
+                MountType::Bind => MountTypeEnum::BIND,
+                MountType::Tmpfs => MountTypeEnum::TMPFS,
+            }),
+            read_only: Some(m.readonly),
+            ..Default::default()
+        })
+        .collect();
+
+    let cpu_to_nano = |cpus: f64| -> i64 { (cpus * 1_000_000_000.0) as i64 };
+    let mb_to_bytes = |mb: u64| -> i64 { (mb * 1024 * 1024) as i64 };
+
+    let host_config = HostConfig {
+        mounts: Some(mounts),
+        runtime: spec.runtime_class.clone(),
+        network_mode: spec.network.clone(),
+        nano_cpus: spec.resources.as_ref().and_then(|r| r.cpu_limit.map(cpu_to_nano)),
+        memory: spec.resources.as_ref().and_then(|r| r.memory_limit_mb.map(mb_to_bytes)),
+        ..Default::default()
+    };
+
+    ContainerConfig {
+        image: Some(spec.image.clone()),
+        cmd: spec.cmd.clone(),
+        env: Some(spec.env.clone()),
+        host_config: Some(host_config),
+        // NOTE: `bollard::container::Config::networking_config` is typed as
+        // `Option<bollard::container::NetworkingConfig<T>>`, a distinct,
+        // non-Option-field type from `bollard::models::NetworkingConfig`
+        // (which the plan text imported) — the latter doesn't fit here.
+        networking_config: spec.network.as_ref().map(|net| NetworkingConfig {
+            endpoints_config: std::collections::HashMap::from([(
+                net.clone(),
+                EndpointSettings {
+                    aliases: Some(spec.network_aliases.clone()),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        ..Default::default()
+    }
+}
+
 /// Decode an HTTP/1.1 chunked body.
 fn decode_chunked(input: &str) -> String {
     let mut out = String::new();
@@ -550,6 +624,90 @@ fn decode_chunked(input: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod container_spec_tests {
+    use super::*;
+
+    fn sample_spec() -> ContainerSpec {
+        ContainerSpec {
+            name: "shipyard-sandbox-abcd1234".to_string(),
+            image: "node:20-alpine".to_string(),
+            cmd: Some(vec!["sh".to_string(), "-c".to_string(), "npm run dev".to_string()]),
+            env: vec!["PORT=3000".to_string()],
+            mounts: vec![MountSpec {
+                source: "sandbox-vol-abcd1234".to_string(),
+                target: "/app".to_string(),
+                mount_type: MountType::Volume,
+                readonly: false,
+            }],
+            network: Some("shipyard-net".to_string()),
+            network_aliases: vec!["shipyard-sandbox-abcd1234".to_string()],
+            runtime_class: Some("runsc".to_string()),
+            resources: Some(ResourceSpec {
+                cpu_limit: Some(0.5),
+                memory_limit_mb: Some(1024),
+                cpu_reservation: None,
+                memory_reservation_mb: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn build_container_config_sets_runtime_class() {
+        let config = build_container_config(&sample_spec());
+        let host_config = config.host_config.expect("host_config must be set");
+        assert_eq!(host_config.runtime.as_deref(), Some("runsc"));
+    }
+
+    #[test]
+    fn build_container_config_sets_resource_limits_in_bytes_and_nanocpus() {
+        let config = build_container_config(&sample_spec());
+        let host_config = config.host_config.expect("host_config must be set");
+        assert_eq!(host_config.memory, Some(1024 * 1024 * 1024));
+        assert_eq!(host_config.nano_cpus, Some(500_000_000));
+    }
+
+    #[test]
+    fn build_container_config_mounts_volume_at_target() {
+        let config = build_container_config(&sample_spec());
+        let host_config = config.host_config.expect("host_config must be set");
+        let mounts = host_config.mounts.expect("mounts must be set");
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].source.as_deref(), Some("sandbox-vol-abcd1234"));
+        assert_eq!(mounts[0].target.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn build_container_config_sets_network_mode() {
+        let config = build_container_config(&sample_spec());
+        let host_config = config.host_config.expect("host_config must be set");
+        assert_eq!(host_config.network_mode.as_deref(), Some("shipyard-net"));
+    }
+
+    #[test]
+    fn build_container_config_sets_network_alias() {
+        let config = build_container_config(&sample_spec());
+        let networking_config = config.networking_config.expect("networking_config must be set");
+        let endpoint = networking_config
+            .endpoints_config
+            .get("shipyard-net")
+            .expect("endpoint config for the spec's network must be present");
+        assert_eq!(
+            endpoint.aliases.as_deref(),
+            Some(["shipyard-sandbox-abcd1234".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn build_container_config_none_runtime_class_omits_field() {
+        let mut spec = sample_spec();
+        spec.runtime_class = None;
+        let config = build_container_config(&spec);
+        let host_config = config.host_config.expect("host_config must be set");
+        assert_eq!(host_config.runtime, None);
+    }
 }
 
 #[cfg(test)]
@@ -898,6 +1056,46 @@ impl DockerEngine for BollardDockerEngine {
             .await
             .map_err(|e| AppError::Docker(format!("remove_volume failed: {e}")))?;
         Ok(())
+    }
+
+    // ── Plain container lifecycle (sandbox runtime, detection probes) ────────
+
+    async fn create_container(&self, spec: ContainerSpec) -> AppResult<String> {
+        let config = build_container_config(&spec);
+        let result = self
+            .client
+            .create_container(
+                Some(CreateContainerOptions { name: spec.name.clone(), platform: None }),
+                config,
+            )
+            .await
+            .map_err(|e| AppError::Docker(format!("create_container failed: {e}")))?;
+        Ok(result.id)
+    }
+
+    async fn start_container(&self, container_id: &str) -> AppResult<()> {
+        self.client
+            .start_container::<String>(container_id, None)
+            .await
+            .map_err(|e| AppError::Docker(format!("start_container failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn remove_container(&self, container_id: &str, force: bool) -> AppResult<()> {
+        self.client
+            .remove_container(container_id, Some(RemoveContainerOptions { force, ..Default::default() }))
+            .await
+            .map_err(|e| AppError::Docker(format!("remove_container failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn wait_container(&self, container_id: &str) -> AppResult<i64> {
+        let mut stream = self.client.wait_container(container_id, None::<WaitContainerOptions<String>>);
+        match stream.next().await {
+            Some(Ok(result)) => Ok(result.status_code),
+            Some(Err(e)) => Err(AppError::Docker(format!("wait_container failed: {e}"))),
+            None => Err(AppError::Docker("wait_container: stream ended with no result".to_string())),
+        }
     }
 
     // ── Image management ──────────────────────────────────────────────────────

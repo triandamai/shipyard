@@ -2,7 +2,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use dashmap::DashMap;
 
 use axum::{
@@ -23,86 +23,24 @@ use shipyard_common::config::AppConfig;
 use shipyard_common::types::ApiResponse;
 use shipyard_docker::BollardDockerEngine;
 use shipyard_docker::engine::DockerEngine;
-use shipyard_mqtt::MqttPublisher;
 
-use middleware::rate_limit::SharedRateLimiter;
 use tokio::sync::Notify;
-
-mod admin;
-mod alerts;
-mod auth;
-mod cache;
-mod compose;
-mod email;
-mod error;
-mod routes;
-mod setup;
-mod orgs;
-mod projects;
-mod services;
-pub(crate) mod resources;
-mod containers;
-mod deployments;
-mod topology;
-mod logs;
-mod middleware;
-mod templates;
-mod webhooks;
-mod settings;
-mod shorthand;
-mod dbclient;
-mod static_site;
-mod git_providers;
-mod billing;
-mod nodes;
-mod plans;
-mod provisioning;
-mod compute;
-mod edge_functions;
-mod artifactory;
-mod artifact_source;
 
 use shipyard_registry::{
     router::registry_router,
     storage::{local::LocalStorage, StorageBackend},
-    RegistryState,
 };
-use axum::extract::FromRef;
 
-/// Short-lived OAuth state entries keyed by state UUID → (provider, org_id, created_at).
-/// `org_id` is passed through the flow so the callback redirect lands on the right org settings page.
-pub type OAuthStates = Arc<DashMap<String, (String, Option<String>, Instant)>>;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub config: Arc<AppConfig>,
-    pub db: sqlx::PgPool,
-    pub docker: Arc<dyn DockerEngine>,
-    pub mqtt: Arc<MqttPublisher>,
-    pub oauth_states: OAuthStates,
-    pub redis: Option<redis::aio::ConnectionManager>,
-    /// Shared HTTP client — reuses the connection pool across all outbound requests.
-    pub http_client: reqwest::Client,
-    /// Tight per-IP rate limiter for /auth/login and /auth/register (10 req/min).
-    pub auth_limiter: SharedRateLimiter,
-    /// Notified whenever a deployment completes so the Swarm sync loop wakes immediately.
-    pub swarm_sync_trigger: Arc<Notify>,
-    /// Artifact registry storage backend (local or S3).
-    pub registry_storage: Arc<dyn StorageBackend>,
-}
-
-/// Allow registry route handlers typed `State<RegistryState>` to be used inside
-/// the main `Router<AppState>` — axum calls this to extract the sub-state.
-impl FromRef<AppState> for RegistryState {
-    fn from_ref(s: &AppState) -> Self {
-        RegistryState {
-            db:         s.db.clone(),
-            storage:    Arc::clone(&s.registry_storage),
-            hostname:   s.config.registry.hostname.clone(),
-            jwt_secret: s.config.auth.jwt_secret.clone(),
-        }
-    }
-}
+// Not every module below is referenced by name in this file directly — several
+// are only reached indirectly (e.g. via `routes::api_router()` aggregating them).
+#[allow(unused_imports)]
+use shipyard_api::{
+    admin, alerts, auth, cache, compose, email, error, routes, setup, orgs, projects, services,
+    resources, containers, deployments, topology, logs, middleware, templates, webhooks, settings,
+    shorthand, dbclient, static_site, git_providers, billing, nodes, plans, provisioning, compute,
+    edge_functions, artifactory, artifact_source, sandbox_runtime,
+    AppState, OAuthStates,
+};
 
 fn main() {
     tokio::runtime::Builder::new_multi_thread()
@@ -632,6 +570,15 @@ async fn async_main() {
         });
     }
 
+    // Sandbox idle reaper: stops sandboxes past their idle timeout (backstop for
+    // missed explicit-stop / tab-close signals).
+    if state.config.sandbox.enabled {
+        let sandbox_state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            sandbox_runtime::reaper::run(sandbox_state).await;
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
@@ -716,6 +663,9 @@ async fn async_main() {
         // Edge function invocations — public, no auth, routed to per-org runtime.
         // Must be outside /api so it's not behind the init gate.
         .nest("/fn", edge_functions::invoke_routes())
+        // Cold-preview auto-start — public, no auth, must be outside /api so
+        // an anonymous preview visitor isn't blocked by the init gate.
+        .nest("/apps", sandbox_runtime::routes::public_routes())
         // OCI artifact registry — nested at /registry so Traefik can route
         // registry-domain.com/* → backend:3001/registry/* with addPrefix middleware.
         // RegistryState is extracted from AppState via FromRef.
