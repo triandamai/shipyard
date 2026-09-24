@@ -14,6 +14,7 @@ use crate::error::ApiAppError;
 use crate::middleware::rbac::require_service_access;
 use crate::AppState;
 
+use super::exec;
 use super::files;
 use super::manager;
 
@@ -29,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/:service_id/sandbox/stop", post(stop))
         .route("/apps/:service_id/sandbox/heartbeat", post(heartbeat))
         .merge(files::routes())
+        .merge(exec::routes())
 }
 
 async fn start(
