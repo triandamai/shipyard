@@ -2,25 +2,46 @@
 	import { onMount } from 'svelte';
 	import { EditorView, basicSetup } from 'codemirror';
 	import { yaml } from '@codemirror/lang-yaml';
-	import { EditorState } from '@codemirror/state';
+	import { javascript } from '@codemirror/lang-javascript';
+	import { json } from '@codemirror/lang-json';
+	import { EditorState, Compartment } from '@codemirror/state';
 
 	interface Props {
 		value?: string;
 		onChange?: (val: string) => void;
 		height?: string;
 		readonly?: boolean;
+		language?: 'yaml' | 'javascript' | 'json' | 'plain';
 	}
 
-	let { value = '', onChange, height = '280px', readonly = false }: Props = $props();
+	let { value = '', onChange, height = '280px', readonly = false, language = 'yaml' }: Props = $props();
 
 	let container: HTMLDivElement | undefined = $state();
 	let view: EditorView | null = null;
+
+	const languageCompartment = new Compartment();
+
+	function languageExtension(lang: string) {
+		switch (lang) {
+			case 'javascript': return javascript();
+			case 'json': return json();
+			case 'yaml': return yaml();
+			default: return [];
+		}
+	}
 
 	// Called by parent to reset content imperatively (e.g. "clear")
 	export function setValue(newVal: string) {
 		if (!view) return;
 		view.dispatch({
 			changes: { from: 0, to: view.state.doc.length, insert: newVal },
+		});
+	}
+
+	export function setLanguage(lang: string) {
+		if (!view) return;
+		view.dispatch({
+			effects: languageCompartment.reconfigure(languageExtension(lang)),
 		});
 	}
 
@@ -58,7 +79,7 @@
 
 		const extensions = [
 			basicSetup,
-			yaml(),
+			languageCompartment.of(languageExtension(language)),
 			theme,
 			EditorView.lineWrapping,
 			EditorView.updateListener.of((update) => {
