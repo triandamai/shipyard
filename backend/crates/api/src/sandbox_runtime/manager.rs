@@ -15,8 +15,31 @@ pub fn sandbox_volume_name(service_id: Uuid) -> String {
     format!("sandbox-vol-{}", &service_id.to_string()[..8])
 }
 
-fn preview_hostname(slug: &str, base_domain: &str) -> String {
-    format!("preview-{slug}.{base_domain}")
+/// Preview hostnames are keyed by the first 8 hex chars of the service's
+/// globally-unique id, not by `services.slug` — slugs are only unique per
+/// project (`UNIQUE (project_id, slug)`), so a slug-keyed hostname would let
+/// two tenants collide on the globally-unique `domains.hostname`. Same
+/// convention as `efg-{group_id[..8]}` / `shipyard-edge-{org_id[..8]}`.
+fn preview_hostname(service_id: Uuid, base_domain: &str) -> String {
+    format!("preview-{}.{base_domain}", &service_id.to_string()[..8])
+}
+
+/// The Traefik dynamic-config filename for a sandbox's route. Keyed by
+/// `service_id` for the same reason as `preview_hostname` — the default
+/// slug-derived filename would let a sandbox clobber an unrelated service's
+/// routing file.
+fn sandbox_traefik_config_name(service_id: Uuid) -> String {
+    format!("sbx-{}", &service_id.to_string()[..8])
+}
+
+/// Splits a combined `image:tag` reference into the `(image, tag)` pair
+/// `DockerEngine::pull_image` expects. A `:` that appears before a `/` is a
+/// registry port, not a tag, so those fall back to the `latest` tag.
+fn split_image_ref(image_ref: &str) -> (&str, &str) {
+    match image_ref.rsplit_once(':') {
+        Some((image, tag)) if !tag.is_empty() && !tag.contains('/') => (image, tag),
+        _ => (image_ref, "latest"),
+    }
 }
 
 /// Starts (or returns the already-running) sandbox for `service_id`. Enforces
@@ -24,8 +47,17 @@ fn preview_hostname(slug: &str, base_domain: &str) -> String {
 /// (probe container → detect_stack), launches the gVisor-isolated sandbox
 /// container, and points the app's Traefik route at it.
 pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<SandboxInstanceRow> {
-    let (org_id, slug): (Uuid, String) = sqlx::query_as(
-        "SELECT p.org_id, s.slug FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
+    // The feature flag must gate the actual container launch, not just the
+    // idle reaper — otherwise a start on a deployment with the reaper
+    // disabled would run an uncapped sandbox forever.
+    if !state.config.sandbox.enabled {
+        return Err(AppError::BadRequest(
+            "Sandbox runtime is not enabled on this deployment".to_string(),
+        ));
+    }
+
+    let org_id: Uuid = sqlx::query_scalar(
+        "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )
     .bind(service_id)
     .fetch_optional(&state.db)
@@ -38,6 +70,7 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
     // row can go stale if the container crashed, was OOM-killed, or was
     // removed out-of-band, in which case we self-heal by falling through to
     // re-provisioning instead of returning stale state.
+    let mut self_healing = false;
     if let Some(existing) = fetch_instance(&state.db, service_id).await? {
         if existing.status == "starting" {
             return Ok(existing);
@@ -52,19 +85,51 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
             }
             tracing::warn!(service_id = %service_id, "start_sandbox: DB says running but container is dead — self-healing");
             // Fall through to relaunch below instead of returning stale state.
+            self_healing = true;
         }
     }
 
     match quota::check_quota(&state.db, org_id).await? {
         Ok(()) => {}
-        Err(message) => return Err(AppError::BadRequest(message)),
+        Err(message) => return Err(AppError::Conflict(message)),
     }
 
-    upsert_instance_status(&state.db, service_id, "starting", None, None).await?;
+    // Claim the start atomically. The idempotency check above is racy on its
+    // own — two concurrent calls for the same service can both read "stopped"
+    // and both fall through — so the "starting" write doubles as the claim:
+    // the conditional `DO UPDATE ... WHERE` only fires (and only then does
+    // `RETURNING` produce a row) if the row isn't already starting/running.
+    // Postgres re-evaluates that WHERE against the latest committed row
+    // version, so the loser of a race always sees the winner's 'starting'.
+    // The `$2` branch lets the self-heal path above (DB says running, the
+    // container is actually dead) claim a 'running' row — exactly once, for
+    // the same reason.
+    let claimed: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO sandbox_instances (service_id, status, updated_at)
+         VALUES ($1, 'starting', NOW())
+         ON CONFLICT (service_id) DO UPDATE
+           SET status = 'starting', container_id = NULL, container_name = NULL, updated_at = NOW()
+           WHERE sandbox_instances.status NOT IN ('starting', 'running')
+              OR ($2 AND sandbox_instances.status = 'running')
+         RETURNING service_id",
+    )
+    .bind(service_id)
+    .bind(self_healing)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    if claimed.is_none() {
+        // Another concurrent call already claimed the start — return its
+        // current state rather than racing on container creation.
+        return fetch_instance(&state.db, service_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("sandbox_instances row missing after concurrent claim".to_string()));
+    }
 
     let volume_name = sandbox_volume_name(service_id);
 
-    match provision_sandbox(state, service_id, &volume_name, org_id, &slug).await {
+    match provision_sandbox(state, service_id, &volume_name, org_id).await {
         Ok(row) => Ok(row),
         Err(e) => {
             // Reset so a retry isn't permanently blocked by the idempotency
@@ -81,14 +146,35 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
 /// detection/config insert, container launch, and the preview
 /// domain/Traefik sync. Split out of `start_sandbox` so any `Err` here can be
 /// caught by the caller and turned into a status reset back to `"stopped"`.
+///
+/// NOTE (follow-up): deleting the `services` row cascades the sandbox's DB
+/// rows but does *not* stop/remove the sandbox's Docker container or delete
+/// its Docker volume — a service-delete teardown hook is still needed.
 async fn provision_sandbox(
     state: &AppState,
     service_id: Uuid,
     volume_name: &str,
     org_id: Uuid,
-    slug: &str,
 ) -> AppResult<SandboxInstanceRow> {
     state.docker.create_volume(volume_name, "local").await.ok(); // idempotent: ignore "already exists"
+
+    // Record the app's persistent volume in the platform's `volumes` table so
+    // it shows up in the volume UI/topology like any other attached volume.
+    // `volumes` has no unique constraint usable as an ON CONFLICT target, so
+    // idempotency across restarts comes from the NOT EXISTS guard instead.
+    sqlx::query(
+        "INSERT INTO volumes (id, project_id, service_id, name, mount_path, driver)
+         SELECT $1, s.project_id, s.id, $3, '/app', 'local'
+         FROM services s
+         WHERE s.id = $2
+           AND NOT EXISTS (SELECT 1 FROM volumes v WHERE v.service_id = $2 AND v.name = $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(service_id)
+    .bind(volume_name)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
 
     let mut config = fetch_config(&state.db, service_id).await?;
     if config.is_none() {
@@ -134,11 +220,19 @@ async fn provision_sandbox(
         None => config.dev_cmd.clone().unwrap_or_default(),
     };
 
+    // Docker's create API never auto-pulls (only the CLI's `docker run` does),
+    // so a daemon without the base image cached would fail every first start.
+    // A missing image is fatal here, unlike the idempotent create_volume /
+    // remove_container calls above.
+    let base_image = config.base_image.clone().unwrap_or_default();
+    let (pull_image, pull_tag) = split_image_ref(&base_image);
+    state.docker.pull_image(pull_image, pull_tag, None).await?;
+
     let container_id = state
         .docker
         .create_container(ContainerSpec {
             name: container_name.clone(),
-            image: config.base_image.clone().unwrap_or_default(),
+            image: base_image.clone(),
             cmd: Some(vec!["sh".to_string(), "-c".to_string(), install_and_dev]),
             env: vec![format!("PORT={}", config.port.unwrap_or(3000))],
             mounts: vec![MountSpec {
@@ -161,7 +255,7 @@ async fn provision_sandbox(
 
     state.docker.start_container(&container_id).await?;
 
-    let hostname = preview_hostname(slug, &state.config.sandbox.preview_base_domain);
+    let hostname = preview_hostname(service_id, &state.config.sandbox.preview_base_domain);
     ensure_preview_domain(&state.db, service_id, &hostname, config.port.unwrap_or(3000)).await?;
     crate::resources::sync_traefik_dynamic_config(
         &state.db,
@@ -172,6 +266,7 @@ async fn provision_sandbox(
         state.config.traefik.dynamic_config_dir.as_deref(),
         Some(&container_name),
         false,
+        Some(&sandbox_traefik_config_name(service_id)),
     )
     .await;
 
@@ -213,9 +308,15 @@ pub async fn stop_sandbox(state: &AppState, service_id: Uuid) -> AppResult<()> {
     // string here would double-append the port. Instead we pass just the
     // placeholder hostname and repoint `domains.port` at the placeholder
     // port so the existing template's `:{port}` suffix stays correct.
-    sqlx::query("UPDATE domains SET port = $2 WHERE service_id = $1")
+    //
+    // Scoped to the preview hostname specifically: a sandbox app may gain a
+    // second domain (the spec's "publish" transition), and that one must not
+    // be repointed at the placeholder port.
+    let hostname = preview_hostname(service_id, &state.config.sandbox.preview_base_domain);
+    sqlx::query("UPDATE domains SET port = $2 WHERE service_id = $1 AND hostname = $3")
         .bind(service_id)
         .bind(state.config.sandbox.placeholder_port as i32)
+        .bind(&hostname)
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -229,6 +330,7 @@ pub async fn stop_sandbox(state: &AppState, service_id: Uuid) -> AppResult<()> {
         state.config.traefik.dynamic_config_dir.as_deref(),
         Some(&state.config.sandbox.placeholder_upstream),
         false,
+        Some(&sandbox_traefik_config_name(service_id)),
     )
     .await;
 
@@ -261,6 +363,15 @@ async fn probe_and_detect(
     use shipyard_engine::sandbox_probe::{detect_stack, ProbeResult, SANDBOX_PROBE_SCRIPT};
 
     let probe_name = format!("shipyard-probe-{}", Uuid::new_v4().simple());
+
+    // create_container does not auto-pull — see provision_sandbox.
+    let (pull_image, pull_tag) = split_image_ref(&state.config.sandbox.probe_image);
+    state
+        .docker
+        .pull_image(pull_image, pull_tag, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let container_id = state
         .docker
         .create_container(ContainerSpec {

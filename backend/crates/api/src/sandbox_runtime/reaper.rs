@@ -11,12 +11,18 @@ use super::manager;
 /// Idle timeout is the source of truth for "is this sandbox actually in
 /// use" (see spec Decisions) — explicit stop and tab-close signals are
 /// best-effort and can be missed, so this is the reliable backstop.
+///
+/// Also catches rows wedged in `'starting'`: if the process dies mid-provision
+/// the row never reaches `'running'` and never gets a `last_heartbeat_at`, so
+/// that branch keys off `updated_at` against the same threshold instead.
 pub async fn find_stale_sandboxes(db: &PgPool, idle_timeout_secs: u64) -> AppResult<Vec<Uuid>> {
     let rows: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT service_id FROM sandbox_instances
-         WHERE status = 'running'
-           AND last_heartbeat_at IS NOT NULL
-           AND last_heartbeat_at < NOW() - ($1 || ' seconds')::interval",
+         WHERE (status = 'running'
+                AND last_heartbeat_at IS NOT NULL
+                AND last_heartbeat_at < NOW() - ($1 || ' seconds')::interval)
+            OR (status = 'starting'
+                AND updated_at < NOW() - ($1 || ' seconds')::interval)",
     )
     .bind(idle_timeout_secs.to_string())
     .fetch_all(db)

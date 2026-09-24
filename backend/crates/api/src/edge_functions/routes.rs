@@ -1367,6 +1367,7 @@ async fn create_group_domain(
         state.config.traefik.dynamic_config_dir.as_deref(),
         Some(&edge_upstream(org_id)),
         false,
+        None,
     ).await;
     publish_topology_changed(&state, org_id, group_id).await;
 
@@ -1417,6 +1418,7 @@ async fn delete_group_domain(
         state.config.traefik.dynamic_config_dir.as_deref(),
         Some(&edge_upstream(org_id)),
         false,
+        None,
     ).await;
     publish_topology_changed(&state, org_id, group_id).await;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": true }))))

@@ -559,6 +559,14 @@ impl AppConfig {
             .set_default("edge_functions.max_bundle_kb_max", 2048)?
             .set_default("edge_functions.max_invocations_free", 10_000)?
             .set_default("edge_functions.max_invocations_pro", 500_000)?
+            .set_default("sandbox.enabled", false)?
+            .set_default("sandbox.idle_timeout_secs", 1200)?
+            .set_default("sandbox.reaper_interval_secs", 60)?
+            .set_default("sandbox.preview_base_domain", "shipyard-apps.dev")?
+            .set_default("sandbox.runtime_class", "runsc")?
+            .set_default("sandbox.probe_image", "alpine:3.19")?
+            .set_default("sandbox.placeholder_upstream", "shipyard-sandbox-placeholder")?
+            .set_default("sandbox.placeholder_port", 8080)?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("SHIPYARD").separator("__"))
             .build()?;

@@ -148,7 +148,8 @@ async fn get_topology(
     // 1. Query all services in the project, joining live running-container count
     // plus attached domain/volume counts (each fed to ServiceNode's stack peeks).
     // Exclude 'edge_functions' — those synthetic rows are handled by the edge
-    // function group query (query 9) which emits richer node data.
+    // function group query (query 9) which emits richer node data. Exclude
+    // 'sandbox_app' too — no node renderer exists for it yet.
     // COUNT(DISTINCT ...) is required because the three LEFT JOINs fan out
     // independently — without DISTINCT, e.g. 2 containers × 3 domains would
     // inflate the domain count to 6.
@@ -163,7 +164,7 @@ async fn get_topology(
          LEFT JOIN domains d ON d.service_id = s.id
          LEFT JOIN volumes v ON v.service_id = s.id
          WHERE s.project_id = $1
-           AND s.type::text != 'edge_functions'
+           AND s.type::text NOT IN ('edge_functions', 'sandbox_app')
          GROUP BY s.id
          ORDER BY s.created_at ASC",
     )
