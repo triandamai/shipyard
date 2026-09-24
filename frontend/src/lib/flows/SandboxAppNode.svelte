@@ -45,10 +45,21 @@
 		align-items: center;
 		gap: 8px;
 		font-family: var(--font-sans);
+		transition: all var(--transition-fast);
+	}
+	.sandbox-app-node:hover {
+		border-color: var(--border-hover);
+		box-shadow: var(--shadow-md);
 	}
 	.sandbox-app-node.selected {
 		border-color: var(--accent);
 		box-shadow: 0 0 0 2px var(--accent-muted), var(--shadow-md);
+	}
+	.node-header {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		margin-bottom: 8px;
 	}
 	.node-icon {
 		width: 24px;
