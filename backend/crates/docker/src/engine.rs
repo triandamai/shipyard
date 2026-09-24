@@ -198,6 +198,13 @@ pub trait DockerEngine: Send + Sync {
     /// Resize the TTY of an active exec session.
     async fn resize_exec(&self, exec_id: &str, cols: u16, rows: u16) -> AppResult<()>;
 
+    /// Run a one-shot, non-interactive command in a container and collect its
+    /// full output. Unlike `exec_container` (always PTY, for interactive
+    /// terminals), this never allocates a TTY, so stdout is returned exactly
+    /// as the process wrote it — required for reading/writing file content
+    /// without corruption.
+    async fn exec_container_oneshot(&self, container_id: &str, cmd: Vec<String>) -> AppResult<ExecOutput>;
+
     /// Pull an image, streaming each status line to `tx` as it arrives.
     /// Used by the self-update flow so progress appears in real time.
     async fn pull_image_stream(
@@ -1835,6 +1842,49 @@ impl DockerEngine for BollardDockerEngine {
             .map_err(|e| AppError::Docker(format!("resize_exec failed: {e}")))
     }
 
+    async fn exec_container_oneshot(&self, container_id: &str, cmd: Vec<String>) -> AppResult<ExecOutput> {
+        let exec_id = self.client
+            .create_exec(container_id, CreateExecOptions {
+                attach_stdin:  Some(false),
+                attach_stdout: Some(true),
+                attach_stderr: Some(true),
+                tty:           Some(false),
+                cmd:           Some(cmd),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| AppError::Docker(format!("create_exec (oneshot) failed: {e}")))?
+            .id;
+
+        let result = self.client
+            .start_exec(&exec_id, Some(StartExecOptions { detach: false, tty: false, ..Default::default() }))
+            .await
+            .map_err(|e| AppError::Docker(format!("start_exec (oneshot) failed: {e}")))?;
+
+        let mut output = match result {
+            StartExecResults::Attached { output, .. } => output,
+            StartExecResults::Detached => {
+                return Err(AppError::Docker("oneshot exec started in detached mode".into()));
+            }
+        };
+
+        let mut stdout = String::new();
+        while let Some(chunk) = output.next().await {
+            match chunk {
+                Ok(log) => stdout.push_str(&log.to_string()),
+                Err(e) => return Err(AppError::Docker(format!("oneshot exec stream error: {e}"))),
+            }
+        }
+
+        let inspect = self.client
+            .inspect_exec(&exec_id)
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_exec (oneshot) failed: {e}")))?;
+        let exit_code = inspect.exit_code.unwrap_or(-1);
+
+        Ok(ExecOutput { stdout, exit_code })
+    }
+
     async fn pull_image_stream(
         &self,
         image: &str,
@@ -2007,5 +2057,17 @@ fn task_value_to_detail(v: &serde_json::Value) -> TaskDetail {
         message,
         image,
         slot,
+    }
+}
+
+#[cfg(test)]
+mod exec_oneshot_tests {
+    use super::*;
+
+    #[test]
+    fn exec_output_carries_stdout_and_exit_code() {
+        let out = ExecOutput { stdout: "hello\n".to_string(), exit_code: 0 };
+        assert_eq!(out.stdout, "hello\n");
+        assert_eq!(out.exit_code, 0);
     }
 }

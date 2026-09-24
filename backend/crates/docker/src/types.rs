@@ -239,6 +239,14 @@ pub struct ExecHandle {
     pub output: Pin<Box<dyn Stream<Item = Bytes> + Send>>,
 }
 
+/// Result of a one-shot, non-interactive exec (no PTY) — used for file
+/// operations where PTY translation would corrupt exact byte content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecOutput {
+    pub stdout: String,
+    pub exit_code: i64,
+}
+
 /// Summary of a swarm node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
