@@ -570,6 +570,15 @@ async fn async_main() {
         });
     }
 
+    // Sandbox idle reaper: stops sandboxes past their idle timeout (backstop for
+    // missed explicit-stop / tab-close signals).
+    if state.config.sandbox.enabled {
+        let sandbox_state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            sandbox_runtime::reaper::run(sandbox_state).await;
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
