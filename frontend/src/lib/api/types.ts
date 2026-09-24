@@ -3,7 +3,7 @@
 
 // Enums
 export type MemberRole = 'owner' | 'admin' | 'member' | 'viewer';
-export type ServiceType = 'git' | 'docker' | 'docker_compose' | 'manual' | 'static' | 'database';
+export type ServiceType = 'git' | 'docker' | 'docker_compose' | 'manual' | 'static' | 'database' | 'sandbox_app';
 export type ContainerStatus = 'pending' | 'preparing' | 'running' | 'complete' | 'failed' | 'shutdown' | 'rejected' | 'orphan';
 export type DeploymentStatus = 'pending' | 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 export type StepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
@@ -507,6 +507,34 @@ export interface DnsCheckResult {
 	addresses: string[];
 }
 
+// Sandbox Apps
+export interface SandboxAppConfig {
+	service_id: string;
+	runtime: string | null;
+	base_image: string | null;
+	install_cmd: string | null;
+	dev_cmd: string | null;
+	port: number | null;
+	manifest_source: 'undetected' | 'detected' | 'manifest';
+	volume_name: string;
+}
+
+export interface SandboxInstance {
+	service_id: string;
+	status: 'stopped' | 'starting' | 'running';
+	container_id: string | null;
+	container_name: string | null;
+	preview_url: string | null;
+	last_heartbeat_at: string | null;
+	started_at: string | null;
+}
+
+export interface SandboxFileEntry {
+	path: string;
+	name: string;
+	is_dir: boolean;
+}
+
 export interface Volume {
 	id: string;
 	service_id: string;
@@ -537,7 +565,7 @@ export interface Network {
 // Topology
 export interface TopologyNode {
 	id: string;
-	type: 'service' | 'network' | 'volume' | 'static_site' | 'portal' | 'edge_function';
+	type: 'service' | 'network' | 'volume' | 'static_site' | 'portal' | 'edge_function' | 'sandbox_app';
 	data: Record<string, unknown>;
 }
 

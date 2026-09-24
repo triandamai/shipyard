@@ -32,6 +32,9 @@ import type {
 	StaticSiteConfig,
 	OrgBilling,
 	ComputeNode,
+	SandboxAppConfig,
+	SandboxInstance,
+	SandboxFileEntry,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -184,6 +187,23 @@ class ApiClient {
 				body: form,
 				credentials: 'same-origin',
 			});
+			const text = await response.text();
+			if (!text) return { data: null as T, error: null };
+			try {
+				return JSON.parse(text) as ApiResponse<T>;
+			} catch {
+				return { data: null, error: { code: 'PARSE_ERROR', message: `Non-JSON: ${text.slice(0, 120)}` } };
+			}
+		} catch (error) {
+			return { data: null, error: { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : 'Network error' } };
+		}
+	}
+
+	async putRaw<T>(path: string, body: string): Promise<ApiResponse<T>> {
+		const headers: Record<string, string> = { 'Content-Type': 'text/plain' };
+		if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+		try {
+			const response = await fetch(`${this.baseUrl}${path}`, { method: 'PUT', headers, body });
 			const text = await response.text();
 			if (!text) return { data: null as T, error: null };
 			try {
@@ -811,6 +831,55 @@ class ApiClient {
 		if (opts.org_id)  p.set('org_id', opts.org_id);
 		const qs = p.toString() ? `?${p}` : '';
 		return this.request('GET', `/admin/audit-logs${qs}`);
+	}
+
+	// ─── Sandbox Apps ────────────────────────────────────────────────
+
+	async createSandboxApp(
+		projectId: string,
+		data: { name: string; slug: string; template: 'node' | 'python' | 'static' }
+	): Promise<ApiResponse<{ id: string; project_id: string; name: string; slug: string; type: string }>> {
+		return this.post(`/projects/${projectId}/apps`, data);
+	}
+
+	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null }>> {
+		return this.post(`/apps/${serviceId}/sandbox/start`);
+	}
+
+	async stopSandbox(serviceId: string): Promise<ApiResponse<{ status: string }>> {
+		return this.post(`/apps/${serviceId}/sandbox/stop`);
+	}
+
+	async heartbeatSandbox(serviceId: string): Promise<ApiResponse<{ ok: boolean }>> {
+		return this.post(`/apps/${serviceId}/sandbox/heartbeat`);
+	}
+
+	async getSandboxFileTree(serviceId: string): Promise<ApiResponse<{ entries: SandboxFileEntry[]; truncated: boolean }>> {
+		return this.get(`/apps/${serviceId}/files/tree`);
+	}
+
+	async readSandboxFile(serviceId: string, path: string): Promise<ApiResponse<string>> {
+		return this.get(`/apps/${serviceId}/files/content?path=${encodeURIComponent(path)}`);
+	}
+
+	async writeSandboxFile(serviceId: string, path: string, content: string): Promise<ApiResponse<{ path: string }>> {
+		return this.putRaw(`/apps/${serviceId}/files/content?path=${encodeURIComponent(path)}`, content);
+	}
+
+	async mkdirSandboxFile(serviceId: string, path: string): Promise<ApiResponse<{ path: string }>> {
+		return this.post(`/apps/${serviceId}/files/mkdir?path=${encodeURIComponent(path)}`);
+	}
+
+	async deleteSandboxFile(serviceId: string, path: string): Promise<ApiResponse<{ deleted: string }>> {
+		return this.delete(`/apps/${serviceId}/files/entry?path=${encodeURIComponent(path)}`);
+	}
+
+	async renameSandboxFile(serviceId: string, from: string, to: string): Promise<ApiResponse<{ from: string; to: string }>> {
+		return this.post(`/apps/${serviceId}/files/rename`, { from, to });
+	}
+
+	async mintSandboxExecToken(serviceId: string): Promise<ApiResponse<{ token: string }>> {
+		return this.post(`/apps/${serviceId}/exec/token`);
 	}
 }
 
