@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
+	import { Globe, HardDrive, Layers, ExternalLink } from '@lucide/svelte';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
 
 	interface Props {
@@ -16,6 +17,9 @@
 	let runningReplicas = $derived((data.running_replicas as number) ?? 0);
 	let domainCount     = $derived((data.domain_count as number)    ?? 0);
 	let volumeCount     = $derived((data.volume_count as number)    ?? 0);
+	let firstDomain     = $derived((data.first_domain as string | null) ?? null);
+	let firstDomainTls  = $derived((data.first_domain_tls as boolean)   ?? false);
+	let firstDomainUrl  = $derived(firstDomain ? `${firstDomainTls ? 'https' : 'http'}://${firstDomain}` : null);
 	let svcType         = $derived((data.type as string)            ?? '');
 	let ports           = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
 
@@ -66,16 +70,32 @@
 <div class="node-stack-wrapper">
 	{#if showDomainStack}
 		<div class="stack-layer domain-stack-peek" title={domainStackTitle}>
-			<span class="stack-count-label">{domainCountLabel}</span>
+			<Globe size={10} style="flex-shrink:0" />
+			<span class="stack-count-label">{firstDomain ?? domainCountLabel}</span>
+			{#if firstDomainUrl}
+				<a
+					class="stack-link-btn"
+					href={firstDomainUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					title="Open {firstDomain} in a new tab"
+					aria-label="Open {firstDomain} in a new tab"
+					onclick={(e) => e.stopPropagation()}
+				>
+					<ExternalLink size={10} />
+				</a>
+			{/if}
 		</div>
 	{/if}
 	{#if showVolumeStack}
 		<div class="stack-layer volume-stack-peek" title={volumeStackTitle}>
+			<HardDrive size={10} style="flex-shrink:0" />
 			<span class="stack-count-label">{volumeCountLabel}</span>
 		</div>
 	{/if}
 	{#if showReplicaStack}
 		<div class="stack-layer replica-stack-peek" title={replicaStackTitle}>
+			<Layers size={10} style="flex-shrink:0" />
 			<span class="stack-count-label">{replicaCountLabel}</span>
 		</div>
 	{/if}
@@ -141,7 +161,9 @@
 		display: flex;
 		align-items: flex-end;
 		justify-content: center;
-		padding-bottom: 3px;
+		gap: 3px;
+		padding: 0 8px 3px;
+		color: var(--text-dim);
 	}
 
 	/* Stack order (nearest → furthest behind the card): replicas, volumes,
@@ -156,6 +178,24 @@
 		font-weight: 600;
 		color: var(--text-dim);
 		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+	}
+
+	.stack-link-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		color: var(--text-dim);
+		border-radius: 3px;
+		padding: 1px;
+	}
+
+	.stack-link-btn:hover {
+		color: var(--accent);
+		background: var(--bg-surface);
 	}
 
 	.node-stack-wrapper:hover .replica-stack-peek { transform: translate(0, 18px); opacity: 1; }

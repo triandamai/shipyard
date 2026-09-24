@@ -75,6 +75,7 @@ struct VolumeRow {
 struct DomainRow {
     service_id: Uuid,
     hostname: String,
+    tls_enabled: bool,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -206,7 +207,7 @@ async fn get_topology(
     // Edge function group domains are included automatically because each group
     // now has a synthetic services row (type='edge_functions').
     let domains = sqlx::query_as::<_, DomainRow>(
-        "SELECT d.service_id, d.hostname
+        "SELECT d.service_id, d.hostname, d.tls_enabled
          FROM domains d
          JOIN services s ON s.id = d.service_id
          WHERE s.project_id = $1
@@ -264,10 +265,17 @@ async fn get_topology(
         .into_iter()
         .collect();
 
-    // Build per-static-service domain list from already-fetched domains
+    // Build per-static-service domain list from already-fetched domains, plus
+    // each regular service's first domain (by created_at ASC) for the stack
+    // card's domain peek — it links out to the actual hostname instead of
+    // just showing a count.
     let mut static_domain_map: std::collections::HashMap<Uuid, Vec<String>> = std::collections::HashMap::new();
+    let mut first_domain_map: std::collections::HashMap<Uuid, (String, bool)> = std::collections::HashMap::new();
     for dom in &domains {
         static_domain_map.entry(dom.service_id).or_default().push(dom.hostname.clone());
+        first_domain_map
+            .entry(dom.service_id)
+            .or_insert_with(|| (dom.hostname.clone(), dom.tls_enabled));
     }
 
     // 6b. Query env-based platform references for this project's services
@@ -357,6 +365,11 @@ async fn get_topology(
                 }),
             });
         } else {
+            let (first_domain, first_domain_tls) = first_domain_map
+                .get(&svc.id)
+                .map(|(hostname, tls)| (Some(hostname.clone()), *tls))
+                .unwrap_or((None, false));
+
             nodes.push(TopologyNode {
                 id: format!("svc_{}", svc.id),
                 node_type: "service".to_string(),
@@ -368,6 +381,8 @@ async fn get_topology(
                     "running_replicas":  svc.running_replicas,
                     "domain_count":      svc.domain_count,
                     "volume_count":      svc.volume_count,
+                    "first_domain":      first_domain,
+                    "first_domain_tls":  first_domain_tls,
                     "type":              svc.service_type,
                     "ports":             svc.ports,
                     "service_parent_id": svc.service_parent_id.map(|id| format!("svc_{id}")),
