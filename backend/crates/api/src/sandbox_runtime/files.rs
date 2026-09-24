@@ -51,7 +51,21 @@ fn build_write_command(path: &str, content: &str) -> String {
         Some(dir) if !dir.is_empty() => format!("mkdir -p '/app/{dir}' && "),
         _ => String::new(),
     };
-    format!("{mkdir_part}cat > '{full}' <<'SHIPYARD_FILE_EOF'\n{content}\nSHIPYARD_FILE_EOF\n")
+    // The heredoc terminator must not collide with any line of `content`,
+    // or the shell's heredoc ends early at that line — silently truncating
+    // the write while the command still exits 0. A fixed literal delimiter
+    // (e.g. "SHIPYARD_FILE_EOF") is user-reachable: a file legitimately
+    // containing that exact line as its own content would corrupt itself on
+    // save. Randomizing per write makes a collision astronomically
+    // unlikely, and the loop makes it impossible rather than merely
+    // unlikely.
+    let delimiter = loop {
+        let candidate = format!("SHIPYARD_FILE_EOF_{}", Uuid::new_v4().simple());
+        if !content.lines().any(|line| line == candidate) {
+            break candidate;
+        }
+    };
+    format!("{mkdir_part}cat > '{full}' <<'{delimiter}'\n{content}\n{delimiter}\n")
 }
 
 #[derive(Debug, Serialize)]
@@ -362,9 +376,19 @@ mod command_building_tests {
         let content = "console.log('hi');\n";
         let cmd_str = build_write_command(path, content);
         assert!(cmd_str.contains("mkdir -p '/app/src'"));
-        assert!(cmd_str.contains("cat > '/app/src/index.js' <<'SHIPYARD_FILE_EOF'"));
+        // The delimiter is randomized per write (see the collision test
+        // below), so we can't assert an exact literal — only the structural
+        // shape: a `cat > '<path>' <<'SHIPYARD_FILE_EOF_<hex>'` opener.
+        assert!(cmd_str.contains("cat > '/app/src/index.js' <<'SHIPYARD_FILE_EOF_"));
         assert!(cmd_str.contains(content));
-        assert!(cmd_str.ends_with("SHIPYARD_FILE_EOF\n"));
+
+        // The command must end with a bare delimiter line matching the
+        // opener's delimiter, followed by a newline.
+        let opener_start = cmd_str.find("<<'").unwrap() + 3;
+        let opener_end = cmd_str[opener_start..].find('\'').unwrap() + opener_start;
+        let delimiter = &cmd_str[opener_start..opener_end];
+        assert!(delimiter.starts_with("SHIPYARD_FILE_EOF_"));
+        assert!(cmd_str.ends_with(&format!("{delimiter}\n")));
     }
 
     #[test]
@@ -373,5 +397,30 @@ mod command_building_tests {
         // mkdir -p '/app' would be a harmless no-op but this checks the
         // dirname logic doesn't produce a malformed empty-path mkdir.
         assert!(!cmd_str.contains("mkdir -p '/app/'"));
+    }
+
+    #[test]
+    fn write_command_avoids_delimiter_collision_with_content_containing_old_style_delimiter() {
+        // Regression test for a real data-corruption bug: a fixed literal
+        // heredoc delimiter (e.g. "SHIPYARD_FILE_EOF") is user-reachable — a
+        // file whose content legitimately contains that exact line as its
+        // own text would have its heredoc end early at that line, silently
+        // truncating everything after it while the write still reports
+        // success (`exit_code == 0`). Content here contains that literal
+        // line, plus more content after it, to prove the delimiter picked is
+        // never that colliding string and the full content survives intact
+        // in the generated command.
+        let content = "line one\nSHIPYARD_FILE_EOF\nline three";
+        let cmd_str = build_write_command("notes.txt", content);
+
+        let opener_start = cmd_str.find("<<'").unwrap() + 3;
+        let opener_end = cmd_str[opener_start..].find('\'').unwrap() + opener_start;
+        let delimiter = &cmd_str[opener_start..opener_end];
+
+        assert_ne!(delimiter, "SHIPYARD_FILE_EOF");
+        // The content must appear as one contiguous, uninterrupted block —
+        // proving the heredoc body is not split at the embedded
+        // "SHIPYARD_FILE_EOF" line.
+        assert!(cmd_str.contains(content));
     }
 }
