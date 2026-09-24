@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/:service_id/sandbox/start", post(start))
         .route("/apps/:service_id/sandbox/stop", post(stop))
         .route("/apps/:service_id/sandbox/heartbeat", post(heartbeat))
+        .route("/apps/:service_id/sandbox/status", get(status))
         .merge(files::routes())
         .merge(exec::routes())
 }
@@ -141,6 +142,18 @@ async fn stop(
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     manager::stop_sandbox(&state, service_id).await?;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "status": "stopped" }))))
+}
+
+async fn status(
+    auth_user: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
+    let instance = manager::fetch_instance(&state.db, service_id)
+        .await?
+        .unwrap_or_else(|| super::models::SandboxInstanceRow::default_stopped(service_id));
+    Ok(Json(ApiResponse::ok(serde_json::json!(instance))))
 }
 
 async fn heartbeat(

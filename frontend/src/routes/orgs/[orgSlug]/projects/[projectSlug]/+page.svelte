@@ -22,12 +22,14 @@
 	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
 	import EdgeFunctionNode from '$lib/flows/EdgeFunctionNode.svelte';
+	import SandboxAppNode from '$lib/flows/SandboxAppNode.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 	import NetworkDetailPanel from '$lib/panels/NetworkDetailPanel.svelte';
 	import VolumeDetailPanel from '$lib/panels/VolumeDetailPanel.svelte';
 	import StaticSiteDetailPanel from '$lib/panels/StaticSiteDetailPanel.svelte';
 	import AddResourcePanel from '$lib/panels/AddResourcePanel.svelte';
 	import EdgeFunctionDetailPanel from '$lib/panels/EdgeFunctionDetailPanel.svelte';
+	import SandboxAppDetailPanel from '$lib/panels/SandboxAppDetailPanel.svelte';
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
 	let projectSlug = $derived(page.params.projectSlug ?? '');
@@ -88,6 +90,7 @@
 		portal:        PortalNode as any,
 		add_resource:  AddResourceNode as any,
 		edge_function: EdgeFunctionNode as any,
+		sandbox_app:   SandboxAppNode as any,
 	};
 
 	function openAddResource() {
@@ -176,6 +179,14 @@
 					},
 				},
 				title: (node.data?.repo_name as string) || 'Edge Functions',
+			});
+		} else if (node.type === 'sandbox_app') {
+			const serviceId = node.id.replace(/^svc_/, '');
+			uiStore.pushPanel({
+				key: `sandbox_app:${serviceId}`,
+				component: SandboxAppDetailPanel,
+				props: { serviceId, projectId, orgId },
+				title: (node.data?.name as string) || 'App'
 			});
 		} else if (node.type === 'portal') {
 			// Portal nodes are read-only info — no panel needed

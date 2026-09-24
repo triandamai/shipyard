@@ -842,6 +842,10 @@ class ApiClient {
 		return this.post(`/projects/${projectId}/apps`, data);
 	}
 
+	async getSandboxInstance(serviceId: string): Promise<ApiResponse<SandboxInstance>> {
+		return this.get(`/apps/${serviceId}/sandbox/status`);
+	}
+
 	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null }>> {
 		return this.post(`/apps/${serviceId}/sandbox/start`);
 	}

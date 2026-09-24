@@ -149,8 +149,7 @@ async fn get_topology(
     // 1. Query all services in the project, joining live running-container count
     // plus attached domain/volume counts (each fed to ServiceNode's stack peeks).
     // Exclude 'edge_functions' — those synthetic rows are handled by the edge
-    // function group query (query 9) which emits richer node data. Exclude
-    // 'sandbox_app' too — no node renderer exists for it yet.
+    // function group query (query 9) which emits richer node data.
     // COUNT(DISTINCT ...) is required because the three LEFT JOINs fan out
     // independently — without DISTINCT, e.g. 2 containers × 3 domains would
     // inflate the domain count to 6.
@@ -165,7 +164,7 @@ async fn get_topology(
          LEFT JOIN domains d ON d.service_id = s.id
          LEFT JOIN volumes v ON v.service_id = s.id
          WHERE s.project_id = $1
-           AND s.type::text NOT IN ('edge_functions', 'sandbox_app')
+           AND s.type::text != 'edge_functions'
          GROUP BY s.id
          ORDER BY s.created_at ASC",
     )
@@ -362,6 +361,16 @@ async fn get_topology(
                     "domains":        site_domains,
                     "deploy_config":  deploy_config,
                     "icon":           svc.icon,
+                }),
+            });
+        } else if svc.service_type == "sandbox_app" {
+            nodes.push(TopologyNode {
+                id: format!("svc_{}", svc.id),
+                node_type: "sandbox_app".to_string(),
+                data: serde_json::json!({
+                    "name": svc.name,
+                    "slug": svc.slug,
+                    "status": svc.status,
                 }),
             });
         } else {
