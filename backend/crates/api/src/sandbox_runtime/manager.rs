@@ -33,10 +33,25 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
     .map_err(|e| AppError::Database(e.to_string()))?
     .ok_or_else(|| AppError::NotFound(format!("Service '{service_id}' not found")))?;
 
-    // Idempotent: already starting/running just returns current state.
+    // Idempotent: already starting just returns current state. "running" is
+    // only trusted after confirming the container is actually alive — the DB
+    // row can go stale if the container crashed, was OOM-killed, or was
+    // removed out-of-band, in which case we self-heal by falling through to
+    // re-provisioning instead of returning stale state.
     if let Some(existing) = fetch_instance(&state.db, service_id).await? {
-        if existing.status == "starting" || existing.status == "running" {
+        if existing.status == "starting" {
             return Ok(existing);
+        }
+        if existing.status == "running" {
+            let inspect_result = match &existing.container_id {
+                Some(id) => state.docker.inspect_container(id).await.map(|d| d.state).map_err(|e| e.to_string()),
+                None => Err("no container_id recorded".to_string()),
+            };
+            if !is_container_dead(&inspect_result) {
+                return Ok(existing);
+            }
+            tracing::warn!(service_id = %service_id, "start_sandbox: DB says running but container is dead — self-healing");
+            // Fall through to relaunch below instead of returning stale state.
         }
     }
 
@@ -347,6 +362,18 @@ async fn upsert_instance_status(
     Ok(())
 }
 
+/// Interprets the result of inspecting a sandbox's recorded container as
+/// dead or alive. Any inspect failure (container removed out-of-band, Docker
+/// daemon no longer knows about it, etc.) is treated as dead rather than
+/// trusting the stale DB row; a successful inspect is only alive when the
+/// reported state is exactly `"running"`.
+fn is_container_dead(inspect_result: &Result<String, String>) -> bool {
+    match inspect_result {
+        Err(_) => true,
+        Ok(state) => state != "running",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +394,21 @@ mod tests {
         let vol = sandbox_volume_name(service_id);
         assert_eq!(vol, "sandbox-vol-11111111");
         assert_ne!(vol, sandbox_container_name(service_id));
+    }
+
+    #[test]
+    fn is_container_dead_treats_inspect_error_as_dead() {
+        // A container_id that Docker no longer knows about (removed out-of-band,
+        // OOM-killed and reaped, host rebooted) must be treated as dead rather
+        // than trusting the stale DB row — modeled here as any Err from inspect.
+        let simulated_inspect_result: Result<String, String> = Err("No such container".to_string());
+        assert!(is_container_dead(&simulated_inspect_result));
+
+        let simulated_running: Result<String, String> = Ok("running".to_string());
+        assert!(!is_container_dead(&simulated_running));
+
+        let simulated_exited: Result<String, String> = Ok("exited".to_string());
+        assert!(is_container_dead(&simulated_exited));
     }
 
     #[test]
