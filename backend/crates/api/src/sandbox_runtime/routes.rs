@@ -62,9 +62,14 @@ async fn create_app(
     State(state): State<AppState>,
     Json(body): Json<CreateAppRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    crate::middleware::rbac::require_project_access(&state.db, auth_user.user_id, project_id)
-        .await
-        .map_err(ApiAppError)?;
+    crate::middleware::rbac::require_project_permission(
+        &state.db,
+        auth_user.user_id,
+        project_id,
+        "service:write",
+    )
+    .await
+    .map_err(ApiAppError)?;
 
     let template = Template::from_str(&body.template).ok_or_else(|| {
         ApiAppError(AppError::BadRequest(format!(
