@@ -31,6 +31,7 @@ use crate::plans;
 use crate::edge_functions;
 use crate::artifactory;
 use crate::artifact_source;
+use crate::sandbox_runtime;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -84,6 +85,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(static_site::routes())
         // Artifact source — /services/:service_id/artifact-source
         .merge(artifact_source::routes())
+        // Sandbox runtime — /apps/:service_id/sandbox/{start,stop,heartbeat}
+        .merge(sandbox_runtime::routes::routes())
         // Git providers — org-scoped Git integrations
         .merge(git_providers::routes())
         // Billing webhook — /billing/webhooks

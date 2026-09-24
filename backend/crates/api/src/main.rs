@@ -654,6 +654,9 @@ async fn async_main() {
         // Edge function invocations — public, no auth, routed to per-org runtime.
         // Must be outside /api so it's not behind the init gate.
         .nest("/fn", edge_functions::invoke_routes())
+        // Cold-preview auto-start — public, no auth, must be outside /api so
+        // an anonymous preview visitor isn't blocked by the init gate.
+        .nest("/apps", sandbox_runtime::routes::public_routes())
         // OCI artifact registry — nested at /registry so Traefik can route
         // registry-domain.com/* → backend:3001/registry/* with addPrefix middleware.
         // RegistryState is extracted from AppState via FromRef.
