@@ -244,6 +244,7 @@ pub struct ExecHandle {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecOutput {
     pub stdout: String,
+    pub stderr: String,
     pub exit_code: i64,
 }
 

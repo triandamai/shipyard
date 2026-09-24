@@ -1869,9 +1869,17 @@ impl DockerEngine for BollardDockerEngine {
         };
 
         let mut stdout = String::new();
+        let mut stderr = String::new();
         while let Some(chunk) = output.next().await {
             match chunk {
-                Ok(log) => stdout.push_str(&log.to_string()),
+                Ok(bollard::container::LogOutput::StdOut { message })
+                | Ok(bollard::container::LogOutput::Console { message }) => {
+                    stdout.push_str(&String::from_utf8_lossy(&message));
+                }
+                Ok(bollard::container::LogOutput::StdErr { message }) => {
+                    stderr.push_str(&String::from_utf8_lossy(&message));
+                }
+                Ok(_) => {}
                 Err(e) => return Err(AppError::Docker(format!("oneshot exec stream error: {e}"))),
             }
         }
@@ -1882,7 +1890,7 @@ impl DockerEngine for BollardDockerEngine {
             .map_err(|e| AppError::Docker(format!("inspect_exec (oneshot) failed: {e}")))?;
         let exit_code = inspect.exit_code.unwrap_or(-1);
 
-        Ok(ExecOutput { stdout, exit_code })
+        Ok(ExecOutput { stdout, stderr, exit_code })
     }
 
     async fn pull_image_stream(
@@ -2065,9 +2073,14 @@ mod exec_oneshot_tests {
     use super::*;
 
     #[test]
-    fn exec_output_carries_stdout_and_exit_code() {
-        let out = ExecOutput { stdout: "hello\n".to_string(), exit_code: 0 };
+    fn exec_output_carries_stdout_stderr_and_exit_code() {
+        let out = ExecOutput {
+            stdout: "hello\n".to_string(),
+            stderr: "warning: noise\n".to_string(),
+            exit_code: 0,
+        };
         assert_eq!(out.stdout, "hello\n");
+        assert_eq!(out.stderr, "warning: noise\n");
         assert_eq!(out.exit_code, 0);
     }
 }
