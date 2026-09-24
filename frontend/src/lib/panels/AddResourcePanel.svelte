@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap } from '@lucide/svelte';
+	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap, Code2 } from '@lucide/svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import type { Service } from '$lib/api/types';
 	import DockerImagePanel from './resources/DockerImagePanel.svelte';
@@ -11,6 +11,7 @@
 	import TemplatePanel from './resources/TemplatePanel.svelte';
 	import StaticSitePanel from './resources/StaticSitePanel.svelte';
 	import EdgeFunctionPanel from './resources/EdgeFunctionPanel.svelte';
+	import SandboxAppTemplatePanel from './resources/SandboxAppTemplatePanel.svelte';
 
 	interface Props {
 		projectId: string;
@@ -20,7 +21,7 @@
 
 	let { projectId, orgId, onCreated }: Props = $props();
 
-	type ResourceType = 'docker' | 'git' | 'database' | 'compose' | 'static' | 'volume' | 'network' | 'template' | 'edge-function';
+	type ResourceType = 'docker' | 'git' | 'database' | 'compose' | 'static' | 'volume' | 'network' | 'template' | 'edge-function' | 'sandbox-app';
 
 	const PANELS: Record<ResourceType, { component: any; title: string }> = {
 		docker:          { component: DockerImagePanel,  title: 'Docker Image' },
@@ -32,6 +33,7 @@
 		network:         { component: NetworkPanel,       title: 'Network' },
 		template:        { component: TemplatePanel,      title: 'Templates' },
 		'edge-function': { component: EdgeFunctionPanel,  title: 'Edge Function' },
+		'sandbox-app':   { component: SandboxAppTemplatePanel, title: 'App' },
 	};
 
 	const resourceTypes: { id: ResourceType; label: string; description: string; icon: any }[] = [
@@ -44,6 +46,7 @@
 		{ id: 'volume',          label: 'Volume',            description: 'Persistent storage volume',          icon: HardDrive },
 		{ id: 'network',         label: 'Network',           description: 'Attach services to a network',       icon: Network },
 		{ id: 'template',        label: 'Template',          description: 'Start from a pre-built template',    icon: LayoutTemplate },
+		{ id: 'sandbox-app',     label: 'App',               description: 'Live coding sandbox with an in-browser editor', icon: Code2 },
 	];
 
 	function open(type: ResourceType) {
