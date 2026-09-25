@@ -229,9 +229,9 @@ async fn provision_sandbox(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    let install_and_dev = match &config.install_cmd {
-        Some(install) => format!("{install} && {}", config.dev_cmd.as_deref().unwrap_or("")),
-        None => config.dev_cmd.clone().unwrap_or_default(),
+    let install_and_dev = match config.install_cmd.as_deref() {
+        Some(install) if !install.is_empty() => format!("{install} && {}", config.dev_cmd.as_deref().unwrap_or("")),
+        _ => config.dev_cmd.clone().unwrap_or_default(),
     };
     let install_and_dev = build_startup_command(config.seed_script_b64.as_deref(), &install_and_dev);
 

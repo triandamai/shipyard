@@ -41,21 +41,21 @@ mod tests {
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Node);
         assert_eq!(runtime, "node");
         assert_eq!(base_image, "node:20-alpine");
-        assert_eq!(install, "npm install");
+        assert_eq!(install, Some("npm install"));
         assert_eq!(dev, "npm run dev");
         assert_eq!(port, 3000);
 
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Python);
         assert_eq!(runtime, "python");
         assert_eq!(base_image, "python:3.12-slim");
-        assert_eq!(install, "pip install -r requirements.txt");
+        assert_eq!(install, Some("pip install -r requirements.txt"));
         assert_eq!(dev, "python manage.py runserver 0.0.0.0:8000");
         assert_eq!(port, 8000);
 
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Static);
         assert_eq!(runtime, "static");
         assert_eq!(base_image, "nginx:alpine");
-        assert_eq!(install, "");
+        assert_eq!(install, None);
         assert_eq!(dev, "nginx -g 'daemon off;'");
         assert_eq!(port, 8080);
     }
@@ -124,11 +124,11 @@ pub fn template_seed_script_b64(t: Template) -> String {
 /// exact values `shipyard_engine::sandbox_probe::detect_stack` would infer
 /// for these stacks, so a template-created app behaves identically to a
 /// probe-detected one on every start after the first.
-pub fn template_runtime(t: Template) -> (&'static str, &'static str, &'static str, &'static str, u16) {
+pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'static str>, &'static str, u16) {
     match t {
-        Template::Node => ("node", "node:20-alpine", "npm install", "npm run dev", 3000),
-        Template::Python => ("python", "python:3.12-slim", "pip install -r requirements.txt", "python manage.py runserver 0.0.0.0:8000", 8000),
-        Template::Static => ("static", "nginx:alpine", "", "nginx -g 'daemon off;'", 8080),
+        Template::Node => ("node", "node:20-alpine", Some("npm install"), "npm run dev", 3000),
+        Template::Python => ("python", "python:3.12-slim", Some("pip install -r requirements.txt"), "python manage.py runserver 0.0.0.0:8000", 8000),
+        Template::Static => ("static", "nginx:alpine", None, "nginx -g 'daemon off;'", 8080),
     }
 }
 
