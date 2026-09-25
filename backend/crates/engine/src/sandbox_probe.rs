@@ -112,6 +112,22 @@ printf '{"has_package_json":%s,"package_json":%s,"has_requirements_txt":%s,"has_
   "$( [ -n "$sj" ] && printf '%s' "$sj" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN{printf "\""} {printf "%s\\n", $0} END{printf "\""}' || echo null )"
 "#;
 
+/// Minimal nginx config, regenerated on every container boot (only `/app`
+/// persists across restarts, not `/etc/nginx`), that roots nginx at the
+/// sandbox's mounted volume instead of nginx:alpine's bundled default page.
+/// Shared between probe-based detection (this file's `detect_stack`) and
+/// template-based creation (`shipyard_api::sandbox_runtime::templates`'s
+/// `template_runtime`) so both paths produce an identical, actually-working
+/// static site rather than silently diverging. The heredoc delimiter is
+/// **quoted** (`<<'NGINX_EOF'`, not `<<NGINX_EOF`) — this is essential, not
+/// stylistic: nginx's own `$uri` variable reference must survive untouched,
+/// and an unquoted delimiter would let the shell expand it to nothing before
+/// nginx ever saw the file. `listen 8080` is a literal tied to this same
+/// static stack's fixed port (8080) in both callers — if that port ever
+/// changes in either `detect_stack`'s or `template_runtime`'s Static branch,
+/// update this literal to match.
+pub const STATIC_DEV_CMD: &str = "mkdir -p /etc/nginx/conf.d && cat > /etc/nginx/conf.d/default.conf <<'NGINX_EOF'\nserver {\n    listen 8080;\n    root /app;\n    index index.html;\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\nNGINX_EOF\nnginx -g 'daemon off;'";
+
 fn dev_script_from_package_json(package_json: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(package_json).ok()?;
     parsed.get("scripts")?.get("dev").and_then(|v| v.as_str()).map(|_| "npm run dev".to_string())
@@ -179,7 +195,7 @@ pub fn detect_stack(probe: &ProbeResult) -> Result<DetectedStack, String> {
             runtime: "static".to_string(),
             base_image: "nginx:alpine".to_string(),
             install_cmd: None,
-            dev_cmd: "nginx -g 'daemon off;'".to_string(),
+            dev_cmd: STATIC_DEV_CMD.to_string(),
             port: 8080,
             source: DetectionSource::Detected,
         });

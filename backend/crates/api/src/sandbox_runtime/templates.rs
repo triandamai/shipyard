@@ -60,8 +60,7 @@ mod tests {
         assert_eq!(runtime, "static");
         assert_eq!(base_image, "nginx:alpine");
         assert_eq!(install, None);
-        assert!(dev.contains("root /app;"), "static dev_cmd must configure nginx to serve the mounted volume");
-        assert!(dev.contains("nginx -g 'daemon off;'"), "static dev_cmd must still start nginx in the foreground");
+        assert_eq!(dev, shipyard_engine::sandbox_probe::STATIC_DEV_CMD);
         assert_eq!(port, 8080);
     }
 
@@ -177,7 +176,7 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
             "static",
             "nginx:alpine",
             None,
-            "mkdir -p /etc/nginx/conf.d && cat > /etc/nginx/conf.d/default.conf <<'NGINX_EOF'\nserver {\n    listen 8080;\n    root /app;\n    index index.html;\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\nNGINX_EOF\nnginx -g 'daemon off;'",
+            shipyard_engine::sandbox_probe::STATIC_DEV_CMD,
             8080,
         ),
     }
