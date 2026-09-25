@@ -148,8 +148,42 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
         Err(e) => {
             // Reset so a retry isn't permanently blocked by the idempotency
             // check above — otherwise a single failed first-start would wedge
-            // the service in "starting" forever.
-            upsert_instance_status(&state.db, service_id, "stopped", None, None).await.ok();
+            // the service in "starting" forever. But first check the real
+            // container state: if provisioning failed because an existing
+            // container couldn't be cleaned up (it may still be healthy and
+            // running), overwriting that with "stopped" would leave Docker
+            // and the database disagreeing in a direction the idle reaper
+            // (which only looks for stale *running* rows) can't correct, and
+            // the container would leak indefinitely. Re-inspect by name
+            // (not the now-cleared container_id) to find out.
+            let container_name = sandbox_container_name(service_id);
+            let still_running = state
+                .docker
+                .inspect_container(&container_name)
+                .await
+                .ok()
+                .filter(|d| d.state == "running");
+
+            match still_running {
+                Some(detail) => {
+                    tracing::warn!(
+                        service_id = %service_id,
+                        "start_sandbox: provisioning failed but the existing container is still running — restoring 'running' status instead of marking 'stopped'"
+                    );
+                    upsert_instance_status(
+                        &state.db,
+                        service_id,
+                        "running",
+                        Some(&detail.id),
+                        Some(&container_name),
+                    )
+                    .await
+                    .ok();
+                }
+                None => {
+                    upsert_instance_status(&state.db, service_id, "stopped", None, None).await.ok();
+                }
+            }
             Err(e)
         }
     }
@@ -218,7 +252,21 @@ async fn provision_sandbox(
     let config = config.ok_or_else(|| AppError::Internal("sandbox config missing after insert".to_string()))?;
 
     let container_name = sandbox_container_name(service_id);
-    state.docker.remove_container(&container_name, true).await.ok(); // clean slate
+    if let Err(e) = state.docker.remove_container(&container_name, true).await {
+        let msg = e.to_string();
+        if !msg.to_lowercase().contains("no such container") {
+            // A container by this name exists and we failed to remove it —
+            // proceeding to create_container would just hit a 409 name
+            // conflict. Bail out now rather than attempting it: the caller
+            // (start_sandbox) re-checks the container's real state on this
+            // error rather than blindly assuming it's gone.
+            return Err(AppError::Conflict(format!(
+                "Could not clean up existing sandbox container before restart: {msg}"
+            )));
+        }
+        // "No such container" is the expected, harmless case — there was
+        // nothing to remove. Fall through to create a fresh one.
+    }
 
     let (cpu_cores, memory_gb): (f64, f64) = sqlx::query_as(
         "SELECT p.sandbox_cpu_cores, p.sandbox_memory_gb
@@ -495,9 +543,16 @@ async fn upsert_instance_status(
 /// daemon no longer knows about it, etc.) is treated as dead rather than
 /// trusting the stale DB row; a successful inspect is only alive when the
 /// reported state is exactly `"running"`.
+/// A container is only treated as dead when Docker *confirms* it's actually
+/// gone (inspect fails with a "no such container" 404) or reports a
+/// non-running state. Any OTHER inspect error — a transient socket timeout,
+/// connection reset, or the daemon being momentarily busy — must NOT be
+/// treated as dead: a healthy container must never be destroyed and
+/// recreated just because one inspect call happened to fail for an
+/// unrelated reason.
 fn is_container_dead(inspect_result: &Result<String, String>) -> bool {
     match inspect_result {
-        Err(_) => true,
+        Err(msg) => msg.to_lowercase().contains("no such container"),
         Ok(state) => state != "running",
     }
 }
@@ -525,10 +580,12 @@ mod tests {
     }
 
     #[test]
-    fn is_container_dead_treats_inspect_error_as_dead() {
+    fn is_container_dead_treats_confirmed_not_found_as_dead() {
         // A container_id that Docker no longer knows about (removed out-of-band,
         // OOM-killed and reaped, host rebooted) must be treated as dead rather
-        // than trusting the stale DB row — modeled here as any Err from inspect.
+        // than trusting the stale DB row — modeled here as a genuine "no such
+        // container" 404 from inspect, which is the ONLY error condition that
+        // should be trusted as confirmation the container is actually gone.
         let simulated_inspect_result: Result<String, String> = Err("No such container".to_string());
         assert!(is_container_dead(&simulated_inspect_result));
 
@@ -537,6 +594,20 @@ mod tests {
 
         let simulated_exited: Result<String, String> = Ok("exited".to_string());
         assert!(is_container_dead(&simulated_exited));
+    }
+
+    #[test]
+    fn is_container_dead_does_not_treat_a_transient_inspect_error_as_dead() {
+        // Regression guard: a flaky/transient Docker API error (timeout,
+        // connection reset, daemon momentarily busy) must NOT be treated the
+        // same as "container confirmed gone" -- treating every error as dead
+        // caused start_sandbox to destroy and recreate healthy containers on
+        // a single flaky inspect call.
+        let transient: Result<String, String> = Err("connection reset by peer".to_string());
+        assert!(!is_container_dead(&transient));
+
+        let timeout: Result<String, String> = Err("operation timed out".to_string());
+        assert!(!is_container_dead(&timeout));
     }
 
     #[test]
