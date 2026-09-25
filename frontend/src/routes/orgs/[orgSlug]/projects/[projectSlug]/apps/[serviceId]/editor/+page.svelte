@@ -20,6 +20,9 @@
 	let showTerminal = $state(false);
 
 	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingSave: { path: string; content: string } | null = null;
+	let saveInFlight = false;
 
 	function languageForPath(path: string): 'javascript' | 'json' | 'plain' {
 		if (path.endsWith('.json')) return 'json';
@@ -54,11 +57,26 @@
 		}
 	}
 
-	async function saveFile(content: string) {
+	function saveFile(content: string) {
 		if (!openPath) return;
+		pendingSave = { path: openPath, content };
+		if (saveTimer) clearTimeout(saveTimer);
+		saveTimer = setTimeout(flushSave, 500);
+	}
+
+	async function flushSave() {
+		if (!pendingSave || saveInFlight) return;
+		const { path, content } = pendingSave;
+		pendingSave = null;
+		saveInFlight = true;
 		isSaving = true;
-		await api.writeSandboxFile(serviceId, openPath, content);
-		isSaving = false;
+		await api.writeSandboxFile(serviceId, path, content);
+		saveInFlight = false;
+		if (pendingSave) {
+			flushSave();
+		} else {
+			isSaving = false;
+		}
 	}
 
 	function stopBeacon() {
@@ -72,6 +90,7 @@
 
 	onDestroy(() => {
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
+		if (saveTimer) clearTimeout(saveTimer);
 		window.removeEventListener('beforeunload', stopBeacon);
 	});
 </script>
