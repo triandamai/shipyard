@@ -26,6 +26,10 @@ mod tests {
         let decoded = BASE64.decode(&b64).expect("must be valid base64");
         let script = String::from_utf8(decoded).expect("must be valid utf8");
         assert!(script.contains("requirements.txt"), "python seed script must write requirements.txt");
+        assert!(script.contains("app.py"), "python seed script must write app.py, the file dev_cmd actually runs");
+        assert!(script.contains("PORT"), "seeded app.py must bind to the sandbox's PORT env var, not a hardcoded port");
+        assert!(!script.contains("django"), "the Django placeholder that never actually ran anything must be gone");
+        assert!(!script.contains("manage.py"), "manage.py placeholder (sys.exit(0) on startup) must be gone");
     }
 
     #[test]
@@ -49,15 +53,29 @@ mod tests {
         assert_eq!(runtime, "python");
         assert_eq!(base_image, "python:3.12-slim");
         assert_eq!(install, Some("pip install -r requirements.txt"));
-        assert_eq!(dev, "python manage.py runserver 0.0.0.0:8000");
+        assert_eq!(dev, "python app.py");
         assert_eq!(port, 8000);
 
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Static);
         assert_eq!(runtime, "static");
         assert_eq!(base_image, "nginx:alpine");
         assert_eq!(install, None);
-        assert_eq!(dev, "nginx -g 'daemon off;'");
+        assert!(dev.contains("root /app;"), "static dev_cmd must configure nginx to serve the mounted volume");
+        assert!(dev.contains("nginx -g 'daemon off;'"), "static dev_cmd must still start nginx in the foreground");
         assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn static_dev_cmd_writes_a_quoted_heredoc_so_nginx_variables_are_not_shell_expanded() {
+        // Regression guard: the nginx config this writes uses $uri as a
+        // literal nginx variable reference. If the heredoc delimiter were
+        // ever changed to an unquoted form, the shell would try to expand
+        // $uri as one of its own (nonexistent) variables before nginx ever
+        // saw the file, silently corrupting the generated config.
+        let (_, _, _, dev, _) = template_runtime(Template::Static);
+        assert!(dev.contains("<<'NGINX_EOF'"), "heredoc delimiter must be quoted to disable shell expansion inside the config body");
+        assert!(dev.contains("$uri"), "the generated config must reference nginx's $uri variable literally");
+        assert!(dev.contains("listen 8080;"), "the generated config must listen on the template's declared port");
     }
 }
 
@@ -89,13 +107,40 @@ SHIPYARD_EOF
 
 const PYTHON_SEED_SCRIPT: &str = r#"mkdir -p /app
 cat > /app/requirements.txt <<'SHIPYARD_EOF'
-django==5.0
 SHIPYARD_EOF
-cat > /app/manage.py <<'SHIPYARD_EOF'
-#!/usr/bin/env python
-import sys
-print("Sandbox app placeholder - replace manage.py with your Django project.")
-sys.exit(0)
+cat > /app/app.py <<'SHIPYARD_EOF'
+import http.server
+import os
+import socketserver
+
+PORT = int(os.environ.get("PORT", 8000))
+
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/":
+            body = (
+                b"<!doctype html><html><head><title>Sandbox App</title></head>"
+                b"<body><h1>Hello from your new sandbox app!</h1>"
+                b"<p>Edit <code>app.py</code> or add files to get started.</p>"
+                b"</body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            super().do_GET()
+
+
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
+with ReusableTCPServer(("0.0.0.0", PORT), Handler) as httpd:
+    print(f"Serving on 0.0.0.0:{PORT}")
+    httpd.serve_forever()
 SHIPYARD_EOF
 "#;
 
@@ -127,8 +172,14 @@ pub fn template_seed_script_b64(t: Template) -> String {
 pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'static str>, &'static str, u16) {
     match t {
         Template::Node => ("node", "node:20-alpine", Some("npm install"), "npm run dev", 3000),
-        Template::Python => ("python", "python:3.12-slim", Some("pip install -r requirements.txt"), "python manage.py runserver 0.0.0.0:8000", 8000),
-        Template::Static => ("static", "nginx:alpine", None, "nginx -g 'daemon off;'", 8080),
+        Template::Python => ("python", "python:3.12-slim", Some("pip install -r requirements.txt"), "python app.py", 8000),
+        Template::Static => (
+            "static",
+            "nginx:alpine",
+            None,
+            "mkdir -p /etc/nginx/conf.d && cat > /etc/nginx/conf.d/default.conf <<'NGINX_EOF'\nserver {\n    listen 8080;\n    root /app;\n    index index.html;\n    location / {\n        try_files $uri $uri/ =404;\n    }\n}\nNGINX_EOF\nnginx -g 'daemon off;'",
+            8080,
+        ),
     }
 }
 
