@@ -78,6 +78,13 @@ async fn exec_ws(
     };
     let user_id = Uuid::parse_str(&claims.sub).unwrap_or_default();
 
+    // Authorization: a valid token proves "some authenticated user," not that
+    // this user may access THIS service — check before upgrading, mirroring
+    // exec_token's own require_service_access call.
+    if require_service_access(&state.db, user_id, service_id).await.is_err() {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+
     ws.on_upgrade(move |socket| handle_exec_socket(socket, state, service_id, params, user_id))
 }
 
