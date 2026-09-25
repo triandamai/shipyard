@@ -1885,11 +1885,13 @@ impl DockerEngine for BollardDockerEngine {
         };
 
         let mut stdout = String::new();
+        let mut stdout_bytes: Vec<u8> = Vec::new();
         let mut stderr = String::new();
         while let Some(chunk) = output.next().await {
             match chunk {
                 Ok(bollard::container::LogOutput::StdOut { message })
                 | Ok(bollard::container::LogOutput::Console { message }) => {
+                    stdout_bytes.extend_from_slice(&message);
                     stdout.push_str(&String::from_utf8_lossy(&message));
                 }
                 Ok(bollard::container::LogOutput::StdErr { message }) => {
@@ -1906,7 +1908,7 @@ impl DockerEngine for BollardDockerEngine {
             .map_err(|e| AppError::Docker(format!("inspect_exec (oneshot) failed: {e}")))?;
         let exit_code = inspect.exit_code.unwrap_or(-1);
 
-        Ok(ExecOutput { stdout, stderr, exit_code })
+        Ok(ExecOutput { stdout, stdout_bytes, stderr, exit_code })
     }
 
     async fn pull_image_stream(
@@ -2092,11 +2094,31 @@ mod exec_oneshot_tests {
     fn exec_output_carries_stdout_stderr_and_exit_code() {
         let out = ExecOutput {
             stdout: "hello\n".to_string(),
+            stdout_bytes: b"hello\n".to_vec(),
             stderr: "warning: noise\n".to_string(),
             exit_code: 0,
         };
         assert_eq!(out.stdout, "hello\n");
+        assert_eq!(out.stdout_bytes, b"hello\n");
         assert_eq!(out.stderr, "warning: noise\n");
         assert_eq!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn exec_output_stdout_bytes_preserves_non_utf8_content_the_lossy_string_would_mangle() {
+        // Regression guard for the non-UTF-8 corruption bug: stdout (the
+        // lossy String) is allowed to replace invalid bytes with U+FFFD, but
+        // stdout_bytes must carry the exact original bytes through
+        // untouched, since that's what a caller needing byte-exactness
+        // (detecting or rejecting non-UTF-8 content) has to check instead.
+        let raw = vec![0x68, 0x69, 0xFF, 0xFE]; // "hi" + two invalid UTF-8 bytes
+        let out = ExecOutput {
+            stdout: String::from_utf8_lossy(&raw).into_owned(),
+            stdout_bytes: raw.clone(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        assert_eq!(out.stdout_bytes, raw);
+        assert!(String::from_utf8(out.stdout_bytes).is_err(), "raw bytes must fail strict UTF-8 decode");
     }
 }

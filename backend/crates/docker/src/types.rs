@@ -249,6 +249,7 @@ pub struct ExecHandle {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecOutput {
     pub stdout: String,
+    pub stdout_bytes: Vec<u8>,
     pub stderr: String,
     pub exit_code: i64,
 }

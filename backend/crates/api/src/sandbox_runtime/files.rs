@@ -3,6 +3,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -51,21 +52,8 @@ fn build_write_command(path: &str, content: &str) -> String {
         Some(dir) if !dir.is_empty() => format!("mkdir -p '/app/{dir}' && "),
         _ => String::new(),
     };
-    // The heredoc terminator must not collide with any line of `content`,
-    // or the shell's heredoc ends early at that line — silently truncating
-    // the write while the command still exits 0. A fixed literal delimiter
-    // (e.g. "SHIPYARD_FILE_EOF") is user-reachable: a file legitimately
-    // containing that exact line as its own content would corrupt itself on
-    // save. Randomizing per write makes a collision astronomically
-    // unlikely, and the loop makes it impossible rather than merely
-    // unlikely.
-    let delimiter = loop {
-        let candidate = format!("SHIPYARD_FILE_EOF_{}", Uuid::new_v4().simple());
-        if !content.lines().any(|line| line == candidate) {
-            break candidate;
-        }
-    };
-    format!("{mkdir_part}cat > '{full}' <<'{delimiter}'\n{content}\n{delimiter}\n")
+    let encoded = BASE64.encode(content.as_bytes());
+    format!("{mkdir_part}echo '{encoded}' | base64 -d > '{full}'")
 }
 
 #[derive(Debug, Serialize)]
@@ -156,20 +144,26 @@ async fn read_file(
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     let path = validate_sandbox_path(&q.path).map_err(|e| ApiAppError(AppError::BadRequest(e)))?;
 
-    let cmd = vec!["sh".to_string(), "-c".to_string(), format!("cat -- '/app/{path}'")];
+    let cmd = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!("head -c {} -- '/app/{path}'", MAX_FILE_BYTES + 1),
+    ];
     let output = exec_in_sandbox(&state, service_id, cmd).await?;
 
     if output.exit_code != 0 {
         return Err(ApiAppError(AppError::NotFound(format!("File '{path}' not found"))));
     }
-    if output.stdout.len() > MAX_FILE_BYTES {
+    if output.stdout_bytes.len() > MAX_FILE_BYTES {
         return Err(ApiAppError(AppError::BadRequest(format!("File exceeds {MAX_FILE_BYTES} byte limit"))));
     }
-    if output.stdout.as_bytes().contains(&0) {
+    if output.stdout_bytes.contains(&0) {
         return Err(ApiAppError(AppError::BadRequest("File appears to be binary".to_string())));
     }
+    let content = String::from_utf8(output.stdout_bytes)
+        .map_err(|_| ApiAppError(AppError::BadRequest("File appears to be binary".to_string())))?;
 
-    Ok(Json(ApiResponse::ok(output.stdout)))
+    Ok(Json(ApiResponse::ok(content)))
 }
 
 async fn write_file(
@@ -364,31 +358,32 @@ mod command_building_tests {
     // the actual exec call is verified in Task 12's manual verification.
 
     #[test]
-    fn read_command_uses_cat_with_validated_path() {
+    fn read_command_uses_head_with_byte_cap_and_validated_path() {
         let path = "src/index.js";
-        let cmd = vec!["sh".to_string(), "-c".to_string(), format!("cat -- '/app/{path}'")];
-        assert_eq!(cmd[2], "cat -- '/app/src/index.js'");
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("head -c {} -- '/app/{path}'", MAX_FILE_BYTES + 1),
+        ];
+        assert_eq!(cmd[2], format!("head -c {} -- '/app/src/index.js'", MAX_FILE_BYTES + 1));
     }
 
     #[test]
-    fn write_command_uses_heredoc_with_validated_path_and_content() {
+    fn write_command_uses_base64_with_validated_path_and_content() {
         let path = "src/index.js";
         let content = "console.log('hi');\n";
         let cmd_str = build_write_command(path, content);
         assert!(cmd_str.contains("mkdir -p '/app/src'"));
-        // The delimiter is randomized per write (see the collision test
-        // below), so we can't assert an exact literal — only the structural
-        // shape: a `cat > '<path>' <<'SHIPYARD_FILE_EOF_<hex>'` opener.
-        assert!(cmd_str.contains("cat > '/app/src/index.js' <<'SHIPYARD_FILE_EOF_"));
-        assert!(cmd_str.contains(content));
+        assert!(cmd_str.contains("| base64 -d > '/app/src/index.js'"));
 
-        // The command must end with a bare delimiter line matching the
-        // opener's delimiter, followed by a newline.
-        let opener_start = cmd_str.find("<<'").unwrap() + 3;
-        let opener_end = cmd_str[opener_start..].find('\'').unwrap() + opener_start;
-        let delimiter = &cmd_str[opener_start..opener_end];
-        assert!(delimiter.starts_with("SHIPYARD_FILE_EOF_"));
-        assert!(cmd_str.ends_with(&format!("{delimiter}\n")));
+        // Extract the base64 blob between the quotes after `echo '` and
+        // decode it to confirm the exact original content round-trips byte
+        // for byte -- this is the whole point of switching off the heredoc.
+        let echo_start = cmd_str.find("echo '").unwrap() + "echo '".len();
+        let echo_end = cmd_str[echo_start..].find('\'').unwrap() + echo_start;
+        let encoded = &cmd_str[echo_start..echo_end];
+        let decoded = BASE64.decode(encoded).expect("must be valid base64");
+        assert_eq!(decoded, content.as_bytes());
     }
 
     #[test]
@@ -400,27 +395,35 @@ mod command_building_tests {
     }
 
     #[test]
-    fn write_command_avoids_delimiter_collision_with_content_containing_old_style_delimiter() {
-        // Regression test for a real data-corruption bug: a fixed literal
-        // heredoc delimiter (e.g. "SHIPYARD_FILE_EOF") is user-reachable — a
-        // file whose content legitimately contains that exact line as its
-        // own text would have its heredoc end early at that line, silently
-        // truncating everything after it while the write still reports
-        // success (`exit_code == 0`). Content here contains that literal
-        // line, plus more content after it, to prove the delimiter picked is
-        // never that colliding string and the full content survives intact
-        // in the generated command.
+    fn write_command_round_trips_content_with_and_without_trailing_newline() {
+        // Regression test for the trailing-newline-accretion bug: a heredoc
+        // unconditionally inserted an extra "\n" before its delimiter line,
+        // so every save silently grew the file by one blank line, and a
+        // file *without* a trailing newline could never be saved as such.
+        // Base64 encoding is exact regardless of what the content ends
+        // with, including empty content.
+        for content in ["line one\nline two\n", "no trailing newline", ""] {
+            let cmd_str = build_write_command("notes.txt", content);
+            let echo_start = cmd_str.find("echo '").unwrap() + "echo '".len();
+            let echo_end = cmd_str[echo_start..].find('\'').unwrap() + echo_start;
+            let encoded = &cmd_str[echo_start..echo_end];
+            let decoded = BASE64.decode(encoded).expect("must be valid base64");
+            assert_eq!(decoded, content.as_bytes(), "round-trip must be byte-exact for {content:?}");
+        }
+    }
+
+    #[test]
+    fn write_command_content_that_would_have_collided_with_the_old_heredoc_delimiter_now_writes_fine() {
+        // The base64 approach has no delimiter to collide with at all --
+        // this documents that the entire class of bug the old
+        // heredoc-collision machinery existed to guard against is now
+        // structurally impossible, not merely less likely.
         let content = "line one\nSHIPYARD_FILE_EOF\nline three";
         let cmd_str = build_write_command("notes.txt", content);
-
-        let opener_start = cmd_str.find("<<'").unwrap() + 3;
-        let opener_end = cmd_str[opener_start..].find('\'').unwrap() + opener_start;
-        let delimiter = &cmd_str[opener_start..opener_end];
-
-        assert_ne!(delimiter, "SHIPYARD_FILE_EOF");
-        // The content must appear as one contiguous, uninterrupted block —
-        // proving the heredoc body is not split at the embedded
-        // "SHIPYARD_FILE_EOF" line.
-        assert!(cmd_str.contains(content));
+        let echo_start = cmd_str.find("echo '").unwrap() + "echo '".len();
+        let echo_end = cmd_str[echo_start..].find('\'').unwrap() + echo_start;
+        let encoded = &cmd_str[echo_start..echo_end];
+        let decoded = BASE64.decode(encoded).expect("must be valid base64");
+        assert_eq!(decoded, content.as_bytes());
     }
 }
