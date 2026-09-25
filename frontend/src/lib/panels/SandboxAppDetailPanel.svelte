@@ -7,12 +7,12 @@
 
 	interface Props {
 		serviceId: string;
-		projectId: string;
-		orgId: string;
+		orgSlug: string;
+		projectSlug: string;
 		onDeleted?: () => void;
 	}
 
-	let { serviceId, projectId, orgId }: Props = $props();
+	let { serviceId, orgSlug, projectSlug }: Props = $props();
 
 	let instance = $state<SandboxInstance | null>(null);
 	let isLoading = $state(true);
@@ -45,7 +45,7 @@
 	}
 
 	function openEditor() {
-		goto(`/orgs/${orgId}/projects/${projectId}/apps/${serviceId}/editor`);
+		goto(`/orgs/${orgSlug}/projects/${projectSlug}/apps/${serviceId}/editor`);
 	}
 
 	onMount(load);
