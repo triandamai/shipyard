@@ -1327,15 +1327,17 @@ impl DockerEngine for BollardDockerEngine {
             )
             .await
             .map_err(|e| match &e {
-                // Preserve the underlying Docker message text inside the
-                // NotFound variant (rather than a fresh generic message) so
-                // any existing caller doing its own string-matching against
-                // this error's Display output (e.g. checking for "No such
-                // container") keeps working unchanged -- this is additive, a
-                // new way to detect the condition by type, not a replacement
-                // for the text that's already there.
+                // Preserve the underlying Docker message text AND the "404"
+                // token inside the NotFound variant (rather than a fresh
+                // generic message) so any existing caller doing its own
+                // string-matching against this error's Display output (e.g.
+                // containers/mod.rs's `msg.contains("No such container") ||
+                // msg.contains("404")` fallback check) keeps working
+                // unchanged on either substring it currently relies on --
+                // this is additive, a new way to detect the condition by
+                // type, not a replacement for the text that's already there.
                 BollardError::DockerResponseServerError { status_code: 404, message } => {
-                    AppError::NotFound(format!("Container not found: {message}"))
+                    AppError::NotFound(format!("Container not found (404): {message}"))
                 }
                 _ => AppError::Docker(format!("inspect_container failed: {e}")),
             })?;

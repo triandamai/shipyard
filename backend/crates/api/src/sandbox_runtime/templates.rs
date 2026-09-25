@@ -60,7 +60,18 @@ mod tests {
         assert_eq!(runtime, "static");
         assert_eq!(base_image, "nginx:alpine");
         assert_eq!(install, None);
-        assert_eq!(dev, shipyard_engine::sandbox_probe::STATIC_DEV_CMD);
+        // Compare against detect_stack's own output, not just the shared
+        // constant against itself -- template_runtime already *returns*
+        // STATIC_DEV_CMD, so `assert_eq!(dev, STATIC_DEV_CMD)` would pass
+        // even if detect_stack's static branch regressed back to the old
+        // broken nginx command. This is the actual invariant this test
+        // exists to protect: the template and probe paths must not diverge.
+        let probe = shipyard_engine::sandbox_probe::ProbeResult {
+            has_index_html: true,
+            ..Default::default()
+        };
+        let detected = shipyard_engine::sandbox_probe::detect_stack(&probe).unwrap();
+        assert_eq!(dev, detected.dev_cmd, "template and probe paths must not diverge");
         assert_eq!(port, 8080);
     }
 

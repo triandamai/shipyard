@@ -190,11 +190,16 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
                     // reaper forever, reintroducing the exact leak this
                     // whole branch exists to prevent. COALESCE preserves an
                     // already-valid timestamp rather than overwriting it.
+                    // The status='running' guard matches heartbeat()'s own
+                    // convention, so a concurrent stop_sandbox landing
+                    // between the upsert above and this query can't leave a
+                    // 'stopped' row with a non-NULL heartbeat/started_at
+                    // (stop_sandbox nulls those on purpose).
                     sqlx::query(
                         "UPDATE sandbox_instances
                          SET last_heartbeat_at = COALESCE(last_heartbeat_at, NOW()),
                              started_at = COALESCE(started_at, NOW())
-                         WHERE service_id = $1",
+                         WHERE service_id = $1 AND status = 'running'",
                     )
                     .bind(service_id)
                     .execute(&state.db)
