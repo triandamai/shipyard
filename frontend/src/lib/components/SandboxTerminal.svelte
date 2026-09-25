@@ -15,7 +15,7 @@
 	let fitAddon: FitAddon | null = null;
 	let ws: WebSocket | null = null;
 	let resizeObs: ResizeObserver | null = null;
-	let state = $state<'connecting' | 'connected' | 'error'>('connecting');
+	let connState = $state<'connecting' | 'connected' | 'error'>('connecting');
 	let errorMsg = $state<string>('');
 
 	function mountTerminal(el: HTMLDivElement) {
@@ -27,7 +27,7 @@
 		const tokenRes = await api.mintSandboxExecToken(serviceId);
 		if (!tokenRes.data) {
 			errorMsg = tokenRes.error?.message ?? 'Failed to get exec token';
-			state = 'error';
+			connState = 'error';
 			return;
 		}
 		const token = tokenRes.data.token;
@@ -72,7 +72,7 @@
 			ws.binaryType = 'arraybuffer';
 
 			ws.onopen = () => {
-				state = 'connected';
+				connState = 'connected';
 				term!.focus();
 			};
 			ws.onmessage = (evt) => {
@@ -89,10 +89,10 @@
 			};
 			ws.onerror = () => {
 				errorMsg = 'WebSocket connection failed.';
-				state = 'error';
+				connState = 'error';
 			};
 			ws.onclose = () => {
-				if (state === 'connected') term?.writeln('\r\n\x1b[33m[Session closed]\x1b[0m');
+				if (connState === 'connected') term?.writeln('\r\n\x1b[33m[Session closed]\x1b[0m');
 			};
 
 			term.onData((data) => {
@@ -125,7 +125,7 @@
 </script>
 
 <div class="sandbox-terminal">
-	{#if state === 'error'}
+	{#if connState === 'error'}
 		<p class="error">{errorMsg}</p>
 	{/if}
 	<div class="term-container" use:mountTerminal></div>
