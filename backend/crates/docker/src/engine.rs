@@ -17,6 +17,7 @@ use bollard::models::{
 use bollard::network::CreateNetworkOptions;
 use bollard::service::{InspectServiceOptions, ListServicesOptions, UpdateServiceOptions};
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
+use bollard::errors::Error as BollardError;
 use bollard::Docker;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
@@ -1105,11 +1106,18 @@ impl DockerEngine for BollardDockerEngine {
     }
 
     async fn remove_container(&self, container_id: &str, force: bool) -> AppResult<()> {
-        self.client
+        match self
+            .client
             .remove_container(container_id, Some(RemoveContainerOptions { force, ..Default::default() }))
             .await
-            .map_err(|e| AppError::Docker(format!("remove_container failed: {e}")))?;
-        Ok(())
+        {
+            Ok(()) => Ok(()),
+            // Nothing to remove is not a failure for an operation whose whole
+            // point is "make sure this container is gone" -- every caller in
+            // this codebase already treats a missing container as success.
+            Err(BollardError::DockerResponseServerError { status_code: 404, .. }) => Ok(()),
+            Err(e) => Err(AppError::Docker(format!("remove_container failed: {e}"))),
+        }
     }
 
     async fn wait_container(&self, container_id: &str) -> AppResult<i64> {
@@ -1318,7 +1326,19 @@ impl DockerEngine for BollardDockerEngine {
                 Some(InspectContainerOptions { size: false }),
             )
             .await
-            .map_err(|e| AppError::Docker(format!("inspect_container failed: {e}")))?;
+            .map_err(|e| match &e {
+                // Preserve the underlying Docker message text inside the
+                // NotFound variant (rather than a fresh generic message) so
+                // any existing caller doing its own string-matching against
+                // this error's Display output (e.g. checking for "No such
+                // container") keeps working unchanged -- this is additive, a
+                // new way to detect the condition by type, not a replacement
+                // for the text that's already there.
+                BollardError::DockerResponseServerError { status_code: 404, message } => {
+                    AppError::NotFound(format!("Container not found: {message}"))
+                }
+                _ => AppError::Docker(format!("inspect_container failed: {e}")),
+            })?;
 
         let id = resp.id.unwrap_or_default();
         let name = resp

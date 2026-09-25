@@ -91,8 +91,12 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
         }
         if existing.status == "running" {
             let inspect_result = match &existing.container_id {
-                Some(id) => state.docker.inspect_container(id).await.map(|d| d.state).map_err(|e| e.to_string()),
-                None => Err("no container_id recorded".to_string()),
+                Some(id) => state.docker.inspect_container(id).await.map(|d| d.state),
+                // No container_id at all is just as confirmed-dead as a 404
+                // from Docker -- there is nothing to have ever been running.
+                None => Err(AppError::NotFound(
+                    "sandbox_instances row has no container_id recorded".to_string(),
+                )),
             };
             if !is_container_dead(&inspect_result) {
                 return Ok(existing);
@@ -179,6 +183,23 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
                     )
                     .await
                     .ok();
+                    // upsert_instance_status doesn't touch last_heartbeat_at
+                    // -- without this, a row reaching this branch after a
+                    // stop (which nulls the heartbeat) or a first-ever start
+                    // (which never had one) would be invisible to the idle
+                    // reaper forever, reintroducing the exact leak this
+                    // whole branch exists to prevent. COALESCE preserves an
+                    // already-valid timestamp rather than overwriting it.
+                    sqlx::query(
+                        "UPDATE sandbox_instances
+                         SET last_heartbeat_at = COALESCE(last_heartbeat_at, NOW()),
+                             started_at = COALESCE(started_at, NOW())
+                         WHERE service_id = $1",
+                    )
+                    .bind(service_id)
+                    .execute(&state.db)
+                    .await
+                    .ok();
                 }
                 None => {
                     upsert_instance_status(&state.db, service_id, "stopped", None, None).await.ok();
@@ -251,22 +272,17 @@ async fn provision_sandbox(
     }
     let config = config.ok_or_else(|| AppError::Internal("sandbox config missing after insert".to_string()))?;
 
+    // remove_container is idempotent on "no such container" at the engine
+    // layer (a 404 there is treated as success, not an error) -- so any
+    // Err reaching here is a genuine failure to remove a container that
+    // does exist. Bail out now rather than proceeding to create_container,
+    // which would just hit a 409 name conflict: the caller (start_sandbox)
+    // re-checks the container's real state on this error rather than
+    // blindly assuming it's gone.
     let container_name = sandbox_container_name(service_id);
-    if let Err(e) = state.docker.remove_container(&container_name, true).await {
-        let msg = e.to_string();
-        if !msg.to_lowercase().contains("no such container") {
-            // A container by this name exists and we failed to remove it —
-            // proceeding to create_container would just hit a 409 name
-            // conflict. Bail out now rather than attempting it: the caller
-            // (start_sandbox) re-checks the container's real state on this
-            // error rather than blindly assuming it's gone.
-            return Err(AppError::Conflict(format!(
-                "Could not clean up existing sandbox container before restart: {msg}"
-            )));
-        }
-        // "No such container" is the expected, harmless case — there was
-        // nothing to remove. Fall through to create a fresh one.
-    }
+    state.docker.remove_container(&container_name, true).await.map_err(|e| {
+        AppError::Conflict(format!("Could not clean up existing sandbox container before restart: {e}"))
+    })?;
 
     let (cpu_cores, memory_gb): (f64, f64) = sqlx::query_as(
         "SELECT p.sandbox_cpu_cores, p.sandbox_memory_gb
@@ -538,21 +554,19 @@ async fn upsert_instance_status(
     Ok(())
 }
 
-/// Interprets the result of inspecting a sandbox's recorded container as
-/// dead or alive. Any inspect failure (container removed out-of-band, Docker
-/// daemon no longer knows about it, etc.) is treated as dead rather than
-/// trusting the stale DB row; a successful inspect is only alive when the
-/// reported state is exactly `"running"`.
 /// A container is only treated as dead when Docker *confirms* it's actually
-/// gone (inspect fails with a "no such container" 404) or reports a
-/// non-running state. Any OTHER inspect error — a transient socket timeout,
-/// connection reset, or the daemon being momentarily busy — must NOT be
-/// treated as dead: a healthy container must never be destroyed and
+/// gone (`AppError::NotFound`, from a genuine "no such container" 404) or
+/// reports a non-running state. Any OTHER inspect error — a transient socket
+/// timeout, connection reset, or the daemon being momentarily busy — must
+/// NOT be treated as dead: a healthy container must never be destroyed and
 /// recreated just because one inspect call happened to fail for an
-/// unrelated reason.
-fn is_container_dead(inspect_result: &Result<String, String>) -> bool {
+/// unrelated reason. This is a type-level distinction (not a string match
+/// against Docker's error text, which is not a stable contract) made at the
+/// Docker engine layer, where the real HTTP status code is visible.
+fn is_container_dead(inspect_result: &Result<String, AppError>) -> bool {
     match inspect_result {
-        Err(msg) => msg.to_lowercase().contains("no such container"),
+        Err(AppError::NotFound(_)) => true,
+        Err(_) => false,
         Ok(state) => state != "running",
     }
 }
@@ -583,16 +597,18 @@ mod tests {
     fn is_container_dead_treats_confirmed_not_found_as_dead() {
         // A container_id that Docker no longer knows about (removed out-of-band,
         // OOM-killed and reaped, host rebooted) must be treated as dead rather
-        // than trusting the stale DB row — modeled here as a genuine "no such
-        // container" 404 from inspect, which is the ONLY error condition that
-        // should be trusted as confirmation the container is actually gone.
-        let simulated_inspect_result: Result<String, String> = Err("No such container".to_string());
+        // than trusting the stale DB row — modeled here as the typed
+        // AppError::NotFound the engine layer produces for a genuine "no such
+        // container" 404, which is the ONLY error condition that should be
+        // trusted as confirmation the container is actually gone.
+        let simulated_inspect_result: Result<String, AppError> =
+            Err(AppError::NotFound("Container not found: No such container".to_string()));
         assert!(is_container_dead(&simulated_inspect_result));
 
-        let simulated_running: Result<String, String> = Ok("running".to_string());
+        let simulated_running: Result<String, AppError> = Ok("running".to_string());
         assert!(!is_container_dead(&simulated_running));
 
-        let simulated_exited: Result<String, String> = Ok("exited".to_string());
+        let simulated_exited: Result<String, AppError> = Ok("exited".to_string());
         assert!(is_container_dead(&simulated_exited));
     }
 
@@ -602,12 +618,29 @@ mod tests {
         // connection reset, daemon momentarily busy) must NOT be treated the
         // same as "container confirmed gone" -- treating every error as dead
         // caused start_sandbox to destroy and recreate healthy containers on
-        // a single flaky inspect call.
-        let transient: Result<String, String> = Err("connection reset by peer".to_string());
+        // a single flaky inspect call. Modeled as the generic Docker variant
+        // the engine layer produces for anything other than a 404.
+        let transient: Result<String, AppError> =
+            Err(AppError::Docker("connection reset by peer".to_string()));
         assert!(!is_container_dead(&transient));
 
-        let timeout: Result<String, String> = Err("operation timed out".to_string());
+        let timeout: Result<String, AppError> = Err(AppError::Docker("operation timed out".to_string()));
         assert!(!is_container_dead(&timeout));
+    }
+
+    #[test]
+    fn is_container_dead_treats_a_missing_container_id_as_dead() {
+        // Regression guard: a sandbox_instances row with status='running' but
+        // no container_id at all was, until this fix, misclassified as
+        // "alive" (the synthetic sentinel error didn't match the old
+        // string-based "no such container" check), which meant it could
+        // never self-heal. The caller now maps a missing container_id
+        // directly to AppError::NotFound before calling is_container_dead --
+        // this test locks down that NotFound is unconditionally dead
+        // regardless of its message text, since the caller relies on that.
+        let missing_id: Result<String, AppError> =
+            Err(AppError::NotFound("sandbox_instances row has no container_id recorded".to_string()));
+        assert!(is_container_dead(&missing_id));
     }
 
     #[test]
