@@ -16,6 +16,7 @@
 	let entries = $state<SandboxFileEntry[]>([]);
 	let openPath = $state<string | null>(null);
 	let fileContent = $state('');
+	let editorRef: CodeEditor | undefined = $state();
 	let isSaving = $state(false);
 	let showTerminal = $state(false);
 
@@ -54,6 +55,8 @@
 		if (res.data !== null && res.data !== undefined) {
 			openPath = path;
 			fileContent = res.data;
+			editorRef?.setValue(res.data);
+			editorRef?.setLanguage(languageForPath(path));
 		}
 	}
 
@@ -112,6 +115,7 @@
 					{#if isSaving}<span class="saving">Saving…</span>{/if}
 				</div>
 				<CodeEditor
+					bind:this={editorRef}
 					value={fileContent}
 					language={languageForPath(openPath)}
 					onChange={saveFile}
