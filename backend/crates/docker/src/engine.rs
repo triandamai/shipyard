@@ -587,6 +587,7 @@ fn build_container_config(spec: &ContainerSpec) -> ContainerConfig<String> {
         image: Some(spec.image.clone()),
         cmd: spec.cmd.clone(),
         env: Some(spec.env.clone()),
+        working_dir: spec.working_dir.clone(),
         host_config: Some(host_config),
         // NOTE: `bollard::container::Config::networking_config` is typed as
         // `Option<bollard::container::NetworkingConfig<T>>`, a distinct,
@@ -652,6 +653,7 @@ mod container_spec_tests {
             network: Some("shipyard-net".to_string()),
             network_aliases: vec!["shipyard-sandbox-abcd1234".to_string()],
             runtime_class: Some("runsc".to_string()),
+            working_dir: Some("/app".to_string()),
             resources: Some(ResourceSpec {
                 cpu_limit: Some(0.5),
                 memory_limit_mb: Some(1024),
@@ -714,6 +716,20 @@ mod container_spec_tests {
         let config = build_container_config(&spec);
         let host_config = config.host_config.expect("host_config must be set");
         assert_eq!(host_config.runtime, None);
+    }
+
+    #[test]
+    fn build_container_config_sets_working_dir() {
+        let config = build_container_config(&sample_spec());
+        assert_eq!(config.working_dir.as_deref(), Some("/app"));
+    }
+
+    #[test]
+    fn build_container_config_none_working_dir_omits_field() {
+        let mut spec = sample_spec();
+        spec.working_dir = None;
+        let config = build_container_config(&spec);
+        assert_eq!(config.working_dir, None);
     }
 }
 

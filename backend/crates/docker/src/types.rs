@@ -37,6 +37,11 @@ pub struct ContainerSpec {
     /// Docker runtime class, e.g. Some("runsc") for gVisor isolation.
     /// None uses the daemon's default runtime.
     pub runtime_class: Option<String>,
+    /// Working directory inside the container, e.g. Some("/app") for sandbox
+    /// containers whose startup command assumes that cwd. None uses the
+    /// image's own default (Docker's own default is "/" if the image sets
+    /// nothing).
+    pub working_dir: Option<String>,
     pub resources: Option<ResourceSpec>,
 }
 

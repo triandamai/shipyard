@@ -259,6 +259,7 @@ async fn provision_sandbox(
             network: Some(state.config.traefik.network.clone()),
             network_aliases: vec![container_name.clone()],
             runtime_class: Some(state.config.sandbox.runtime_class.clone()),
+            working_dir: Some("/app".to_string()),
             resources: Some(ResourceSpec {
                 cpu_limit: Some(cpu_cores),
                 memory_limit_mb: Some((memory_gb * 1024.0) as u64),
@@ -403,6 +404,7 @@ async fn probe_and_detect(
             network: None,
             network_aliases: vec![],
             runtime_class: Some(state.config.sandbox.runtime_class.clone()),
+            working_dir: None,
             resources: None,
         })
         .await
