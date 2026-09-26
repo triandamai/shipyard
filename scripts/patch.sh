@@ -19,6 +19,50 @@ UPDATE_SCRIPT="${INSTALL_DIR}/update.sh"
 [[ $EUID -ne 0 ]] && error "Please run as root: sudo bash patch.sh"
 [[ -f "${ENV_FILE}" ]] || error "No .env found at ${ENV_FILE} — is Shipyard installed?"
 
+# ── gVisor (runsc) ────────────────────────────────────────────────────────────
+# Installs the runsc binary + containerd shim straight from Google's release
+# bucket and registers it as a Docker runtime, without depending on apt/gpg
+# repo setup (which isn't guaranteed on every host and has bitten us before).
+# Idempotent — skips entirely if "runsc" is already a registered Docker runtime.
+ensure_gvisor_installed() {
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        info "gVisor (runsc) already registered with Docker — skipping install."
+        return 0
+    fi
+
+    info "Installing gVisor (runsc)..."
+    local gv_arch gv_url gv_tmp
+    gv_arch=$(uname -m)
+    gv_url="https://storage.googleapis.com/gvisor/releases/release/latest/${gv_arch}"
+    gv_tmp=$(mktemp -d)
+    if ! (
+        cd "${gv_tmp}" &&
+        curl -fsSL -O "${gv_url}/runsc" -O "${gv_url}/runsc.sha512" \
+            -O "${gv_url}/containerd-shim-runsc-v1" -O "${gv_url}/containerd-shim-runsc-v1.sha512" &&
+        sha512sum -c runsc.sha512 &&
+        sha512sum -c containerd-shim-runsc-v1.sha512 &&
+        chmod a+rx runsc containerd-shim-runsc-v1 &&
+        mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    ); then
+        rm -rf "${gv_tmp}"
+        warn "gVisor download/verification failed — falling back to the standard runtime (runc) in .env. Install manually later: https://gvisor.dev/docs/user_guide/install/"
+        sed -i "s/^SHIPYARD__SANDBOX__RUNTIME_CLASS=.*/SHIPYARD__SANDBOX__RUNTIME_CLASS=runc/" "${ENV_FILE}"
+        return 1
+    fi
+    rm -rf "${gv_tmp}"
+
+    /usr/local/bin/runsc install
+    systemctl restart docker
+    sleep 2
+
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        success "gVisor (runsc) installed and registered with Docker"
+    else
+        warn "gVisor install ran but 'runsc' does not appear in 'docker info' — falling back to the standard runtime (runc) in .env. Check /etc/docker/daemon.json manually."
+        sed -i "s/^SHIPYARD__SANDBOX__RUNTIME_CLASS=.*/SHIPYARD__SANDBOX__RUNTIME_CLASS=runc/" "${ENV_FILE}"
+    fi
+}
+
 # ── Source existing .env ───────────────────────────────────────────────────────
 set -a; source "${ENV_FILE}"; set +a
 
@@ -70,6 +114,24 @@ append_if_missing "EDGE_RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:
 append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE" "${DOCKERHUB_USER}/shipyard-edge-runtime:${TAG_VALUE}"
 append_if_missing "SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET" "$(openssl rand -hex 24)"
 append_if_missing "SCRIPTS_URL" ""
+
+# Sandbox apps (in-browser code editor + live preview). Defaults match the
+# backend's own built-in defaults (disabled, standard runtime) — this only
+# makes them visible/discoverable in .env, it never force-enables the
+# feature on an existing deployment. To turn it on, edit these three values
+# and restart the backend: set ENABLED=true, point PREVIEW_BASE_DOMAIN at a
+# domain you control with wildcard DNS pointed at this host, and (only if
+# gVisor is installed here) set RUNTIME_CLASS=runsc for stronger isolation.
+append_if_missing "SHIPYARD__SANDBOX__ENABLED" "false"
+append_if_missing "SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN" "apps-${DOMAIN:-example.com}"
+append_if_missing "SHIPYARD__SANDBOX__RUNTIME_CLASS" "runc"
+
+# If this deployment already wants gVisor (set here or in an earlier manual
+# edit), make sure it's actually installed — this is what silently breaks
+# sandbox apps with "unknown or invalid runtime name: runsc" otherwise.
+if [[ "${SHIPYARD__SANDBOX__RUNTIME_CLASS:-runc}" == "runsc" ]]; then
+    ensure_gvisor_installed || true
+fi
 
 # API URL used by edge runtime Swarm services on worker nodes to reach the backend.
 # Worker nodes can't resolve the container name 'shipyard-backend' — must use Traefik.

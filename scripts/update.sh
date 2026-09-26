@@ -27,6 +27,23 @@ if [[ -n "${SCRIPTS_URL:-}" ]]; then
     fi
 fi
 
+# ── Check gVisor (runsc) is present if the config wants it ─────────────────────
+# This script runs inside the shipyard-backend container, which has no
+# systemd/init access to the HOST — it cannot install a Docker runtime or
+# restart the host's Docker daemon itself (that needs root on the host, which
+# is exactly what install.sh/patch.sh have and this container does not). All
+# it can safely do is detect the mismatch early and say so, rather than let
+# sandbox app creation fail later with an inscrutable
+# "unknown or invalid runtime name: runsc".
+if [[ "${SHIPYARD__SANDBOX__RUNTIME_CLASS:-runc}" == "runsc" ]]; then
+    if ! docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        echo "[shipyard] WARNING: SHIPYARD__SANDBOX__RUNTIME_CLASS=runsc but gVisor is not"
+        echo "[shipyard]          registered with Docker on this host. Sandbox apps will fail"
+        echo "[shipyard]          to start until you run 'sudo bash patch.sh' on the host"
+        echo "[shipyard]          (not inside this container) to install it."
+    fi
+fi
+
 # ── Pull compose images ────────────────────────────────────────────────────────
 echo "[shipyard] Pulling latest images..."
 docker compose pull

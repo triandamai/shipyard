@@ -87,6 +87,50 @@ install_pkg() {
     esac
 }
 
+# ── gVisor (runsc) ────────────────────────────────────────────────────────────
+# Installs the runsc binary + containerd shim straight from Google's release
+# bucket and registers it as a Docker runtime, without depending on apt/gpg
+# repo setup (which isn't guaranteed on every host and has bitten us before).
+# Idempotent — skips entirely if "runsc" is already a registered Docker runtime.
+ensure_gvisor_installed() {
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        info "gVisor (runsc) already registered with Docker — skipping install."
+        return 0
+    fi
+
+    info "Installing gVisor (runsc)..."
+    local gv_arch gv_url gv_tmp
+    gv_arch=$(uname -m)
+    gv_url="https://storage.googleapis.com/gvisor/releases/release/latest/${gv_arch}"
+    gv_tmp=$(mktemp -d)
+    if ! (
+        cd "${gv_tmp}" &&
+        curl -fsSL -O "${gv_url}/runsc" -O "${gv_url}/runsc.sha512" \
+            -O "${gv_url}/containerd-shim-runsc-v1" -O "${gv_url}/containerd-shim-runsc-v1.sha512" &&
+        sha512sum -c runsc.sha512 &&
+        sha512sum -c containerd-shim-runsc-v1.sha512 &&
+        chmod a+rx runsc containerd-shim-runsc-v1 &&
+        mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    ); then
+        rm -rf "${gv_tmp}"
+        warn "gVisor download/verification failed — falling back to the standard runtime (runc). Install manually later: https://gvisor.dev/docs/user_guide/install/"
+        SANDBOX_RUNTIME_CLASS="runc"
+        return 1
+    fi
+    rm -rf "${gv_tmp}"
+
+    /usr/local/bin/runsc install
+    systemctl restart docker
+    sleep 2
+
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        success "gVisor (runsc) installed and registered with Docker"
+    else
+        warn "gVisor install ran but 'runsc' does not appear in 'docker info' — falling back to the standard runtime (runc). Check /etc/docker/daemon.json manually."
+        SANDBOX_RUNTIME_CLASS="runc"
+    fi
+}
+
 # ── Base utilities ────────────────────────────────────────────────────────────
 step "Checking base utilities"
 
@@ -244,6 +288,26 @@ read_input "  API domain (e.g. api.example.com) [api-${DOMAIN}]: " API_DOMAIN "a
 
 REGISTRY_DOMAIN=""
 read_input "  Registry domain (e.g. registry.example.com) [registry.${DOMAIN}]: " REGISTRY_DOMAIN "registry.${DOMAIN}"
+
+# ── Sandbox apps (in-browser editor + live preview) ─────────────────────────
+SANDBOX_ENABLED_INPUT=""
+read_input "  Enable sandbox apps — in-browser code editor + live preview? [y/N]: " SANDBOX_ENABLED_INPUT "n"
+
+SANDBOX_ENABLED="false"
+SANDBOX_PREVIEW_DOMAIN=""
+SANDBOX_RUNTIME_CLASS="runc"
+if [[ "${SANDBOX_ENABLED_INPUT}" == "y" || "${SANDBOX_ENABLED_INPUT}" == "Y" || "${SANDBOX_ENABLED_INPUT}" == "yes" || "${SANDBOX_ENABLED_INPUT}" == "YES" || "${SANDBOX_ENABLED_INPUT}" == "Yes" ]]; then
+    SANDBOX_ENABLED="true"
+
+    read_input "  Sandbox preview domain — needs wildcard DNS + TLS, e.g. *.apps.example.com [apps-${DOMAIN}]: " SANDBOX_PREVIEW_DOMAIN "apps-${DOMAIN}"
+
+    SANDBOX_GVISOR_INPUT=""
+    read_input "  Use gVisor (runsc) for stronger sandbox isolation? [Y/n]: " SANDBOX_GVISOR_INPUT "y"
+    if [[ "${SANDBOX_GVISOR_INPUT}" == "y" || "${SANDBOX_GVISOR_INPUT}" == "Y" || "${SANDBOX_GVISOR_INPUT}" == "yes" || "${SANDBOX_GVISOR_INPUT}" == "YES" || "${SANDBOX_GVISOR_INPUT}" == "Yes" ]]; then
+        SANDBOX_RUNTIME_CLASS="runsc"
+        ensure_gvisor_installed || true
+    fi
+fi
 
 ACME_EMAIL=""
 read_input "  Email for Let's Encrypt certificates: " ACME_EMAIL ""
@@ -454,6 +518,11 @@ SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR=/etc/traefik/dynamic
 
 # Data
 SHIPYARD__DATA_DIR=/opt/shipyard/data
+
+# Sandbox Apps (in-browser code editor + live preview)
+SHIPYARD__SANDBOX__ENABLED=${SANDBOX_ENABLED}
+SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN=${SANDBOX_PREVIEW_DOMAIN:-apps-${DOMAIN}}
+SHIPYARD__SANDBOX__RUNTIME_CLASS=${SANDBOX_RUNTIME_CLASS}
 
 # Edge Functions (Deno-based serverless)
 SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
