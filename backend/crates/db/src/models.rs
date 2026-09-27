@@ -164,6 +164,8 @@ pub struct Domain {
     pub cert_provider: String,
     pub port: Option<i32>,
     pub created_at: DateTime<Utc>,
+    pub cloudflare_zone_id: Option<String>,
+    pub cloudflare_record_id: Option<String>,
 }
 
 // ─── Containers ──────────────────────────────────────────────────
@@ -286,6 +288,18 @@ pub struct GitProvider {
     pub username: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+// ─── Cloudflare ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CloudflareConnection {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub api_token: String,
+    pub account_id: String,
+    pub account_name: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 // ─── SaaS Billing & Compute ──────────────────────────────────────────────────
