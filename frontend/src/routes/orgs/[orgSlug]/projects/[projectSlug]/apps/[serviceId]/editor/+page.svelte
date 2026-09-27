@@ -5,7 +5,7 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SandboxTerminal from '$lib/components/SandboxTerminal.svelte';
-	import { ArrowLeft, ArrowRight, RotateCw } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe } from '@lucide/svelte';
 	import type { SandboxFileEntry, SandboxInstance } from '$lib/api/types';
 
 	let serviceId = $derived(page.params.serviceId ?? '');
@@ -13,6 +13,9 @@
 	let instance = $state<SandboxInstance | null>(null);
 	let bootState = $state<'starting' | 'ready' | 'error'>('starting');
 	let bootError = $state('');
+
+	// Editor and preview show one at a time (not split) — pick which is active.
+	let activeTab = $state<'editor' | 'preview'>('editor');
 
 	// ── Preview browser chrome ──────────────────────────────────────────────
 	let previewIframe: HTMLIFrameElement | undefined = $state();
@@ -55,34 +58,6 @@
 		}
 		urlBarValue = target;
 		previewIframe.src = target;
-	}
-
-	// ── Resizable preview pane ──────────────────────────────────────────────
-	const PREVIEW_MIN_WIDTH = 240;
-	const PREVIEW_MAX_WIDTH = 1400;
-	let previewWidth = $state(480);
-	let resizing = $state(false);
-	let resizeStartX = 0;
-	let resizeStartWidth = 0;
-
-	function startResize(e: PointerEvent) {
-		resizing = true;
-		resizeStartX = e.clientX;
-		resizeStartWidth = previewWidth;
-		window.addEventListener('pointermove', onResizeMove);
-		window.addEventListener('pointerup', stopResize, { once: true });
-	}
-
-	function onResizeMove(e: PointerEvent) {
-		if (!resizing) return;
-		const delta = e.clientX - resizeStartX;
-		const maxAllowed = Math.min(PREVIEW_MAX_WIDTH, window.innerWidth - 400);
-		previewWidth = Math.min(maxAllowed, Math.max(PREVIEW_MIN_WIDTH, resizeStartWidth - delta));
-	}
-
-	function stopResize() {
-		resizing = false;
-		window.removeEventListener('pointermove', onResizeMove);
 	}
 
 	let entries = $state<SandboxFileEntry[]>([]);
@@ -155,28 +130,25 @@
 		}
 	}
 
-	function stopBeacon() {
-		navigator.sendBeacon(`/api/apps/${serviceId}/sandbox/stop`, new Blob());
-	}
-
+	// No stop-on-unload here, deliberately: closing or reloading this tab fires
+	// the same 'beforeunload' event as actually leaving for good, and there's
+	// no reliable way to tell those apart client-side. Stopping immediately on
+	// every reload was killing sandboxes the user only meant to refresh,
+	// forcing a full re-provision. The idle reaper (sandbox_runtime/reaper.rs)
+	// already stops a sandbox once its heartbeat goes stale for
+	// idle_timeout_secs (default 20 min) — that's the real "user is actually
+	// gone" signal, with the grace period this needs.
 	onMount(() => {
 		boot();
-		window.addEventListener('beforeunload', stopBeacon);
 	});
 
 	onDestroy(() => {
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		if (saveTimer) clearTimeout(saveTimer);
-		window.removeEventListener('beforeunload', stopBeacon);
-		window.removeEventListener('pointermove', onResizeMove);
 	});
 </script>
 
-<div
-	class="editor-layout"
-	class:resizing
-	style="grid-template-columns: 220px 1fr 6px {previewWidth}px;"
->
+<div class="editor-layout">
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">Waking up your sandbox…</div>
 	{:else if bootState === 'error'}
@@ -186,60 +158,64 @@
 			<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} />
 		</aside>
 
-		<main class="editor-main">
-			{#if openPath}
-				<div class="tab-bar">
-					<span class="tab">{openPath}</span>
-					{#if isSaving}<span class="saving">Saving…</span>{/if}
-				</div>
-				<CodeEditor
-					bind:this={editorRef}
-					value={fileContent}
-					language={languageForPath(openPath)}
-					onChange={saveFile}
-					height="100%"
-				/>
-			{:else}
-				<div class="empty-state">Select a file to start editing</div>
-			{/if}
-		</main>
+		<div class="main-panel">
+			<div class="panel-tabs">
+				<button class="panel-tab" class:active={activeTab === 'editor'} onclick={() => (activeTab = 'editor')}>
+					<Code2 size={13} /> Editor
+				</button>
+				<button class="panel-tab" class:active={activeTab === 'preview'} onclick={() => (activeTab = 'preview')}>
+					<Globe size={13} /> Preview
+				</button>
+			</div>
 
-		<div
-			class="resize-handle"
-			role="separator"
-			aria-orientation="vertical"
-			aria-label="Resize preview pane"
-			tabindex="-1"
-			onpointerdown={startResize}
-		></div>
+			<main class="editor-main" class:hidden={activeTab !== 'editor'}>
+				{#if openPath}
+					<div class="tab-bar">
+						<span class="tab">{openPath}</span>
+						{#if isSaving}<span class="saving">Saving…</span>{/if}
+					</div>
+					<CodeEditor
+						bind:this={editorRef}
+						value={fileContent}
+						language={languageForPath(openPath)}
+						onChange={saveFile}
+						height="100%"
+					/>
+				{:else}
+					<div class="empty-state">Select a file to start editing</div>
+				{/if}
+			</main>
 
-		<section class="preview-pane">
-			{#if instance?.preview_url}
-				<div class="preview-toolbar">
-					<button class="preview-nav-btn" onclick={previewGoBack} title="Back" aria-label="Back">
-						<ArrowLeft size={13} />
-					</button>
-					<button class="preview-nav-btn" onclick={previewGoForward} title="Forward" aria-label="Forward">
-						<ArrowRight size={13} />
-					</button>
-					<button class="preview-nav-btn" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
-						<RotateCw size={12} />
-					</button>
-					<form class="preview-url-form" onsubmit={previewNavigate}>
-						<input
-							class="preview-url-input"
-							type="text"
-							bind:value={urlBarValue}
-							spellcheck="false"
-							autocomplete="off"
-						/>
-					</form>
-				</div>
-				<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
-			{:else}
-				<div class="empty-state">No preview available</div>
-			{/if}
-		</section>
+			<section class="preview-pane" class:hidden={activeTab !== 'preview'}>
+				{#if instance?.preview_url}
+					<div class="preview-toolbar">
+						<button class="preview-nav-btn" onclick={previewGoBack} title="Back" aria-label="Back">
+							<ArrowLeft size={13} />
+						</button>
+						<button class="preview-nav-btn" onclick={previewGoForward} title="Forward" aria-label="Forward">
+							<ArrowRight size={13} />
+						</button>
+						<button class="preview-nav-btn" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
+							<RotateCw size={12} />
+						</button>
+						<form class="preview-url-form" onsubmit={previewNavigate}>
+							<input
+								class="preview-url-input"
+								type="text"
+								bind:value={urlBarValue}
+								spellcheck="false"
+								autocomplete="off"
+							/>
+						</form>
+					</div>
+					<div class="preview-surface">
+						<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
+					</div>
+				{:else}
+					<div class="empty-state">No preview available</div>
+				{/if}
+			</section>
+		</div>
 
 		<button class="terminal-toggle" onclick={() => (showTerminal = !showTerminal)}>
 			{showTerminal ? 'Hide' : 'Show'} Terminal
@@ -255,58 +231,86 @@
 <style>
 	.editor-layout {
 		display: grid;
+		grid-template-columns: 220px 1fr;
 		grid-template-rows: 1fr auto;
 		height: 100vh;
 		width: 100vw;
-	}
-	.editor-layout.resizing {
-		cursor: col-resize;
-		user-select: none;
 	}
 	.sidebar {
 		border-right: 1px solid var(--border);
 		overflow-y: auto;
 		grid-row: 1;
 	}
+	.main-panel {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		grid-row: 1;
+	}
+	.hidden {
+		display: none !important;
+	}
+
+	.panel-tabs {
+		display: flex;
+		gap: 2px;
+		padding: 6px 8px 0;
+		background: var(--bg-elevated);
+		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
+	}
+	.panel-tab {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px 14px;
+		border: none;
+		border-bottom: 2px solid transparent;
+		background: transparent;
+		color: var(--text-dim);
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		border-radius: var(--radius-sm, 4px) var(--radius-sm, 4px) 0 0;
+	}
+	.panel-tab:hover {
+		color: var(--text-secondary);
+		background: var(--bg-surface, rgba(127,127,127,0.08));
+	}
+	.panel-tab.active {
+		color: var(--text-primary);
+		border-bottom-color: var(--accent);
+	}
+
 	.editor-main {
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		border-right: 1px solid var(--border);
-		grid-row: 1;
-	}
-	.resize-handle {
-		grid-row: 1;
-		cursor: col-resize;
-		background: transparent;
-		position: relative;
-	}
-	.resize-handle::after {
-		content: '';
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: 2px;
-		width: 2px;
-		background: var(--border);
-	}
-	.resize-handle:hover::after,
-	.editor-layout.resizing .resize-handle::after {
-		background: var(--accent);
+		flex: 1;
+		min-height: 0;
 	}
 	.preview-pane {
-		grid-row: 1;
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-	}
-	.preview-pane iframe {
 		flex: 1;
-		width: 100%;
-		border: none;
+		min-height: 0;
 	}
-	.editor-layout.resizing .preview-pane iframe {
-		pointer-events: none;
+	/* The preview shows an arbitrary website that may be any color scheme —
+	   giving it its own neutral, always-light "browser content" surface
+	   (rather than inheriting Shipyard's own dark app background) is what
+	   makes it read as a separate embedded page instead of blending into
+	   the surrounding UI, especially before the iframe has painted anything. */
+	.preview-surface {
+		flex: 1;
+		min-height: 0;
+		background: #fff;
+	}
+	.preview-surface iframe {
+		width: 100%;
+		height: 100%;
+		border: none;
+		background: #fff;
 	}
 	.preview-toolbar {
 		display: flex;
