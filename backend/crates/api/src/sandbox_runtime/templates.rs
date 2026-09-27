@@ -165,6 +165,26 @@ mod tests {
     }
 
     #[test]
+    fn vite_family_seed_scripts_scaffold_into_cwd_not_app() {
+        // Regression guard for the C1 bug: create-vite resolves its target
+        // argument with path.join(cwd, target), not path.resolve. The
+        // container's cwd is already /app (see manager.rs's create_container
+        // working_dir), so passing the literal string "/app" as the target
+        // silently scaffolds into /app/app instead of /app itself. Verified
+        // live: `docker run --rm -w /app node:20-alpine sh -c "npm create
+        // vite@latest /app -- --template react"` creates /app/app/, not
+        // /app/*. The fix is to pass "." instead, which path.joins with cwd
+        // to the correct /app.
+        for t in [Template::React, Template::ReactTs, Template::Vue, Template::VueTs] {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("vite@latest . --"), "{t:?} must scaffold into '.', not '/app' (create-vite path.joins its target with cwd)");
+            assert!(!script.contains("vite@latest /app"), "{t:?} must not pass '/app' as scaffold target");
+        }
+    }
+
+    #[test]
     fn sveltekit_templates_scaffold_via_the_official_sv_cli() {
         let cases = [
             (Template::SvelteKit, "--types jsdoc"),
@@ -387,10 +407,10 @@ cat > /app/shipyard.json.example <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 
-const REACT_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react\n";
-const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react-ts\n";
-const VUE_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue\n";
-const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue-ts\n";
+const REACT_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react\n";
+const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react-ts\n";
+const VUE_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue\n";
+const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue-ts\n";
 const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --install npm\n";
 const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --install npm\n";
 const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
