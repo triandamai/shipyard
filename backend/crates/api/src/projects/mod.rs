@@ -300,16 +300,25 @@ async fn delete_project(
         ))));
     }
 
-    // Collect every service (id + slug) so we can tear down Docker + Traefik.
-    let services: Vec<(Uuid, String)> = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, slug FROM services WHERE project_id = $1",
+    // Collect every service (id + slug + type) so we can tear down Docker + Traefik.
+    let services: Vec<(Uuid, String, String)> = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT id, slug, type::text FROM services WHERE project_id = $1",
     )
     .bind(project_id)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
 
-    for (svc_id, svc_slug) in &services {
+    for (svc_id, svc_slug, svc_type) in &services {
+        if svc_type == "sandbox_app" {
+            // Sandbox apps run as a plain container under their own naming
+            // convention (not a Swarm service, not `{slug}.yml`) — the
+            // generic cleanup below would miss the container, its dedicated
+            // volume, and its Cloudflare-managed DNS record entirely.
+            crate::sandbox_runtime::manager::teardown_sandbox(&state, *svc_id).await;
+            continue;
+        }
+
         // Remove Docker Swarm service (best-effort).
         let docker_name = format!("{}-{}", state.config.docker.label_prefix, svc_id);
         if let Err(e) = state.docker.remove_service(&docker_name).await {

@@ -705,6 +705,12 @@ async fn delete_service(
             .args(["exec", "shipyard-nginx-static", "nginx", "-s", "reload"])
             .output()
             .await;
+    } else if svc_type == "sandbox_app" {
+        // Sandbox apps run as a plain container (not a Swarm service), so the
+        // catch-all branch below would be a no-op for them — they need their
+        // own teardown: container, dedicated volume, preview domain (with
+        // Cloudflare DNS cleanup), and Traefik route file.
+        crate::sandbox_runtime::manager::teardown_sandbox(&state, service_id).await;
     } else {
         // Non-compose, non-static: remove Docker Swarm service
         let docker_svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);

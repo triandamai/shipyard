@@ -387,7 +387,7 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
 /// authenticate the delete with — same code path as never having connected
 /// at all, per the spec). Never returns an error; a failure here (including
 /// a timeout) must never block deleting the domain from Shipyard.
-async fn try_delete_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, zone_id: &str, record_id: &str) {
+pub(crate) async fn try_delete_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, zone_id: &str, record_id: &str) {
     let org_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )

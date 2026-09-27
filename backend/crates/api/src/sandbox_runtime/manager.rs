@@ -220,10 +220,6 @@ pub async fn start_sandbox(state: &AppState, service_id: Uuid) -> AppResult<Sand
 /// detection/config insert, container launch, and the preview
 /// domain/Traefik sync. Split out of `start_sandbox` so any `Err` here can be
 /// caught by the caller and turned into a status reset back to `"stopped"`.
-///
-/// NOTE (follow-up): deleting the `services` row cascades the sandbox's DB
-/// rows but does *not* stop/remove the sandbox's Docker container or delete
-/// its Docker volume — a service-delete teardown hook is still needed.
 async fn provision_sandbox(
     state: &AppState,
     service_id: Uuid,
@@ -428,6 +424,64 @@ pub async fn stop_sandbox(state: &AppState, service_id: Uuid) -> AppResult<()> {
     .map_err(|e| AppError::Database(e.to_string()))?;
 
     Ok(())
+}
+
+/// Full teardown for a sandbox app being deleted (not just stopped): removes
+/// the Docker container and its dedicated volume, deletes the preview (and
+/// any other) domain — including its Cloudflare DNS record, if one was
+/// synced — and removes the sandbox's dedicated Traefik dynamic-config file.
+///
+/// Must run BEFORE the caller deletes the `services` row: `domains` and
+/// `try_delete_cloudflare_record`'s org lookup both need `service_id` to
+/// still resolve to a real service. Every step here is best-effort (matches
+/// the rest of this feature's failure handling) — a Docker or Cloudflare
+/// hiccup must never block a user from deleting their own sandbox. The DB
+/// rows themselves (`sandbox_instances`, `sandbox_app_configs`, `domains`,
+/// `volumes`) are left for `ON DELETE CASCADE` on `services` to clean up —
+/// this function only handles what a DB cascade can never reach.
+pub async fn teardown_sandbox(state: &AppState, service_id: Uuid) {
+    let container_name = sandbox_container_name(service_id);
+    if let Err(e) = state.docker.remove_container(&container_name, true).await {
+        tracing::warn!(%service_id, "teardown_sandbox: remove_container failed: {e}");
+    }
+
+    let volume_name = sandbox_volume_name(service_id);
+    if let Err(e) = state.docker.remove_volume(&volume_name).await {
+        tracing::warn!(%service_id, "teardown_sandbox: remove_volume failed: {e}");
+    }
+
+    // Capture + delete every domain on this service (normally just the
+    // preview hostname) before the caller's `DELETE FROM services` cascades
+    // them away — try_delete_cloudflare_record needs service_id to still
+    // resolve to a real org via the services/projects join.
+    let domains: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+        "DELETE FROM domains WHERE service_id = $1 RETURNING cloudflare_zone_id, cloudflare_record_id",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (zone_id, record_id) in domains {
+        if let (Some(zone_id), Some(record_id)) = (zone_id, record_id) {
+            crate::resources::try_delete_cloudflare_record(&state.db, service_id, &zone_id, &record_id).await;
+        }
+    }
+
+    // Domains are already gone, so this just removes the now-empty sandbox
+    // route file — same "no domains left" path `delete_domain` uses.
+    crate::resources::sync_traefik_dynamic_config(
+        &state.db,
+        service_id,
+        &state.config.docker.label_prefix,
+        &state.config.traefik.entrypoint_http,
+        &state.config.traefik.entrypoint_https,
+        state.config.traefik.dynamic_config_dir.as_deref(),
+        None,
+        false,
+        Some(&sandbox_traefik_config_name(service_id)),
+    )
+    .await;
 }
 
 /// Records that the editor is still open for this sandbox. Called on an
