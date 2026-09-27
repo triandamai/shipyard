@@ -38,6 +38,23 @@ fn hostname_to_router_name(hostname: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Finds the zone (if any) that covers `hostname` — the longest zone name
+/// that is either exactly `hostname` or a dot-separated suffix of it (e.g.
+/// zone "example.com" covers "api.example.com" but not "notexample.com").
+/// Longest match wins so a more specific zone (e.g. "staging.example.com")
+/// is preferred over a broader one (e.g. "example.com") when an org has
+/// both connected.
+fn longest_matching_zone<'a>(hostname: &str, zones: &'a [shipyard_cloudflare::Zone]) -> Option<&'a shipyard_cloudflare::Zone> {
+    let hostname = hostname.trim_end_matches('.').to_lowercase();
+    zones
+        .iter()
+        .filter(|z| {
+            let zone_name = z.name.to_lowercase();
+            hostname == zone_name || hostname.ends_with(&format!(".{zone_name}"))
+        })
+        .max_by_key(|z| z.name.len())
+}
+
 /// Regenerates the Traefik file-provider dynamic config for a service's domains.
 ///
 /// Writes `{dir}/{slug}.yml`. If there are no domains the file is removed.
@@ -1398,5 +1415,48 @@ mod tests {
             unmounted_volume_paths(&v(&["/data", "/data/"]), &v(&[])),
             v(&["/data"]),
         );
+    }
+
+    // ─── Cloudflare zone matching ────────────────────────────────────────────
+
+    use shipyard_cloudflare::Zone;
+
+    fn zone(id: &str, name: &str) -> Zone {
+        Zone { id: id.to_string(), name: name.to_string() }
+    }
+
+    #[test]
+    fn matches_the_longest_zone_name_that_is_a_suffix_of_the_hostname() {
+        let zones = vec![zone("1", "example.com"), zone("2", "staging.example.com")];
+        let m = longest_matching_zone("api.staging.example.com", &zones).unwrap();
+        assert_eq!(m.id, "2", "the more specific zone must win");
+    }
+
+    #[test]
+    fn matches_an_exact_hostname_equal_to_the_zone_apex() {
+        let zones = vec![zone("1", "example.com")];
+        let m = longest_matching_zone("example.com", &zones).unwrap();
+        assert_eq!(m.id, "1");
+    }
+
+    #[test]
+    fn returns_none_when_no_zone_covers_the_hostname() {
+        let zones = vec![zone("1", "example.com")];
+        assert!(longest_matching_zone("totally-different.org", &zones).is_none());
+    }
+
+    #[test]
+    fn does_not_match_a_different_domain_that_merely_shares_a_suffix_string() {
+        // "notexample.com" ends with "example.com" as a raw string, but is a
+        // completely different domain — must not match.
+        let zones = vec![zone("1", "example.com")];
+        assert!(longest_matching_zone("notexample.com", &zones).is_none());
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        let zones = vec![zone("1", "Example.com")];
+        let m = longest_matching_zone("API.EXAMPLE.COM", &zones).unwrap();
+        assert_eq!(m.id, "1");
     }
 }

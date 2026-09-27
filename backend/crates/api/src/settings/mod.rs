@@ -1410,17 +1410,16 @@ struct HostIpResponse {
     is_public: bool,
 }
 
-/// Returns the server's detected public IP so the frontend can generate
-/// appropriate wildcard domains (nip.io for VPS, traefik.me for localhost).
-async fn get_host_ip(
-    _auth: AuthUser,
-) -> Json<ApiResponse<HostIpResponse>> {
+/// The same 3-tier IP resolution `get_host_ip` exposes over HTTP, factored
+/// out so the Cloudflare DNS-record creation path (resources/mod.rs,
+/// Task 5/6 of the Cloudflare DNS plan) can resolve the same address
+/// without duplicating this logic or making an HTTP round-trip to itself.
+pub(crate) async fn resolve_host_ip() -> String {
     // 1. Prefer the DOMAIN env var if it looks like an IPv4 address
     if let Ok(domain) = std::env::var("DOMAIN") {
         let trimmed = domain.trim().to_string();
         if trimmed.parse::<std::net::IpAddr>().is_ok() {
-            let is_public = !is_loopback_or_private(&trimmed);
-            return Json(ApiResponse::ok(HostIpResponse { ip: trimmed, is_public }));
+            return trimmed;
         }
     }
 
@@ -1434,15 +1433,21 @@ async fn get_host_ip(
     .flatten();
 
     if let Some(ip) = detected {
-        let is_public = !is_loopback_or_private(&ip);
-        return Json(ApiResponse::ok(HostIpResponse { ip, is_public }));
+        return ip;
     }
 
     // 3. Fall back to localhost
-    Json(ApiResponse::ok(HostIpResponse {
-        ip: "127.0.0.1".to_string(),
-        is_public: false,
-    }))
+    "127.0.0.1".to_string()
+}
+
+/// Returns the server's detected public IP so the frontend can generate
+/// appropriate wildcard domains (nip.io for VPS, traefik.me for localhost).
+async fn get_host_ip(
+    _auth: AuthUser,
+) -> Json<ApiResponse<HostIpResponse>> {
+    let ip = resolve_host_ip().await;
+    let is_public = !is_loopback_or_private(&ip);
+    Json(ApiResponse::ok(HostIpResponse { ip, is_public }))
 }
 
 async fn fetch_public_ip() -> Option<String> {
