@@ -163,6 +163,10 @@ async fn handle_exec_socket(
                             let rows = v["rows"].as_u64().unwrap_or(24) as u16;
                             let _ = docker.resize_exec(&exec_id, cols, rows).await;
                         }
+                        // "ping" is a client keep-alive with no effect on the shell —
+                        // its purpose is just generating traffic so an idle-timeout
+                        // layer between the browser and here doesn't close the
+                        // connection during a quiet terminal session.
                     }
                 }
                 Message::Close(_) => break,

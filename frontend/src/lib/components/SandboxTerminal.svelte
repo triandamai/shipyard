@@ -15,6 +15,7 @@
 	let fitAddon: FitAddon | null = null;
 	let ws: WebSocket | null = null;
 	let resizeObs: ResizeObserver | null = null;
+	let pingTimer: ReturnType<typeof setInterval> | null = null;
 	let connState = $state<'connecting' | 'connected' | 'error'>('connecting');
 	let errorMsg = $state<string>('');
 
@@ -74,6 +75,18 @@
 			ws.onopen = () => {
 				connState = 'connected';
 				term!.focus();
+				// A shell that's just sitting idle (no typing, no output) produces
+				// zero traffic — long enough with none and the reverse proxy in
+				// front of this connection (or any idle-timeout layer between here
+				// and the container) closes it, even though the session is still
+				// alive. A tiny ping every 30s keeps the connection looking active;
+				// the backend recognizes and drops this control message rather than
+				// forwarding it to the shell as input.
+				pingTimer = setInterval(() => {
+					if (ws?.readyState === WebSocket.OPEN) {
+						ws.send(JSON.stringify({ type: 'ping' }));
+					}
+				}, 30_000);
 			};
 			ws.onmessage = (evt) => {
 				if (evt.data instanceof ArrayBuffer) {
@@ -113,9 +126,11 @@
 	}
 
 	function cleanup() {
+		if (pingTimer) clearInterval(pingTimer);
 		resizeObs?.disconnect();
 		ws?.close();
 		term?.dispose();
+		pingTimer = null;
 		ws = null;
 		term = null;
 		fitAddon = null;
