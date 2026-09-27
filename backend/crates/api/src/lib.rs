@@ -38,6 +38,7 @@ pub mod shorthand;
 pub mod dbclient;
 pub mod static_site;
 pub mod git_providers;
+pub mod cloudflare_connections;
 pub mod billing;
 pub mod nodes;
 pub mod plans;

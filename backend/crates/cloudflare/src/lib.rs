@@ -3,7 +3,7 @@ use shipyard_common::error::{AppError, AppResult};
 
 const API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Zone {
     pub id: String,
     pub name: String,

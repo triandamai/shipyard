@@ -18,6 +18,7 @@ shipyard-mqtt = { path = "../mqtt_broker" }
 shipyard-openapi = { path = "../openapi" }
 shipyard-traefik = { path = "../traefik" }
 shipyard-git = { path = "../git" }
+shipyard-cloudflare = { path = "../cloudflare" }
 shipyard-registry = { path = "../registry" }
 axum = { workspace = true }
 tower = { workspace = true }

@@ -25,6 +25,7 @@ use crate::shorthand;
 use crate::dbclient;
 use crate::static_site;
 use crate::git_providers;
+use crate::cloudflare_connections;
 use crate::billing;
 use crate::nodes;
 use crate::plans;
@@ -91,6 +92,7 @@ pub fn api_router() -> Router<AppState> {
         .merge(sandbox_runtime::routes::project_routes())
         // Git providers — org-scoped Git integrations
         .merge(git_providers::routes())
+        .merge(cloudflare_connections::routes())
         // Billing webhook — /billing/webhooks
         .merge(billing::routes())
         // Billing org routes — /orgs/:org_id/billing

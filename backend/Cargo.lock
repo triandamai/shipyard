@@ -3808,6 +3808,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "shipyard-cloudflare",
  "shipyard-common",
  "shipyard-db",
  "shipyard-docker",
@@ -3833,6 +3834,17 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "shipyard-cloudflare"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "shipyard-common",
+ "tracing",
 ]
 
 [[package]]
