@@ -5,6 +5,7 @@ pub enum Template {
     Node,
     Python,
     Static,
+    Custom,
 }
 
 #[cfg(test)]
@@ -87,6 +88,30 @@ mod tests {
         assert!(dev.contains("$uri"), "the generated config must reference nginx's $uri variable literally");
         assert!(dev.contains("listen 8080;"), "the generated config must listen on the template's declared port");
     }
+
+    #[test]
+    fn custom_template_seed_script_writes_a_starter_shipyard_json() {
+        let b64 = template_seed_script_b64(Template::Custom);
+        let decoded = BASE64.decode(&b64).expect("must be valid base64");
+        let script = String::from_utf8(decoded).expect("must be valid utf8");
+        assert!(script.contains("shipyard.json"), "custom seed script must write a starter shipyard.json");
+        assert!(script.contains("\"runtime\""), "starter manifest must show the app.runtime field");
+        assert!(script.contains("\"dev\""), "starter manifest must show the app.dev field");
+    }
+
+    #[test]
+    fn custom_template_runtime_is_an_idle_placeholder() {
+        let (runtime, base_image, install, dev, _port) = template_runtime(Template::Custom);
+        assert_eq!(runtime, "custom");
+        assert_eq!(base_image, "node:20-alpine");
+        assert_eq!(install, None, "nothing to install yet — /app starts empty");
+        assert_eq!(dev, "sleep infinity", "must keep the container alive with no real app yet, so the terminal stays usable");
+    }
+
+    #[test]
+    fn custom_template_is_reachable_by_name() {
+        assert_eq!(Template::from_str("custom"), Some(Template::Custom));
+    }
 }
 
 const NODE_SEED_SCRIPT: &str = r#"mkdir -p /app
@@ -166,11 +191,25 @@ cat > /app/index.html <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 
+const CUSTOM_SEED_SCRIPT: &str = r#"mkdir -p /app
+cat > /app/shipyard.json <<'SHIPYARD_EOF'
+{
+  "app": {
+    "runtime": "node",
+    "install": "npm install",
+    "dev": "npm run dev",
+    "port": 3000
+  }
+}
+SHIPYARD_EOF
+"#;
+
 pub fn template_seed_script_b64(t: Template) -> String {
     let script = match t {
         Template::Node => NODE_SEED_SCRIPT,
         Template::Python => PYTHON_SEED_SCRIPT,
         Template::Static => STATIC_SEED_SCRIPT,
+        Template::Custom => CUSTOM_SEED_SCRIPT,
     };
     BASE64.encode(script)
 }
@@ -190,6 +229,12 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
             shipyard_engine::sandbox_probe::STATIC_DEV_CMD,
             8080,
         ),
+        // No real app yet — /app starts empty except for the starter
+        // shipyard.json the seed script writes. `sleep infinity` keeps the
+        // container alive so the terminal stays usable; sandbox_runtime::manager's
+        // provision_sandbox re-detects the real stack on every restart while
+        // this sandbox's manifest_source stays 'pending'.
+        Template::Custom => ("custom", "node:20-alpine", None, "sleep infinity", 3000),
     }
 }
 
@@ -199,6 +244,7 @@ impl Template {
             "node" => Some(Template::Node),
             "python" => Some(Template::Python),
             "static" => Some(Template::Static),
+            "custom" => Some(Template::Custom),
             _ => None,
         }
     }
