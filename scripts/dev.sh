@@ -20,6 +20,11 @@ if [ -f .env ]; then
     set -a
     source .env
     set +a
+elif [ "${1:-start}" = "start" ]; then
+    echo "⚠️  No .env found at $PROJECT_ROOT/.env"
+    echo "   Copy the example and fill in real secrets first:"
+    echo "     cp .env.example .env"
+    exit 1
 fi
 
 case "${1:-start}" in
@@ -55,8 +60,27 @@ case "${1:-start}" in
         export SHIPYARD__REDIS__URL="redis://localhost:6379"
         export SHIPYARD__DATA_DIR="$HOME/.shipyard/data"
         export SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR="$PROJECT_ROOT/infra/traefik/dynamic"
+
+        # Sandbox apps (in-browser code editor + live preview). Defaults here
+        # are for local dev only — override any of these in .env if needed:
+        #   - runtime_class defaults to runc since gVisor is almost never
+        #     installed on a dev machine (the "runsc" default would fail every
+        #     sandbox start with "unknown or invalid runtime name: runsc").
+        #   - preview_base_domain defaults to a nip.io host so preview URLs
+        #     (preview-<id>.apps-127.0.0.1.nip.io) resolve to localhost with
+        #     zero DNS/Cloudflare setup — nip.io resolves any subdomain of an
+        #     IP-embedded suffix to that IP, and resources/mod.rs already
+        #     treats *.nip.io as a "convenience domain" (self-signed TLS
+        #     instead of attempting real Let's Encrypt issuance, which can't
+        #     succeed against localhost anyway).
+        export SHIPYARD__SANDBOX__ENABLED="${SHIPYARD__SANDBOX__ENABLED:-true}"
+        export SHIPYARD__SANDBOX__RUNTIME_CLASS="${SHIPYARD__SANDBOX__RUNTIME_CLASS:-runc}"
+        export SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN="${SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN:-apps-127.0.0.1.nip.io}"
+
         mkdir -p "$SHIPYARD__DATA_DIR"
         mkdir -p "$PROJECT_ROOT/infra/traefik/dynamic"
+        echo "  Sandbox apps: enabled=${SHIPYARD__SANDBOX__ENABLED} runtime=${SHIPYARD__SANDBOX__RUNTIME_CLASS} preview_domain=${SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN}"
+        echo ""
         cd backend && cargo run --bin shipyard
         ;;
     stop)
