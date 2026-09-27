@@ -90,7 +90,8 @@ class ApiClient {
 		path: string,
 		body?: unknown,
 		options?: RequestInit,
-		_retry = false
+		_retry = false,
+		silent403 = false
 	): Promise<ApiResponse<T>> {
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json',
@@ -134,14 +135,14 @@ class ApiClient {
 				if (!_retry) {
 					const refreshed = await this._tryRefresh();
 					if (refreshed) {
-						return this.request<T>(method, path, body, options, true);
+						return this.request<T>(method, path, body, options, true, silent403);
 					}
 				}
 				// Refresh failed or already retried — session is dead.
 				authStore.markSessionExpired();
 			}
 
-			if (response.status === 403) {
+			if (response.status === 403 && !silent403) {
 				authStore.markForbidden();
 			}
 
@@ -759,7 +760,11 @@ class ApiClient {
 	}
 
 	async getSandboxPreviewDns(): Promise<ApiResponse<import('./types').SandboxPreviewDnsStatus>> {
-		return this.get(`/admin/sandbox/preview-dns`);
+		// This endpoint is owner/superadmin-only; a 403 here is expected for most
+		// viewers of the org-scoped Cloudflare settings page and must be handled
+		// as an ordinary ApiResponse error, not the global "Access Restricted"
+		// dialog — hence silent403 (see request()).
+		return this.request('GET', `/admin/sandbox/preview-dns`, undefined, undefined, false, true);
 	}
 
 	async setSandboxPreviewDnsOwner(orgId: string): Promise<ApiResponse<null>> {

@@ -85,11 +85,11 @@
 	}
 
 	onMount(async () => {
-		await loadStatus();
-		// Best-effort: only owners/superadmins can actually read this; a
-		// Forbidden response here is expected and silently ignored for
-		// everyone else, matching how this page's per-org section already
-		// only shows write controls to those with write permission.
+		// Only owners/superadmins can actually read this; the API client marks
+		// this call `silent403`, so a Forbidden response here is treated as an
+		// ordinary ApiResponse error (previewDns stays null and the section
+		// simply doesn't render) instead of triggering the app-wide "Access
+		// Restricted" dialog for every other viewer of this page.
 		await loadPreviewDns();
 		loading = false;
 	});
