@@ -33,6 +33,9 @@ pub enum AppError {
     #[error("Git error: {0}")]
     Git(String),
 
+    #[error("Cloudflare error: {0}")]
+    Cloudflare(String),
+
     #[error("Configuration error: {0}")]
     Config(String),
 
@@ -84,6 +87,7 @@ impl AppError {
             AppError::Docker(_) => "DOCKER_ERROR",
             AppError::Mqtt(_) => "MQTT_ERROR",
             AppError::Git(_) => "GIT_ERROR",
+            AppError::Cloudflare(_) => "CLOUDFLARE_ERROR",
             AppError::Config(_) => "CONFIG_ERROR",
             AppError::Validation(_) => "VALIDATION_ERROR",
             AppError::NotInitialized => "NOT_INITIALIZED",

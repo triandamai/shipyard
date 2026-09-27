@@ -1,0 +1,11 @@
+[package]
+name = "shipyard-cloudflare"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shipyard-common = { path = "../common" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }

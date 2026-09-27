@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/api",
+    "crates/cloudflare",
     "crates/common",
     "crates/db",
     "crates/docker",
