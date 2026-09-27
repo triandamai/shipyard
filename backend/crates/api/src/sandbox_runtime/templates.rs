@@ -116,7 +116,7 @@ mod tests {
     fn custom_template_runtime_is_an_idle_placeholder() {
         let (runtime, base_image, install, dev, _port) = template_runtime(Template::Custom);
         assert_eq!(runtime, "custom");
-        assert_eq!(base_image, "node:20-alpine");
+        assert_eq!(base_image, "node:22-alpine");
         assert_eq!(install, None, "nothing to install yet — /app starts empty");
         assert_eq!(dev, "sleep infinity", "must keep the container alive with no real app yet, so the terminal stays usable");
     }
@@ -148,7 +148,7 @@ mod tests {
         for t in [Template::React, Template::ReactTs, Template::Vue, Template::VueTs] {
             let (runtime, base_image, install, dev, port) = template_runtime(t);
             assert_eq!(runtime, "node");
-            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(base_image, "node:22-alpine");
             assert_eq!(install, Some("npm install"));
             assert!(dev.contains("--host 0.0.0.0"), "{t:?} dev_cmd must bind all interfaces: {dev}");
             assert!(dev.contains("--port $PORT"), "{t:?} dev_cmd must read the PORT env var: {dev}");
@@ -204,7 +204,7 @@ mod tests {
         for t in [Template::SvelteKit, Template::SvelteKitTs] {
             let (runtime, base_image, install, dev, port) = template_runtime(t);
             assert_eq!(runtime, "node");
-            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(base_image, "node:22-alpine");
             assert_eq!(install, Some("npm install"));
             assert!(dev.contains("--host 0.0.0.0"));
             assert!(dev.contains("--port $PORT"));
@@ -235,7 +235,7 @@ mod tests {
         for t in [Template::Next, Template::NextTs] {
             let (runtime, base_image, install, dev, port) = template_runtime(t);
             assert_eq!(runtime, "node");
-            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(base_image, "node:22-alpine");
             assert_eq!(install, Some("npm install"));
             // Next's CLI uses -H/-p, not Vite's --host/--port convention.
             assert!(dev.contains("-H 0.0.0.0"), "{t:?} dev_cmd must bind all interfaces: {dev}");
@@ -277,14 +277,15 @@ mod tests {
     fn nuxt_and_astro_templates_bind_dev_server_and_use_correct_default_ports() {
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Nuxt);
         assert_eq!(runtime, "node");
-        assert_eq!(base_image, "node:20-alpine");
+        assert_eq!(base_image, "node:22-alpine");
         assert_eq!(install, Some("npm install"));
         assert!(dev.contains("--host 0.0.0.0"));
         assert!(dev.contains("--port $PORT"));
         assert_eq!(port, 3000, "Nuxt's own default dev port");
 
         for t in [Template::Astro, Template::AstroTs] {
-            let (_, _, _, dev, port) = template_runtime(t);
+            let (_, base_image, _, dev, port) = template_runtime(t);
+            assert_eq!(base_image, "node:22-alpine");
             assert!(dev.contains("--host 0.0.0.0"));
             assert!(dev.contains("--port $PORT"));
             assert_eq!(port, 4321, "Astro's own default dev port");
@@ -501,18 +502,18 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
         // container alive so the terminal stays usable; sandbox_runtime::manager's
         // provision_sandbox re-detects the real stack on every restart while
         // this sandbox's manifest_source stays 'pending'.
-        Template::Custom => ("custom", "node:20-alpine", None, "sleep infinity", 3000),
-        Template::React => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::ReactTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::Vue => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::VueTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::SvelteKit => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::SvelteKitTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
-        Template::Next => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
-        Template::NextTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
-        Template::Nuxt => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 3000),
-        Template::Astro => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
-        Template::AstroTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
+        Template::Custom => ("custom", "node:22-alpine", None, "sleep infinity", 3000),
+        Template::React => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::ReactTs => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::Vue => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::VueTs => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::SvelteKit => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::SvelteKitTs => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::Next => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
+        Template::NextTs => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
+        Template::Nuxt => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 3000),
+        Template::Astro => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
+        Template::AstroTs => ("node", "node:22-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
     }
 }
 
