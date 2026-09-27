@@ -185,7 +185,13 @@
 			uiStore.pushPanel({
 				key: `sandbox_app:${serviceId}`,
 				component: SandboxAppDetailPanel,
-				props: { serviceId, orgSlug, projectSlug },
+				props: {
+					serviceId,
+					projectId,
+					orgSlug,
+					projectSlug,
+					onDeleted: () => syncTopology(orgId, projectId)
+				},
 				title: (node.data?.name as string) || 'App'
 			});
 		} else if (node.type === 'portal') {
