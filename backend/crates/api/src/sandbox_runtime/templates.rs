@@ -97,6 +97,8 @@ mod tests {
         assert!(script.contains("shipyard.json"), "custom seed script must write a starter shipyard.json");
         assert!(script.contains("\"runtime\""), "starter manifest must show the app.runtime field");
         assert!(script.contains("\"dev\""), "starter manifest must show the app.dev field");
+        assert!(script.contains("cat > /app/shipyard.json.example"), "must write the starter as .example, not a live shipyard.json");
+        assert!(!script.contains("cat > /app/shipyard.json <<"), "must not write a live shipyard.json — sandbox_probe.rs would self-detect it prematurely, permanently exiting 'pending' before the user scaffolds anything real");
     }
 
     #[test]
@@ -191,8 +193,26 @@ cat > /app/index.html <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 
+/// Writes the starter manifest as `shipyard.json.example`, NOT the live
+/// `shipyard.json` filename. `shipyard_engine::sandbox_probe`'s stack
+/// detector looks for a file literally named `shipyard.json` and, if found,
+/// treats it as an authoritative, already-resolved manifest — checked before
+/// any framework-specific heuristic like `package.json`/`requirements.txt`.
+/// Combined with `provision_sandbox`'s redetect-on-restart logic (which
+/// re-probes a `'pending'` Custom sandbox on every start until detection
+/// succeeds once, then locks in permanently), a *live* `shipyard.json` here
+/// would get self-detected as a real app on the sandbox's very first
+/// Stop+Start — before the user has scaffolded anything — permanently
+/// flipping `manifest_source` out of `'pending'` with a `dev_cmd` that
+/// immediately fails (no real `package.json` exists yet) and, since it can
+/// never be `'pending'` again, no path back to ever detecting the real
+/// project the user eventually adds. Keeping this as `.example` means the
+/// probe's exact-filename check never matches it until the user deliberately
+/// renames it (`mv shipyard.json.example shipyard.json`) once they've
+/// customized it for their real project — preserving the "starter template
+/// to copy from" intent without the premature self-detection.
 const CUSTOM_SEED_SCRIPT: &str = r#"mkdir -p /app
-cat > /app/shipyard.json <<'SHIPYARD_EOF'
+cat > /app/shipyard.json.example <<'SHIPYARD_EOF'
 {
   "app": {
     "runtime": "node",

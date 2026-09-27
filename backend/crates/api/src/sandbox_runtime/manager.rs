@@ -302,6 +302,7 @@ async fn provision_sandbox(
                 // /app is still empty (or not yet a recognized stack) — fall
                 // through and keep serving the idle placeholder config below,
                 // so the terminal stays usable instead of erroring the start.
+                tracing::debug!(%service_id, error = %e, "sandbox stack still undetected; keeping pending placeholder config");
             }
         }
     }
