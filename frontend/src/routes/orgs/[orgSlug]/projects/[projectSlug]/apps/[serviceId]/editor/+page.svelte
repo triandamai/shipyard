@@ -300,7 +300,7 @@
 		<div class="editor-view-wrap" class:hidden={activeTab !== 'editor'}>
 			{#if instance?.pending}
 				<div class="pending-banner">
-					No project detected yet — scaffold one in the Terminal below, then Stop and Start to apply it.
+					No project detected yet — scaffold one in the Terminal below, then stop and start this sandbox from its app panel on the project canvas to apply it.
 				</div>
 			{/if}
 			<div class="editor-view">

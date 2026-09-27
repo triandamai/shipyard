@@ -101,7 +101,7 @@
 			</button>
 		</div>
 		{#if template === 'custom'}
-			<p class="template-hint">Starts blank with a starter <code>shipyard.json</code>. Scaffold your own project via the Terminal tab, then Stop and Start to apply it.</p>
+			<p class="template-hint">Starts blank with a starter <code>shipyard.json.example</code>. Scaffold your own project via the Terminal tab, then Stop and Start it from the app's canvas panel to apply it.</p>
 		{/if}
 
 		<div class="template-group-label">Frameworks</div>

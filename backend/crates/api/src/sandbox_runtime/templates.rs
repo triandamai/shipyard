@@ -256,6 +256,8 @@ mod tests {
         let decoded = BASE64.decode(&b64).expect("must be valid base64");
         let script = String::from_utf8(decoded).expect("must be valid utf8");
         assert!(script.contains("nuxi"), "Nuxt seed script must invoke nuxi");
+        assert!(script.contains("--template minimal"), "nuxi now requires --template in non-interactive mode");
+        assert!(script.contains("--force"), "nuxi refuses to scaffold into an existing (even empty) directory without --force");
         // Nuxt 3's own scaffolder defaults to TypeScript with no meaningful
         // plain-JS mode in its current tooling, so there is deliberately no
         // separate NuxtTs variant — this is the one and only Nuxt template.
@@ -263,13 +265,17 @@ mod tests {
 
     #[test]
     fn astro_templates_scaffold_via_the_official_create_astro_cli() {
-        let cases = [(Template::Astro, "--typescript relaxed"), (Template::AstroTs, "--typescript strict")];
-        for (t, expected_flag) in cases {
+        let cases = [
+            (Template::Astro, "--typescript relaxed", "astro/tsconfigs/base"),
+            (Template::AstroTs, "--typescript strict", "astro/tsconfigs/strict"),
+        ];
+        for (t, expected_flag, expected_extends) in cases {
             let b64 = template_seed_script_b64(t);
             let decoded = BASE64.decode(&b64).expect("must be valid base64");
             let script = String::from_utf8(decoded).expect("must be valid utf8");
             assert!(script.contains("create astro"), "{t:?} seed script must invoke create-astro");
             assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
+            assert!(script.contains(expected_extends), "{t:?} seed script must overwrite tsconfig.json to extend '{expected_extends}'");
         }
     }
 
@@ -412,10 +418,10 @@ const REACT_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react\n"
 const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react-ts\n";
 const VUE_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue\n";
 const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue-ts\n";
-const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --install npm\n";
-const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --install npm\n";
-const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
-const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
+const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --no-install\n";
+const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --no-install\n";
+const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm --skip-install\n";
+const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm --skip-install\n";
 // Verified live against nuxi@latest (v3.37.0, 2026-09-27): `--template` is
 // now a REQUIRED argument in non-interactive mode (confirmed by running the
 // command without it: nuxi prints "Missing required argument: --template"
