@@ -247,29 +247,63 @@ async fn provision_sandbox(
     .map_err(|e| AppError::Database(e.to_string()))?;
 
     let mut config = fetch_config(&state.db, service_id).await?;
-    if config.is_none() {
-        let stack = probe_and_detect(state, volume_name).await.map_err(|e| {
-            AppError::BadRequest(format!("Could not start sandbox: {e}"))
-        })?;
-        sqlx::query(
-            "INSERT INTO sandbox_app_configs (service_id, runtime, base_image, install_cmd, dev_cmd, port, manifest_source, volume_name)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        )
-        .bind(service_id)
-        .bind(&stack.runtime)
-        .bind(&stack.base_image)
-        .bind(&stack.install_cmd)
-        .bind(&stack.dev_cmd)
-        .bind(stack.port as i32)
-        .bind(match stack.source {
-            shipyard_engine::sandbox_probe::DetectionSource::Detected => "detected",
-            shipyard_engine::sandbox_probe::DetectionSource::Manifest => "manifest",
-        })
-        .bind(volume_name)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        config = fetch_config(&state.db, service_id).await?;
+    if needs_redetect(config.as_ref()) {
+        match probe_and_detect(state, volume_name).await {
+            Ok(stack) => {
+                let source = match stack.source {
+                    shipyard_engine::sandbox_probe::DetectionSource::Detected => "detected",
+                    shipyard_engine::sandbox_probe::DetectionSource::Manifest => "manifest",
+                };
+                if config.is_some() {
+                    // Was 'pending' — a real project is now in /app. Update in
+                    // place and let manifest_source's new value permanently
+                    // exit 'pending' (needs_redetect returns false from here on).
+                    sqlx::query(
+                        "UPDATE sandbox_app_configs
+                         SET runtime = $2, base_image = $3, install_cmd = $4, dev_cmd = $5, port = $6, manifest_source = $7, updated_at = NOW()
+                         WHERE service_id = $1",
+                    )
+                    .bind(service_id)
+                    .bind(&stack.runtime)
+                    .bind(&stack.base_image)
+                    .bind(&stack.install_cmd)
+                    .bind(&stack.dev_cmd)
+                    .bind(stack.port as i32)
+                    .bind(source)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                } else {
+                    sqlx::query(
+                        "INSERT INTO sandbox_app_configs (service_id, runtime, base_image, install_cmd, dev_cmd, port, manifest_source, volume_name)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    )
+                    .bind(service_id)
+                    .bind(&stack.runtime)
+                    .bind(&stack.base_image)
+                    .bind(&stack.install_cmd)
+                    .bind(&stack.dev_cmd)
+                    .bind(stack.port as i32)
+                    .bind(source)
+                    .bind(volume_name)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                }
+                config = fetch_config(&state.db, service_id).await?;
+            }
+            Err(e) => {
+                if config.is_none() {
+                    // From-scratch sandbox with an undetectable /app — this is
+                    // a genuine, user-facing error exactly as it is today.
+                    return Err(AppError::BadRequest(format!("Could not start sandbox: {e}")));
+                }
+                // Already-existing 'pending' row: detection failing just means
+                // /app is still empty (or not yet a recognized stack) — fall
+                // through and keep serving the idle placeholder config below,
+                // so the terminal stays usable instead of erroring the start.
+            }
+        }
     }
     let config = config.ok_or_else(|| AppError::Internal("sandbox config missing after insert".to_string()))?;
 
@@ -573,6 +607,20 @@ async fn ensure_preview_domain(db: &PgPool, service_id: Uuid, hostname: &str, po
     Ok(())
 }
 
+/// A sandbox needs its stack (re-)detected when it has no config row yet
+/// (the existing from-scratch path), or when its config is still 'pending'
+/// (a Custom-created sandbox whose real project hasn't been scaffolded, or
+/// hasn't been restarted since it was). Every other manifest_source value
+/// ('detected', 'manifest', 'undetected') is a permanently-resolved sandbox —
+/// this must return false for those, or a resolved sandbox would be
+/// re-probed forever instead of just once.
+fn needs_redetect(config: Option<&SandboxAppConfigRow>) -> bool {
+    match config {
+        None => true,
+        Some(c) => c.manifest_source == "pending",
+    }
+}
+
 async fn fetch_config(db: &PgPool, service_id: Uuid) -> AppResult<Option<SandboxAppConfigRow>> {
     sqlx::query_as("SELECT * FROM sandbox_app_configs WHERE service_id = $1")
         .bind(service_id)
@@ -717,6 +765,49 @@ mod tests {
         let install_and_dev = "npm install && npm run dev";
         let full_cmd = build_startup_command(None, install_and_dev);
         assert_eq!(full_cmd, install_and_dev);
+    }
+
+    #[test]
+    fn needs_redetect_is_true_when_there_is_no_config_yet() {
+        assert!(needs_redetect(None));
+    }
+
+    #[test]
+    fn needs_redetect_is_true_only_while_pending() {
+        let pending = SandboxAppConfigRow {
+            service_id: Uuid::new_v4(),
+            runtime: Some("custom".to_string()),
+            base_image: Some("node:20-alpine".to_string()),
+            install_cmd: None,
+            dev_cmd: Some("sleep infinity".to_string()),
+            port: Some(3000),
+            manifest_source: "pending".to_string(),
+            volume_name: "sandbox-vol-abcd1234".to_string(),
+            seed_script_b64: None,
+        };
+        assert!(needs_redetect(Some(&pending)));
+
+        for resolved_source in ["detected", "manifest", "undetected"] {
+            let resolved = SandboxAppConfigRow {
+                manifest_source: resolved_source.to_string(),
+                ..pending_clone_with_source(resolved_source)
+            };
+            assert!(!needs_redetect(Some(&resolved)), "manifest_source '{resolved_source}' must not trigger redetect");
+        }
+    }
+
+    fn pending_clone_with_source(source: &str) -> SandboxAppConfigRow {
+        SandboxAppConfigRow {
+            service_id: Uuid::new_v4(),
+            runtime: Some("node".to_string()),
+            base_image: Some("node:20-alpine".to_string()),
+            install_cmd: Some("npm install".to_string()),
+            dev_cmd: Some("npm run dev".to_string()),
+            port: Some(3000),
+            manifest_source: source.to_string(),
+            volume_name: "sandbox-vol-abcd1234".to_string(),
+            seed_script_b64: None,
+        }
     }
 
     #[test]
