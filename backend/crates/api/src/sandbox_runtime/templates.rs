@@ -14,6 +14,9 @@ pub enum Template {
     SvelteKitTs,
     Next,
     NextTs,
+    Nuxt,
+    Astro,
+    AstroTs,
 }
 
 #[cfg(test)]
@@ -226,6 +229,54 @@ mod tests {
         assert_eq!(Template::from_str("next"), Some(Template::Next));
         assert_eq!(Template::from_str("next-ts"), Some(Template::NextTs));
     }
+
+    #[test]
+    fn nuxt_template_scaffolds_via_the_official_nuxi_cli() {
+        let b64 = template_seed_script_b64(Template::Nuxt);
+        let decoded = BASE64.decode(&b64).expect("must be valid base64");
+        let script = String::from_utf8(decoded).expect("must be valid utf8");
+        assert!(script.contains("nuxi"), "Nuxt seed script must invoke nuxi");
+        // Nuxt 3's own scaffolder defaults to TypeScript with no meaningful
+        // plain-JS mode in its current tooling, so there is deliberately no
+        // separate NuxtTs variant — this is the one and only Nuxt template.
+    }
+
+    #[test]
+    fn astro_templates_scaffold_via_the_official_create_astro_cli() {
+        let cases = [(Template::Astro, "--typescript relaxed"), (Template::AstroTs, "--typescript strict")];
+        for (t, expected_flag) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("create astro"), "{t:?} seed script must invoke create-astro");
+            assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
+        }
+    }
+
+    #[test]
+    fn nuxt_and_astro_templates_bind_dev_server_and_use_correct_default_ports() {
+        let (runtime, base_image, install, dev, port) = template_runtime(Template::Nuxt);
+        assert_eq!(runtime, "node");
+        assert_eq!(base_image, "node:20-alpine");
+        assert_eq!(install, Some("npm install"));
+        assert!(dev.contains("--host 0.0.0.0"));
+        assert!(dev.contains("--port $PORT"));
+        assert_eq!(port, 3000, "Nuxt's own default dev port");
+
+        for t in [Template::Astro, Template::AstroTs] {
+            let (_, _, _, dev, port) = template_runtime(t);
+            assert!(dev.contains("--host 0.0.0.0"));
+            assert!(dev.contains("--port $PORT"));
+            assert_eq!(port, 4321, "Astro's own default dev port");
+        }
+    }
+
+    #[test]
+    fn nuxt_and_astro_templates_are_reachable_by_name() {
+        assert_eq!(Template::from_str("nuxt"), Some(Template::Nuxt));
+        assert_eq!(Template::from_str("astro"), Some(Template::Astro));
+        assert_eq!(Template::from_str("astro-ts"), Some(Template::AstroTs));
+    }
 }
 
 const NODE_SEED_SCRIPT: &str = r#"mkdir -p /app
@@ -344,6 +395,50 @@ const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal
 const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --install npm\n";
 const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
 const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
+// Verified live against nuxi@latest (v3.37.0, 2026-09-27): `--template` is
+// now a REQUIRED argument in non-interactive mode (confirmed by running the
+// command without it: nuxi prints "Missing required argument: --template"
+// and exits nonzero instead of scaffolding). The brief's original command
+// omitted it, which would have failed every Nuxt sandbox provision. Added
+// `--template minimal` here. `--packageManager`, `--gitInit false`, and
+// `--force` (needed since /app already exists as a mounted volume, even
+// empty — confirmed nuxi refuses to proceed on an existing directory without
+// it) were all verified unchanged.
+const NUXT_SEED_SCRIPT: &str = "npx --yes nuxi@latest init /app --template minimal --packageManager npm --gitInit false --force\n";
+// Verified live against create-astro v5.2.4 (2026-09-27): the `--typescript`
+// flag no longer appears in `--help` at all, and empirically it is now a
+// complete no-op — `--typescript relaxed`, `--typescript strict`, and even a
+// totally made-up flag all produced byte-identical output (create-astro
+// silently ignores unrecognized/defunct flags rather than erroring). Every
+// scaffolded project's tsconfig.json unconditionally extends
+// "astro/tsconfigs/strict" now, regardless of what (if anything) is passed.
+// The relaxed/strict distinction this template pair is built around no
+// longer exists in the CLI itself, so it's restored here by overwriting
+// tsconfig.json after scaffolding: Astro pins astro/tsconfigs/base (Astro's
+// own loosest bundled preset — no `strict: true` — the closest equivalent to
+// a plain-JS experience), while AstroTs pins astro/tsconfigs/strict
+// explicitly (matching the CLI's current default, restated here so it stays
+// correct even if that default changes again). The `--typescript` flags are
+// kept in the command for forward-compatibility and to document each
+// variant's intent, even though the CLI currently ignores them.
+const ASTRO_SEED_SCRIPT: &str = r#"npm create astro@latest /app -- --template minimal --typescript relaxed --no-install --no-git --yes
+cat > /app/tsconfig.json <<'SHIPYARD_EOF'
+{
+  "extends": "astro/tsconfigs/base",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}
+SHIPYARD_EOF
+"#;
+const ASTRO_TS_SEED_SCRIPT: &str = r#"npm create astro@latest /app -- --template minimal --typescript strict --no-install --no-git --yes
+cat > /app/tsconfig.json <<'SHIPYARD_EOF'
+{
+  "extends": "astro/tsconfigs/strict",
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}
+SHIPYARD_EOF
+"#;
 
 pub fn template_seed_script_b64(t: Template) -> String {
     let script = match t {
@@ -359,6 +454,9 @@ pub fn template_seed_script_b64(t: Template) -> String {
         Template::SvelteKitTs => SVELTEKIT_TS_SEED_SCRIPT,
         Template::Next => NEXT_SEED_SCRIPT,
         Template::NextTs => NEXT_TS_SEED_SCRIPT,
+        Template::Nuxt => NUXT_SEED_SCRIPT,
+        Template::Astro => ASTRO_SEED_SCRIPT,
+        Template::AstroTs => ASTRO_TS_SEED_SCRIPT,
     };
     BASE64.encode(script)
 }
@@ -392,6 +490,9 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
         Template::SvelteKitTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
         Template::Next => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
         Template::NextTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
+        Template::Nuxt => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 3000),
+        Template::Astro => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
+        Template::AstroTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 4321),
     }
 }
 
@@ -410,6 +511,9 @@ impl Template {
             "sveltekit-ts" => Some(Template::SvelteKitTs),
             "next" => Some(Template::Next),
             "next-ts" => Some(Template::NextTs),
+            "nuxt" => Some(Template::Nuxt),
+            "astro" => Some(Template::Astro),
+            "astro-ts" => Some(Template::AstroTs),
             _ => None,
         }
     }
