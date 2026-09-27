@@ -5,7 +5,7 @@
 	import { can, perm, isAdminRole } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { Cloud, Loader2, AlertCircle, Trash2, RefreshCw, Check } from '@lucide/svelte';
-	import type { CloudflareConnectionStatus, SandboxPreviewDnsStatus } from '$lib/api/types';
+	import type { CloudflareConnectionStatus, SandboxPreviewDnsStatus, Organization } from '$lib/api/types';
 
 	let orgId   = $derived($orgStore.activeOrg?.id ?? '');
 	let myRole  = $derived($orgStore.myMembership?.role ?? null);
@@ -53,8 +53,10 @@
 	let previewDns   = $state<SandboxPreviewDnsStatus | null>(null);
 	let selectedOwnerOrgId = $state('');
 	let savingOwner  = $state(false);
+	let ownerError   = $state('');
 	let syncing      = $state(false);
 	let syncMsg      = $state('');
+	let myOrgs       = $state<Organization[]>([]);
 
 	async function loadPreviewDns() {
 		const res = await api.getSandboxPreviewDns();
@@ -67,8 +69,13 @@
 	async function saveOwner() {
 		if (!selectedOwnerOrgId) return;
 		savingOwner = true;
-		await api.setSandboxPreviewDnsOwner(selectedOwnerOrgId);
+		ownerError = '';
+		const res = await api.setSandboxPreviewDnsOwner(selectedOwnerOrgId);
 		savingOwner = false;
+		if (res.error) {
+			ownerError = res.error.message;
+			return;
+		}
 		await loadPreviewDns();
 	}
 
@@ -91,6 +98,8 @@
 		// simply doesn't render) instead of triggering the app-wide "Access
 		// Restricted" dialog for every other viewer of this page.
 		await loadPreviewDns();
+		const orgsRes = await api.getOrgs();
+		if (orgsRes.data) myOrgs = orgsRes.data;
 		loading = false;
 	});
 
@@ -173,9 +182,21 @@
 			<div class="fields">
 				<div class="field">
 					<span class="field-label">DNS-owner organization</span>
-					<input class="field-input font-mono" placeholder="org id" bind:value={selectedOwnerOrgId} />
-					<p class="field-hint">Paste the id of the org whose Cloudflare connection covers <code>{previewDns.preview_base_domain}</code>'s zone, then Save.</p>
+					{#if myOrgs.length > 0}
+						<select class="field-input" bind:value={selectedOwnerOrgId}>
+							<option value="" disabled>Select an organization…</option>
+							{#each myOrgs as org (org.id)}
+								<option value={org.id}>{org.name}</option>
+							{/each}
+						</select>
+					{:else}
+						<input class="field-input font-mono" placeholder="org id (UUID)" bind:value={selectedOwnerOrgId} />
+					{/if}
+					<p class="field-hint">The org whose Cloudflare connection covers <code>{previewDns.preview_base_domain}</code>'s zone — almost always your own platform-operator org, not a customer org.</p>
 				</div>
+				{#if ownerError}
+					<div class="error-banner"><AlertCircle size={14} /><span>{ownerError}</span></div>
+				{/if}
 				<div class="save-bar" style="justify-content: flex-start; gap: 8px;">
 					<button class="cf-btn connect" onclick={saveOwner} disabled={savingOwner || !selectedOwnerOrgId}>
 						{#if savingOwner}<Loader2 size={12} class="spin" /> Saving…{:else}Save Owner{/if}
