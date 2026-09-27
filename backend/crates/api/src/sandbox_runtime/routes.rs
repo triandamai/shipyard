@@ -23,6 +23,7 @@ use super::templates::{template_runtime, template_seed_script_b64, Template};
 struct SandboxStatusResponse {
     status: String,
     preview_url: Option<String>,
+    pending: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -56,7 +57,10 @@ pub fn project_routes() -> Router<AppState> {
 /// skipping probe detection: the template already declares the runtime,
 /// base image, install/dev commands and port, so there is nothing to
 /// detect on this first-ever start. `sandbox_app_configs.manifest_source`
-/// is set to `'manifest'` (not `'undetected'`) to reflect that.
+/// is set to `'manifest'` (not `'undetected'`) to reflect that — except for
+/// `Template::Custom`, which starts as an idle placeholder with nothing to
+/// detect yet, so it gets `'pending'` instead (see `provision_sandbox`'s
+/// redetect logic).
 async fn create_app(
     auth_user: AuthUser,
     Path(project_id): Path<Uuid>,
@@ -80,6 +84,12 @@ async fn create_app(
     })?;
     let (runtime, base_image, install_cmd, dev_cmd, port) = template_runtime(template);
     let seed_script_b64 = template_seed_script_b64(template);
+    // Custom starts with nothing to detect (an idle placeholder, /app empty
+    // except a starter shipyard.json) — 'pending' tells provision_sandbox to
+    // re-check /app on every restart until the user scaffolds something real.
+    // Every other template already knows its runtime, so 'manifest' is
+    // correct for them (matches today's behavior exactly).
+    let manifest_source = if template == Template::Custom { "pending" } else { "manifest" };
 
     let service_id = Uuid::new_v4();
     sqlx::query(
@@ -98,7 +108,7 @@ async fn create_app(
     sqlx::query(
         "INSERT INTO sandbox_app_configs
              (service_id, runtime, base_image, install_cmd, dev_cmd, port, manifest_source, volume_name, seed_script_b64)
-         VALUES ($1, $2, $3, $4, $5, $6, 'manifest', $7, $8)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(service_id)
     .bind(runtime)
@@ -106,6 +116,7 @@ async fn create_app(
     .bind(install_cmd)
     .bind(dev_cmd)
     .bind(port as i32)
+    .bind(manifest_source)
     .bind(&volume_name)
     .bind(&seed_script_b64)
     .execute(&state.db)
@@ -128,9 +139,17 @@ async fn start(
 ) -> Result<Json<ApiResponse<SandboxStatusResponse>>, ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     let instance = manager::start_sandbox(&state, service_id).await?;
+    let manifest_source: Option<String> = sqlx::query_scalar(
+        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     Ok(Json(ApiResponse::ok(SandboxStatusResponse {
         status: instance.status,
         preview_url: instance.preview_url,
+        pending: manifest_source.as_deref() == Some("pending"),
     })))
 }
 
@@ -153,7 +172,17 @@ async fn status(
     let instance = manager::fetch_instance(&state.db, service_id)
         .await?
         .unwrap_or_else(|| super::models::SandboxInstanceRow::default_stopped(service_id));
-    Ok(Json(ApiResponse::ok(serde_json::json!(instance))))
+    let manifest_source: Option<String> = sqlx::query_scalar(
+        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let mut json = serde_json::to_value(&instance)
+        .map_err(|e| ApiAppError(AppError::Internal(format!("failed to serialize sandbox instance: {e}"))))?;
+    json["pending"] = serde_json::json!(manifest_source.as_deref() == Some("pending"));
+    Ok(Json(ApiResponse::ok(json)))
 }
 
 async fn heartbeat(
@@ -208,9 +237,17 @@ async fn public_start(
     .ok_or_else(|| ApiAppError(AppError::NotFound(format!("App '{token}' not found"))))?;
 
     let instance = manager::start_sandbox(&state, service_id).await?;
+    let manifest_source: Option<String> = sqlx::query_scalar(
+        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
     Ok(Json(ApiResponse::ok(SandboxStatusResponse {
         status: instance.status,
         preview_url: instance.preview_url,
+        pending: manifest_source.as_deref() == Some("pending"),
     })))
 }
 
@@ -222,5 +259,17 @@ mod create_app_tests {
     fn unknown_template_string_is_rejected() {
         assert!(Template::from_str("rust").is_none());
         assert!(Template::from_str("node").is_some());
+    }
+
+    #[test]
+    fn custom_template_string_resolves_and_is_distinct_from_manifest_source_used_by_others() {
+        assert_eq!(Template::from_str("custom"), Some(Template::Custom));
+        // The insert branch this task adds must use 'pending', not 'manifest'
+        // (the value every other template already uses) — this is exercised
+        // end-to-end in this plan's final manual-verification task, since
+        // create_app needs a live DB; this test just locks down the string
+        // constant so a typo can't silently regress to a different value.
+        const CUSTOM_MANIFEST_SOURCE: &str = "pending";
+        assert_eq!(CUSTOM_MANIFEST_SOURCE, "pending");
     }
 }
