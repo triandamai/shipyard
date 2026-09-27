@@ -185,7 +185,7 @@
 			bootState = 'error';
 			return;
 		}
-		instance = { ...instance, status: startRes.data.status, preview_url: startRes.data.preview_url } as SandboxInstance;
+		instance = { ...instance, status: startRes.data.status, preview_url: startRes.data.preview_url, pending: startRes.data.pending } as SandboxInstance;
 		urlBarValue = startRes.data.preview_url ?? '';
 		navHistory = startRes.data.preview_url ? [startRes.data.preview_url] : [];
 		navIndex = navHistory.length - 1;
@@ -297,35 +297,42 @@
 			</button>
 		</div>
 
-		<div class="editor-view" class:hidden={activeTab !== 'editor'}>
-			<aside class="sidebar" style="width: {sidebarWidth}px">
-				<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} onCreateFile={createFile} createError={newFileError} />
-			</aside>
-			<div
-				class="sidebar-resize-handle"
-				role="separator"
-				aria-orientation="vertical"
-				aria-label="Resize sidebar"
-				tabindex="-1"
-				onpointerdown={startSidebarResize}
-			></div>
-			<main class="editor-main">
-				{#if openPath}
-					<div class="tab-bar">
-						<span class="tab">{openPath}</span>
-						{#if isSaving}<span class="saving">Saving…</span>{:else if justSaved}<span class="saved">Saved</span>{/if}
-					</div>
-					<CodeEditor
-						bind:this={editorRef}
-						value={fileContent}
-						language={languageForPath(openPath)}
-						onChange={saveFile}
-						height="100%"
-					/>
-				{:else}
-					<div class="empty-state">Select a file to start editing</div>
-				{/if}
-			</main>
+		<div class="editor-view-wrap" class:hidden={activeTab !== 'editor'}>
+			{#if instance?.pending}
+				<div class="pending-banner">
+					No project detected yet — scaffold one in the Terminal below, then Stop and Start to apply it.
+				</div>
+			{/if}
+			<div class="editor-view">
+				<aside class="sidebar" style="width: {sidebarWidth}px">
+					<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} onCreateFile={createFile} createError={newFileError} />
+				</aside>
+				<div
+					class="sidebar-resize-handle"
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize sidebar"
+					tabindex="-1"
+					onpointerdown={startSidebarResize}
+				></div>
+				<main class="editor-main">
+					{#if openPath}
+						<div class="tab-bar">
+							<span class="tab">{openPath}</span>
+							{#if isSaving}<span class="saving">Saving…</span>{:else if justSaved}<span class="saved">Saved</span>{/if}
+						</div>
+						<CodeEditor
+							bind:this={editorRef}
+							value={fileContent}
+							language={languageForPath(openPath)}
+							onChange={saveFile}
+							height="100%"
+						/>
+					{:else}
+						<div class="empty-state">Select a file to start editing</div>
+					{/if}
+				</main>
+			</div>
 		</div>
 
 		<section class="preview-pane" class:hidden={activeTab !== 'preview'}>
@@ -454,10 +461,24 @@
 
 	/* Sidebar + editor travel together, like VS Code — only shown as a pair
 	   on the Editor tab; the Preview tab gets the full width to itself. */
-	.editor-view {
+	.editor-view-wrap {
 		grid-row: 2;
 		display: flex;
+		flex-direction: column;
 		min-height: 0;
+	}
+	.editor-view {
+		display: flex;
+		flex: 1;
+		min-height: 0;
+	}
+	.pending-banner {
+		flex-shrink: 0;
+		padding: 8px 14px;
+		background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+		border-bottom: 1px solid var(--border);
+		color: var(--text-secondary);
+		font-size: 12px;
 	}
 	.sidebar {
 		flex-shrink: 0;
