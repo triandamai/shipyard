@@ -309,6 +309,85 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
     }
 }
 
+/// Best-effort: if the domain's org has a Cloudflare connection whose zones
+/// cover `hostname`, creates a DNS-only A record pointed at this server and
+/// returns its (zone_id, record_id). Returns None for every "nothing to do
+/// or something went wrong" case — no connection, no matching zone, or any
+/// Cloudflare API failure — logging a warning but never returning an `Err`,
+/// since a Cloudflare hiccup must never block domain creation (see the
+/// plan's Global Constraints).
+async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostname: &str) -> Option<(String, String)> {
+    let org_id: Uuid = sqlx::query_scalar(
+        "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+
+    let connection = sqlx::query_as::<_, shipyard_db::models::CloudflareConnection>(
+        "SELECT id, org_id, api_token, account_id, account_name, created_at FROM cloudflare_connections WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+
+    let client = shipyard_cloudflare::CloudflareClient::new(connection.api_token);
+    let zones = match client.list_zones().await {
+        Ok(z) => z,
+        Err(e) => {
+            tracing::warn!(hostname, "Cloudflare list_zones failed while creating domain: {e}");
+            return None;
+        }
+    };
+
+    let zone = longest_matching_zone(hostname, &zones)?;
+    let ip = crate::settings::resolve_host_ip().await;
+
+    match client.create_dns_record(&zone.id, hostname, &ip).await {
+        Ok(record) => Some((zone.id.clone(), record.id)),
+        Err(e) => {
+            tracing::warn!(hostname, zone = %zone.name, "Cloudflare create_dns_record failed: {e}");
+            None
+        }
+    }
+}
+
+/// Best-effort: deletes the given Cloudflare DNS record if the domain's org
+/// still has a connection (an org that disconnected simply has none to
+/// authenticate the delete with — same code path as never having connected
+/// at all, per the spec). Never returns an error; a failure here must never
+/// block deleting the domain from Shipyard.
+async fn try_delete_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, zone_id: &str, record_id: &str) {
+    let org_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+
+    let Some(org_id) = org_id else { return };
+
+    let token: Option<String> = sqlx::query_scalar("SELECT api_token FROM cloudflare_connections WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(token) = token else { return };
+
+    let client = shipyard_cloudflare::CloudflareClient::new(token);
+    if let Err(e) = client.delete_dns_record(zone_id, record_id).await {
+        tracing::warn!(zone_id, record_id, "Cloudflare delete_dns_record failed: {e}");
+    }
+}
+
 // ─── Request types ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -425,7 +504,7 @@ async fn list_domains(
 ) -> Result<Json<ApiResponse<Vec<Domain>>>, ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     let domains = sqlx::query_as::<_, Domain>(
-        "SELECT id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at
+        "SELECT id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at, cloudflare_zone_id, cloudflare_record_id
          FROM domains
          WHERE service_id = $1
          ORDER BY created_at ASC",
@@ -477,7 +556,7 @@ async fn create_domain(
     let domain = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-         RETURNING id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at",
+         RETURNING id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at, cloudflare_zone_id, cloudflare_record_id",
     )
     .bind(domain_id)
     .bind(service_id)
@@ -499,6 +578,17 @@ async fn create_domain(
             ApiAppError(AppError::Database(msg))
         }
     })?;
+
+    // Best-effort Cloudflare DNS record — never blocks domain creation on failure.
+    if let Some((zone_id, record_id)) = try_create_cloudflare_record(&state.db, service_id, &body.hostname).await {
+        sqlx::query("UPDATE domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3")
+            .bind(&zone_id)
+            .bind(&record_id)
+            .bind(domain.id)
+            .execute(&state.db)
+            .await
+            .ok();
+    }
 
     // Write Traefik file-provider config (no-op when dynamic_config_dir is unset)
     sync_traefik_dynamic_config(
@@ -543,21 +633,24 @@ async fn delete_domain(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
-    let rows_affected = sqlx::query(
-        "DELETE FROM domains WHERE id = $1 AND service_id = $2",
+    let deleted: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "DELETE FROM domains WHERE id = $1 AND service_id = $2 RETURNING cloudflare_zone_id, cloudflare_record_id",
     )
     .bind(domain_id)
     .bind(service_id)
-    .execute(&state.db)
+    .fetch_optional(&state.db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .rows_affected();
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if rows_affected == 0 {
+    let Some((cloudflare_zone_id, cloudflare_record_id)) = deleted else {
         return Err(ApiAppError(AppError::NotFound(format!(
             "Domain '{}' not found",
             domain_id
         ))));
+    };
+
+    if let (Some(zone_id), Some(record_id)) = (cloudflare_zone_id, cloudflare_record_id) {
+        try_delete_cloudflare_record(&state.db, service_id, &zone_id, &record_id).await;
     }
 
     // Regenerate Traefik file-provider config after removal
