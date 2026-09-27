@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { Settings2, Users, KeyRound, Rocket, ShieldCheck, GitBranch } from '@lucide/svelte';
+	import { Settings2, Users, KeyRound, Rocket, ShieldCheck, GitBranch, Cloud } from '@lucide/svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole, can, perm } from '$lib/auth/permissions';
@@ -37,6 +37,7 @@
 	const tabs: { label: string; href: (slug: string) => string; icon: typeof Settings2; badge: TabBadge }[] = [
 		{ label: 'General',     href: (slug: string) => `/orgs/${slug}/settings/general`,     icon: Settings2,   badge: null    },
 		{ label: 'Providers',   href: (slug: string) => `/orgs/${slug}/settings/providers`,   icon: GitBranch,   badge: 'admin' },
+		{ label: 'Cloudflare',  href: (slug: string) => `/orgs/${slug}/settings/cloudflare`,  icon: Cloud,       badge: 'admin' },
 		{ label: 'Members',     href: (slug: string) => `/orgs/${slug}/settings/members`,     icon: Users,       badge: 'admin' },
 		{ label: 'API Keys',    href: (slug: string) => `/orgs/${slug}/settings/api-keys`,    icon: KeyRound,    badge: 'admin' },
 		{ label: 'Deployments', href: (slug: string) => `/orgs/${slug}/settings/deployments`, icon: Rocket,      badge: null    },
