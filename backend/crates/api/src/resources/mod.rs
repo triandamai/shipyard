@@ -359,6 +359,15 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
 
     let zone = longest_matching_zone(hostname, &zones)?;
     let ip = crate::settings::resolve_host_ip().await;
+    if crate::settings::is_loopback_or_private(&ip) {
+        tracing::warn!(
+            hostname,
+            zone = %zone.name,
+            %ip,
+            "resolved host IP is loopback/private; refusing to create a Cloudflare DNS record pointing a public domain at it"
+        );
+        return None;
+    }
 
     match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.create_dns_record(&zone.id, hostname, &ip)).await {
         Ok(Ok(record)) => Some((zone.id.clone(), record.id)),
@@ -572,7 +581,7 @@ async fn create_domain(
     // Convenience wildcard-DNS domains must never request LE certs.
     let tls_enabled = body.tls_enabled && !is_convenience_domain(&body.hostname);
 
-    let domain = sqlx::query_as::<_, Domain>(
+    let mut domain = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          RETURNING id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at, cloudflare_zone_id, cloudflare_record_id",
@@ -614,6 +623,11 @@ async fn create_domain(
                 "created Cloudflare DNS record but failed to persist its ids: {e}"
             );
         }
+        // Reflect the synchronous Cloudflare result in the response so the
+        // frontend's Cloudflare badge (which appends this response directly
+        // to local state, no refetch) shows up immediately on first create.
+        domain.cloudflare_zone_id = Some(zone_id);
+        domain.cloudflare_record_id = Some(record_id);
     }
 
     // Write Traefik file-provider config (no-op when dynamic_config_dir is unset)

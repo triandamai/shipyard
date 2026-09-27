@@ -1471,7 +1471,10 @@ async fn fetch_public_ip() -> Option<String> {
     if ip.parse::<std::net::Ipv4Addr>().is_ok() { Some(ip) } else { None }
 }
 
-fn is_loopback_or_private(ip: &str) -> bool {
+/// Also used by `resources::mod.rs::try_create_cloudflare_record` to refuse
+/// writing a loopback/private address into a real public DNS record when
+/// `resolve_host_ip`'s last-resort fallback kicks in.
+pub(crate) fn is_loopback_or_private(ip: &str) -> bool {
     match ip.parse::<std::net::IpAddr>() {
         Ok(addr) => addr.is_loopback() || is_private_ip(&addr),
         Err(_) => true,
@@ -1631,6 +1634,12 @@ async fn sync_sandbox_preview_dns(
 
     let wildcard_name = format!("*.{preview_base_domain}");
     let ip = resolve_host_ip().await;
+    if is_loopback_or_private(&ip) {
+        return Err(ApiAppError(AppError::Cloudflare(format!(
+            "Resolved host IP '{ip}' is loopback/private, not a usable public address — \
+             fix the DOMAIN env var or network config before syncing sandbox preview DNS"
+        ))));
+    }
 
     let existing_record_id: Option<String> = sqlx::query_scalar(
         "SELECT value #>> '{}' FROM system_config WHERE key = 'sandbox_preview_cloudflare_record_id'",

@@ -5,12 +5,22 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::{error::ApiAppError, middleware::rbac, AppState};
 use shipyard_cloudflare::CloudflareClient;
 use shipyard_common::error::AppError;
 use shipyard_db::models::CloudflareConnection;
+
+/// `reqwest::Client::new()` (used inside `shipyard_cloudflare::CloudflareClient`)
+/// has no default timeout, so every Cloudflare HTTP call in this file is
+/// wrapped in `tokio::time::timeout` with this bound — mirrors
+/// `resources::mod.rs::CLOUDFLARE_CALL_TIMEOUT` and
+/// `settings::mod.rs::CLOUDFLARE_CALL_TIMEOUT`. These are foreground,
+/// user-facing handlers (not background best-effort paths), so a timeout is
+/// surfaced to the caller as a clear error rather than swallowed.
+const CLOUDFLARE_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectCloudflareRequest {
@@ -60,7 +70,18 @@ async fn get_connection(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     let zones = match &connection {
-        Some(c) => CloudflareClient::new(c.api_token.clone()).list_zones().await.unwrap_or_default(),
+        Some(c) => {
+            let client = CloudflareClient::new(c.api_token.clone());
+            match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_zones()).await {
+                Ok(Ok(z)) => z,
+                Ok(Err(e)) => return Err(ApiAppError(e)),
+                Err(_) => {
+                    return Err(ApiAppError(AppError::Cloudflare(
+                        "Cloudflare list_zones timed out".to_string(),
+                    )))
+                }
+            }
+        }
         None => Vec::new(),
     };
 
@@ -83,11 +104,29 @@ async fn connect(
     }
 
     let client = CloudflareClient::new(body.api_token.clone());
-    client.verify_token().await.map_err(|e| {
-        ApiAppError(AppError::BadRequest(format!("Could not verify Cloudflare token: {e}")))
-    })?;
+    match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.verify_token()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            return Err(ApiAppError(AppError::BadRequest(format!(
+                "Could not verify Cloudflare token: {e}"
+            ))));
+        }
+        Err(_) => {
+            return Err(ApiAppError(AppError::Cloudflare(
+                "Cloudflare verify_token timed out".to_string(),
+            )));
+        }
+    }
 
-    let accounts = client.list_accounts().await.map_err(ApiAppError)?;
+    let accounts = match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_accounts()).await {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => return Err(ApiAppError(e)),
+        Err(_) => {
+            return Err(ApiAppError(AppError::Cloudflare(
+                "Cloudflare list_accounts timed out".to_string(),
+            )))
+        }
+    };
     let account = accounts.into_iter().next().ok_or_else(|| {
         ApiAppError(AppError::BadRequest("This Cloudflare token has no accessible accounts".to_string()))
     })?;
