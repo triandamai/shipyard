@@ -4,15 +4,22 @@ use shipyard_common::error::{AppError, AppResult};
 const API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Zone {
+pub struct ZoneAccount {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Account {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Zone {
     pub id: String,
     pub name: String,
+    /// The Cloudflare account that owns this zone. Present on every zone
+    /// Cloudflare returns from `GET /zones`, and readable with just a
+    /// zone-scoped token (unlike `GET /accounts`, which requires an
+    /// account-level permission a `Zone:DNS:Edit` token doesn't have) — so
+    /// this is how callers resolve "which account is this token for"
+    /// without a separate, more-privileged API call.
+    pub account: ZoneAccount,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,13 +151,6 @@ impl CloudflareClient {
     pub async fn verify_token(&self) -> AppResult<()> {
         self.get::<serde_json::Value>("/user/tokens/verify").await?;
         Ok(())
-    }
-
-    /// GET /accounts — the token-verify endpoint doesn't return account
-    /// details, so resolving which Cloudflare account(s) a token can act on
-    /// needs this separate call.
-    pub async fn list_accounts(&self) -> AppResult<Vec<Account>> {
-        self.get("/accounts").await
     }
 
     /// GET /zones — every zone (domain) this token can manage.

@@ -89,8 +89,11 @@ async fn get_connection(
 }
 
 /// POST /orgs/:org_id/cloudflare — verifies the token, resolves the account
-/// for display, then stores the connection. One per org (UNIQUE constraint);
-/// connecting again replaces the existing one.
+/// for display from the token's first accessible zone (a `GET /accounts`
+/// call would require an account-level permission a zone-scoped
+/// `Zone:DNS:Edit` token doesn't have — see `Zone::account`), then stores
+/// the connection. One per org (UNIQUE constraint); connecting again
+/// replaces the existing one.
 async fn connect(
     auth: crate::auth::AuthUser,
     Path(org_id): Path<Uuid>,
@@ -118,17 +121,19 @@ async fn connect(
         }
     }
 
-    let accounts = match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_accounts()).await {
-        Ok(Ok(a)) => a,
+    let zones = match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_zones()).await {
+        Ok(Ok(z)) => z,
         Ok(Err(e)) => return Err(ApiAppError(e)),
         Err(_) => {
             return Err(ApiAppError(AppError::Cloudflare(
-                "Cloudflare list_accounts timed out".to_string(),
+                "Cloudflare list_zones timed out".to_string(),
             )))
         }
     };
-    let account = accounts.into_iter().next().ok_or_else(|| {
-        ApiAppError(AppError::BadRequest("This Cloudflare token has no accessible accounts".to_string()))
+    let account = zones.into_iter().next().map(|z| z.account).ok_or_else(|| {
+        ApiAppError(AppError::BadRequest(
+            "This Cloudflare token has no accessible zones — create a token with Zone:DNS:Edit permission for at least one zone".to_string(),
+        ))
     })?;
 
     let connection_id = Uuid::now_v7();

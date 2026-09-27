@@ -1552,10 +1552,14 @@ mod tests {
 
     // ─── Cloudflare zone matching ────────────────────────────────────────────
 
-    use shipyard_cloudflare::Zone;
+    use shipyard_cloudflare::{Zone, ZoneAccount};
 
     fn zone(id: &str, name: &str) -> Zone {
-        Zone { id: id.to_string(), name: name.to_string() }
+        Zone {
+            id: id.to_string(),
+            name: name.to_string(),
+            account: ZoneAccount { id: "acct-test".to_string(), name: "Test Account".to_string() },
+        }
     }
 
     #[test]
