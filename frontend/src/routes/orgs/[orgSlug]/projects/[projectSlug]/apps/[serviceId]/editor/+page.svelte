@@ -5,7 +5,7 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SandboxTerminal from '$lib/components/SandboxTerminal.svelte';
-	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone } from '@lucide/svelte';
 	import type { SandboxFileEntry, SandboxInstance } from '$lib/api/types';
 
 	let serviceId = $derived(page.params.serviceId ?? '');
@@ -14,19 +14,47 @@
 	let bootState = $state<'starting' | 'ready' | 'error'>('starting');
 	let bootError = $state('');
 
-	// Editor and preview show one at a time (not split) — pick which is active.
+	// Editor (sidebar + code editor, like VS Code) and preview show one at a
+	// time, full width — pick which is active.
 	let activeTab = $state<'editor' | 'preview'>('editor');
 
 	// ── Preview browser chrome ──────────────────────────────────────────────
 	let previewIframe: HTMLIFrameElement | undefined = $state();
 	let urlBarValue = $state('');
 
+	// A cross-origin iframe's `contentWindow.history` throws a SecurityError
+	// just from being READ (not only from calling back()/forward() on it) —
+	// sandbox previews are always cross-origin from this app, so that path
+	// can never work. Back/forward instead replay our own record of the URLs
+	// we've explicitly navigated the iframe to (initial load + anything typed
+	// into the URL bar) — it can't know about in-page link clicks the preview
+	// makes on its own, since reading its live location is equally blocked,
+	// but it's real navigation over everything driven from this toolbar.
+	let navHistory = $state<string[]>([]);
+	let navIndex = $state(-1);
+	let canGoBack = $derived(navIndex > 0);
+	let canGoForward = $derived(navIndex >= 0 && navIndex < navHistory.length - 1);
+
+	function navigateIframeTo(url: string, pushHistory: boolean) {
+		if (!previewIframe) return;
+		if (pushHistory) {
+			navHistory = [...navHistory.slice(0, navIndex + 1), url];
+			navIndex = navHistory.length - 1;
+		}
+		urlBarValue = url;
+		previewIframe.src = url;
+	}
+
 	function previewGoBack() {
-		try { previewIframe?.contentWindow?.history.back(); } catch { /* cross-origin restrictions vary by browser */ }
+		if (!canGoBack) return;
+		navIndex -= 1;
+		navigateIframeTo(navHistory[navIndex], false);
 	}
 
 	function previewGoForward() {
-		try { previewIframe?.contentWindow?.history.forward(); } catch { /* cross-origin restrictions vary by browser */ }
+		if (!canGoForward) return;
+		navIndex += 1;
+		navigateIframeTo(navHistory[navIndex], false);
 	}
 
 	function previewRefresh() {
@@ -56,8 +84,50 @@
 		} else if (!/^https?:\/\//i.test(target)) {
 			target = `https://${target}`;
 		}
-		urlBarValue = target;
-		previewIframe.src = target;
+		navigateIframeTo(target, true);
+	}
+
+	// ── Preview device-width sizing (desktop/mobile presets + free drag) ────
+	// The preview PANE itself never resizes — only the simulated device width
+	// of the content inside it, like a browser's responsive design mode.
+	const PREVIEW_CONTENT_MIN_WIDTH = 280;
+	let previewContentWidth = $state<number | null>(null); // null = fill the pane (Desktop)
+	let previewSurfaceEl: HTMLDivElement | undefined = $state();
+	let resizingPreviewContent = $state(false);
+	let previewResizeCenterX = 0;
+	let previewResizeMaxWidth = 0;
+
+	function setPreviewDesktop() {
+		previewContentWidth = null;
+	}
+
+	function setPreviewMobile() {
+		previewContentWidth = 375;
+	}
+
+	function startPreviewContentResize(e: PointerEvent) {
+		if (!previewSurfaceEl) return;
+		const rect = previewSurfaceEl.getBoundingClientRect();
+		previewResizeCenterX = rect.left + rect.width / 2;
+		previewResizeMaxWidth = rect.width;
+		resizingPreviewContent = true;
+		window.addEventListener('pointermove', onPreviewContentResizeMove);
+		window.addEventListener('pointerup', stopPreviewContentResize, { once: true });
+	}
+
+	function onPreviewContentResizeMove(e: PointerEvent) {
+		if (!resizingPreviewContent) return;
+		// The frame box is centered in the pane, so growing it by `delta` on the
+		// dragged edge grows it by `delta` on the mirrored edge too.
+		const raw = 2 * Math.abs(e.clientX - previewResizeCenterX);
+		previewContentWidth = Math.round(
+			Math.min(previewResizeMaxWidth, Math.max(PREVIEW_CONTENT_MIN_WIDTH, raw))
+		);
+	}
+
+	function stopPreviewContentResize() {
+		resizingPreviewContent = false;
+		window.removeEventListener('pointermove', onPreviewContentResizeMove);
 	}
 
 	let entries = $state<SandboxFileEntry[]>([]);
@@ -87,6 +157,8 @@
 		}
 		instance = { ...instance, status: startRes.data.status, preview_url: startRes.data.preview_url } as SandboxInstance;
 		urlBarValue = startRes.data.preview_url ?? '';
+		navHistory = startRes.data.preview_url ? [startRes.data.preview_url] : [];
+		navIndex = navHistory.length - 1;
 
 		const treeRes = await api.getSandboxFileTree(serviceId);
 		if (treeRes.data) entries = treeRes.data.entries;
@@ -145,30 +217,30 @@
 	onDestroy(() => {
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		if (saveTimer) clearTimeout(saveTimer);
+		window.removeEventListener('pointermove', onPreviewContentResizeMove);
 	});
 </script>
 
-<div class="editor-layout">
+<div class="editor-layout" class:resizing-preview={resizingPreviewContent}>
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">Waking up your sandbox…</div>
 	{:else if bootState === 'error'}
 		<div class="boot-overlay error">{bootError}</div>
 	{:else}
-		<aside class="sidebar">
-			<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} />
-		</aside>
+		<div class="panel-tabs">
+			<button class="panel-tab" class:active={activeTab === 'editor'} onclick={() => (activeTab = 'editor')}>
+				<Code2 size={13} /> Editor
+			</button>
+			<button class="panel-tab" class:active={activeTab === 'preview'} onclick={() => (activeTab = 'preview')}>
+				<Globe size={13} /> Preview
+			</button>
+		</div>
 
-		<div class="main-panel">
-			<div class="panel-tabs">
-				<button class="panel-tab" class:active={activeTab === 'editor'} onclick={() => (activeTab = 'editor')}>
-					<Code2 size={13} /> Editor
-				</button>
-				<button class="panel-tab" class:active={activeTab === 'preview'} onclick={() => (activeTab = 'preview')}>
-					<Globe size={13} /> Preview
-				</button>
-			</div>
-
-			<main class="editor-main" class:hidden={activeTab !== 'editor'}>
+		<div class="editor-view" class:hidden={activeTab !== 'editor'}>
+			<aside class="sidebar">
+				<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} />
+			</aside>
+			<main class="editor-main">
 				{#if openPath}
 					<div class="tab-bar">
 						<span class="tab">{openPath}</span>
@@ -185,37 +257,70 @@
 					<div class="empty-state">Select a file to start editing</div>
 				{/if}
 			</main>
-
-			<section class="preview-pane" class:hidden={activeTab !== 'preview'}>
-				{#if instance?.preview_url}
-					<div class="preview-toolbar">
-						<button class="preview-nav-btn" onclick={previewGoBack} title="Back" aria-label="Back">
-							<ArrowLeft size={13} />
-						</button>
-						<button class="preview-nav-btn" onclick={previewGoForward} title="Forward" aria-label="Forward">
-							<ArrowRight size={13} />
-						</button>
-						<button class="preview-nav-btn" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
-							<RotateCw size={12} />
-						</button>
-						<form class="preview-url-form" onsubmit={previewNavigate}>
-							<input
-								class="preview-url-input"
-								type="text"
-								bind:value={urlBarValue}
-								spellcheck="false"
-								autocomplete="off"
-							/>
-						</form>
-					</div>
-					<div class="preview-surface">
-						<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
-					</div>
-				{:else}
-					<div class="empty-state">No preview available</div>
-				{/if}
-			</section>
 		</div>
+
+		<section class="preview-pane" class:hidden={activeTab !== 'preview'}>
+			{#if instance?.preview_url}
+				<div class="preview-toolbar">
+					<button class="preview-nav-btn" onclick={previewGoBack} disabled={!canGoBack} title="Back" aria-label="Back">
+						<ArrowLeft size={13} />
+					</button>
+					<button class="preview-nav-btn" onclick={previewGoForward} disabled={!canGoForward} title="Forward" aria-label="Forward">
+						<ArrowRight size={13} />
+					</button>
+					<button class="preview-nav-btn" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
+						<RotateCw size={12} />
+					</button>
+					<form class="preview-url-form" onsubmit={previewNavigate}>
+						<input
+							class="preview-url-input"
+							type="text"
+							bind:value={urlBarValue}
+							spellcheck="false"
+							autocomplete="off"
+						/>
+					</form>
+					<div class="preview-device-btns">
+						<button
+							class="preview-nav-btn"
+							class:active={previewContentWidth === null}
+							onclick={setPreviewDesktop}
+							title="Desktop width"
+							aria-label="Desktop width"
+						>
+							<Monitor size={13} />
+						</button>
+						<button
+							class="preview-nav-btn"
+							class:active={previewContentWidth === 375}
+							onclick={setPreviewMobile}
+							title="Mobile width"
+							aria-label="Mobile width"
+						>
+							<Smartphone size={13} />
+						</button>
+					</div>
+				</div>
+				<div class="preview-surface" bind:this={previewSurfaceEl}>
+					<div
+						class="preview-frame-box"
+						style={previewContentWidth ? `width:${previewContentWidth}px` : 'width:100%'}
+					>
+						<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
+						<div
+							class="preview-resize-handle"
+							role="separator"
+							aria-orientation="vertical"
+							aria-label="Resize preview width"
+							tabindex="-1"
+							onpointerdown={startPreviewContentResize}
+						></div>
+					</div>
+				</div>
+			{:else}
+				<div class="empty-state">No preview available</div>
+			{/if}
+		</section>
 
 		<button class="terminal-toggle" onclick={() => (showTerminal = !showTerminal)}>
 			{showTerminal ? 'Hide' : 'Show'} Terminal
@@ -231,27 +336,20 @@
 <style>
 	.editor-layout {
 		display: grid;
-		grid-template-columns: 220px 1fr;
-		grid-template-rows: 1fr auto;
+		grid-template-rows: auto 1fr auto;
 		height: 100vh;
 		width: 100vw;
 	}
-	.sidebar {
-		border-right: 1px solid var(--border);
-		overflow-y: auto;
-		grid-row: 1;
-	}
-	.main-panel {
-		display: flex;
-		flex-direction: column;
-		min-width: 0;
-		grid-row: 1;
+	.editor-layout.resizing-preview {
+		cursor: ew-resize;
+		user-select: none;
 	}
 	.hidden {
 		display: none !important;
 	}
 
 	.panel-tabs {
+		grid-row: 1;
 		display: flex;
 		gap: 2px;
 		padding: 6px 8px 0;
@@ -282,6 +380,19 @@
 		border-bottom-color: var(--accent);
 	}
 
+	/* Sidebar + editor travel together, like VS Code — only shown as a pair
+	   on the Editor tab; the Preview tab gets the full width to itself. */
+	.editor-view {
+		grid-row: 2;
+		display: flex;
+		min-height: 0;
+	}
+	.sidebar {
+		width: 220px;
+		flex-shrink: 0;
+		border-right: 1px solid var(--border);
+		overflow-y: auto;
+	}
 	.editor-main {
 		display: flex;
 		flex-direction: column;
@@ -289,11 +400,12 @@
 		flex: 1;
 		min-height: 0;
 	}
+
 	.preview-pane {
+		grid-row: 2;
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		flex: 1;
 		min-height: 0;
 	}
 	/* The preview shows an arbitrary website that may be any color scheme —
@@ -305,12 +417,59 @@
 		flex: 1;
 		min-height: 0;
 		background: #fff;
+		display: flex;
+		justify-content: center;
+		overflow: hidden;
 	}
-	.preview-surface iframe {
+	/* Only this box's width changes on resize/device-preset — the pane
+	   around it stays put, so resizing simulates a narrower device viewport
+	   rather than shrinking the preview panel itself. */
+	.preview-frame-box {
+		position: relative;
+		height: 100%;
+		max-width: 100%;
+		padding-right: 8px;
+		box-sizing: border-box;
+	}
+	.preview-frame-box iframe {
 		width: 100%;
 		height: 100%;
 		border: none;
+		display: block;
 		background: #fff;
+	}
+	.editor-layout.resizing-preview .preview-frame-box iframe {
+		pointer-events: none;
+	}
+	.preview-resize-handle {
+		position: absolute;
+		top: 0;
+		right: 0;
+		width: 8px;
+		height: 100%;
+		cursor: ew-resize;
+	}
+	.preview-resize-handle::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 3px;
+		width: 2px;
+		background: var(--border);
+	}
+	.preview-resize-handle:hover::after,
+	.editor-layout.resizing-preview .preview-resize-handle::after {
+		background: var(--accent);
+	}
+	.preview-device-btns {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding-left: 6px;
+		margin-left: 4px;
+		border-left: 1px solid var(--border);
+		flex-shrink: 0;
 	}
 	.preview-toolbar {
 		display: flex;
@@ -334,9 +493,17 @@
 		cursor: pointer;
 		flex-shrink: 0;
 	}
-	.preview-nav-btn:hover {
+	.preview-nav-btn:hover:not(:disabled) {
 		background: var(--bg-surface, rgba(127,127,127,0.12));
 		color: var(--text-primary);
+	}
+	.preview-nav-btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+	.preview-nav-btn.active {
+		color: var(--accent);
+		background: var(--bg-surface, rgba(127,127,127,0.12));
 	}
 	.preview-url-form {
 		flex: 1;
@@ -392,8 +559,7 @@
 		color: var(--accent-red);
 	}
 	.terminal-toggle {
-		grid-column: 1 / -1;
-		grid-row: 2;
+		grid-row: 3;
 		padding: 6px 12px;
 		background: var(--bg-elevated);
 		border: none;
