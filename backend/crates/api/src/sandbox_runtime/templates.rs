@@ -10,6 +10,8 @@ pub enum Template {
     ReactTs,
     Vue,
     VueTs,
+    SvelteKit,
+    SvelteKitTs,
 }
 
 #[cfg(test)]
@@ -156,6 +158,40 @@ mod tests {
         assert_eq!(Template::from_str("vue"), Some(Template::Vue));
         assert_eq!(Template::from_str("vue-ts"), Some(Template::VueTs));
     }
+
+    #[test]
+    fn sveltekit_templates_scaffold_via_the_official_sv_cli() {
+        let cases = [
+            (Template::SvelteKit, "--types jsdoc"),
+            (Template::SvelteKitTs, "--types ts"),
+        ];
+        for (t, expected_flag) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("sv create"), "{t:?} seed script must invoke the sv CLI");
+            assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
+        }
+    }
+
+    #[test]
+    fn sveltekit_templates_bind_dev_server_correctly() {
+        for t in [Template::SvelteKit, Template::SvelteKitTs] {
+            let (runtime, base_image, install, dev, port) = template_runtime(t);
+            assert_eq!(runtime, "node");
+            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(install, Some("npm install"));
+            assert!(dev.contains("--host 0.0.0.0"));
+            assert!(dev.contains("--port $PORT"));
+            assert_eq!(port, 5173, "SvelteKit's Vite-based dev server default port");
+        }
+    }
+
+    #[test]
+    fn sveltekit_templates_are_reachable_by_name() {
+        assert_eq!(Template::from_str("sveltekit"), Some(Template::SvelteKit));
+        assert_eq!(Template::from_str("sveltekit-ts"), Some(Template::SvelteKitTs));
+    }
 }
 
 const NODE_SEED_SCRIPT: &str = r#"mkdir -p /app
@@ -270,6 +306,8 @@ const REACT_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react
 const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react-ts\n";
 const VUE_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue\n";
 const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue-ts\n";
+const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --install npm\n";
+const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --install npm\n";
 
 pub fn template_seed_script_b64(t: Template) -> String {
     let script = match t {
@@ -281,6 +319,8 @@ pub fn template_seed_script_b64(t: Template) -> String {
         Template::ReactTs => REACT_TS_SEED_SCRIPT,
         Template::Vue => VUE_SEED_SCRIPT,
         Template::VueTs => VUE_TS_SEED_SCRIPT,
+        Template::SvelteKit => SVELTEKIT_SEED_SCRIPT,
+        Template::SvelteKitTs => SVELTEKIT_TS_SEED_SCRIPT,
     };
     BASE64.encode(script)
 }
@@ -310,6 +350,8 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
         Template::ReactTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
         Template::Vue => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
         Template::VueTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::SvelteKit => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::SvelteKitTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
     }
 }
 
@@ -324,6 +366,8 @@ impl Template {
             "react-ts" => Some(Template::ReactTs),
             "vue" => Some(Template::Vue),
             "vue-ts" => Some(Template::VueTs),
+            "sveltekit" => Some(Template::SvelteKit),
+            "sveltekit-ts" => Some(Template::SvelteKitTs),
             _ => None,
         }
     }
