@@ -101,7 +101,12 @@
 	});
 </script>
 
-<div bind:this={container} class="editor-wrap"></div>
+<div
+	bind:this={container}
+	class="editor-wrap"
+	class:fill={height === '100%'}
+	style={height !== '100%' ? `height: ${height}` : undefined}
+></div>
 
 <style>
 	.editor-wrap {
@@ -110,6 +115,19 @@
 		overflow: hidden;
 		background: var(--bg-base);
 		transition: border-color var(--transition-fast);
+	}
+
+	/* height:100% on the CodeMirror root (below) only resolves to something
+	   real if THIS wrapper has a definite height too — a plain block element
+	   with no height set (the default) computes to its content's height, which
+	   for a one-line file is one line tall, not "fill the available space".
+	   Growing as a flex child instead gives it a real, definite height to
+	   fill, wherever this component sits inside a flex column layout. */
+	.editor-wrap.fill {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.editor-wrap:focus-within {

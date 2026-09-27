@@ -1,14 +1,46 @@
 <script lang="ts">
-	import { File, Folder, FolderOpen } from '@lucide/svelte';
+	import { File, Folder, FolderOpen, Plus } from '@lucide/svelte';
 	import type { SandboxFileEntry } from '$lib/api/types';
 
 	interface Props {
 		entries: SandboxFileEntry[];
 		selectedPath?: string;
 		onSelect: (path: string) => void;
+		onCreateFile?: (path: string) => void;
+		createError?: string;
 	}
 
-	let { entries, selectedPath, onSelect }: Props = $props();
+	let { entries, selectedPath, onSelect, onCreateFile, createError = '' }: Props = $props();
+
+	let creatingFile = $state(false);
+	let newFileName = $state('');
+	let newFileInputEl: HTMLInputElement | undefined = $state();
+
+	function startCreateFile() {
+		creatingFile = true;
+		newFileName = '';
+		requestAnimationFrame(() => newFileInputEl?.focus());
+	}
+
+	function submitCreateFile() {
+		if (!newFileName.trim()) {
+			creatingFile = false;
+			return;
+		}
+		onCreateFile?.(newFileName);
+		creatingFile = false;
+		newFileName = '';
+	}
+
+	function handleNewFileKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			submitCreateFile();
+		} else if (e.key === 'Escape') {
+			creatingFile = false;
+			newFileName = '';
+		}
+	}
 
 	interface TreeNode {
 		name: string;
@@ -81,9 +113,36 @@
 {/snippet}
 
 <div class="file-tree">
-	{#each tree as n (n.path)}
-		{@render node(n, 0)}
-	{/each}
+	<div class="file-tree-header">
+		<span class="file-tree-title">Files</span>
+		<button class="new-file-btn" onclick={startCreateFile} title="New file" aria-label="New file">
+			<Plus size={13} />
+		</button>
+	</div>
+	{#if creatingFile}
+		<div class="new-file-row">
+			<File size={13} />
+			<input
+				bind:this={newFileInputEl}
+				bind:value={newFileName}
+				class="new-file-input"
+				type="text"
+				placeholder="path/to/file.ts"
+				spellcheck="false"
+				autocomplete="off"
+				onkeydown={handleNewFileKeydown}
+				onblur={submitCreateFile}
+			/>
+		</div>
+	{/if}
+	{#if createError}
+		<div class="new-file-error">{createError}</div>
+	{/if}
+	<div class="file-tree-scroll">
+		{#each tree as n (n.path)}
+			{@render node(n, 0)}
+		{/each}
+	</div>
 </div>
 
 <style>
@@ -91,8 +150,67 @@
 		display: flex;
 		flex-direction: column;
 		font-size: 12px;
-		overflow-y: auto;
 		height: 100%;
+	}
+	.file-tree-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 6px 8px;
+		flex-shrink: 0;
+	}
+	.file-tree-title {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-dim);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.new-file-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		border: none;
+		background: transparent;
+		color: var(--text-dim);
+		border-radius: var(--radius-sm, 4px);
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.new-file-btn:hover {
+		background: var(--bg-hover);
+		color: var(--text-primary);
+	}
+	.new-file-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 8px;
+		color: var(--text-secondary);
+	}
+	.new-file-input {
+		flex: 1;
+		min-width: 0;
+		background: var(--bg-base);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-sm, 4px);
+		color: var(--text-primary);
+		font-size: 12px;
+		font-family: var(--font-mono);
+		padding: 2px 6px;
+		outline: none;
+	}
+	.new-file-error {
+		font-size: 11px;
+		color: var(--accent-red);
+		padding: 2px 8px 6px;
+	}
+	.file-tree-scroll {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
 	}
 	.tree-item {
 		display: flex;

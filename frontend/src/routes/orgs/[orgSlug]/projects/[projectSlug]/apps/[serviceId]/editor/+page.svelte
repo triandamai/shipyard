@@ -135,12 +135,42 @@
 	let fileContent = $state('');
 	let editorRef: CodeEditor | undefined = $state();
 	let isSaving = $state(false);
+	let justSaved = $state(false);
 	let showTerminal = $state(false);
+	let newFileError = $state('');
 
 	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+	let savedFlashTimer: ReturnType<typeof setTimeout> | undefined;
 	let pendingSave: { path: string; content: string } | null = null;
 	let saveInFlight = false;
+
+	// ── Resizable sidebar ────────────────────────────────────────────────────
+	const SIDEBAR_MIN_WIDTH = 140;
+	const SIDEBAR_MAX_WIDTH = 480;
+	let sidebarWidth = $state(220);
+	let resizingSidebar = $state(false);
+	let sidebarResizeStartX = 0;
+	let sidebarResizeStartWidth = 0;
+
+	function startSidebarResize(e: PointerEvent) {
+		resizingSidebar = true;
+		sidebarResizeStartX = e.clientX;
+		sidebarResizeStartWidth = sidebarWidth;
+		window.addEventListener('pointermove', onSidebarResizeMove);
+		window.addEventListener('pointerup', stopSidebarResize, { once: true });
+	}
+
+	function onSidebarResizeMove(e: PointerEvent) {
+		if (!resizingSidebar) return;
+		const delta = e.clientX - sidebarResizeStartX;
+		sidebarWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, sidebarResizeStartWidth + delta));
+	}
+
+	function stopSidebarResize() {
+		resizingSidebar = false;
+		window.removeEventListener('pointermove', onSidebarResizeMove);
+	}
 
 	function languageForPath(path: string): 'javascript' | 'json' | 'plain' {
 		if (path.endsWith('.json')) return 'json';
@@ -193,13 +223,42 @@
 		pendingSave = null;
 		saveInFlight = true;
 		isSaving = true;
-		await api.writeSandboxFile(serviceId, path, content);
+		const res = await api.writeSandboxFile(serviceId, path, content);
 		saveInFlight = false;
 		if (pendingSave) {
 			flushSave();
-		} else {
-			isSaving = false;
+			return;
 		}
+		isSaving = false;
+		if (!res.error) {
+			justSaved = true;
+			if (savedFlashTimer) clearTimeout(savedFlashTimer);
+			savedFlashTimer = setTimeout(() => (justSaved = false), 1500);
+			// "Hot reload": most dev servers already live-update the page
+			// themselves via their own HMR client script, but not every stack
+			// has one (e.g. plain static files) — refreshing the preview after
+			// every save guarantees it reflects the latest saved content
+			// either way, on top of whatever the framework already does.
+			if (instance?.preview_url) previewRefresh();
+		}
+	}
+
+	async function createFile(rawPath: string) {
+		const path = rawPath.trim().replace(/^\/+/, '');
+		if (!path) return;
+		newFileError = '';
+		if (entries.some((e) => e.path === path)) {
+			newFileError = `'${path}' already exists`;
+			return;
+		}
+		const res = await api.writeSandboxFile(serviceId, path, '');
+		if (res.error) {
+			newFileError = res.error.message;
+			return;
+		}
+		const treeRes = await api.getSandboxFileTree(serviceId);
+		if (treeRes.data) entries = treeRes.data.entries;
+		await openFile(path);
 	}
 
 	// No stop-on-unload here, deliberately: closing or reloading this tab fires
@@ -217,11 +276,13 @@
 	onDestroy(() => {
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		if (saveTimer) clearTimeout(saveTimer);
+		if (savedFlashTimer) clearTimeout(savedFlashTimer);
 		window.removeEventListener('pointermove', onPreviewContentResizeMove);
+		window.removeEventListener('pointermove', onSidebarResizeMove);
 	});
 </script>
 
-<div class="editor-layout" class:resizing-preview={resizingPreviewContent}>
+<div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-sidebar={resizingSidebar}>
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">Waking up your sandbox…</div>
 	{:else if bootState === 'error'}
@@ -237,14 +298,22 @@
 		</div>
 
 		<div class="editor-view" class:hidden={activeTab !== 'editor'}>
-			<aside class="sidebar">
-				<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} />
+			<aside class="sidebar" style="width: {sidebarWidth}px">
+				<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} onCreateFile={createFile} createError={newFileError} />
 			</aside>
+			<div
+				class="sidebar-resize-handle"
+				role="separator"
+				aria-orientation="vertical"
+				aria-label="Resize sidebar"
+				tabindex="-1"
+				onpointerdown={startSidebarResize}
+			></div>
 			<main class="editor-main">
 				{#if openPath}
 					<div class="tab-bar">
 						<span class="tab">{openPath}</span>
-						{#if isSaving}<span class="saving">Saving…</span>{/if}
+						{#if isSaving}<span class="saving">Saving…</span>{:else if justSaved}<span class="saved">Saved</span>{/if}
 					</div>
 					<CodeEditor
 						bind:this={editorRef}
@@ -338,9 +407,12 @@
 		display: grid;
 		grid-template-rows: auto 1fr auto;
 		height: 100vh;
-		width: 100vw;
+		width: 100%;
+		max-width: 100%;
+		overflow: hidden;
 	}
-	.editor-layout.resizing-preview {
+	.editor-layout.resizing-preview,
+	.editor-layout.resizing-sidebar {
 		cursor: ew-resize;
 		user-select: none;
 	}
@@ -388,10 +460,28 @@
 		min-height: 0;
 	}
 	.sidebar {
-		width: 220px;
 		flex-shrink: 0;
-		border-right: 1px solid var(--border);
 		overflow-y: auto;
+	}
+	.sidebar-resize-handle {
+		flex-shrink: 0;
+		width: 6px;
+		cursor: ew-resize;
+		background: transparent;
+		position: relative;
+	}
+	.sidebar-resize-handle::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 2px;
+		width: 2px;
+		background: var(--border);
+	}
+	.sidebar-resize-handle:hover::after,
+	.editor-layout.resizing-sidebar .sidebar-resize-handle::after {
+		background: var(--accent);
 	}
 	.editor-main {
 		display: flex;
@@ -536,6 +626,10 @@
 	}
 	.saving {
 		color: var(--text-dim);
+		font-size: 11px;
+	}
+	.saved {
+		color: var(--accent-green, #22c55e);
 		font-size: 11px;
 	}
 	.empty-state {
