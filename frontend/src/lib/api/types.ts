@@ -517,7 +517,7 @@ export interface SandboxAppConfig {
 	install_cmd: string | null;
 	dev_cmd: string | null;
 	port: number | null;
-	manifest_source: 'undetected' | 'detected' | 'manifest';
+	manifest_source: 'undetected' | 'detected' | 'manifest' | 'pending';
 	volume_name: string;
 }
 

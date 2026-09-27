@@ -33,6 +33,17 @@ struct CreateAppRequest {
     template: String,
 }
 
+async fn is_pending(db: &sqlx::PgPool, service_id: Uuid) -> Result<bool, AppError> {
+    let manifest_source: Option<String> = sqlx::query_scalar(
+        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(manifest_source.as_deref() == Some("pending"))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/apps/:service_id/sandbox/start", post(start))
@@ -139,17 +150,11 @@ async fn start(
 ) -> Result<Json<ApiResponse<SandboxStatusResponse>>, ApiAppError> {
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     let instance = manager::start_sandbox(&state, service_id).await?;
-    let manifest_source: Option<String> = sqlx::query_scalar(
-        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let pending = is_pending(&state.db, service_id).await.map_err(ApiAppError)?;
     Ok(Json(ApiResponse::ok(SandboxStatusResponse {
         status: instance.status,
         preview_url: instance.preview_url,
-        pending: manifest_source.as_deref() == Some("pending"),
+        pending,
     })))
 }
 
@@ -172,16 +177,10 @@ async fn status(
     let instance = manager::fetch_instance(&state.db, service_id)
         .await?
         .unwrap_or_else(|| super::models::SandboxInstanceRow::default_stopped(service_id));
-    let manifest_source: Option<String> = sqlx::query_scalar(
-        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let pending = is_pending(&state.db, service_id).await.map_err(ApiAppError)?;
     let mut json = serde_json::to_value(&instance)
         .map_err(|e| ApiAppError(AppError::Internal(format!("failed to serialize sandbox instance: {e}"))))?;
-    json["pending"] = serde_json::json!(manifest_source.as_deref() == Some("pending"));
+    json["pending"] = serde_json::json!(pending);
     Ok(Json(ApiResponse::ok(json)))
 }
 
@@ -237,17 +236,11 @@ async fn public_start(
     .ok_or_else(|| ApiAppError(AppError::NotFound(format!("App '{token}' not found"))))?;
 
     let instance = manager::start_sandbox(&state, service_id).await?;
-    let manifest_source: Option<String> = sqlx::query_scalar(
-        "SELECT manifest_source FROM sandbox_app_configs WHERE service_id = $1",
-    )
-    .bind(service_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let pending = is_pending(&state.db, service_id).await.map_err(ApiAppError)?;
     Ok(Json(ApiResponse::ok(SandboxStatusResponse {
         status: instance.status,
         preview_url: instance.preview_url,
-        pending: manifest_source.as_deref() == Some("pending"),
+        pending,
     })))
 }
 

@@ -302,7 +302,7 @@ async fn provision_sandbox(
                 // /app is still empty (or not yet a recognized stack) — fall
                 // through and keep serving the idle placeholder config below,
                 // so the terminal stays usable instead of erroring the start.
-                tracing::debug!(%service_id, error = %e, "sandbox stack still undetected; keeping pending placeholder config");
+                tracing::warn!(%service_id, error = %e, "sandbox stack still undetected; keeping pending placeholder config");
             }
         }
     }
@@ -611,14 +611,15 @@ async fn ensure_preview_domain(db: &PgPool, service_id: Uuid, hostname: &str, po
 /// A sandbox needs its stack (re-)detected when it has no config row yet
 /// (the existing from-scratch path), or when its config is still 'pending'
 /// (a Custom-created sandbox whose real project hasn't been scaffolded, or
-/// hasn't been restarted since it was). Every other manifest_source value
-/// ('detected', 'manifest', 'undetected') is a permanently-resolved sandbox —
-/// this must return false for those, or a resolved sandbox would be
-/// re-probed forever instead of just once.
+/// hasn't been restarted since it was) or 'undetected' (a config row that has
+/// never been through the probe-detection path at all). Only 'detected' and
+/// 'manifest' are permanently-resolved sandboxes — this must return false for
+/// those, or a resolved sandbox would be re-probed forever instead of just
+/// once.
 fn needs_redetect(config: Option<&SandboxAppConfigRow>) -> bool {
     match config {
         None => true,
-        Some(c) => c.manifest_source == "pending",
+        Some(c) => c.manifest_source == "pending" || c.manifest_source == "undetected",
     }
 }
 
@@ -788,16 +789,15 @@ mod tests {
         };
         assert!(needs_redetect(Some(&pending)));
 
-        for resolved_source in ["detected", "manifest", "undetected"] {
-            let resolved = SandboxAppConfigRow {
-                manifest_source: resolved_source.to_string(),
-                ..pending_clone_with_source(resolved_source)
-            };
+        for resolved_source in ["detected", "manifest"] {
+            let resolved = resolved_config_with_source(resolved_source);
             assert!(!needs_redetect(Some(&resolved)), "manifest_source '{resolved_source}' must not trigger redetect");
         }
+
+        assert!(needs_redetect(Some(&resolved_config_with_source("undetected"))), "'undetected' has never been through probe detection and must redetect");
     }
 
-    fn pending_clone_with_source(source: &str) -> SandboxAppConfigRow {
+    fn resolved_config_with_source(source: &str) -> SandboxAppConfigRow {
         SandboxAppConfigRow {
             service_id: Uuid::new_v4(),
             runtime: Some("node".to_string()),
