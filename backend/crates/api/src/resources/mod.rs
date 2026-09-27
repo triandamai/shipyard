@@ -309,13 +309,22 @@ async fn sync_static_nginx_conf(db: &sqlx::PgPool, service_id: Uuid, data_dir: &
     }
 }
 
+/// `reqwest::Client::new()` (used inside `shipyard_cloudflare::CloudflareClient`)
+/// has no default timeout, so every Cloudflare HTTP call made from this file
+/// is wrapped in `tokio::time::timeout` with this bound — a dropped
+/// connection (egress firewall change, blackhole route, etc.) must never
+/// hang `create_domain`/`delete_domain` indefinitely. 10s mirrors the
+/// pattern `crate::settings::resolve_host_ip`'s `fetch_public_ip` call uses
+/// (3s there, since that's a fast public-IP ping rather than a real API op).
+const CLOUDFLARE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Best-effort: if the domain's org has a Cloudflare connection whose zones
 /// cover `hostname`, creates a DNS-only A record pointed at this server and
 /// returns its (zone_id, record_id). Returns None for every "nothing to do
 /// or something went wrong" case — no connection, no matching zone, or any
-/// Cloudflare API failure — logging a warning but never returning an `Err`,
-/// since a Cloudflare hiccup must never block domain creation (see the
-/// plan's Global Constraints).
+/// Cloudflare API failure (including a timeout) — logging a warning but
+/// never returning an `Err`, since a Cloudflare hiccup must never block
+/// domain creation (see the plan's Global Constraints).
 async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostname: &str) -> Option<(String, String)> {
     let org_id: Uuid = sqlx::query_scalar(
         "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
@@ -336,10 +345,14 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
     .flatten()?;
 
     let client = shipyard_cloudflare::CloudflareClient::new(connection.api_token);
-    let zones = match client.list_zones().await {
-        Ok(z) => z,
-        Err(e) => {
+    let zones = match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_zones()).await {
+        Ok(Ok(z)) => z,
+        Ok(Err(e)) => {
             tracing::warn!(hostname, "Cloudflare list_zones failed while creating domain: {e}");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(hostname, "Cloudflare list_zones timed out while creating domain");
             return None;
         }
     };
@@ -347,10 +360,14 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
     let zone = longest_matching_zone(hostname, &zones)?;
     let ip = crate::settings::resolve_host_ip().await;
 
-    match client.create_dns_record(&zone.id, hostname, &ip).await {
-        Ok(record) => Some((zone.id.clone(), record.id)),
-        Err(e) => {
+    match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.create_dns_record(&zone.id, hostname, &ip)).await {
+        Ok(Ok(record)) => Some((zone.id.clone(), record.id)),
+        Ok(Err(e)) => {
             tracing::warn!(hostname, zone = %zone.name, "Cloudflare create_dns_record failed: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(hostname, zone = %zone.name, "Cloudflare create_dns_record timed out");
             None
         }
     }
@@ -359,8 +376,8 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
 /// Best-effort: deletes the given Cloudflare DNS record if the domain's org
 /// still has a connection (an org that disconnected simply has none to
 /// authenticate the delete with — same code path as never having connected
-/// at all, per the spec). Never returns an error; a failure here must never
-/// block deleting the domain from Shipyard.
+/// at all, per the spec). Never returns an error; a failure here (including
+/// a timeout) must never block deleting the domain from Shipyard.
 async fn try_delete_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, zone_id: &str, record_id: &str) {
     let org_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
@@ -383,8 +400,10 @@ async fn try_delete_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, zone_
     let Some(token) = token else { return };
 
     let client = shipyard_cloudflare::CloudflareClient::new(token);
-    if let Err(e) = client.delete_dns_record(zone_id, record_id).await {
-        tracing::warn!(zone_id, record_id, "Cloudflare delete_dns_record failed: {e}");
+    match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.delete_dns_record(zone_id, record_id)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(zone_id, record_id, "Cloudflare delete_dns_record failed: {e}"),
+        Err(_) => tracing::warn!(zone_id, record_id, "Cloudflare delete_dns_record timed out"),
     }
 }
 
@@ -581,13 +600,20 @@ async fn create_domain(
 
     // Best-effort Cloudflare DNS record — never blocks domain creation on failure.
     if let Some((zone_id, record_id)) = try_create_cloudflare_record(&state.db, service_id, &body.hostname).await {
-        sqlx::query("UPDATE domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3")
+        if let Err(e) = sqlx::query("UPDATE domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3")
             .bind(&zone_id)
             .bind(&record_id)
             .bind(domain.id)
             .execute(&state.db)
             .await
-            .ok();
+        {
+            tracing::warn!(
+                hostname = %body.hostname,
+                %zone_id,
+                %record_id,
+                "created Cloudflare DNS record but failed to persist its ids: {e}"
+            );
+        }
     }
 
     // Write Traefik file-provider config (no-op when dynamic_config_dir is unset)
