@@ -44,7 +44,7 @@ fn hostname_to_router_name(hostname: &str) -> String {
 /// Longest match wins so a more specific zone (e.g. "staging.example.com")
 /// is preferred over a broader one (e.g. "example.com") when an org has
 /// both connected.
-fn longest_matching_zone<'a>(hostname: &str, zones: &'a [shipyard_cloudflare::Zone]) -> Option<&'a shipyard_cloudflare::Zone> {
+pub(crate) fn longest_matching_zone<'a>(hostname: &str, zones: &'a [shipyard_cloudflare::Zone]) -> Option<&'a shipyard_cloudflare::Zone> {
     let hostname = hostname.trim_end_matches('.').to_lowercase();
     zones
         .iter()

@@ -16,6 +16,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 
+use shipyard_cloudflare::CloudflareClient;
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_docker::{ContainerSummary, ImageSummary, NetworkSummary, NodeInfo, ServiceSummary, SwarmJoinTokens, VolumeSummary};
@@ -171,6 +172,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/db/tables/:table_name/columns", get(list_table_columns))
         .route("/admin/db/tables/:table_name/rows", get(list_table_rows))
         .route("/admin/db/tables/:table_name/rows/:pk_value", axum::routing::patch(update_table_row).delete(delete_table_row))
+        .route("/admin/sandbox/preview-dns", get(get_sandbox_preview_dns).put(set_sandbox_preview_dns_owner))
+        .route("/admin/sandbox/preview-dns/sync", post(sync_sandbox_preview_dns))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1487,6 +1490,206 @@ fn is_private_ip(addr: &std::net::IpAddr) -> bool {
     }
 }
 
+// ── Sandbox preview DNS (Cloudflare) ───────────────────────────────────────────
+
+/// `reqwest::Client::new()` (used inside `shipyard_cloudflare::CloudflareClient`)
+/// has no default timeout, so every Cloudflare HTTP call below is wrapped in
+/// `tokio::time::timeout` with this bound — mirrors
+/// `resources::mod.rs::CLOUDFLARE_CALL_TIMEOUT`. Unlike that file's
+/// best-effort domain-creation path, `sync_sandbox_preview_dns` is a
+/// foreground, user-triggered action, so a timeout here is surfaced to the
+/// caller as an error rather than swallowed.
+const CLOUDFLARE_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Debug, Serialize)]
+struct SandboxPreviewDnsStatus {
+    preview_base_domain: String,
+    owner_org_id: Option<uuid::Uuid>,
+    cloudflare_zone_id: Option<String>,
+    cloudflare_record_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetPreviewDnsOwnerRequest {
+    org_id: uuid::Uuid,
+}
+
+async fn require_owner_or_superadmin(db: &sqlx::PgPool, user_id: uuid::Uuid) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, user_id).await {
+        return Ok(());
+    }
+    let is_owner: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
+        "SELECT TRUE FROM org_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    if is_owner.is_none() {
+        return Err(ApiAppError(AppError::Forbidden(
+            "Only platform owners or superadmins can manage sandbox preview DNS".to_string(),
+        )));
+    }
+    Ok(())
+}
+
+/// GET /admin/sandbox/preview-dns
+async fn get_sandbox_preview_dns(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<SandboxPreviewDnsStatus>>, ApiAppError> {
+    require_owner_or_superadmin(&state.db, auth.user_id).await?;
+
+    let rows: Vec<(String, Value)> = sqlx::query_as(
+        "SELECT key, value FROM system_config WHERE key = ANY($1)",
+    )
+    .bind([
+        "sandbox_preview_cloudflare_org_id",
+        "sandbox_preview_cloudflare_zone_id",
+        "sandbox_preview_cloudflare_record_id",
+    ].as_slice())
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let mut map: std::collections::HashMap<String, String> = rows
+        .into_iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
+        .collect();
+
+    Ok(Json(ApiResponse::ok(SandboxPreviewDnsStatus {
+        preview_base_domain: state.config.sandbox.preview_base_domain.clone(),
+        owner_org_id: map.remove("sandbox_preview_cloudflare_org_id").and_then(|s| s.parse().ok()),
+        cloudflare_zone_id: map.remove("sandbox_preview_cloudflare_zone_id"),
+        cloudflare_record_id: map.remove("sandbox_preview_cloudflare_record_id"),
+    })))
+}
+
+/// PUT /admin/sandbox/preview-dns — designates which org's Cloudflare
+/// connection owns the sandbox preview base domain's zone.
+async fn set_sandbox_preview_dns_owner(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<SetPreviewDnsOwnerRequest>,
+) -> Result<Json<ApiResponse<()>>, ApiAppError> {
+    require_owner_or_superadmin(&state.db, auth.user_id).await?;
+
+    sqlx::query(
+        "INSERT INTO system_config (key, value, updated_at) VALUES ('sandbox_preview_cloudflare_org_id', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+    )
+    .bind(Value::String(body.org_id.to_string()))
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(())))
+}
+
+/// POST /admin/sandbox/preview-dns/sync — creates the wildcard record on
+/// the first sync, updates it (in case the server's IP changed) on every
+/// sync after that. Manually triggered only — no background polling.
+async fn sync_sandbox_preview_dns(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<SandboxPreviewDnsStatus>>, ApiAppError> {
+    require_owner_or_superadmin(&state.db, auth.user_id).await?;
+
+    let owner_org_id: Option<String> = sqlx::query_scalar(
+        "SELECT value #>> '{}' FROM system_config WHERE key = 'sandbox_preview_cloudflare_org_id'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let owner_org_id: uuid::Uuid = owner_org_id
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| ApiAppError(AppError::BadRequest("No DNS-owner org set yet — call PUT /admin/sandbox/preview-dns first".to_string())))?;
+
+    let token: String = sqlx::query_scalar("SELECT api_token FROM cloudflare_connections WHERE org_id = $1")
+        .bind(owner_org_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        .ok_or_else(|| ApiAppError(AppError::BadRequest("The DNS-owner org has no Cloudflare connection".to_string())))?;
+
+    let client = CloudflareClient::new(token);
+
+    let zones = match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.list_zones()).await {
+        Ok(Ok(zones)) => zones,
+        Ok(Err(e)) => return Err(ApiAppError(e)),
+        Err(_) => return Err(ApiAppError(AppError::Cloudflare(
+            "Cloudflare list_zones timed out".to_string(),
+        ))),
+    };
+
+    let preview_base_domain = state.config.sandbox.preview_base_domain.clone();
+    let zone = crate::resources::longest_matching_zone(&preview_base_domain, &zones)
+        .ok_or_else(|| ApiAppError(AppError::BadRequest(format!(
+            "No zone in the DNS-owner org's Cloudflare account covers '{preview_base_domain}'"
+        ))))?
+        .clone();
+
+    let wildcard_name = format!("*.{preview_base_domain}");
+    let ip = resolve_host_ip().await;
+
+    let existing_record_id: Option<String> = sqlx::query_scalar(
+        "SELECT value #>> '{}' FROM system_config WHERE key = 'sandbox_preview_cloudflare_record_id'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let record_id = match existing_record_id {
+        Some(id) => {
+            match tokio::time::timeout(
+                CLOUDFLARE_CALL_TIMEOUT,
+                client.update_dns_record(&zone.id, &id, &wildcard_name, &ip),
+            ).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(ApiAppError(e)),
+                Err(_) => return Err(ApiAppError(AppError::Cloudflare(
+                    "Cloudflare update_dns_record timed out".to_string(),
+                ))),
+            }
+            id
+        }
+        None => {
+            match tokio::time::timeout(
+                CLOUDFLARE_CALL_TIMEOUT,
+                client.create_dns_record(&zone.id, &wildcard_name, &ip),
+            ).await {
+                Ok(Ok(record)) => record.id,
+                Ok(Err(e)) => return Err(ApiAppError(e)),
+                Err(_) => return Err(ApiAppError(AppError::Cloudflare(
+                    "Cloudflare create_dns_record timed out".to_string(),
+                ))),
+            }
+        }
+    };
+
+    for (key, value) in [
+        ("sandbox_preview_cloudflare_zone_id", zone.id.clone()),
+        ("sandbox_preview_cloudflare_record_id", record_id.clone()),
+    ] {
+        sqlx::query(
+            "INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, NOW())
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        )
+        .bind(key)
+        .bind(Value::String(value))
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    }
+
+    Ok(Json(ApiResponse::ok(SandboxPreviewDnsStatus {
+        preview_base_domain,
+        owner_org_id: Some(owner_org_id),
+        cloudflare_zone_id: Some(zone.id),
+        cloudflare_record_id: Some(record_id),
+    })))
+}
+
 // ── All-deployments admin view ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2513,5 +2716,23 @@ mod tests {
         // "BACKEND_IMAGE_EXTRA=foo" must not be picked up when looking for "BACKEND_IMAGE"
         let content = "BACKEND_IMAGE_EXTRA=foo\nBACKEND_IMAGE=real-value\n";
         assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "real-value");
+    }
+}
+
+#[cfg(test)]
+mod sandbox_preview_dns_tests {
+    use super::*;
+
+    #[test]
+    fn preview_dns_status_serializes_with_null_fields_when_never_configured() {
+        let status = SandboxPreviewDnsStatus {
+            preview_base_domain: "shipyard-apps.dev".to_string(),
+            owner_org_id: None,
+            cloudflare_zone_id: None,
+            cloudflare_record_id: None,
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["preview_base_domain"], "shipyard-apps.dev");
+        assert!(json["owner_org_id"].is_null());
     }
 }
