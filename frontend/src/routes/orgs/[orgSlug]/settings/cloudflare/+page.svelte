@@ -52,6 +52,7 @@
 	// ── Platform: sandbox preview DNS (owner/superadmin only; backend enforces) ──
 	let previewDns   = $state<SandboxPreviewDnsStatus | null>(null);
 	let selectedOwnerOrgId = $state('');
+	let selectedProxied = $state(false);
 	let savingOwner  = $state(false);
 	let ownerError   = $state('');
 	let syncing      = $state(false);
@@ -63,6 +64,7 @@
 		if (res.data) {
 			previewDns = res.data;
 			selectedOwnerOrgId = res.data.owner_org_id ?? '';
+			selectedProxied = res.data.proxied;
 		}
 	}
 
@@ -70,7 +72,7 @@
 		if (!selectedOwnerOrgId) return;
 		savingOwner = true;
 		ownerError = '';
-		const res = await api.setSandboxPreviewDnsOwner(selectedOwnerOrgId);
+		const res = await api.setSandboxPreviewDnsOwner(selectedOwnerOrgId, selectedProxied);
 		savingOwner = false;
 		if (res.error) {
 			ownerError = res.error.message;
@@ -194,6 +196,20 @@
 					{/if}
 					<p class="field-hint">The org whose Cloudflare connection covers <code>{previewDns.preview_base_domain}</code>'s zone — almost always your own platform-operator org, not a customer org.</p>
 				</div>
+				<div class="field">
+					<label class="proxied-toggle">
+						<input type="checkbox" bind:checked={selectedProxied} />
+						<span>Proxy through Cloudflare (orange cloud)</span>
+					</label>
+					<p class="field-hint proxied-warning">
+						<AlertCircle size={12} style="display:inline;vertical-align:-2px;" />
+						Not recommended: Shipyard issues its own TLS certificate per sandbox preview via Let's Encrypt,
+						which requires Cloudflare to pass the ACME HTTP challenge straight through. Proxying intercepts
+						that challenge instead, so enabling this will break HTTPS for every sandbox preview URL unless
+						you separately terminate TLS at Cloudflare's edge yourself. Leave unchecked (DNS-only) unless
+						you specifically know you need this.
+					</p>
+				</div>
 				{#if ownerError}
 					<div class="error-banner"><AlertCircle size={14} /><span>{ownerError}</span></div>
 				{/if}
@@ -245,6 +261,10 @@
 	.field-input:focus { border-color: var(--accent); }
 	.field-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; margin: 2px 0 0; }
 	.field-hint code { font-family: var(--font-mono); background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+	.field-hint.proxied-warning { color: #F59E0B; }
+
+	.proxied-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
+	.proxied-toggle input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
 
 	.fields { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px; }
 	.save-bar { display: flex; justify-content: flex-end; align-items: center; }

@@ -846,6 +846,7 @@ export interface SandboxPreviewDnsStatus {
 	owner_org_id: string | null;
 	cloudflare_zone_id: string | null;
 	cloudflare_record_id: string | null;
+	proxied: boolean;
 }
 
 // ─── SaaS Billing & Nodes ─────────────────────────────────────────

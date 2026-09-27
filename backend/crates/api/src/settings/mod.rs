@@ -1510,11 +1510,19 @@ struct SandboxPreviewDnsStatus {
     owner_org_id: Option<uuid::Uuid>,
     cloudflare_zone_id: Option<String>,
     cloudflare_record_id: Option<String>,
+    /// Whether the wildcard record is proxied ("orange cloud") through
+    /// Cloudflare. Defaults to `false` (DNS-only) — enabling this is an
+    /// explicit operator opt-in that breaks Traefik's per-preview Let's
+    /// Encrypt HTTP-01 issuance, since Cloudflare's edge would intercept the
+    /// ACME challenge instead of passing it through.
+    proxied: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct SetPreviewDnsOwnerRequest {
     org_id: uuid::Uuid,
+    #[serde(default)]
+    proxied: bool,
 }
 
 async fn require_owner_or_superadmin(db: &sqlx::PgPool, user_id: uuid::Uuid) -> Result<(), ApiAppError> {
@@ -1550,21 +1558,28 @@ async fn get_sandbox_preview_dns(
         "sandbox_preview_cloudflare_org_id",
         "sandbox_preview_cloudflare_zone_id",
         "sandbox_preview_cloudflare_record_id",
+        "sandbox_preview_cloudflare_proxied",
     ].as_slice())
     .fetch_all(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let mut map: std::collections::HashMap<String, String> = rows
-        .into_iter()
-        .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
-        .collect();
+    let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut proxied = false;
+    for (k, v) in rows {
+        if k == "sandbox_preview_cloudflare_proxied" {
+            proxied = v.as_bool().unwrap_or(false);
+        } else if let Some(s) = v.as_str() {
+            map.insert(k, s.to_string());
+        }
+    }
 
     Ok(Json(ApiResponse::ok(SandboxPreviewDnsStatus {
         preview_base_domain: state.config.sandbox.preview_base_domain.clone(),
         owner_org_id: map.remove("sandbox_preview_cloudflare_org_id").and_then(|s| s.parse().ok()),
         cloudflare_zone_id: map.remove("sandbox_preview_cloudflare_zone_id"),
         cloudflare_record_id: map.remove("sandbox_preview_cloudflare_record_id"),
+        proxied,
     })))
 }
 
@@ -1582,6 +1597,15 @@ async fn set_sandbox_preview_dns_owner(
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
     )
     .bind(Value::String(body.org_id.to_string()))
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    sqlx::query(
+        "INSERT INTO system_config (key, value, updated_at) VALUES ('sandbox_preview_cloudflare_proxied', $1, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+    )
+    .bind(Value::Bool(body.proxied))
     .execute(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -1648,11 +1672,23 @@ async fn sync_sandbox_preview_dns(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
+    // Operator-configurable (set via PUT alongside the DNS-owner org) — unlike
+    // per-service domains, this is an explicit, informed opt-in the operator
+    // makes knowing it breaks per-preview Let's Encrypt HTTP-01 issuance.
+    let proxied: bool = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM system_config WHERE key = 'sandbox_preview_cloudflare_proxied'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    .and_then(|v| v.as_bool())
+    .unwrap_or(false);
+
     let record_id = match existing_record_id {
         Some(id) => {
             match tokio::time::timeout(
                 CLOUDFLARE_CALL_TIMEOUT,
-                client.update_dns_record(&zone.id, &id, &wildcard_name, &ip),
+                client.update_dns_record(&zone.id, &id, &wildcard_name, &ip, proxied),
             ).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => return Err(ApiAppError(e)),
@@ -1665,7 +1701,7 @@ async fn sync_sandbox_preview_dns(
         None => {
             match tokio::time::timeout(
                 CLOUDFLARE_CALL_TIMEOUT,
-                client.create_dns_record(&zone.id, &wildcard_name, &ip),
+                client.create_dns_record(&zone.id, &wildcard_name, &ip, proxied),
             ).await {
                 Ok(Ok(record)) => record.id,
                 Ok(Err(e)) => return Err(ApiAppError(e)),
@@ -1696,6 +1732,7 @@ async fn sync_sandbox_preview_dns(
         owner_org_id: Some(owner_org_id),
         cloudflare_zone_id: Some(zone.id),
         cloudflare_record_id: Some(record_id),
+        proxied,
     })))
 }
 
@@ -2739,6 +2776,7 @@ mod sandbox_preview_dns_tests {
             owner_org_id: None,
             cloudflare_zone_id: None,
             cloudflare_record_id: None,
+            proxied: false,
         };
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json["preview_base_domain"], "shipyard-apps.dev");

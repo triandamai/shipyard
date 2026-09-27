@@ -369,7 +369,11 @@ async fn try_create_cloudflare_record(db: &sqlx::PgPool, service_id: Uuid, hostn
         return None;
     }
 
-    match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.create_dns_record(&zone.id, hostname, &ip)).await {
+    // Per-service domains are always DNS-only (never proxied) — a proxied
+    // record here would break Traefik's own ACME HTTP-01 issuance for that
+    // domain. Unlike the sandbox preview wildcard, this isn't operator-
+    // configurable.
+    match tokio::time::timeout(CLOUDFLARE_CALL_TIMEOUT, client.create_dns_record(&zone.id, hostname, &ip, false)).await {
         Ok(Ok(record)) => Some((zone.id.clone(), record.id)),
         Ok(Err(e)) => {
             tracing::warn!(hostname, zone = %zone.name, "Cloudflare create_dns_record failed: {e}");

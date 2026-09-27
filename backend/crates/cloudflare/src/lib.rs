@@ -170,11 +170,15 @@ struct DnsRecordBody<'a> {
 }
 
 impl<'a> DnsRecordBody<'a> {
-    /// Every record this crate ever writes is a DNS-only (never proxied) `A`
-    /// record with a 300s TTL — see the plan's Global Constraints for why
-    /// "never proxied" matters (it would break Traefik's own ACME flow).
-    fn a_record(name: &'a str, content: &'a str) -> Self {
-        Self { record_type: "A", name, content, ttl: 300, proxied: false }
+    /// Every record this crate writes is an `A` record with a 300s TTL.
+    /// `proxied` is caller-controlled: per-service domains always pass
+    /// `false` (a proxied record would break Traefik's own ACME HTTP-01
+    /// flow — see the plan's Global Constraints), but the sandbox preview
+    /// wildcard record is an explicit, informed opt-in the operator makes
+    /// knowing that tradeoff, so it's threaded through rather than
+    /// hardcoded here.
+    fn a_record(name: &'a str, content: &'a str, proxied: bool) -> Self {
+        Self { record_type: "A", name, content, ttl: 300, proxied }
     }
 }
 
@@ -196,9 +200,9 @@ impl CloudflareClient {
     }
 
     /// POST /zones/:zone_id/dns_records
-    pub async fn create_dns_record(&self, zone_id: &str, name: &str, content: &str) -> AppResult<DnsRecord> {
+    pub async fn create_dns_record(&self, zone_id: &str, name: &str, content: &str, proxied: bool) -> AppResult<DnsRecord> {
         let url = format!("{API_BASE}/zones/{zone_id}/dns_records");
-        let body = DnsRecordBody::a_record(name, content);
+        let body = DnsRecordBody::a_record(name, content, proxied);
         self.send_json(self.client.post(&url).json(&body)).await
     }
 
@@ -207,9 +211,9 @@ impl CloudflareClient {
     /// takes `name` too even though it's normally unchanged across a
     /// re-sync (only `content`, the target IP, actually changes in
     /// practice — see the sandbox preview-DNS sync in Task 6).
-    pub async fn update_dns_record(&self, zone_id: &str, record_id: &str, name: &str, content: &str) -> AppResult<DnsRecord> {
+    pub async fn update_dns_record(&self, zone_id: &str, record_id: &str, name: &str, content: &str, proxied: bool) -> AppResult<DnsRecord> {
         let url = format!("{API_BASE}/zones/{zone_id}/dns_records/{record_id}");
-        let body = DnsRecordBody::a_record(name, content);
+        let body = DnsRecordBody::a_record(name, content, proxied);
         self.send_json(self.client.put(&url).json(&body)).await
     }
 

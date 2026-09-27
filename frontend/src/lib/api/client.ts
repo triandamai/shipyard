@@ -767,8 +767,8 @@ class ApiClient {
 		return this.request('GET', `/admin/sandbox/preview-dns`, undefined, undefined, false, true);
 	}
 
-	async setSandboxPreviewDnsOwner(orgId: string): Promise<ApiResponse<null>> {
-		return this.put(`/admin/sandbox/preview-dns`, { org_id: orgId });
+	async setSandboxPreviewDnsOwner(orgId: string, proxied: boolean = false): Promise<ApiResponse<null>> {
+		return this.put(`/admin/sandbox/preview-dns`, { org_id: orgId, proxied });
 	}
 
 	async syncSandboxPreviewDns(): Promise<ApiResponse<import('./types').SandboxPreviewDnsStatus>> {
