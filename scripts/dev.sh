@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ── Shipyard Dev Environment Launcher ──────────────────────────
 # Usage: ./scripts/dev.sh [command]
-#   start   - Start all dev infrastructure + backend
+#   start   - Start all dev infrastructure + backend + frontend
 #   stop    - Stop all dev infrastructure
 #   db      - Start only PostgreSQL
 #   reset   - Reset database (drop and recreate)
@@ -80,7 +80,25 @@ case "${1:-start}" in
         mkdir -p "$SHIPYARD__DATA_DIR"
         mkdir -p "$PROJECT_ROOT/infra/traefik/dynamic"
         echo "  Sandbox apps: enabled=${SHIPYARD__SANDBOX__ENABLED} runtime=${SHIPYARD__SANDBOX__RUNTIME_CLASS} preview_domain=${SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN}"
+
+        # ── Frontend (SvelteKit dev server) ──────────────────────────────
+        FRONTEND_DIR="$PROJECT_ROOT/frontend"
+        if [ ! -f "$FRONTEND_DIR/.env" ]; then
+            echo "  No frontend/.env found — copying frontend/.env.example"
+            cp "$FRONTEND_DIR/.env.example" "$FRONTEND_DIR/.env"
+        fi
+        if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+            echo "  Installing frontend dependencies (first run)..."
+            (cd "$FRONTEND_DIR" && npm install)
+        fi
+
+        echo "  Frontend:   http://localhost:5173"
         echo ""
+
+        (cd "$FRONTEND_DIR" && npm run dev) &
+        FRONTEND_PID=$!
+        trap 'echo ""; echo "Stopping frontend..."; kill "$FRONTEND_PID" 2>/dev/null || true' EXIT INT TERM
+
         cd backend && cargo run --bin shipyard
         ;;
     stop)
