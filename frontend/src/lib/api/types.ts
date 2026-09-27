@@ -521,6 +521,15 @@ export interface SandboxAppConfig {
 	volume_name: string;
 }
 
+export type SandboxTemplate =
+	| 'node' | 'python' | 'static' | 'custom'
+	| 'react' | 'react-ts'
+	| 'vue' | 'vue-ts'
+	| 'sveltekit' | 'sveltekit-ts'
+	| 'next' | 'next-ts'
+	| 'nuxt'
+	| 'astro' | 'astro-ts';
+
 export interface SandboxInstance {
 	service_id: string;
 	status: 'stopped' | 'starting' | 'running';
@@ -529,6 +538,7 @@ export interface SandboxInstance {
 	preview_url: string | null;
 	last_heartbeat_at: string | null;
 	started_at: string | null;
+	pending: boolean;
 }
 
 export interface SandboxFileEntry {

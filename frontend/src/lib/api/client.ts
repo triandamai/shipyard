@@ -34,6 +34,7 @@ import type {
 	ComputeNode,
 	SandboxAppConfig,
 	SandboxInstance,
+	SandboxTemplate,
 	SandboxFileEntry,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
@@ -867,7 +868,7 @@ class ApiClient {
 
 	async createSandboxApp(
 		projectId: string,
-		data: { name: string; slug: string; template: 'node' | 'python' | 'static' }
+		data: { name: string; slug: string; template: SandboxTemplate }
 	): Promise<ApiResponse<{ id: string; project_id: string; name: string; slug: string; type: string }>> {
 		return this.post(`/projects/${projectId}/apps`, data);
 	}
@@ -876,7 +877,7 @@ class ApiClient {
 		return this.get(`/apps/${serviceId}/sandbox/status`);
 	}
 
-	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null }>> {
+	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null; pending: boolean }>> {
 		return this.post(`/apps/${serviceId}/sandbox/start`);
 	}
 
