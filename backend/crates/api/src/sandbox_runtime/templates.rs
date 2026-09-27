@@ -6,6 +6,10 @@ pub enum Template {
     Python,
     Static,
     Custom,
+    React,
+    ReactTs,
+    Vue,
+    VueTs,
 }
 
 #[cfg(test)]
@@ -113,6 +117,44 @@ mod tests {
     #[test]
     fn custom_template_is_reachable_by_name() {
         assert_eq!(Template::from_str("custom"), Some(Template::Custom));
+    }
+
+    #[test]
+    fn vite_family_templates_scaffold_via_the_official_create_vite_cli() {
+        let cases = [
+            (Template::React, "--template react"),
+            (Template::ReactTs, "--template react-ts"),
+            (Template::Vue, "--template vue"),
+            (Template::VueTs, "--template vue-ts"),
+        ];
+        for (t, expected_flag) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("npm create vite@latest"), "{t:?} seed script must invoke create-vite");
+            assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
+        }
+    }
+
+    #[test]
+    fn vite_family_templates_bind_dev_server_to_all_interfaces_and_the_port_env_var() {
+        for t in [Template::React, Template::ReactTs, Template::Vue, Template::VueTs] {
+            let (runtime, base_image, install, dev, port) = template_runtime(t);
+            assert_eq!(runtime, "node");
+            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(install, Some("npm install"));
+            assert!(dev.contains("--host 0.0.0.0"), "{t:?} dev_cmd must bind all interfaces: {dev}");
+            assert!(dev.contains("--port $PORT"), "{t:?} dev_cmd must read the PORT env var: {dev}");
+            assert_eq!(port, 5173, "Vite's own default dev port");
+        }
+    }
+
+    #[test]
+    fn vite_family_templates_are_reachable_by_name() {
+        assert_eq!(Template::from_str("react"), Some(Template::React));
+        assert_eq!(Template::from_str("react-ts"), Some(Template::ReactTs));
+        assert_eq!(Template::from_str("vue"), Some(Template::Vue));
+        assert_eq!(Template::from_str("vue-ts"), Some(Template::VueTs));
     }
 }
 
@@ -224,12 +266,21 @@ cat > /app/shipyard.json.example <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 
+const REACT_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react\n";
+const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template react-ts\n";
+const VUE_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue\n";
+const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue-ts\n";
+
 pub fn template_seed_script_b64(t: Template) -> String {
     let script = match t {
         Template::Node => NODE_SEED_SCRIPT,
         Template::Python => PYTHON_SEED_SCRIPT,
         Template::Static => STATIC_SEED_SCRIPT,
         Template::Custom => CUSTOM_SEED_SCRIPT,
+        Template::React => REACT_SEED_SCRIPT,
+        Template::ReactTs => REACT_TS_SEED_SCRIPT,
+        Template::Vue => VUE_SEED_SCRIPT,
+        Template::VueTs => VUE_TS_SEED_SCRIPT,
     };
     BASE64.encode(script)
 }
@@ -255,6 +306,10 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
         // provision_sandbox re-detects the real stack on every restart while
         // this sandbox's manifest_source stays 'pending'.
         Template::Custom => ("custom", "node:20-alpine", None, "sleep infinity", 3000),
+        Template::React => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::ReactTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::Vue => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::VueTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
     }
 }
 
@@ -265,6 +320,10 @@ impl Template {
             "python" => Some(Template::Python),
             "static" => Some(Template::Static),
             "custom" => Some(Template::Custom),
+            "react" => Some(Template::React),
+            "react-ts" => Some(Template::ReactTs),
+            "vue" => Some(Template::Vue),
+            "vue-ts" => Some(Template::VueTs),
             _ => None,
         }
     }
