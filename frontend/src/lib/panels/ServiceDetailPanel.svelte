@@ -1844,6 +1844,9 @@
 												{#if d.port}
 													<span class="badge badge-blue">:{d.port}</span>
 												{/if}
+												{#if d.cloudflare_record_id}
+													<span class="badge badge-cf" title="DNS record managed by Cloudflare">Cloudflare</span>
+												{/if}
 											</div>
 										</div>
 										<div class="domain-actions">
@@ -3043,6 +3046,10 @@
 	.badge-dim {
 		background: var(--bg-elevated); color: var(--text-muted);
 		border: 1px solid var(--border);
+	}
+	.badge-cf {
+		background: rgba(37,99,235,0.1); color: var(--accent);
+		border: 1px solid rgba(37,99,235,0.25);
 	}
 
 	.domain-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
