@@ -12,6 +12,8 @@ pub enum Template {
     VueTs,
     SvelteKit,
     SvelteKitTs,
+    Next,
+    NextTs,
 }
 
 #[cfg(test)]
@@ -192,6 +194,38 @@ mod tests {
         assert_eq!(Template::from_str("sveltekit"), Some(Template::SvelteKit));
         assert_eq!(Template::from_str("sveltekit-ts"), Some(Template::SvelteKitTs));
     }
+
+    #[test]
+    fn next_templates_scaffold_via_the_official_create_next_app_cli() {
+        let cases = [(Template::Next, "--js"), (Template::NextTs, "--ts")];
+        for (t, expected_flag) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("create-next-app"), "{t:?} seed script must invoke create-next-app");
+            assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
+        }
+    }
+
+    #[test]
+    fn next_templates_bind_dev_server_via_nexts_own_hostname_and_port_flags() {
+        for t in [Template::Next, Template::NextTs] {
+            let (runtime, base_image, install, dev, port) = template_runtime(t);
+            assert_eq!(runtime, "node");
+            assert_eq!(base_image, "node:20-alpine");
+            assert_eq!(install, Some("npm install"));
+            // Next's CLI uses -H/-p, not Vite's --host/--port convention.
+            assert!(dev.contains("-H 0.0.0.0"), "{t:?} dev_cmd must bind all interfaces: {dev}");
+            assert!(dev.contains("-p $PORT"), "{t:?} dev_cmd must read the PORT env var: {dev}");
+            assert_eq!(port, 3000, "Next's own default dev port");
+        }
+    }
+
+    #[test]
+    fn next_templates_are_reachable_by_name() {
+        assert_eq!(Template::from_str("next"), Some(Template::Next));
+        assert_eq!(Template::from_str("next-ts"), Some(Template::NextTs));
+    }
 }
 
 const NODE_SEED_SCRIPT: &str = r#"mkdir -p /app
@@ -308,6 +342,8 @@ const VUE_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue\n";
 const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest /app -- --template vue-ts\n";
 const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --install npm\n";
 const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --install npm\n";
+const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
+const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm\n";
 
 pub fn template_seed_script_b64(t: Template) -> String {
     let script = match t {
@@ -321,6 +357,8 @@ pub fn template_seed_script_b64(t: Template) -> String {
         Template::VueTs => VUE_TS_SEED_SCRIPT,
         Template::SvelteKit => SVELTEKIT_SEED_SCRIPT,
         Template::SvelteKitTs => SVELTEKIT_TS_SEED_SCRIPT,
+        Template::Next => NEXT_SEED_SCRIPT,
+        Template::NextTs => NEXT_TS_SEED_SCRIPT,
     };
     BASE64.encode(script)
 }
@@ -352,6 +390,8 @@ pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'st
         Template::VueTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
         Template::SvelteKit => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
         Template::SvelteKitTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- --host 0.0.0.0 --port $PORT", 5173),
+        Template::Next => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
+        Template::NextTs => ("node", "node:20-alpine", Some("npm install"), "npm run dev -- -H 0.0.0.0 -p $PORT", 3000),
     }
 }
 
@@ -368,6 +408,8 @@ impl Template {
             "vue-ts" => Some(Template::VueTs),
             "sveltekit" => Some(Template::SvelteKit),
             "sveltekit-ts" => Some(Template::SvelteKitTs),
+            "next" => Some(Template::Next),
+            "next-ts" => Some(Template::NextTs),
             _ => None,
         }
     }
