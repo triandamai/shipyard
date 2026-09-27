@@ -745,6 +745,31 @@ class ApiClient {
 		return this.delete(`/orgs/${orgId}/git-providers/${providerId}`);
 	}
 
+	// ─── Cloudflare ─────────────────────────────────────────────────────────────
+	async getCloudflareConnection(orgId: string): Promise<ApiResponse<import('./types').CloudflareConnectionStatus>> {
+		return this.get(`/orgs/${orgId}/cloudflare`);
+	}
+
+	async connectCloudflare(orgId: string, apiToken: string): Promise<ApiResponse<import('./types').CloudflareConnection>> {
+		return this.post(`/orgs/${orgId}/cloudflare`, { api_token: apiToken });
+	}
+
+	async disconnectCloudflare(orgId: string): Promise<ApiResponse<null>> {
+		return this.delete(`/orgs/${orgId}/cloudflare`);
+	}
+
+	async getSandboxPreviewDns(): Promise<ApiResponse<import('./types').SandboxPreviewDnsStatus>> {
+		return this.get(`/admin/sandbox/preview-dns`);
+	}
+
+	async setSandboxPreviewDnsOwner(orgId: string): Promise<ApiResponse<null>> {
+		return this.put(`/admin/sandbox/preview-dns`, { org_id: orgId });
+	}
+
+	async syncSandboxPreviewDns(): Promise<ApiResponse<import('./types').SandboxPreviewDnsStatus>> {
+		return this.post(`/admin/sandbox/preview-dns/sync`, {});
+	}
+
 	// ─── Billing ────────────────────────────────────────────────────────────────
 	getBilling(orgId: string): Promise<ApiResponse<OrgBilling>> {
 		return this.request<OrgBilling>('GET', `/orgs/${orgId}/billing`);

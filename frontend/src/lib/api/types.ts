@@ -499,6 +499,8 @@ export interface Domain {
 	cert_provider: string;
 	port: number | null;
 	created_at: string;
+	cloudflare_zone_id: string | null;
+	cloudflare_record_id: string | null;
 }
 
 export interface DnsCheckResult {
@@ -813,6 +815,37 @@ export interface GitProvider {
 	username: string | null;
 	created_at: string;
 	updated_at: string;
+}
+
+export interface CloudflareConnection {
+	id: string;
+	org_id: string;
+	api_token: string;
+	account_id: string;
+	account_name: string | null;
+	created_at: string;
+}
+
+export interface CloudflareZone {
+	id: string;
+	name: string;
+}
+
+export interface CloudflareConnectionStatus {
+	id?: string;
+	org_id?: string;
+	api_token?: string;
+	account_id?: string;
+	account_name?: string | null;
+	created_at?: string;
+	zones: CloudflareZone[];
+}
+
+export interface SandboxPreviewDnsStatus {
+	preview_base_domain: string;
+	owner_org_id: string | null;
+	cloudflare_zone_id: string | null;
+	cloudflare_record_id: string | null;
 }
 
 // ─── SaaS Billing & Nodes ─────────────────────────────────────────
