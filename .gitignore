@@ -62,3 +62,6 @@ vite.config.ts.timestamp-*
 .cache/
 tmp/
 .worktrees/
+
+# ── Superpowers scratch (SDD workspaces, brainstorm mockups) ─────────────────
+.superpowers/
