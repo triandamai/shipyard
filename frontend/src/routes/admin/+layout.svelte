@@ -12,9 +12,11 @@
 	let mobileOpen    = $state(false);
 
 	onMount(async () => {
-		const savedTheme = localStorage.getItem('shipyard-admin-theme');
-		if (savedTheme === 'dark' || savedTheme === 'light') theme = savedTheme;
-		else if (window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+		// Same theme storage key and mechanism as IconSidebar.svelte — one
+		// shared theme state for the whole app, not a separate admin one.
+		const saved = localStorage.getItem('shipyard_theme');
+		theme = saved === 'dark' ? 'dark' : 'light';
+		document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : '');
 
 		const savedCollapsed = localStorage.getItem('shipyard-admin-sidebar');
 		if (savedCollapsed === '1') collapsed = true;
@@ -35,7 +37,8 @@
 
 	function toggleTheme() {
 		theme = theme === 'light' ? 'dark' : 'light';
-		localStorage.setItem('shipyard-admin-theme', theme);
+		localStorage.setItem('shipyard_theme', theme);
+		document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : '');
 	}
 	function toggleSidebar() {
 		collapsed = !collapsed;
@@ -209,64 +212,54 @@
 	.gate-ring { width:24px; height:24px; border:2px solid rgba(255,255,255,0.1); border-top-color:rgba(59,130,246,0.8); border-radius:50%; animation:spin 0.75s linear infinite; }
 	@keyframes spin { to { transform:rotate(360deg); } }
 
-	/* ── Design tokens ────────────────────── */
+	/* ── Design tokens: alias admin's old var names onto the shared design
+	   system's real tokens (defined in frontend/src/routes/layout.css, which
+	   the root layout already imports globally). This keeps every
+	   not-yet-migrated admin page's existing `var(--bg)` etc. references
+	   working during the page-by-page migration (Part B of the plan) — once
+	   a page migrates, it stops using these names entirely and this alias
+	   layer becomes dead weight to delete in a final cleanup task. */
 	.shell {
-		--bg:            #f5f5f5;
-		--surface:       #ffffff;
-		--surface-2:     #f0f0f0;
-		--border:        #e3e3e3;
-		--border-2:      #cecece;
-		--text:          #111111;
-		--text-2:        #555555;
-		--text-3:        #9a9a9a;
-		--text-4:        #c4c4c4;
-		--accent:        #1d4ed8;
-		--accent-soft:   rgba(29,78,216,0.09);
-		--accent-ring:   rgba(29,78,216,0.25);
-		--ok:            #16a34a;
-		--ok-soft:       rgba(22,163,74,0.08);
-		--warn:          #b45309;
-		--warn-soft:     rgba(180,83,9,0.08);
-		--danger:        #dc2626;
-		--danger-soft:   rgba(220,38,38,0.08);
-		--row-hover:     rgba(0,0,0,0.022);
-		--shadow-sm:     0 1px 2px rgba(0,0,0,0.07);
-		--shadow:        0 1px 3px rgba(0,0,0,0.09), 0 1px 2px rgba(0,0,0,0.05);
-		--shadow-md:     0 4px 8px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
-		--radius:        9px;
-		--radius-sm:     6px;
-		--font:          system-ui, -apple-system, 'Segoe UI', sans-serif;
-		--mono:          ui-monospace, 'JetBrains Mono', 'Fira Code', monospace;
+		--bg:            var(--bg-base);
+		--surface:       var(--bg-surface);
+		--surface-2:     var(--bg-elevated);
+		/* --border and --accent are intentionally NOT redeclared here: their
+		   new-token name is identical to the old admin name, and CSS treats
+		   `--border: var(--border);` on the same rule as a self-reference
+		   cycle, which resolves to an invalid (empty) value rather than the
+		   inherited one — verified live in-browser, where it silently broke
+		   every var(--border)/var(--accent) consumer (transparent borders,
+		   invisible accent-colored buttons). Omitting the declaration lets
+		   the identically-named token inherit straight from :root instead,
+		   which is what we actually want. */
+		--border-2:      var(--border-hover);
+		--text:          var(--text-primary);
+		--text-2:        var(--text-secondary);
+		--text-3:        var(--text-muted);
+		--text-4:        var(--text-dim);
+		--accent-soft:   var(--accent-muted);
+		--accent-ring:   color-mix(in srgb, var(--accent) 25%, transparent);
+		--ok:            var(--accent-green);
+		--ok-soft:       var(--accent-green-muted);
+		--warn:          var(--accent-yellow);
+		--warn-soft:     var(--accent-yellow-muted);
+		--danger:        var(--accent-red);
+		--danger-soft:   var(--accent-red-muted);
+		--row-hover:     var(--bg-hover);
+		/* --shadow-sm: same self-reference issue as --border/--accent above —
+		   omitted so it inherits :root's --shadow-sm directly. */
+		--shadow:        var(--shadow-md);
+		--shadow-md:     var(--shadow-lg);
+		--radius:        var(--radius-lg);
+		--radius-sm:     var(--radius-md);
+		--font:          var(--font-sans);
+		--mono:          var(--font-mono);
 		display:flex;
 		height:100vh;
 		overflow:hidden;
 		font-family:var(--font);
 		font-size:13px;
 		-webkit-font-smoothing:antialiased;
-	}
-	.shell[data-theme="dark"] {
-		--bg:            #111111;
-		--surface:       #1a1a1a;
-		--surface-2:     #212121;
-		--border:        #2d2d2d;
-		--border-2:      #3d3d3d;
-		--text:          #efefef;
-		--text-2:        #999999;
-		--text-3:        #585858;
-		--text-4:        #3d3d3d;
-		--accent:        #3b82f6;
-		--accent-soft:   rgba(59,130,246,0.1);
-		--accent-ring:   rgba(59,130,246,0.22);
-		--ok:            #22c55e;
-		--ok-soft:       rgba(34,197,94,0.1);
-		--warn:          #f59e0b;
-		--warn-soft:     rgba(245,158,11,0.1);
-		--danger:        #ef4444;
-		--danger-soft:   rgba(239,68,68,0.1);
-		--row-hover:     rgba(255,255,255,0.025);
-		--shadow-sm:     0 1px 2px rgba(0,0,0,0.35);
-		--shadow:        0 1px 3px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.3);
-		--shadow-md:     0 4px 8px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
 	}
 
 	/* ── Sidebar ──────────────────────────── */
