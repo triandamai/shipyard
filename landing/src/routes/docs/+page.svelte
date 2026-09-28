@@ -112,6 +112,7 @@
 			<a href="/docs" class="topbar-link active">Docs</a>
 			<a href="/docs/api" class="topbar-link">API Reference</a>
 			<a href="/docs/edge-functions" class="topbar-link">Edge Functions</a>
+			<a href="/docs/sandbox" class="topbar-link">Sandbox</a>
 				<a href="/docs/registry" class="topbar-link">Registry</a>
 			<a href="https://github.com/triandamai/shipyard" target="_blank" rel="noopener noreferrer" class="topbar-link">GitHub</a>
 		</div>
@@ -151,6 +152,10 @@
 				<a href="/docs/edge-functions" class="nav-item">
 					<ChevronRight size={12} />
 					Edge Functions
+				</a>
+				<a href="/docs/sandbox" class="nav-item">
+					<ChevronRight size={12} />
+					Sandbox Apps
 				</a>
 				<a href="/docs/registry" class="nav-item">
 					<ChevronRight size={12} />
@@ -455,8 +460,15 @@
 						<tr><td><code>static</code></td><td>Serve static files via nginx — defaults to <code>nginx:alpine</code></td></tr>
 						<tr><td><code>database</code></td><td>Run a database image with preset options (Postgres, MySQL, Redis, etc.)</td></tr>
 						<tr><td><code>docker_compose</code></td><td>Import a Compose file as managed services</td></tr>
+						<tr><td><code>sandbox_app</code></td><td>Disposable coding sandbox — browser terminal, live preview, and one-click framework scaffolding (React, Vue, SvelteKit, Next.js, Nuxt, Astro)</td></tr>
 					</tbody>
 				</table>
+			</div>
+
+			<div class="callout callout-info">
+				Sandbox apps are a different workflow from the other service types — see the
+				dedicated <a href="/docs/sandbox" class="inline-link">Sandbox Apps</a> guide for
+				templates, the Custom scaffold-your-own mode, and the editor/terminal/preview UI.
 			</div>
 
 			<h3>Creating a service</h3>

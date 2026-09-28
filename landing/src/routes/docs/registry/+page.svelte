@@ -153,6 +153,7 @@ __IMAGE__=registry.your-domain.com/acme/backend/api:v1.2.3`,
 			<a href="/docs" class="topbar-link">Docs</a>
 			<a href="/docs/api" class="topbar-link">API Reference</a>
 			<a href="/docs/edge-functions" class="topbar-link">Edge Functions</a>
+			<a href="/docs/sandbox" class="topbar-link">Sandbox</a>
 			<a href="/docs/registry" class="topbar-link active">Registry</a>
 			<a href="https://github.com/triandamai/shipyard" target="_blank" rel="noopener noreferrer" class="topbar-link">GitHub</a>
 		</div>

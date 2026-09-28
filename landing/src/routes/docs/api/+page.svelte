@@ -118,6 +118,7 @@
 			<a href="/" class="topbar-link">Home</a>
 			<a href="/docs" class="topbar-link">Docs</a>
 			<a href="/docs/api" class="topbar-link active">API Reference</a>
+			<a href="/docs/sandbox" class="topbar-link">Sandbox</a>
 			<a href="https://github.com/triandamai/shipyard" target="_blank" rel="noopener noreferrer" class="topbar-link">GitHub</a>
 		</div>
 		<button class="mobile-menu-btn" onclick={() => sidebarOpen = !sidebarOpen} aria-label="Toggle menu">
