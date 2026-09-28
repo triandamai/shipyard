@@ -13,7 +13,6 @@
 	let instance = $state<SandboxInstance | null>(null);
 	let bootState = $state<'starting' | 'ready' | 'error'>('starting');
 	let bootError = $state('');
-	let bootStatusMessage = $state('Waking up your sandbox…');
 	let pollCancelled = false;
 
 	// Editor (sidebar + code editor, like VS Code) and preview show one at a
@@ -193,7 +192,6 @@
 	async function boot() {
 		bootState = 'starting';
 		bootError = '';
-		bootStatusMessage = 'Waking up your sandbox…';
 
 		const startRes = await api.startSandbox(serviceId);
 		if (!startRes.data) {
@@ -212,47 +210,43 @@
 		navHistory = startRes.data.preview_url ? [startRes.data.preview_url] : [];
 		navIndex = navHistory.length - 1;
 
-		// The container is up, but the dev server inside it may still be
-		// scaffolding/installing — the backend keeps `status` at 'starting'
-		// until it confirms the dev server's port actually accepts
-		// connections (or gives up and reports a failure). Poll until it
-		// resolves one way or the other rather than assuming ready.
-		if (startRes.data.status === 'starting') {
-			bootStatusMessage = 'Starting the dev server — first boot on a framework template can take a minute or two.';
-			const reachedRunning = await pollUntilResolved();
-			if (!reachedRunning) return; // pollUntilResolved already set bootState = 'error'
-		}
-
 		const treeRes = await api.getSandboxFileTree(serviceId);
 		if (treeRes.data) entries = treeRes.data.entries;
 
+		// The editor shell (file tree, code editor, terminal) opens right away
+		// — it only needs the container, not the dev server. The dev server
+		// itself may still be scaffolding/installing, so `instance.status` can
+		// still read 'starting' here; that's tracked in the background below
+		// and surfaced inline in the Preview pane, never as a full-page block.
 		bootState = 'ready';
+
+		if (startRes.data.status === 'starting') {
+			// Surface progress immediately rather than making the user go find
+			// it — the Terminal defaults to a live log tail, so opening it here
+			// is the loading indicator.
+			showTerminal = true;
+			pollDevServerStatus();
+		}
 
 		heartbeatTimer = setInterval(() => {
 			api.heartbeatSandbox(serviceId);
 		}, 60_000);
 	}
 
-	/** Polls GET /sandbox/status while `status` stays 'starting'. Resolves
-	 * `true` once it flips to 'running'. If it flips to 'stopped' instead —
-	 * the dev server never came up within the backend's timeout — sets
-	 * `bootState = 'error'` (using the backend's `last_error` message when
-	 * one was recorded) and resolves `false`. */
-	async function pollUntilResolved(): Promise<boolean> {
+	/** Fire-and-forget: polls GET /sandbox/status in the background while the
+	 * dev server is still coming up, updating `instance` as it changes so the
+	 * Preview pane (and the terminal's status pill) can react to it — without
+	 * blocking the editor shell, which is already usable by the time this
+	 * runs. Stops once `status` leaves 'starting' either way. */
+	async function pollDevServerStatus() {
 		while (!pollCancelled) {
 			await new Promise((r) => setTimeout(r, 1500));
-			if (pollCancelled) return false;
+			if (pollCancelled) return;
 			const res = await api.getSandboxInstance(serviceId);
 			if (!res.data) continue; // transient fetch error — keep trying
 			instance = res.data;
-			if (res.data.status === 'running') return true;
-			if (res.data.status === 'stopped') {
-				bootError = res.data.last_error ?? 'The sandbox stopped unexpectedly while starting.';
-				bootState = 'error';
-				return false;
-			}
+			if (res.data.status !== 'starting') return;
 		}
-		return false;
 	}
 
 	async function openFile(path: string) {
@@ -341,10 +335,7 @@
 <div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-sidebar={resizingSidebar}>
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">
-			<div class="boot-message">{bootStatusMessage}</div>
-			<div class="boot-logs">
-				<SandboxTerminal {serviceId} />
-			</div>
+			<div class="boot-message">Waking up your sandbox…</div>
 		</div>
 	{:else if bootState === 'error'}
 		<div class="boot-overlay error">
@@ -449,22 +440,35 @@
 						Publish
 					</button>
 				</div>
-				<div class="preview-surface" bind:this={previewSurfaceEl}>
-					<div
-						class="preview-frame-box"
-						style={previewContentWidth ? `width:${previewContentWidth}px` : 'width:100%'}
-					>
-						<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
-						<div
-							class="preview-resize-handle"
-							role="separator"
-							aria-orientation="vertical"
-							aria-label="Resize preview width"
-							tabindex="-1"
-							onpointerdown={startPreviewContentResize}
-						></div>
+				{#if instance.status === 'starting'}
+					<div class="preview-loading">
+						<div class="spinner"></div>
+						<p>Starting the dev server…</p>
+						<p class="hint">First boot on a framework template can take a minute or two — check the Terminal's Logs tab to watch progress.</p>
 					</div>
-				</div>
+				{:else if instance.last_error}
+					<div class="preview-loading error">
+						<p>{instance.last_error}</p>
+						<button class="btn btn-primary" onclick={boot}>Retry</button>
+					</div>
+				{:else}
+					<div class="preview-surface" bind:this={previewSurfaceEl}>
+						<div
+							class="preview-frame-box"
+							style={previewContentWidth ? `width:${previewContentWidth}px` : 'width:100%'}
+						>
+							<iframe bind:this={previewIframe} title="Live preview" src={instance.preview_url}></iframe>
+							<div
+								class="preview-resize-handle"
+								role="separator"
+								aria-orientation="vertical"
+								aria-label="Resize preview width"
+								tabindex="-1"
+								onpointerdown={startPreviewContentResize}
+							></div>
+						</div>
+					</div>
+				{/if}
 			{:else}
 				<div class="empty-state">No preview available</div>
 			{/if}
@@ -475,7 +479,7 @@
 		</button>
 		{#if showTerminal}
 			<div class="terminal-pane">
-				<SandboxTerminal {serviceId} />
+				<SandboxTerminal {serviceId} sandboxStatus={instance?.status} />
 			</div>
 		{/if}
 	{/if}
@@ -590,6 +594,37 @@
 		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
+	}
+	.preview-loading {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 10px;
+		padding: 24px;
+		text-align: center;
+		color: var(--text-secondary);
+		font-size: 13px;
+	}
+	.preview-loading.error {
+		color: var(--accent-red);
+	}
+	.preview-loading .hint {
+		max-width: 420px;
+		color: var(--text-dim);
+		font-size: 12px;
+	}
+	.preview-loading .spinner {
+		width: 20px;
+		height: 20px;
+		border: 2px solid var(--border);
+		border-top-color: var(--accent);
+		border-radius: 50%;
+		animation: preview-spin 0.7s linear infinite;
+	}
+	@keyframes preview-spin {
+		to { transform: rotate(360deg); }
 	}
 	/* The preview shows an arbitrary website that may be any color scheme —
 	   giving it its own neutral, always-light "browser content" surface
@@ -775,14 +810,6 @@
 	.boot-message {
 		text-align: center;
 		max-width: 520px;
-	}
-	.boot-logs {
-		width: 100%;
-		max-width: 720px;
-		height: 320px;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		overflow: hidden;
 	}
 	.terminal-toggle {
 		grid-row: 3;

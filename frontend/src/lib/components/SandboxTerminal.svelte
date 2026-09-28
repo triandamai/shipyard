@@ -7,9 +7,13 @@
 
 	interface Props {
 		serviceId: string;
+		/** Optional — when provided, shows a small status pill next to the
+		 * Logs/Shell tabs while the dev server is still starting, so the
+		 * loading state is visible without having to read the log text. */
+		sandboxStatus?: 'stopped' | 'starting' | 'running';
 	}
 
-	let { serviceId }: Props = $props();
+	let { serviceId, sandboxStatus }: Props = $props();
 
 	// 'logs' (default): a read-only tail of the dev server's own stdout/stderr
 	// — what most people opening the terminal actually want to see. 'shell'
@@ -217,6 +221,12 @@
 		<button class="mode-tab" class:active={mode === 'shell'} onclick={() => switchMode('shell')}>
 			Shell
 		</button>
+		{#if sandboxStatus === 'starting'}
+			<span class="status-pill">
+				<span class="status-dot"></span>
+				Starting…
+			</span>
+		{/if}
 	</div>
 	{#if connState === 'error'}
 		<p class="error">{errorMsg}</p>
@@ -254,6 +264,30 @@
 	.mode-tab.active {
 		color: #58a6ff;
 		background: rgba(88, 166, 255, 0.1);
+	}
+	.status-pill {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		margin-left: auto;
+		margin-right: 8px;
+		padding: 3px 8px;
+		font-size: 11px;
+		font-weight: 500;
+		color: #d29922;
+		background: rgba(210, 153, 34, 0.12);
+		border-radius: 999px;
+	}
+	.status-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: #d29922;
+		animation: status-pulse 1.2s ease-in-out infinite;
+	}
+	@keyframes status-pulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.35; }
 	}
 	.term-container {
 		flex: 1;
