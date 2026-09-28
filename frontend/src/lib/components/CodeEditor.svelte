@@ -5,6 +5,8 @@
 	import { javascript } from '@codemirror/lang-javascript';
 	import { json } from '@codemirror/lang-json';
 	import { EditorState, Compartment } from '@codemirror/state';
+	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+	import { tags as t } from '@lezer/highlight';
 
 	interface Props {
 		value?: string;
@@ -29,6 +31,26 @@
 			default: return [];
 		}
 	}
+
+	// Maps token types to the app's own design-token colors (layout.css) so
+	// the editor reads as part of Shipyard rather than a generic default
+	// CodeMirror palette — and follows the same light/dark theme switch
+	// automatically, since these resolve as real CSS custom properties.
+	const syntaxTheme = HighlightStyle.define([
+		{ tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.definitionKeyword, t.moduleKeyword], color: 'var(--accent)', fontWeight: 600 },
+		{ tag: [t.string, t.special(t.string), t.docString, t.regexp], color: 'var(--accent-green)' },
+		{ tag: [t.number, t.integer, t.float, t.bool, t.null, t.atom, t.escape], color: 'var(--accent-yellow)' },
+		{ tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: 'var(--text-dim)', fontStyle: 'italic' },
+		{ tag: t.function(t.variableName), color: 'var(--accent-blue)' },
+		{ tag: t.definition(t.variableName), color: 'var(--text-primary)' },
+		{ tag: t.variableName, color: 'var(--text-secondary)' },
+		{ tag: [t.propertyName, t.attributeName], color: 'var(--text-primary)' },
+		{ tag: [t.typeName, t.className, t.namespace], color: 'var(--accent-yellow)' },
+		{ tag: t.tagName, color: 'var(--accent)' },
+		{ tag: [t.operator, t.derefOperator, t.arithmeticOperator, t.logicOperator, t.bitwiseOperator, t.compareOperator, t.updateOperator, t.definitionOperator], color: 'var(--text-secondary)' },
+		{ tag: [t.punctuation, t.bracket, t.squareBracket, t.paren, t.brace], color: 'var(--text-muted)' },
+		{ tag: t.invalid, color: 'var(--accent-red)' },
+	]);
 
 	// Called by parent to reset content imperatively (e.g. "clear")
 	export function setValue(newVal: string) {
@@ -81,6 +103,7 @@
 			basicSetup,
 			languageCompartment.of(languageExtension(language)),
 			theme,
+			syntaxHighlighting(syntaxTheme),
 			EditorView.lineWrapping,
 			EditorView.updateListener.of((update) => {
 				if (update.docChanged) onChange?.(update.state.doc.toString());

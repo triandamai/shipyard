@@ -185,6 +185,28 @@ mod tests {
     }
 
     #[test]
+    fn vite_family_seed_scripts_patch_allowed_hosts_in_the_correct_config_file() {
+        // Verified live (2026-09-28): Vite 8.3.1 rejects any request whose
+        // Host header isn't on `server.allowedHosts`, which every sandbox
+        // preview domain trips — there's no CLI flag for it, so the generated
+        // config file must be patched. The config's extension tracks the
+        // JS/TS variant, not a fixed name.
+        let cases = [
+            (Template::React, "vite.config.js"),
+            (Template::ReactTs, "vite.config.ts"),
+            (Template::Vue, "vite.config.js"),
+            (Template::VueTs, "vite.config.ts"),
+        ];
+        for (t, config_file) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("allowedHosts: true"), "{t:?} seed script must patch server.allowedHosts");
+            assert!(script.contains(config_file), "{t:?} seed script must patch {config_file}");
+        }
+    }
+
+    #[test]
     fn sveltekit_templates_scaffold_via_the_official_sv_cli() {
         let cases = [
             (Template::SvelteKit, "--types jsdoc"),
@@ -209,6 +231,25 @@ mod tests {
             assert!(dev.contains("--host 0.0.0.0"));
             assert!(dev.contains("--port $PORT"));
             assert_eq!(port, 5173, "SvelteKit's Vite-based dev server default port");
+        }
+    }
+
+    #[test]
+    fn sveltekit_templates_patch_allowed_hosts_in_the_correct_config_file() {
+        // Verified live (2026-09-28): SvelteKit's own vite.config extension
+        // tracks its --types choice (jsdoc -> .js, ts -> .ts) — NOT always
+        // .ts regardless of variant, which would have been the more obvious
+        // (and wrong) guess.
+        let cases = [
+            (Template::SvelteKit, "vite.config.js"),
+            (Template::SvelteKitTs, "vite.config.ts"),
+        ];
+        for (t, config_file) in cases {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("allowedHosts: true"), "{t:?} seed script must patch server.allowedHosts");
+            assert!(script.contains(config_file), "{t:?} seed script must patch {config_file}");
         }
     }
 
@@ -251,6 +292,22 @@ mod tests {
     }
 
     #[test]
+    fn next_templates_do_not_patch_allowed_hosts() {
+        // Verified live (2026-09-28): unlike every other framework template,
+        // Next's dev server is not Vite-backed (webpack/Turbopack) and does
+        // not reject unrecognized Host headers — a spoofed preview Host
+        // header returns 200 with no config changes needed. Asserting the
+        // absence here catches an accidental copy-paste of the Vite-family
+        // patch onto a template that doesn't need (or support) it.
+        for t in [Template::Next, Template::NextTs] {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(!script.contains("allowedHosts"), "{t:?} seed script must not patch allowedHosts — Next isn't Vite-backed and doesn't need it");
+        }
+    }
+
+    #[test]
     fn nuxt_template_scaffolds_via_the_official_nuxi_cli() {
         let b64 = template_seed_script_b64(Template::Nuxt);
         let decoded = BASE64.decode(&b64).expect("must be valid base64");
@@ -261,6 +318,19 @@ mod tests {
         // Nuxt 3's own scaffolder defaults to TypeScript with no meaningful
         // plain-JS mode in its current tooling, so there is deliberately no
         // separate NuxtTs variant — this is the one and only Nuxt template.
+    }
+
+    #[test]
+    fn nuxt_template_patches_allowed_hosts_via_vite_passthrough() {
+        // Verified live (2026-09-28): Nuxt's dev server is Vite-backed too,
+        // and forwards a top-level `vite:` config key straight to its
+        // internal Vite instance — a spoofed preview Host header succeeds
+        // after this patch.
+        let b64 = template_seed_script_b64(Template::Nuxt);
+        let decoded = BASE64.decode(&b64).expect("must be valid base64");
+        let script = String::from_utf8(decoded).expect("must be valid utf8");
+        assert!(script.contains("nuxt.config.ts"), "Nuxt seed script must patch nuxt.config.ts");
+        assert!(script.contains("vite: { server: { allowedHosts: true } }"), "Nuxt seed script must patch allowedHosts via the vite: passthrough key");
     }
 
     #[test]
@@ -276,6 +346,21 @@ mod tests {
             assert!(script.contains("create astro"), "{t:?} seed script must invoke create-astro");
             assert!(script.contains(expected_flag), "{t:?} seed script must pass '{expected_flag}'");
             assert!(script.contains(expected_extends), "{t:?} seed script must overwrite tsconfig.json to extend '{expected_extends}'");
+        }
+    }
+
+    #[test]
+    fn astro_templates_patch_allowed_hosts_via_vite_passthrough() {
+        // Verified live (2026-09-28): a fresh Astro scaffold's astro.config.mjs
+        // is the exact literal `defineConfig({})`, so the patch is a plain
+        // string swap injecting Astro's documented `vite:` passthrough key —
+        // a spoofed preview Host header succeeds after this patch.
+        for t in [Template::Astro, Template::AstroTs] {
+            let b64 = template_seed_script_b64(t);
+            let decoded = BASE64.decode(&b64).expect("must be valid base64");
+            let script = String::from_utf8(decoded).expect("must be valid utf8");
+            assert!(script.contains("astro.config.mjs"), "{t:?} seed script must patch astro.config.mjs");
+            assert!(script.contains("vite: { server: { allowedHosts: true } }"), "{t:?} seed script must patch allowedHosts via the vite: passthrough key");
         }
     }
 
@@ -414,12 +499,44 @@ cat > /app/shipyard.json.example <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 
-const REACT_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react\n";
-const REACT_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template react-ts\n";
-const VUE_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue\n";
-const VUE_TS_SEED_SCRIPT: &str = "npm create vite@latest . -- --template vue-ts\n";
-const SVELTEKIT_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --no-install\n";
-const SVELTEKIT_TS_SEED_SCRIPT: &str = "npx --yes sv create /app --template minimal --types ts --no-add-ons --no-install\n";
+// Every Vite-backed dev server (plain Vite, SvelteKit, Astro, Nuxt) rejects
+// requests whose Host header it doesn't recognize as of Vite 5.4+'s
+// `server.allowedHosts` check (a DNS-rebinding-attack mitigation) — a
+// sandbox's preview domain (`preview-<id>.<base-domain>`) is exactly such an
+// unrecognized host, so every one of these templates 403s in the browser
+// with "Blocked request... add ... to `server.allowedHosts`" unless patched.
+// Verified live (2026-09-28) against Vite 8.3.1: there is no CLI flag for
+// this (`vite --help` offers only `--host`, which binds the listen address,
+// not the allowlist) — it must be set in the config file. Each scaffolder's
+// generated config is patched in-place right after scaffolding, before the
+// dev server ever starts, using the exact `defineConfig({`/`defineNuxtConfig({`
+// opening every one of these tools currently generates (confirmed by
+// scaffolding each fresh and inspecting the output) — if a future scaffolder
+// version reformats that opening, this sed silently becomes a no-op and the
+// preview breaks again; there's no more robust general-purpose way to patch
+// an arbitrary generated JS/TS config file without a real AST parser.
+const REACT_SEED_SCRIPT: &str = r#"npm create vite@latest . -- --template react
+sed -i 's/defineConfig({/defineConfig({\n  server: { allowedHosts: true },/' /app/vite.config.js
+"#;
+const REACT_TS_SEED_SCRIPT: &str = r#"npm create vite@latest . -- --template react-ts
+sed -i 's/defineConfig({/defineConfig({\n  server: { allowedHosts: true },/' /app/vite.config.ts
+"#;
+const VUE_SEED_SCRIPT: &str = r#"npm create vite@latest . -- --template vue
+sed -i 's/defineConfig({/defineConfig({\n  server: { allowedHosts: true },/' /app/vite.config.js
+"#;
+const VUE_TS_SEED_SCRIPT: &str = r#"npm create vite@latest . -- --template vue-ts
+sed -i 's/defineConfig({/defineConfig({\n  server: { allowedHosts: true },/' /app/vite.config.ts
+"#;
+// SvelteKit's own vite.config extension tracks its `--types` choice, same as
+// the app code itself (verified live: `--types jsdoc` scaffolds
+// vite.config.js, `--types ts` scaffolds vite.config.ts) — NOT always `.ts`
+// regardless of variant, which would have been the more obvious guess.
+const SVELTEKIT_SEED_SCRIPT: &str = r#"npx --yes sv create /app --template minimal --types jsdoc --no-add-ons --no-install
+sed -i 's/defineConfig({/defineConfig({\n\tserver: { allowedHosts: true },/' /app/vite.config.js
+"#;
+const SVELTEKIT_TS_SEED_SCRIPT: &str = r#"npx --yes sv create /app --template minimal --types ts --no-add-ons --no-install
+sed -i 's/defineConfig({/defineConfig({\n\tserver: { allowedHosts: true },/' /app/vite.config.ts
+"#;
 const NEXT_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --js --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm --skip-install\n";
 const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --eslint --no-tailwind --no-src-dir --app --import-alias '@/*' --use-npm --skip-install\n";
 // Verified live against nuxi@latest (v3.37.0, 2026-09-27): `--template` is
@@ -430,8 +547,14 @@ const NEXT_TS_SEED_SCRIPT: &str = "npx --yes create-next-app@latest /app --ts --
 // `--template minimal` here. `--packageManager`, `--gitInit false`, and
 // `--force` (needed since /app already exists as a mounted volume, even
 // empty — confirmed nuxi refuses to proceed on an existing directory without
-// it) were all verified unchanged.
-const NUXT_SEED_SCRIPT: &str = "npx --yes nuxi@latest init /app --template minimal --packageManager npm --gitInit false --force\n";
+// it) were all verified unchanged. Nuxt's own dev server is Vite-backed too
+// (see the allowedHosts comment above) — patches nuxt.config.ts's
+// `defineNuxtConfig({` the same way, via Nuxt's documented `vite:` passthrough
+// key (verified live: a request with a spoofed preview Host header succeeds
+// after this patch).
+const NUXT_SEED_SCRIPT: &str = r#"npx --yes nuxi@latest init /app --template minimal --packageManager npm --gitInit false --force
+sed -i 's/defineNuxtConfig({/defineNuxtConfig({\n  vite: { server: { allowedHosts: true } },/' /app/nuxt.config.ts
+"#;
 // Verified live against create-astro v5.2.4 (2026-09-27): the `--typescript`
 // flag no longer appears in `--help` at all, and empirically it is now a
 // complete no-op — `--typescript relaxed`, `--typescript strict`, and even a
@@ -448,7 +571,14 @@ const NUXT_SEED_SCRIPT: &str = "npx --yes nuxi@latest init /app --template minim
 // correct even if that default changes again). The `--typescript` flags are
 // kept in the command for forward-compatibility and to document each
 // variant's intent, even though the CLI currently ignores them.
+// Astro's dev server is Vite-backed too (see the allowedHosts comment above
+// REACT_SEED_SCRIPT) — a fresh scaffold's astro.config.mjs is the exact
+// literal `defineConfig({})` (verified live), so the patch is a plain string
+// swap rather than a `\n`-inserting sed, via Astro's documented `vite:`
+// config passthrough key (verified live: a spoofed preview Host header
+// succeeds after this patch).
 const ASTRO_SEED_SCRIPT: &str = r#"npm create astro@latest /app -- --template minimal --typescript relaxed --no-install --no-git --yes
+sed -i 's/defineConfig({})/defineConfig({ vite: { server: { allowedHosts: true } } })/' /app/astro.config.mjs
 cat > /app/tsconfig.json <<'SHIPYARD_EOF'
 {
   "extends": "astro/tsconfigs/base",
@@ -458,6 +588,7 @@ cat > /app/tsconfig.json <<'SHIPYARD_EOF'
 SHIPYARD_EOF
 "#;
 const ASTRO_TS_SEED_SCRIPT: &str = r#"npm create astro@latest /app -- --template minimal --typescript strict --no-install --no-git --yes
+sed -i 's/defineConfig({})/defineConfig({ vite: { server: { allowedHosts: true } } })/' /app/astro.config.mjs
 cat > /app/tsconfig.json <<'SHIPYARD_EOF'
 {
   "extends": "astro/tsconfigs/strict",

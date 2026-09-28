@@ -487,9 +487,8 @@
 
 <style>
 	.editor-layout {
-		position: relative;
 		display: grid;
-		grid-template-rows: auto 1fr auto;
+		grid-template-rows: auto 1fr auto auto;
 		height: 100vh;
 		width: 100%;
 		max-width: 100%;
@@ -823,16 +822,12 @@
 		cursor: pointer;
 	}
 	.terminal-pane {
-		/* Positioned relative to .editor-layout (not the viewport) — .editor-layout
-		   is already confined to this page's own content column, to the right of
-		   the app's main nav sidebar. `position: fixed` here previously anchored
-		   to the true viewport instead, so the panel extended underneath that
-		   sidebar and its opaque background covered the panel's left edge. */
-		position: absolute;
-		bottom: 32px;
-		left: 0;
-		right: 0;
+		/* A normal grid row (not an overlay) — showing it shrinks the 1fr
+		   editor/preview row above instead of floating on top of it. */
+		grid-row: 4;
 		height: 240px;
+		min-height: 0;
 		border-top: 1px solid var(--border);
+		overflow: hidden;
 	}
 </style>
