@@ -487,6 +487,7 @@
 
 <style>
 	.editor-layout {
+		position: relative;
 		display: grid;
 		grid-template-rows: auto 1fr auto;
 		height: 100vh;
@@ -822,7 +823,12 @@
 		cursor: pointer;
 	}
 	.terminal-pane {
-		position: fixed;
+		/* Positioned relative to .editor-layout (not the viewport) — .editor-layout
+		   is already confined to this page's own content column, to the right of
+		   the app's main nav sidebar. `position: fixed` here previously anchored
+		   to the true viewport instead, so the panel extended underneath that
+		   sidebar and its opaque background covered the panel's left edge. */
+		position: absolute;
 		bottom: 32px;
 		left: 0;
 		right: 0;
