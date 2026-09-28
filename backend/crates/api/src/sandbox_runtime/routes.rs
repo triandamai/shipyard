@@ -16,6 +16,7 @@ use crate::AppState;
 
 use super::exec;
 use super::files;
+use super::logs;
 use super::manager;
 use super::templates::{template_runtime, template_seed_script_b64, Template};
 
@@ -24,6 +25,7 @@ struct SandboxStatusResponse {
     status: String,
     preview_url: Option<String>,
     pending: bool,
+    last_error: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -52,6 +54,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/:service_id/sandbox/status", get(status))
         .merge(files::routes())
         .merge(exec::routes())
+        .merge(logs::routes())
 }
 
 /// Project-scoped routes for the sandbox runtime — as opposed to `routes()`
@@ -155,6 +158,7 @@ async fn start(
         status: instance.status,
         preview_url: instance.preview_url,
         pending,
+        last_error: instance.last_error,
     })))
 }
 
@@ -241,6 +245,7 @@ async fn public_start(
         status: instance.status,
         preview_url: instance.preview_url,
         pending,
+        last_error: instance.last_error,
     })))
 }
 

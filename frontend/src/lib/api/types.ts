@@ -539,6 +539,7 @@ export interface SandboxInstance {
 	last_heartbeat_at: string | null;
 	started_at: string | null;
 	pending: boolean;
+	last_error: string | null;
 }
 
 export interface SandboxFileEntry {

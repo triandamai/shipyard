@@ -23,6 +23,7 @@ pub struct SandboxInstanceRow {
     pub preview_url: Option<String>,
     pub last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_error: Option<String>,
 }
 
 impl SandboxInstanceRow {
@@ -35,6 +36,7 @@ impl SandboxInstanceRow {
             preview_url: None,
             last_heartbeat_at: None,
             started_at: None,
+            last_error: None,
         }
     }
 }

@@ -215,6 +215,19 @@ pub trait DockerEngine: Send + Sync {
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> AppResult<()>;
 
+    /// Stream a container's log lines to `tx` as they arrive. Unlike
+    /// `container_logs` (which fully collects into a `Vec` before returning —
+    /// unusable with `follow: true`, since it would never return), this
+    /// forwards each line as soon as Docker emits it, so a caller can drive a
+    /// live tail (e.g. over a WebSocket) without buffering the whole history
+    /// in memory first.
+    async fn container_logs_stream(
+        &self,
+        container_id: &str,
+        opts: LogOpts,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> AppResult<()>;
+
     /// Spawn a detached `docker:cli` container that runs
     /// `docker compose up -d --remove-orphans` after a short delay.
     /// Used by the self-update flow to restart services without killing
@@ -1961,6 +1974,39 @@ impl DockerEngine for BollardDockerEngine {
                 }
                 Err(e) => {
                     return Err(AppError::Docker(format!("pull_image_stream failed: {e}")));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn container_logs_stream(
+        &self,
+        container_id: &str,
+        opts: LogOpts,
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> AppResult<()> {
+        let log_opts = LogsOptions::<String> {
+            stdout: opts.stdout,
+            stderr: opts.stderr,
+            follow: opts.follow,
+            since: opts.since.unwrap_or(0),
+            until: opts.until.unwrap_or(0),
+            timestamps: opts.timestamps,
+            tail: opts.tail.unwrap_or_else(|| "all".into()),
+        };
+
+        let mut stream = self.client.logs(container_id, Some(log_opts));
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(log_output) => {
+                    // If the receiver is gone (client disconnected) we can stop early.
+                    if tx.send(log_output.to_string()).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    return Err(AppError::Docker(format!("container_logs_stream failed: {e}")));
                 }
             }
         }

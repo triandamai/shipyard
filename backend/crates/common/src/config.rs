@@ -328,6 +328,13 @@ pub struct SandboxConfig {
     /// Port the placeholder responder listens on.
     #[serde(default = "default_sandbox_placeholder_port")]
     pub placeholder_port: u16,
+    /// Seconds to wait for the dev server inside a sandbox container to
+    /// start accepting connections on its declared port before giving up
+    /// and reporting a start failure. Generous by default since a
+    /// framework template's first boot runs a real scaffold + npm install
+    /// over the network, not just a dev server startup.
+    #[serde(default = "default_sandbox_dev_server_ready_timeout_secs")]
+    pub dev_server_ready_timeout_secs: u64,
 }
 
 fn default_sandbox_idle_timeout_secs() -> u64 { 1200 }
@@ -336,6 +343,7 @@ fn default_sandbox_runtime_class() -> String { "runsc".to_string() }
 fn default_sandbox_probe_image() -> String { "alpine:3.19".to_string() }
 fn default_sandbox_placeholder_upstream() -> String { "shipyard-sandbox-placeholder".to_string() }
 fn default_sandbox_placeholder_port() -> u16 { 8080 }
+fn default_sandbox_dev_server_ready_timeout_secs() -> u64 { 120 }
 
 impl Default for SandboxConfig {
     fn default() -> Self {
@@ -348,6 +356,7 @@ impl Default for SandboxConfig {
             probe_image: default_sandbox_probe_image(),
             placeholder_upstream: default_sandbox_placeholder_upstream(),
             placeholder_port: default_sandbox_placeholder_port(),
+            dev_server_ready_timeout_secs: default_sandbox_dev_server_ready_timeout_secs(),
         }
     }
 }
@@ -567,6 +576,7 @@ impl AppConfig {
             .set_default("sandbox.probe_image", "alpine:3.19")?
             .set_default("sandbox.placeholder_upstream", "shipyard-sandbox-placeholder")?
             .set_default("sandbox.placeholder_port", 8080)?
+            .set_default("sandbox.dev_server_ready_timeout_secs", 120)?
             .add_source(config::File::with_name("config").required(false))
             .add_source(config::Environment::with_prefix("SHIPYARD").separator("__"))
             .build()?;
@@ -677,5 +687,6 @@ mod sandbox_config_tests {
         assert_eq!(cfg.reaper_interval_secs, 60);
         assert_eq!(cfg.runtime_class, "runsc");
         assert_eq!(cfg.probe_image, "alpine:3.19");
+        assert_eq!(cfg.dev_server_ready_timeout_secs, 120);
     }
 }

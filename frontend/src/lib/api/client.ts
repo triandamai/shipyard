@@ -877,7 +877,7 @@ class ApiClient {
 		return this.get(`/apps/${serviceId}/sandbox/status`);
 	}
 
-	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null; pending: boolean }>> {
+	async startSandbox(serviceId: string): Promise<ApiResponse<{ status: string; preview_url: string | null; pending: boolean; last_error: string | null }>> {
 		return this.post(`/apps/${serviceId}/sandbox/start`);
 	}
 

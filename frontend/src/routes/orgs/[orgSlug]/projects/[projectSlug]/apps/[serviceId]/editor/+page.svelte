@@ -5,7 +5,7 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SandboxTerminal from '$lib/components/SandboxTerminal.svelte';
-	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone, Share2, Check, Rocket } from '@lucide/svelte';
 	import type { SandboxFileEntry, SandboxInstance } from '$lib/api/types';
 
 	let serviceId = $derived(page.params.serviceId ?? '');
@@ -13,6 +13,8 @@
 	let instance = $state<SandboxInstance | null>(null);
 	let bootState = $state<'starting' | 'ready' | 'error'>('starting');
 	let bootError = $state('');
+	let bootStatusMessage = $state('Waking up your sandbox…');
+	let pollCancelled = false;
 
 	// Editor (sidebar + code editor, like VS Code) and preview show one at a
 	// time, full width — pick which is active.
@@ -66,6 +68,16 @@
 		previewIframe.src = 'about:blank';
 		requestAnimationFrame(() => {
 			if (previewIframe) previewIframe.src = src;
+		});
+	}
+
+	let shareCopied = $state(false);
+
+	function sharePreview() {
+		if (!instance?.preview_url) return;
+		navigator.clipboard.writeText(instance.preview_url).then(() => {
+			shareCopied = true;
+			setTimeout(() => (shareCopied = false), 1500);
 		});
 	}
 
@@ -179,16 +191,37 @@
 	}
 
 	async function boot() {
+		bootState = 'starting';
+		bootError = '';
+		bootStatusMessage = 'Waking up your sandbox…';
+
 		const startRes = await api.startSandbox(serviceId);
 		if (!startRes.data) {
 			bootError = startRes.error?.message ?? 'Failed to start sandbox';
 			bootState = 'error';
 			return;
 		}
-		instance = { ...instance, status: startRes.data.status, preview_url: startRes.data.preview_url, pending: startRes.data.pending } as SandboxInstance;
+		instance = {
+			...instance,
+			status: startRes.data.status,
+			preview_url: startRes.data.preview_url,
+			pending: startRes.data.pending,
+			last_error: startRes.data.last_error
+		} as SandboxInstance;
 		urlBarValue = startRes.data.preview_url ?? '';
 		navHistory = startRes.data.preview_url ? [startRes.data.preview_url] : [];
 		navIndex = navHistory.length - 1;
+
+		// The container is up, but the dev server inside it may still be
+		// scaffolding/installing — the backend keeps `status` at 'starting'
+		// until it confirms the dev server's port actually accepts
+		// connections (or gives up and reports a failure). Poll until it
+		// resolves one way or the other rather than assuming ready.
+		if (startRes.data.status === 'starting') {
+			bootStatusMessage = 'Starting the dev server — first boot on a framework template can take a minute or two.';
+			const reachedRunning = await pollUntilResolved();
+			if (!reachedRunning) return; // pollUntilResolved already set bootState = 'error'
+		}
 
 		const treeRes = await api.getSandboxFileTree(serviceId);
 		if (treeRes.data) entries = treeRes.data.entries;
@@ -198,6 +231,28 @@
 		heartbeatTimer = setInterval(() => {
 			api.heartbeatSandbox(serviceId);
 		}, 60_000);
+	}
+
+	/** Polls GET /sandbox/status while `status` stays 'starting'. Resolves
+	 * `true` once it flips to 'running'. If it flips to 'stopped' instead —
+	 * the dev server never came up within the backend's timeout — sets
+	 * `bootState = 'error'` (using the backend's `last_error` message when
+	 * one was recorded) and resolves `false`. */
+	async function pollUntilResolved(): Promise<boolean> {
+		while (!pollCancelled) {
+			await new Promise((r) => setTimeout(r, 1500));
+			if (pollCancelled) return false;
+			const res = await api.getSandboxInstance(serviceId);
+			if (!res.data) continue; // transient fetch error — keep trying
+			instance = res.data;
+			if (res.data.status === 'running') return true;
+			if (res.data.status === 'stopped') {
+				bootError = res.data.last_error ?? 'The sandbox stopped unexpectedly while starting.';
+				bootState = 'error';
+				return false;
+			}
+		}
+		return false;
 	}
 
 	async function openFile(path: string) {
@@ -274,6 +329,7 @@
 	});
 
 	onDestroy(() => {
+		pollCancelled = true;
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		if (saveTimer) clearTimeout(saveTimer);
 		if (savedFlashTimer) clearTimeout(savedFlashTimer);
@@ -284,9 +340,17 @@
 
 <div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-sidebar={resizingSidebar}>
 	{#if bootState === 'starting'}
-		<div class="boot-overlay">Waking up your sandbox…</div>
+		<div class="boot-overlay">
+			<div class="boot-message">{bootStatusMessage}</div>
+			<div class="boot-logs">
+				<SandboxTerminal {serviceId} />
+			</div>
+		</div>
 	{:else if bootState === 'error'}
-		<div class="boot-overlay error">{bootError}</div>
+		<div class="boot-overlay error">
+			<div class="boot-message">{bootError}</div>
+			<button class="btn btn-primary" onclick={boot}>Retry</button>
+		</div>
 	{:else}
 		<div class="panel-tabs">
 			<button class="panel-tab" class:active={activeTab === 'editor'} onclick={() => (activeTab = 'editor')}>
@@ -376,6 +440,14 @@
 							<Smartphone size={13} />
 						</button>
 					</div>
+					<button class="preview-action-btn" onclick={sharePreview} title="Copy the preview link to share">
+						{#if shareCopied}<Check size={13} />{:else}<Share2 size={13} />{/if}
+						{shareCopied ? 'Copied!' : 'Share Preview'}
+					</button>
+					<button class="preview-action-btn" disabled title="Coming soon — publish to production">
+						<Rocket size={13} />
+						Publish
+					</button>
 				</div>
 				<div class="preview-surface" bind:this={previewSurfaceEl}>
 					<div
@@ -582,6 +654,30 @@
 		border-left: 1px solid var(--border);
 		flex-shrink: 0;
 	}
+	.preview-action-btn {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 10px;
+		margin-left: 6px;
+		font-size: 12px;
+		font-weight: 500;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-secondary);
+		border-radius: var(--radius-sm, 4px);
+		cursor: pointer;
+		flex-shrink: 0;
+		white-space: nowrap;
+	}
+	.preview-action-btn:hover:not(:disabled) {
+		background: var(--bg-surface, rgba(127, 127, 127, 0.12));
+		color: var(--text-primary);
+	}
+	.preview-action-btn:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
 	.preview-toolbar {
 		display: flex;
 		align-items: center;
@@ -664,14 +760,29 @@
 	.boot-overlay {
 		grid-column: 1 / -1;
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
+		gap: 16px;
 		height: 100vh;
+		padding: 24px;
 		font-size: 14px;
 		color: var(--text-secondary);
 	}
 	.boot-overlay.error {
 		color: var(--accent-red);
+	}
+	.boot-message {
+		text-align: center;
+		max-width: 520px;
+	}
+	.boot-logs {
+		width: 100%;
+		max-width: 720px;
+		height: 320px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		overflow: hidden;
 	}
 	.terminal-toggle {
 		grid-row: 3;

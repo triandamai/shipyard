@@ -1,3 +1,4 @@
+use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 use shipyard_common::error::{AppError, AppResult};
@@ -387,17 +388,107 @@ async fn provision_sandbox(
     .await;
 
     let preview_url = format!("https://{hostname}");
-    upsert_instance_status(&state.db, service_id, "running", Some(&container_id), Some(&container_name)).await?;
-    sqlx::query("UPDATE sandbox_instances SET preview_url = $2, started_at = NOW(), last_heartbeat_at = NOW() WHERE service_id = $1")
-        .bind(service_id)
-        .bind(&preview_url)
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+    // Status deliberately stays 'starting' here — the container is running,
+    // but the dev server inside it may still be scaffolding/installing.
+    // finalize_sandbox_start (spawned below) flips it to 'running' once the
+    // dev server's port actually accepts connections, or back to 'stopped'
+    // with `last_error` set if it never does within the configured timeout.
+    sqlx::query(
+        "UPDATE sandbox_instances
+         SET container_id = $2, container_name = $3, preview_url = $4,
+             started_at = NOW(), last_heartbeat_at = NOW(), last_error = NULL
+         WHERE service_id = $1",
+    )
+    .bind(service_id)
+    .bind(&container_id)
+    .bind(&container_name)
+    .bind(&preview_url)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    let ready_timeout = Duration::from_secs(state.config.sandbox.dev_server_ready_timeout_secs);
+    let bg_state = state.clone();
+    let bg_container_name = container_name.clone();
+    let bg_port = config.port.unwrap_or(3000) as u16;
+    tokio::spawn(async move {
+        finalize_sandbox_start(bg_state, service_id, bg_container_name, bg_port, ready_timeout).await;
+    });
 
     fetch_instance(&state.db, service_id)
         .await?
         .ok_or_else(|| AppError::Internal("sandbox_instances row missing after start".to_string()))
+}
+
+/// Runs in the background after `provision_sandbox` has already returned its
+/// response with `status` still `'starting'`. Polls the dev server's port by
+/// dialing it directly over the shared Docker network sandbox containers and
+/// the backend both join (`sandbox.runtime_class`'s network — the same one
+/// Traefik uses to reach them by container-name alias), which works
+/// regardless of the sandbox's base image and needs no tooling installed
+/// inside the container. On success, flips `status` to `'running'`. On
+/// timeout, stops the sandbox exactly as a user-initiated stop would and
+/// records `last_error` so the editor can explain why the dev server never
+/// came up.
+async fn finalize_sandbox_start(
+    state: AppState,
+    service_id: Uuid,
+    container_name: String,
+    port: u16,
+    timeout: Duration,
+) {
+    if wait_for_dev_server_ready(&container_name, port, timeout).await {
+        if let Err(e) = sqlx::query(
+            "UPDATE sandbox_instances SET status = 'running', updated_at = NOW() WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .execute(&state.db)
+        .await
+        {
+            tracing::warn!(%service_id, error = %e, "finalize_sandbox_start: failed to mark sandbox running");
+        }
+        return;
+    }
+
+    tracing::warn!(
+        %service_id, port,
+        "finalize_sandbox_start: dev server did not become reachable within timeout — stopping sandbox"
+    );
+    if let Err(e) = stop_sandbox(&state, service_id).await {
+        tracing::warn!(%service_id, error = %e, "finalize_sandbox_start: failed to stop sandbox after readiness timeout");
+    }
+    let message = format!(
+        "The dev server didn't respond on port {port} within {}s. Check the Terminal's Logs tab for details.",
+        timeout.as_secs()
+    );
+    if let Err(e) = sqlx::query("UPDATE sandbox_instances SET last_error = $2 WHERE service_id = $1")
+        .bind(service_id)
+        .bind(&message)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!(%service_id, error = %e, "finalize_sandbox_start: failed to record last_error");
+    }
+}
+
+/// Repeatedly dials `container_name:port` until it accepts a TCP connection
+/// or `timeout` elapses. `container_name` is the sandbox's Docker network
+/// alias (see `create_container`'s `network_aliases`), resolvable via Docker's
+/// embedded DNS from any other container on the same user-defined network —
+/// the same mechanism Traefik itself relies on to route to sandbox previews.
+async fn wait_for_dev_server_ready(container_name: &str, port: u16, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let addr = format!("{container_name}:{port}");
+    loop {
+        let dial = tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(&addr)).await;
+        if matches!(dial, Ok(Ok(_))) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
 }
 
 pub const PLACEHOLDER_ROUTE_REASON: &str = "sandbox stopped";
