@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import type { Anchor } from '@lucide/svelte';
 
 	interface Item {
 		href: string;
-		icon: Snippet;
+		icon: typeof Anchor;
 		label: string;
 		active: boolean;
 	}
@@ -22,13 +22,14 @@
 	<div class="ui-nav-drawer-inner">
 		<div class="ui-nav-drawer-title">{title}</div>
 		{#each items as item (item.href)}
+			{@const Icon = item.icon}
 			<a
 				href={item.href}
 				class="ui-nav-drawer-item"
 				class:ui-nav-drawer-item--active={item.active}
 				onclick={onNavigate}
 			>
-				<span class="ui-nav-drawer-icon">{@render item.icon()}</span>
+				<span class="ui-nav-drawer-icon"><Icon size={16} /></span>
 				{item.label}
 			</a>
 		{/each}

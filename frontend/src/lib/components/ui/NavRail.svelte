@@ -1,10 +1,9 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { Anchor } from '@lucide/svelte';
 
 	interface Group {
 		key: string;
-		icon: Snippet;
+		icon: typeof Anchor;
 		label: string;
 	}
 
@@ -27,6 +26,7 @@
 	</div>
 	<nav class="ui-nav-rail-items">
 		{#each groups as g (g.key)}
+			{@const Icon = g.icon}
 			<div class="ui-nav-rail-group">
 				<button
 					type="button"
@@ -36,7 +36,7 @@
 					aria-label={g.label}
 					aria-expanded={activeGroup === g.key}
 				>
-					{@render g.icon()}
+					<Icon size={20} />
 				</button>
 				<span class="ui-nav-rail-label">{g.label}</span>
 			</div>
