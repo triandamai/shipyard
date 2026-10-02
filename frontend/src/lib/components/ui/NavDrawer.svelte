@@ -1,0 +1,85 @@
+<script lang="ts">
+	import type { Snippet } from 'svelte';
+
+	interface Item {
+		href: string;
+		icon: Snippet;
+		label: string;
+		active: boolean;
+	}
+
+	interface Props {
+		open: boolean;
+		title: string;
+		items: Item[];
+		onNavigate: () => void;
+	}
+
+	let { open, title, items, onNavigate }: Props = $props();
+</script>
+
+<div class="ui-nav-drawer" class:ui-nav-drawer--open={open}>
+	<div class="ui-nav-drawer-inner">
+		<div class="ui-nav-drawer-title">{title}</div>
+		{#each items as item (item.href)}
+			<a
+				href={item.href}
+				class="ui-nav-drawer-item"
+				class:ui-nav-drawer-item--active={item.active}
+				onclick={onNavigate}
+			>
+				<span class="ui-nav-drawer-icon">{@render item.icon()}</span>
+				{item.label}
+			</a>
+		{/each}
+	</div>
+</div>
+
+<style>
+	.ui-nav-drawer {
+		position: absolute;
+		top: 0;
+		left: 60px;
+		bottom: 0;
+		width: 0;
+		background: var(--bg-surface);
+		border-right: 1px solid var(--border);
+		overflow: hidden;
+		transition: width var(--transition-normal);
+		z-index: 4;
+		box-shadow: var(--shadow-lg);
+	}
+	.ui-nav-drawer--open { width: 230px; }
+	.ui-nav-drawer-inner {
+		width: 230px;
+		padding: 18px 12px;
+	}
+	.ui-nav-drawer-title {
+		font-size: 11px;
+		font-weight: 700;
+		color: var(--text-primary);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		padding: 4px 10px 10px;
+	}
+	.ui-nav-drawer-item {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 8px 10px;
+		border-radius: var(--radius-md);
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--text-secondary);
+		text-decoration: none;
+		cursor: pointer;
+	}
+	.ui-nav-drawer-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+	.ui-nav-drawer-item--active { background: var(--accent-muted); color: var(--accent); font-weight: 600; }
+	.ui-nav-drawer-icon {
+		width: 16px;
+		display: flex;
+		justify-content: center;
+		opacity: 0.85;
+	}
+</style>
