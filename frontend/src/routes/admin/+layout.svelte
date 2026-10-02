@@ -255,7 +255,7 @@
 	.rail-footer-btn:hover { background:var(--bg-hover); color:var(--accent); }
 
 	/* ── Main ─────────────────────────────── */
-	.main { flex:1; overflow-y:auto; background:var(--bg); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; }
+	.main { flex:1; overflow-y:auto; background:var(--bg); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
 
 	/* ── Mobile topbar ────────────────────── */
 	/* NOTE: mob-menu-btn still toggles `mobileOpen`, which was wired to the
