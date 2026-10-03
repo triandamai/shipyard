@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { Card, Button, InlineAlert, Skeleton, EmptyState } from '$lib/components/ui';
 	import {
 		Folder,
 		File,
@@ -432,36 +433,48 @@
 		<!-- ── Bucket List View ── -->
 
 		{#if bucketsLoading}
-			<div class="loading-wrap">
-				<div class="sk-row"><div class="sk" style="width:48px;height:48px;border-radius:8px"></div><div class="sk" style="width:220px;height:16px"></div></div>
+			<div class="bucket-grid-skeleton">
+				<Skeleton variant="card" />
+				<Skeleton variant="card" />
 			</div>
 		{:else if bucketsError}
-			<div class="err-banner">{bucketsError}</div>
+			<InlineAlert tone="error">{bucketsError}</InlineAlert>
 		{:else if buckets.length === 0}
-			<div class="empty">No storage backends configured.</div>
+			<EmptyState message="No storage backends configured." />
 		{:else}
 			<div class="bucket-grid">
 				{#each buckets as bucket}
 					<!-- svelte-ignore a11y_click_events_have_key_events -->
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div class="bucket-card" onclick={() => navigateToBucket(bucket)}>
-						<div class="bucket-icon">
-							{#if bucket.backend === 's3'}
-								<Server width="22" height="22" />
-							{:else}
-								<HardDrive width="22" height="22" />
-							{/if}
-						</div>
-						<div class="bucket-info">
-							<div class="bucket-name mono">{bucket.bucket}</div>
-							<div class="bucket-meta">
-								<span class="badge">{bucket.backend === 's3' ? 'S3 / MinIO' : 'Local Disk'}</span>
-								{#if bucket.endpoint}
-									<span class="bucket-endpoint mono trunc">{bucket.endpoint}</span>
-								{/if}
+					<div class="bucket-tile" onclick={() => navigateToBucket(bucket)}>
+						<Card padding="16px">
+							<div class="bucket-card-inner">
+								<div class="bucket-icon">
+									{#if bucket.backend === 's3'}
+										<Server size={20} />
+									{:else}
+										<HardDrive size={20} />
+									{/if}
+								</div>
+								<div class="bucket-fields">
+									<div class="bucket-field">
+										<span class="bucket-field-label">Backend</span>
+										<span class="bucket-field-value">{bucket.backend === 's3' ? 'S3 / MinIO' : 'Local Disk'}</span>
+									</div>
+									<div class="bucket-field">
+										<span class="bucket-field-label">Bucket</span>
+										<span class="bucket-field-value mono trunc">{bucket.bucket}</span>
+									</div>
+									{#if bucket.endpoint}
+										<div class="bucket-field">
+											<span class="bucket-field-label">Endpoint</span>
+											<span class="bucket-field-value mono trunc">{bucket.endpoint}</span>
+										</div>
+									{/if}
+								</div>
+								<ChevronRight size={16} class="bucket-chevron" />
 							</div>
-						</div>
-						<ChevronRight width="16" height="16" style="color: var(--text-3); flex-shrink: 0;" />
+						</Card>
 					</div>
 				{/each}
 			</div>
@@ -547,18 +560,23 @@
 	.refresh-btn:hover { background: var(--surface-2); }
 
 	/* ── Bucket Grid ── */
-	.bucket-grid { display: flex; flex-direction: column; gap: 10px; }
+	.bucket-grid-skeleton { display: flex; flex-direction: column; gap: 10px; }
+	.bucket-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 
-	.bucket-card { display: flex; align-items: center; gap: 16px; padding: 18px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: background .15s, border-color .15s; }
-	.bucket-card:hover { background: var(--surface-2); border-color: var(--accent); }
+	.bucket-tile { cursor: pointer; }
+	.bucket-tile :global(.ui-card) { transition: background var(--transition-fast), border-color var(--transition-fast); }
+	.bucket-tile:hover :global(.ui-card) { background: var(--bg-hover); border-color: var(--accent); }
 
-	.bucket-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); color: var(--accent); flex-shrink: 0; }
+	.bucket-card-inner { display: flex; align-items: center; gap: 14px; }
 
-	.bucket-info { flex: 1; min-width: 0; }
-	.bucket-name { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
-	.bucket-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-	.badge { display: inline-block; padding: 2px 8px; background: var(--accent-soft, rgba(99,102,241,.12)); color: var(--accent); font-size: 11px; font-weight: 700; border-radius: 20px; letter-spacing: .04em; }
-	.bucket-endpoint { font-size: 12px; color: var(--text-3); }
+	.bucket-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--bg-elevated); border: 1px solid var(--border); color: var(--accent); flex-shrink: 0; }
+
+	.bucket-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+	.bucket-field { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+	.bucket-field-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; width: 58px; flex-shrink: 0; }
+	.bucket-field-value { font-size: 12.5px; color: var(--text-primary); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	:global(.bucket-chevron) { color: var(--text-dim); flex-shrink: 0; }
 	/* Navigation and Breadcrumbs */
 	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; }
 	.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--text-2); }
@@ -680,6 +698,6 @@
 		.overlay { justify-content: center; }
 		.drawer { height: 100%; max-width: 100%; border-left: none; }
 
-		.bucket-card { flex-wrap: wrap; }
+		.bucket-grid { grid-template-columns: 1fr; }
 	}
 </style>
