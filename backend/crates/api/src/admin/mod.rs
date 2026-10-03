@@ -763,6 +763,16 @@ async fn list_provisioning(
     let limit  = params.limit.unwrap_or(30).clamp(1, 100);
     let offset = params.page.unwrap_or(0) * limit;
 
+    let total: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*)
+           FROM compute_nodes cn
+           JOIN organizations o ON o.id = cn.org_id
+           WHERE cn.status NOT IN ('active'::node_status, 'stopped'::node_status)"#,
+    )
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
     #[derive(sqlx::FromRow, Serialize)]
     struct ProvRow {
         id:         Uuid,
@@ -795,6 +805,7 @@ async fn list_provisioning(
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "items": items,
+        "total": total.0,
         "page":  params.page.unwrap_or(0),
         "limit": limit,
     }))))

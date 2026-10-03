@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { DataTable, StatusDot, Badge, PageHeader } from '$lib/components/ui';
 
 	interface ProvisioningJob {
 		id: string;
@@ -12,33 +12,59 @@
 		status: string;
 		created_at: string;
 	}
-	let jobs = $state<ProvisioningJob[]>([]);
-	let loading = $state(false);
-	let error = $state('');
-	let page = $state(0);
-	let total = $state(0);
-	const LIMIT = 30;
 
-	onMount(() => load());
+	let totalJobs = $state(0);
 
-	async function load() {
-		loading = true; error = '';
-		const params = new URLSearchParams({ page: String(page), limit: String(LIMIT) });
-		const res = await api.get<{ items: ProvisioningJob[]; total: number }>(`/admin/deployments/provisioning?${params}`);
-		if (res.data) { jobs = res.data.items ?? []; total = res.data.total ?? 0; }
-		else error = res.error?.message ?? 'Failed to load';
-		loading = false;
+	async function fetchProvisioningPage(params: { page: number; pageSize: number; search: string }) {
+		const res = await api.get<{ items: ProvisioningJob[]; total: number }>(
+			`/admin/deployments/provisioning?page=${params.page}&limit=${params.pageSize}&q=${encodeURIComponent(params.search)}`
+		);
+		if (!res.data) throw new Error(res.error?.message ?? 'Failed to load provisioning jobs');
+		totalJobs = res.data.total;
+		return { rows: res.data.items, total: res.data.total };
 	}
 
-	let totalPages = $derived(Math.ceil(total / LIMIT));
+	// Same `compute_nodes.status` -> StatusDot mapping as the Nodes page (Task 44) —
+	// this endpoint reads the same table (filtered to the non-active/non-stopped
+	// rows), so the same 7-state -> 5-dot collapse and label set apply. See the
+	// Nodes page (src/routes/admin/nodes/+page.svelte) for the full reasoning.
+	type StatusKey =
+		| 'active'
+		| 'degraded'
+		| 'failed'
+		| 'provisioning'
+		| 'cloud_init_running'
+		| 'wireguard_joined'
+		| 'stopped';
 
-	function statusColor(s: string): string {
-		if (s === 'active') return 'var(--ok)';
-		if (s === 'failed') return 'var(--danger)';
-		if (s === 'provisioning') return 'var(--accent)';
-		return 'var(--text-3)';
+	const STATUS_LABEL: Record<StatusKey, string> = {
+		active: 'Active',
+		degraded: 'Degraded',
+		failed: 'Failed',
+		provisioning: 'Provisioning',
+		cloud_init_running: 'Init',
+		wireguard_joined: 'Joining',
+		stopped: 'Stopped'
+	};
+
+	const STATUS_DOT: Record<StatusKey, 'running' | 'pending' | 'deploying' | 'failed' | 'stopped'> = {
+		active: 'running',
+		degraded: 'failed',
+		failed: 'failed',
+		provisioning: 'pending',
+		cloud_init_running: 'deploying',
+		wireguard_joined: 'deploying',
+		stopped: 'stopped'
+	};
+
+	function statusLabel(s: string): string {
+		return STATUS_LABEL[s as StatusKey] ?? s;
+	}
+	function statusDot(s: string): 'running' | 'pending' | 'deploying' | 'failed' | 'stopped' {
+		return STATUS_DOT[s as StatusKey] ?? 'stopped';
 	}
 
+	// Unchanged from the pre-migration version of this page.
 	function relTime(iso: string): string {
 		const diff = Date.now() - new Date(iso).getTime();
 		const m = Math.floor(diff / 60000);
@@ -50,128 +76,47 @@
 	}
 </script>
 
-<div class="p">
-	<header class="hdr">
-		<div>
-			<h1 class="ttl">Tenant Provisioning</h1>
-			<p class="sub">Compute nodes being provisioned for tenant organizations.</p>
-		</div>
-		<div style="display:flex;gap:10px;align-items:center">
-			<a class="back-link" href="/admin/deployments">← App Deployments</a>
-			<button class="refresh-btn" onclick={() => { page = 0; load(); }}>
-				<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
-				Refresh
-			</button>
-		</div>
-	</header>
+<PageHeader title="Tenant Provisioning" subtitle="Compute nodes being provisioned for tenant organizations.">
+	{#snippet actions()}
+		<Badge tone="neutral">{totalJobs} total</Badge>
+	{/snippet}
+</PageHeader>
 
-	{#if loading}
-		<div class="tbl">{#each [0,1,2,3] as _}<div class="sk-row"><div class="sk" style="width:140px;height:12px"></div><div class="sk" style="flex:1;height:12px"></div></div>{/each}</div>
-	{:else if error}
-		<div class="err">{error}</div>
-	{:else if jobs.length === 0}
-		<div class="empty">No provisioning jobs in progress.</div>
-	{:else}
-		<div class="tbl">
-			<div class="thead">
-				<span style="flex:2">Organization</span>
-				<span style="flex:1.5">Node</span>
-				<span style="flex:1">Provider</span>
-				<span style="flex:1">Region</span>
-				<span style="flex:1">Status</span>
-				<span style="flex:1">Started</span>
-			</div>
-			{#each jobs as j}
-				<div class="trow">
-					<div style="flex:2;min-width:0">
-						<a class="link" href="/orgs/{j.org_slug}" target="_blank">{j.org_name}</a>
-					</div>
-					<div class="mono cell" style="flex:1.5">{j.name}</div>
-					<div class="cell" style="flex:1">{j.provider}</div>
-					<div class="cell" style="flex:1">{j.region}</div>
-					<div style="flex:1">
-						<span class="dot" style="background:{statusColor(j.status)}"></span>
-						<span style="font-size:12px;color:{statusColor(j.status)};font-weight:500">{j.status}</span>
-					</div>
-					<div class="muted" style="flex:1;font-size:11.5px">{relTime(j.created_at)}</div>
-				</div>
-			{/each}
-		</div>
-
-		<div class="card-list">
-			{#each jobs as j}
-				<div class="m-card">
-					<div class="m-card-title"><a class="link" href="/orgs/{j.org_slug}" target="_blank">{j.org_name}</a></div>
-					<div class="m-card-row"><span class="m-card-key">Node</span><span class="mono cell">{j.name}</span></div>
-					<div class="m-card-row"><span class="m-card-key">Provider</span><span class="cell">{j.provider}</span></div>
-					<div class="m-card-row"><span class="m-card-key">Region</span><span class="cell">{j.region}</span></div>
-					<div class="m-card-row">
-						<span class="m-card-key">Status</span>
-						<span>
-							<span class="dot" style="background:{statusColor(j.status)}"></span>
-							<span style="font-size:12px;color:{statusColor(j.status)};font-weight:500">{j.status}</span>
-						</span>
-					</div>
-					<div class="m-card-row"><span class="m-card-key">Started</span><span class="muted" style="font-size:11.5px">{relTime(j.created_at)}</span></div>
-				</div>
-			{/each}
-		</div>
-
-		{#if totalPages > 1}
-			<div class="pager">
-				<button class="pg-btn" disabled={page === 0} onclick={() => { page--; load(); }}>Prev</button>
-				<span class="pg-info">Page {page + 1} of {totalPages} &bull; {total} total</span>
-				<button class="pg-btn" disabled={page >= totalPages - 1} onclick={() => { page++; load(); }}>Next</button>
-			</div>
-		{/if}
-	{/if}
-</div>
+<DataTable
+	fetchPage={fetchProvisioningPage}
+	rowKey={(j) => j.id}
+	searchable={false}
+	columns={[
+		{ key: 'org', label: 'Organization' },
+		{ key: 'node', label: 'Node' },
+		{ key: 'provider', label: 'Provider' },
+		{ key: 'region', label: 'Region' },
+		{ key: 'status', label: 'Status' },
+		{ key: 'started', label: 'Started' }
+	]}
+	emptyMessage="No provisioning jobs in progress."
+>
+	{#snippet row(j)}
+		<tr>
+			<td><a class="pv-link" href="/orgs/{j.org_slug}" target="_blank">{j.org_name}</a></td>
+			<td class="pv-mono">{j.name}</td>
+			<td>{j.provider}</td>
+			<td>{j.region}</td>
+			<td>
+				<span class="pv-status-cell">
+					<StatusDot status={statusDot(j.status)} />
+					{statusLabel(j.status)}
+				</span>
+			</td>
+			<td class="pv-dim">{relTime(j.created_at)}</td>
+		</tr>
+	{/snippet}
+</DataTable>
 
 <style>
-	.p { max-width:1100px; margin:0 auto; padding:40px 36px; }
-	.hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
-	.ttl { font-size:18px; font-weight:700; color:var(--text); margin:0 0 4px; letter-spacing:-0.02em; }
-	.sub { font-size:12.5px; color:var(--text-3); margin:0; }
-	.back-link { font-size:12.5px; font-weight:600; color:var(--accent); text-decoration:none; }
-	.back-link:hover { text-decoration:underline; }
-	.refresh-btn { display:flex; align-items:center; gap:6px; padding:6px 12px; height:32px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:background .15s; font-family:var(--font); }
-	.refresh-btn:hover { background:var(--surface-2); }
-
-	.tbl { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow-sm); }
-	.thead { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:10.5px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.065em; }
-	.trow { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); transition:background .1s; }
-	.trow:last-child { border-bottom:none; }
-	.trow:hover { background:var(--row-hover); }
-	.mono { font-family:var(--mono); }
-	.cell { font-size:12.5px; color:var(--text-2); }
-	.muted { color:var(--text-3); }
-	.dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:5px; }
-	.link { font-size:12.5px; font-weight:500; color:var(--text); text-decoration:none; }
-	.link:hover { text-decoration:underline; color:var(--accent); }
-
-	.err { padding:11px 14px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius); font-size:13px; color:var(--danger); }
-	.empty { padding:48px; text-align:center; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-3); font-size:13px; }
-	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
-	.sk-row { display:flex; align-items:center; gap:12px; padding:13px 16px; border-bottom:1px solid var(--border); }
-	.sk-row:last-child { border-bottom:none; }
-	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
-
-	.pager { display:flex; align-items:center; gap:10px; padding:12px 0 4px; justify-content:center; }
-	.pg-btn { padding:5px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); transition:background .15s; }
-	.pg-btn:hover:not(:disabled) { background:var(--surface-2); }
-	.pg-btn:disabled { opacity:.4; cursor:not-allowed; }
-	.pg-info { font-size:12px; color:var(--text-3); }
-
-	.card-list { display:none; }
-	.m-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px; margin-bottom:8px; }
-	.m-card-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px; }
-	.m-card-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border); font-size:12.5px; color:var(--text-2); }
-	.m-card-row:last-child { border-bottom:none; }
-	.m-card-key { font-size:11px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.05em; }
-
-	@media (max-width: 640px) {
-		.p { padding:20px 12px; }
-		.tbl { display:none; }
-		.card-list { display:block; }
-	}
+	.pv-link { color: var(--text-primary); text-decoration: none; }
+	.pv-link:hover { text-decoration: underline; color: var(--accent); }
+	.pv-mono { font-family: var(--mono); }
+	.pv-status-cell { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); }
+	.pv-dim { color: var(--text-muted); font-size: 11.5px; }
 </style>
