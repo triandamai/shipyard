@@ -102,6 +102,7 @@
 	<DataTable
 		fetchPage={fetchDeploymentsPage}
 		rowKey={(d) => d.id}
+		searchable={false}
 		columns={[
 			{ key: 'org', label: 'Org' },
 			{ key: 'service', label: 'Service' },
