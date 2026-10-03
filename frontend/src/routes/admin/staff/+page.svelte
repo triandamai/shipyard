@@ -1,6 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import {
+		DataTable,
+		Avatar,
+		Badge,
+		Button,
+		Modal,
+		FormField,
+		TextField,
+		Checkbox,
+		PageHeader,
+		InlineAlert,
+		ConfirmDialog
+	} from '$lib/components/ui';
 
 	interface StaffUser { id: string; email: string; staff_permissions: string[]; created_at: string; }
 
@@ -8,7 +21,12 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let revokingId = $state<string | null>(null);
-	let search = $state('');
+
+	// ── Revoke confirm ───────────────────────────────────────────────────────
+	let revokeConfirmOpen = $state(false);
+	let revokeTarget = $state<StaffUser | null>(null);
+
+	// ── Promote-to-admin modal ───────────────────────────────────────────────
 	let showGrant = $state(false);
 	let grantEmail = $state('');
 	let grantPerms = $state<string[]>([]);
@@ -108,16 +126,21 @@
 		loading = false;
 	}
 
-	let filtered = $derived(
-		search.trim()
-			? staff.filter(u => u.email.toLowerCase().includes(search.toLowerCase()))
-			: staff
-	);
+	function requestRevoke(user: StaffUser) {
+		revokeTarget = user;
+		revokeConfirmOpen = true;
+	}
 
-	async function revoke(user: StaffUser) {
-		if (!confirm(`Remove staff access from ${user.email}?`)) return;
-		revokingId = user.id;
-		await api.post(`/admin/staff/${user.id}/revoke`, {});
+	// Modal can also close itself (Escape key / backdrop click) without going
+	// through a confirm/cancel handler — keep revokeTarget in sync either way.
+	$effect(() => {
+		if (!revokeConfirmOpen && revokeTarget) revokeTarget = null;
+	});
+
+	async function confirmRevoke() {
+		if (!revokeTarget) return;
+		revokingId = revokeTarget.id;
+		await api.post(`/admin/staff/${revokeTarget.id}/revoke`, {});
 		await load();
 		revokingId = null;
 	}
@@ -154,220 +177,134 @@
 		return id;
 	}
 
-	const avaColors: [string, string][] = [
-		['#1e1e1e','rgba(255,255,255,0.55)'],
-		['#1c1f28','rgba(255,255,255,0.55)'],
-		['#1a1e1a','rgba(255,255,255,0.55)'],
-		['#201a1a','rgba(255,255,255,0.55)'],
-		['#1a1a24','rgba(255,255,255,0.55)'],
-	];
-	function avaStyle(email: string): [string, string] {
-		return avaColors[email.charCodeAt(0) % avaColors.length];
+	// Same deterministic index pattern as the Users page (Task 40): email
+	// charCodeAt(0) % length picks one of Avatar's fixed `tone` values.
+	const avaTones: Array<'blue' | 'green' | 'red' | 'yellow' | 'purple'> = ['blue', 'purple', 'green', 'yellow', 'red'];
+	function avaTone(email: string): 'blue' | 'green' | 'red' | 'yellow' | 'purple' {
+		return avaTones[email.charCodeAt(0) % avaTones.length];
 	}
 </script>
 
-<div class="p">
-	<header class="hdr">
-		<div class="hdr-l">
-			<h1 class="ttl">Staff</h1>
-			<span class="pill">{staff.length}</span>
-		</div>
-		<div style="display:flex;align-items:center;gap:8px">
-			<label class="search">
-				<svg viewBox="0 0 20 20" fill="currentColor" class="si" width="13" height="13">
-					<path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
-				</svg>
-				<input type="text" placeholder="Filter email…" bind:value={search} />
-			</label>
-			<button class="add-btn" onclick={() => (showGrant = true)}>+ Add Staff</button>
-		</div>
-	</header>
+<PageHeader title="Staff">
+	{#snippet actions()}
+		<Badge tone="neutral">{staff.length} total</Badge>
+		<Button size="sm" onclick={() => (showGrant = true)}>+ Add Staff</Button>
+	{/snippet}
+</PageHeader>
 
-	{#if loading}
-		<div class="tbl">
-			{#each [0,1,2] as _}
-				<div class="sk-row">
-					<div class="sk sk-ava"></div>
-					<div style="flex:1;display:flex;flex-direction:column;gap:6px">
-						<div class="sk sk-l"></div>
-						<div class="sk sk-xs"></div>
-					</div>
-				</div>
-			{/each}
-		</div>
-	{:else if error}
-		<div class="err">{error}</div>
-	{:else if filtered.length === 0}
-		<div class="empty">
-			<svg viewBox="0 0 20 20" fill="currentColor" width="28" height="28"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
-			{search ? 'No staff match.' : 'No staff members yet. Add one above.'}
-		</div>
-	{:else}
-		<div class="tbl">
-			<div class="thead">
-				<span style="flex:3">User</span>
-				<span style="flex:3">Permissions</span>
-				<span style="flex:1.1">Joined</span>
-				<span class="r" style="flex:1">Action</span>
-			</div>
-			{#each filtered as user}
-				{@const [bg, fg] = avaStyle(user.email)}
-				<div class="trow">
-					<div class="user-c" style="flex:3">
-						<div class="ava" style="background:{bg};color:{fg}">{user.email[0].toUpperCase()}</div>
-						<div class="user-info">
-							<span class="user-email">{user.email}</span>
-							<span class="user-id">{user.id.slice(0,8)}…</span>
+{#if error}
+	<InlineAlert tone="error">{error}</InlineAlert>
+{:else}
+	<DataTable
+		items={staff}
+		rowKey={(u) => u.id}
+		searchFields={['email']}
+		columns={[
+			{ key: 'user', label: 'User', width: '28%' },
+			{ key: 'permissions', label: 'Permissions', width: '36%' },
+			{ key: 'joined', label: 'Joined', width: '14%' },
+			{ key: 'actions', label: 'Action', width: '22%' }
+		]}
+		emptyMessage="No staff members yet. Add one above."
+	>
+		{#snippet row(user)}
+			<tr>
+				<td>
+					<div class="st-user-cell">
+						<Avatar initials={user.email[0]} tone={avaTone(user.email)} size={32} />
+						<div class="st-user-info">
+							<span class="st-email">{user.email}</span>
+							<span class="st-id">{user.id.slice(0, 8)}…</span>
 						</div>
 					</div>
-					<div style="flex:3;display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+				</td>
+				<td>
+					<div class="st-perms">
 						{#each user.staff_permissions.slice(0, 3) as p}
-							<span class="perm-chip">{permLabel(p)}</span>
+							<Badge tone="blue">{permLabel(p)}</Badge>
 						{/each}
 						{#if user.staff_permissions.length > 3}
-							<span class="perm-more">+{user.staff_permissions.length - 3} more</span>
+							<Badge tone="neutral">+{user.staff_permissions.length - 3} more</Badge>
 						{/if}
 					</div>
-					<div class="d" style="flex:1.1">{new Date(user.created_at).toLocaleDateString()}</div>
-					<div style="flex:1;display:flex;justify-content:flex-end">
-						<button class="act act-danger" onclick={() => revoke(user)} disabled={revokingId === user.id}>
+				</td>
+				<td class="st-date">{new Date(user.created_at).toLocaleDateString()}</td>
+				<td>
+					<div class="st-actions">
+						<Button
+							variant="danger-outline"
+							size="sm"
+							disabled={revokingId === user.id}
+							onclick={() => requestRevoke(user)}
+						>
 							{revokingId === user.id ? '…' : 'Revoke'}
-						</button>
+						</Button>
+					</div>
+				</td>
+			</tr>
+		{/snippet}
+	</DataTable>
+{/if}
+
+<ConfirmDialog
+	bind:open={revokeConfirmOpen}
+	title="Remove staff access"
+	message={revokeTarget ? `Remove staff access from ${revokeTarget.email}?` : ''}
+	confirmLabel="Revoke"
+	onConfirm={confirmRevoke}
+/>
+
+<!-- ── Promote to Admin Modal ──────────────────────────────────────────────── -->
+<Modal bind:open={showGrant} title="Promote to Admin">
+	{#snippet children()}
+		<FormField label="User Email" for="st-grant-email">
+			<TextField id="st-grant-email" type="email" placeholder="user@example.com" bind:value={grantEmail} />
+		</FormField>
+		<div class="st-perm-groups">
+			{#each PERM_GROUPS as group}
+				<div class="st-perm-group">
+					<span class="st-perm-group-label">{group.label}</span>
+					<div class="st-perm-row">
+						{#each group.perms as p}
+							<Checkbox
+								label={p.label}
+								bind:checked={() => grantPerms.includes(p.id), () => togglePerm(p.id)}
+							/>
+						{/each}
 					</div>
 				</div>
 			{/each}
 		</div>
-	{/if}
-</div>
-
-{#if showGrant}
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="modal-bg" onclick={() => (showGrant = false)}>
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="modal" onclick={(e) => e.stopPropagation()}>
-			<div class="modal-hdr">
-				<h2 class="modal-title">Promote to Admin</h2>
-				<button class="modal-close" onclick={() => (showGrant = false)}>✕</button>
-			</div>
-			<div class="modal-body">
-				<div class="field">
-					<label class="lbl">User Email</label>
-					<input class="inp" type="email" placeholder="user@example.com" bind:value={grantEmail} />
-				</div>
-				<div class="field">
-					<label class="lbl">Permissions</label>
-					<div class="perm-groups">
-						{#each PERM_GROUPS as group}
-							<div class="perm-group">
-								<span class="perm-group-label">{group.label}</span>
-								<div class="perm-row">
-									{#each group.perms as p}
-										<label class="perm-item">
-											<input type="checkbox" checked={grantPerms.includes(p.id)} onchange={() => togglePerm(p.id)} />
-											<span>{p.label}</span>
-										</label>
-									{/each}
-								</div>
-							</div>
-						{/each}
-					</div>
-				</div>
-				{#if grantError}
-					<div class="err" style="margin-top:8px">{grantError}</div>
-				{/if}
-			</div>
-			<div class="modal-foot">
-				{#if grantEmail && grantPerms.length === 0}
-					<span class="perm-hint">Select at least one permission</span>
-				{/if}
-				<button class="btn-cancel" onclick={() => (showGrant = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={grantAdmin} disabled={granting || !grantEmail || grantPerms.length === 0}>
-					{granting ? 'Granting…' : 'Grant Admin Access'}
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
+		{#if grantError}
+			<InlineAlert tone="error">{grantError}</InlineAlert>
+		{/if}
+	{/snippet}
+	{#snippet footer()}
+		{#if grantEmail && grantPerms.length === 0}
+			<span class="st-perm-hint">Select at least one permission</span>
+		{/if}
+		<Button variant="secondary" size="sm" onclick={() => (showGrant = false)}>Cancel</Button>
+		<Button size="sm" onclick={grantAdmin} disabled={granting || !grantEmail || grantPerms.length === 0}>
+			{granting ? 'Granting…' : 'Grant Admin Access'}
+		</Button>
+	{/snippet}
+</Modal>
 
 <style>
-	.p { max-width:900px; margin:0 auto; padding:40px 36px; }
+	.st-user-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
+	.st-user-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+	.st-email { font-size: 12.5px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.st-id { font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); }
+	.st-date { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+	.st-perms { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+	.st-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
-	.hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:12px; flex-wrap:wrap; }
-	.hdr-l { display:flex; align-items:center; gap:8px; }
-	.ttl { font-size:18px; font-weight:700; color:var(--text); margin:0; letter-spacing:-0.02em; }
-	.pill { display:inline-flex; align-items:center; justify-content:center; height:20px; padding:0 7px; border-radius:999px; font-size:11px; font-weight:700; background:var(--surface-2); color:var(--text-3); border:1px solid var(--border); }
-
-	.search { position:relative; display:flex; align-items:center; cursor:text; }
-	.si { position:absolute; left:9px; color:var(--text-3); pointer-events:none; }
-	.search input { height:32px; padding:0 10px 0 28px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:12.5px; color:var(--text); outline:none; width:190px; transition:border-color .15s, box-shadow .15s; font-family:var(--font); }
-	.search input::placeholder { color:var(--text-3); }
-	.search input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring); }
-
-	.add-btn { padding:6px 14px; height:32px; border-radius:var(--radius-sm); font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; font-family:var(--font); }
-	.add-btn:hover { opacity:.88; }
-
-	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
-	.sk-ava { width:32px; height:32px; border-radius:8px; flex-shrink:0; }
-	.sk-l { width:150px; height:12px; }
-	.sk-xs { width:80px; height:10px; }
-	.sk-row { display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--border); }
-	.sk-row:last-child { border-bottom:none; }
-	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
-
-	.err { padding:11px 14px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius); font-size:13px; color:var(--danger); }
-	.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:56px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-3); font-size:13px; }
-
-	.tbl { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow-sm); }
-	.thead { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--surface-2); border-bottom:1px solid var(--border); font-size:10.5px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:0.065em; }
-	.trow { display:flex; align-items:center; gap:10px; padding:11px 16px; border-bottom:1px solid var(--border); transition:background .1s; }
-	.trow:last-child { border-bottom:none; }
-	.trow:hover { background:var(--row-hover); }
-
-	.user-c { display:flex; align-items:center; gap:9px; min-width:0; }
-	.ava { width:32px; height:32px; border-radius:8px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; }
-	.user-info { display:flex; flex-direction:column; gap:1px; min-width:0; }
-	.user-email { font-size:12.5px; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-	.user-id { font-size:10px; color:var(--text-3); font-family:var(--mono); }
-	.d { font-size:11.5px; color:var(--text-3); white-space:nowrap; }
-	.r { text-align:right; }
-
-	.role-admin { display:inline-flex; align-items:center; font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--danger-soft); color:var(--danger); border:1px solid rgba(220,38,38,0.18); }
-
-	.act { padding:4px 11px; height:28px; border-radius:var(--radius-sm); font-size:11.5px; font-weight:600; cursor:pointer; border:1px solid transparent; white-space:nowrap; transition:background .15s; font-family:var(--font); }
-	.act:disabled { opacity:.45; cursor:not-allowed; }
-	.act-danger { background:var(--danger-soft); color:var(--danger); border-color:rgba(220,38,38,0.18); }
-	.act-danger:hover:not(:disabled) { background:rgba(220,38,38,0.14); border-color:rgba(220,38,38,0.32); }
-
-	/* Modal */
-	.modal-bg { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; padding:20px; }
-	.modal { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-md); width:100%; max-width:460px; display:flex; flex-direction:column; }
-	.modal-hdr { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); }
-	.modal-title { font-size:14px; font-weight:700; color:var(--text); margin:0; }
-	.modal-close { background:none; border:none; color:var(--text-3); font-size:14px; cursor:pointer; padding:4px; border-radius:4px; }
-	.modal-close:hover { color:var(--text); background:var(--surface-2); }
-	.modal-body { padding:20px; display:flex; flex-direction:column; gap:16px; }
-	.modal-foot { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid var(--border); background:var(--surface-2); }
-
-	.field { display:flex; flex-direction:column; gap:5px; }
-	.lbl { font-size:11.5px; font-weight:600; color:var(--text-2); }
-	.inp { height:34px; padding:0 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:12.5px; color:var(--text); outline:none; width:100%; box-sizing:border-box; font-family:var(--font); transition:border-color .15s; }
-	.inp:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring); }
-
-	.perm-groups { display:flex; flex-direction:column; gap:10px; max-height:360px; overflow-y:auto; }
-	.perm-group { display:flex; flex-direction:column; gap:4px; }
-	.perm-group-label { font-size:10.5px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; }
-	.perm-row { display:flex; gap:16px; }
-	.perm-item { display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--text-2); cursor:pointer; }
-	.perm-item input { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; }
-	.perm-chip { display:inline-flex; padding:1px 7px; border-radius:999px; font-size:10px; font-weight:600; background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-ring); white-space:nowrap; }
-	.perm-more { font-size:10px; color:var(--text-3); }
-
-	.perm-hint { font-size:11px; color:var(--text-3); flex:1; display:flex; align-items:center; }
-	.btn-cancel { padding:6px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); }
-	.btn-cancel:hover { background:var(--surface-2); }
-	.btn-confirm { padding:6px 16px; border-radius:var(--radius-sm); font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; font-family:var(--font); }
-	.btn-confirm:hover:not(:disabled) { opacity:.88; }
-	.btn-confirm:disabled { opacity:.5; cursor:not-allowed; }
+	/* Promote-to-admin modal: same grouped (one heading per permission
+	   category, two Checkboxes per row) layout the page always used — only
+	   rebuilt on Modal + Checkbox (Task 43). */
+	.st-perm-groups { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; }
+	.st-perm-group { display: flex; flex-direction: column; gap: 6px; }
+	.st-perm-group-label { font-size: 10.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+	.st-perm-row { display: flex; gap: 16px; }
+	.st-perm-hint { font-size: 11px; color: var(--text-dim); flex: 1; display: flex; align-items: center; }
 </style>
