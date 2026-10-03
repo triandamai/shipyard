@@ -129,13 +129,16 @@
 	}
 	// Same three-way state semantics as the old nodeStateColor() (ready=ok,
 	// down/disconnected=danger, else=muted) — now expressed as StatusDot's
-	// status enum. StatusDot has no dedicated "unknown/muted" status, so the
-	// old muted-gray fallback becomes "pending" (a slow yellow pulse) — the
-	// closest available neutral-ish status.
+	// status enum. StatusDot has no dedicated "unknown/muted" status; "stopped"
+	// (static --text-dim gray) is the closer match to the old muted-gray
+	// fallback than "pending" would be — pending's pulse implies an active
+	// transition, which "unknown" explicitly is not (same pulse-vs-static
+	// reasoning the nodes page already applies to its own degraded→failed
+	// mapping).
 	function nodeStatusDot(state: string): 'running' | 'stopped' | 'pending' {
 		if (state === 'ready') return 'running';
 		if (state === 'down' || state === 'disconnected') return 'stopped';
-		return 'pending';
+		return 'stopped';
 	}
 
 	interface NodeRow {
