@@ -684,6 +684,21 @@ async fn list_app_deployments(
     let limit  = params.limit.unwrap_or(30).clamp(1, 100);
     let offset = params.page.unwrap_or(0) * limit;
 
+    let total: (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*)
+           FROM deployments d
+           JOIN services sv ON sv.id = d.service_id
+           JOIN projects p  ON p.id  = sv.project_id
+           JOIN organizations o ON o.id = p.org_id
+           WHERE ($1::uuid IS NULL OR o.id = $1)
+             AND ($2::text IS NULL OR d.status::text = $2)"#,
+    )
+    .bind(params.org_id)
+    .bind(params.status.as_deref())
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
     #[derive(sqlx::FromRow, Serialize)]
     struct DeployRow {
         id:           Uuid,
@@ -724,6 +739,7 @@ async fn list_app_deployments(
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "items": items,
+        "total": total.0,
         "page":  params.page.unwrap_or(0),
         "limit": limit,
     }))))
