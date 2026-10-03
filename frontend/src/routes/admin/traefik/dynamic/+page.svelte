@@ -1,17 +1,30 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { FileText } from '@lucide/svelte';
+	import {
+		SearchInput,
+		ActivityList,
+		ListRow,
+		Card,
+		Button,
+		EmptyState,
+		InlineAlert,
+		Skeleton,
+		Spinner
+	} from '$lib/components/ui';
 
 	interface TraefikFileResponse { content: string; path: string }
 	interface TraefikDynamicResponse { dir: string; files: { name: string }[] }
 
-	let dynamicDir    = $state<TraefikDynamicResponse | null>(null);
-	let loading       = $state(true);
-	let error         = $state('');
-	let selectedFile  = $state<string | null>(null);
+	let dynamicDir      = $state<TraefikDynamicResponse | null>(null);
+	let loading         = $state(true);
+	let error           = $state('');
+	let selectedFile    = $state<string | null>(null);
 	let selectedContent = $state<TraefikFileResponse | null>(null);
-	let fileLoading   = $state(false);
-	let copied = $state(false);
+	let fileLoading     = $state(false);
+	let copied          = $state(false);
+	let search          = $state('');
 
 	async function load() {
 		loading = true; error = '';
@@ -36,78 +49,100 @@
 		setTimeout(() => (copied = false), 2000);
 	}
 
+	let filteredFiles = $derived(
+		(dynamicDir?.files ?? []).filter(f => !search || f.name.toLowerCase().includes(search.toLowerCase()))
+	);
+
 	onMount(load);
 </script>
 
 {#if loading}
-	<div class="card sk-wrap"><div class="sk" style="height:80px"></div></div>
+	<Skeleton variant="card" height="340px" />
 {:else if error}
-	<div class="err">{error}</div>
+	<InlineAlert tone="error">{error}</InlineAlert>
 {:else if dynamicDir}
-	<div class="dyn-shell">
+	<div class="shell">
 		<div class="file-list">
-			<div class="file-list-hdr">{dynamicDir.dir}</div>
-			{#each dynamicDir.files as f}
-				<button class="file-item" class:file-sel={selectedFile === f.name} onclick={() => openFile(f.name)}>
-					<svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
-					{f.name}
-				</button>
-			{/each}
-			{#if dynamicDir.files.length === 0}
-				<div class="file-empty">No dynamic files.</div>
-			{/if}
+			<div class="fl-hdr">
+				<span class="fl-path mono">{dynamicDir.dir}</span>
+				<span class="count">{filteredFiles.length}</span>
+			</div>
+			<div class="search-wrap">
+				<SearchInput bind:value={search} placeholder="Filter files…" />
+			</div>
+			<div class="fl-body">
+				{#if filteredFiles.length === 0}
+					<EmptyState message="No dynamic files." />
+				{:else}
+					<ActivityList>
+						{#each filteredFiles as f (f.name)}
+							<button
+								type="button"
+								class={selectedFile === f.name ? 'fl-item fl-sel' : 'fl-item'}
+								onclick={() => openFile(f.name)}
+							>
+								<ListRow iconTone="blue" title={f.name}>
+									{#snippet icon()}<FileText size={13} />{/snippet}
+								</ListRow>
+							</button>
+						{/each}
+					</ActivityList>
+				{/if}
+			</div>
 		</div>
+
 		<div class="file-content">
-			{#if fileLoading}
-				<div class="fc-center"><div class="mini-spin"></div></div>
+			{#if !selectedFile}
+				<div class="fc-placeholder">Select a file to view</div>
+			{:else if fileLoading}
+				<div class="fc-placeholder"><Spinner size={20} /></div>
 			{:else if selectedContent}
-				<div class="tpl-hdr">
-					<span class="tpl-title mono">{selectedContent.path}</span>
-					<button class="copy-btn" onclick={() => copyCode(selectedContent!.content)}>
-						{copied ? 'Copied!' : 'Copy'}
-					</button>
+				<div class="fc-hdr">
+					<span class="mono fc-name">{selectedContent.path}</span>
+					{#if selectedContent.content}
+						<Button variant="secondary" size="sm" onclick={() => copyCode(selectedContent!.content)}>
+							{copied ? 'Copied!' : 'Copy'}
+						</Button>
+					{/if}
 				</div>
-				<pre class="code" style="border-top-left-radius:0;border-top-right-radius:0">{selectedContent.content}</pre>
-			{:else}
-				<div class="fc-center" style="color:var(--text-3);font-size:12.5px">Select a file to view</div>
+				{#if selectedContent.content}
+					<Card padding="0">
+						<pre class="code">{selectedContent.content}</pre>
+					</Card>
+				{:else}
+					<div class="fc-placeholder" style="padding:24px">File is empty.</div>
+				{/if}
 			{/if}
 		</div>
 	</div>
 {:else}
-	<div class="empty">No dynamic config directory accessible.</div>
+	<EmptyState message="No dynamic config directory accessible." />
 {/if}
 
 <style>
-	.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow-sm); }
-	.sk-wrap { display:flex; flex-direction:column; gap:16px; }
-	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
-	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
+	.shell { display:grid; grid-template-columns:260px 1fr; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.07); min-height:340px; }
 
-	.dyn-shell { display:grid; grid-template-columns:220px 1fr; gap:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow-sm); min-height:240px; }
 	.file-list { border-right:1px solid var(--border); display:flex; flex-direction:column; }
-	.file-list-hdr { padding:9px 12px; font-size:10px; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em; border-bottom:1px solid var(--border); background:var(--surface-2); font-family:var(--mono); word-break:break-all; }
-	.file-item { display:flex; align-items:center; gap:7px; padding:8px 12px; font-size:12px; color:var(--text-2); cursor:pointer; border:none; background:transparent; text-align:left; transition:background .1s, color .1s; width:100%; font-family:var(--mono); }
-	.file-item:hover { background:var(--row-hover); color:var(--text); }
-	.file-item.file-sel { background:var(--accent-soft); color:var(--accent); }
-	.file-empty { padding:16px 12px; font-size:12px; color:var(--text-3); }
-	.file-content { display:flex; flex-direction:column; min-width:0; }
-	.fc-center { display:flex; align-items:center; justify-content:center; flex:1; padding:40px; }
+	.fl-hdr { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); background:var(--bg-elevated); gap:6px; }
+	.fl-path { font-size:10.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.count { font-size:10px; font-weight:700; background:var(--border); color:var(--text-dim); padding:1px 6px; border-radius:999px; flex-shrink:0; }
+	.search-wrap { padding:8px; border-bottom:1px solid var(--border); }
+	.fl-body { overflow-y:auto; flex:1; padding:6px 10px; }
+	.fl-item { display:block; width:100%; background:none; border:none; padding:0; cursor:pointer; text-align:left; font-family:var(--font-sans); border-radius:var(--radius-sm); }
+	.fl-item :global(.ui-list-row-title) { font-family:var(--font-mono); }
+	.fl-item.fl-sel :global(.ui-list-row-title) { color:var(--accent); }
+	.fl-item:hover { background:var(--bg-hover); }
 
-	.tpl-hdr { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--border); background:var(--surface-2); }
-	.tpl-title { font-size:12px; font-weight:600; color:var(--text-2); }
-	.copy-btn { padding:4px 11px; border-radius:var(--radius-sm); font-size:11px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:background .15s, color .15s; font-family:var(--font); }
-	.copy-btn:hover { background:var(--accent); border-color:var(--accent); color:#000; }
-	.code { margin:0; padding:16px; font-size:11.5px; line-height:1.65; color:var(--text-2); font-family:var(--mono); white-space:pre-wrap; word-break:break-all; overflow-x:auto; }
-	.mono { font-family:var(--mono); }
+	.file-content { display:flex; flex-direction:column; min-width:0; padding:14px 16px; }
+	.fc-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+	.fc-name { font-size:12px; color:var(--text-secondary); }
+	.fc-placeholder { display:flex; align-items:center; justify-content:center; flex:1; color:var(--text-dim); font-size:12.5px; padding:60px; }
+	.code { margin:0; padding:16px; font-size:11.5px; line-height:1.65; color:var(--text-secondary); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-all; overflow-x:auto; }
 
-	.err { padding:11px 14px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius); font-size:13px; color:var(--danger); }
-	.empty { padding:48px; text-align:center; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-3); font-size:13px; }
-
-	.mini-spin { display:inline-block; width:18px; height:18px; border:2px solid var(--border-2); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
-	@keyframes spin { to { transform:rotate(360deg); } }
+	.mono { font-family:var(--font-mono); }
 
 	@media (max-width: 640px) {
-		.dyn-shell { grid-template-columns: 1fr; }
+		.shell { grid-template-columns: 1fr; }
 		.file-list { border-right: none; border-bottom: 1px solid var(--border); }
 	}
 </style>
