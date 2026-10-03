@@ -1,22 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
-
-	interface Plan {
-		id: string;
-		name: string;
-		enabled: boolean;
-		cpu_cores: number;
-		memory_mb: number;
-		max_replicas: number;
-		node_count: number;
-		max_members: number;
-		max_projects: number;
-		max_orgs: number;
-		max_parallel_deployments: number;
-		max_git_providers: number;
-		price_monthly: number;
-	}
+	import type { Plan } from '$lib/api/types';
+	import {
+		PageHeader,
+		Card,
+		Toggle,
+		Button,
+		Modal,
+		FormField,
+		TextField,
+		InlineAlert,
+		EmptyState,
+		Skeleton
+	} from '$lib/components/ui';
 
 	function fmtMem(mb: number): string {
 		if (mb < 1024) return `${mb} MB`;
@@ -24,61 +21,86 @@
 		return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
 	}
 
+	// -1 is the "unlimited" sentinel on these quota-style fields (same
+	// convention as orgs' quota modal) — render it as ∞ rather than the
+	// literal number. Matches this page's pre-migration formatting exactly.
+	function fmtLimit(n: number): string {
+		return n === -1 ? '∞' : String(n);
+	}
+
 	let plans = $state<Plan[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let saving = $state<string | null>(null);
-	let showCreate = $state(false);
-	let creating = $state(false);
 
-	// ── Edit modal ────────────────────────────────────────────────────────────
-	let editPlan = $state<Plan | null>(null);
-	let editForm = $state<Omit<Plan, 'id'> | null>(null);
-	let editSaving = $state(false);
-	let editError = $state<string | null>(null);
+	// ── Shared 9-field numeric quota grid ───────────────────────────────────
+	// Same fields/shape as orgs' quota modal (Task 41): cpu_cores, memory_mb,
+	// max_replicas, node_count, max_members, max_projects, max_orgs,
+	// max_parallel_deployments, max_git_providers. Reused as-is by both the
+	// Create and Edit modals below.
+	//
+	// NOTE: a type="number" TextField numerically coerces its bound value on
+	// every edit (Svelte checks the live DOM input's own `type` at runtime,
+	// regardless of how dynamic the `type` prop looked at the call site) — so
+	// these form fields are strings only until the user touches one, at which
+	// point that field becomes a real JS number. planNumber() below normalizes
+	// either shape before building the save payload for the backend's
+	// strict numeric-typed plan endpoint. A previous task (orgs' quota-edit
+	// modal, which this modal explicitly reuses the pattern from) originally
+	// wrote this helper as `(raw: string) => raw.trim()...` and crashed with
+	// "raw.trim is not a function" the instant a numeric field was edited,
+	// leaving Save stuck on "Saving…" forever with no visible error.
+	type QuotaKey =
+		| 'cpu_cores'
+		| 'memory_mb'
+		| 'max_replicas'
+		| 'node_count'
+		| 'max_members'
+		| 'max_projects'
+		| 'max_orgs'
+		| 'max_parallel_deployments'
+		| 'max_git_providers';
 
-	function openEdit(plan: Plan) {
-		editPlan = plan;
-		editForm = { ...plan };
-		editError = null;
+	type QuotaFormFields = Record<QuotaKey, string>;
+
+	const quotaFieldDefs: { key: QuotaKey; label: string; hint?: string }[] = [
+		{ key: 'cpu_cores', label: 'CPU Cores' },
+		{ key: 'memory_mb', label: 'Memory (MB)' },
+		{ key: 'max_replicas', label: 'Max Replicas', hint: '-1 = unlimited' },
+		{ key: 'node_count', label: 'Node Count' },
+		{ key: 'max_members', label: 'Max Members', hint: '-1 = unlimited' },
+		{ key: 'max_projects', label: 'Max Projects', hint: '-1 = unlimited' },
+		{ key: 'max_orgs', label: 'Max Orgs', hint: '-1 = unlimited' },
+		{ key: 'max_parallel_deployments', label: 'Parallel Deployments', hint: '-1 = unlimited' },
+		{ key: 'max_git_providers', label: 'Max Git Providers', hint: '-1 = unlimited' }
+	];
+
+	function emptyQuotaForm(): QuotaFormFields {
+		return {
+			cpu_cores: '1',
+			memory_mb: '1024',
+			max_replicas: '2',
+			node_count: '1',
+			max_members: '5',
+			max_projects: '5',
+			max_orgs: '1',
+			max_parallel_deployments: '2',
+			max_git_providers: '1'
+		};
 	}
 
-	function closeEdit() {
-		editPlan = null;
-		editForm = null;
-		editError = null;
+	// `raw` is typed `string | number` defensively: a type="number" TextField
+	// bound via a computed member expression (`form[field.key]`) inside an
+	// {#each} loop can end up holding a real JS number at runtime the instant
+	// the user edits that field, not just a numeric string. -1 is a valid
+	// sentinel ("unlimited"); blank or non-numeric input falls back to 0
+	// rather than being sent to the backend as a string.
+	function planNumber(raw: string | number): number {
+		const trimmed = String(raw).trim();
+		if (trimmed === '') return 0;
+		const n = Number(trimmed);
+		return Number.isFinite(n) ? n : 0;
 	}
-
-	async function saveEdit() {
-		if (!editPlan || !editForm) return;
-		editSaving = true;
-		editError = null;
-		const res = await api.patch<unknown>(`/admin/plans/${editPlan.id}`, editForm);
-		if (res.error) {
-			editError = res.error.message;
-		} else {
-			closeEdit();
-			await load();
-		}
-		editSaving = false;
-	}
-
-	const defaultForm = (): Partial<Plan> => ({
-		name: '',
-		enabled: true,
-		cpu_cores: 1,
-		memory_mb: 1024,
-		max_replicas: 2,
-		node_count: 1,
-		max_members: 5,
-		max_projects: 5,
-		max_orgs: 1,
-		max_parallel_deployments: 2,
-		max_git_providers: 1,
-		price_monthly: 0,
-	});
-
-	let form = $state<Partial<Plan>>(defaultForm());
 
 	onMount(() => load());
 
@@ -92,315 +114,335 @@
 
 	async function toggleEnabled(plan: Plan) {
 		saving = plan.id;
-		await api.patch(`/admin/plans/${plan.id}`, { enabled: !plan.enabled });
-		await load();
-		saving = null;
+		try {
+			await api.patch(`/admin/plans/${plan.id}`, { enabled: !plan.enabled });
+			await load();
+		} finally {
+			saving = null;
+		}
+	}
+
+	// ── Create modal ─────────────────────────────────────────────────────────
+	// 11 fields total: name, price/mo, + the 9 shared quota fields above —
+	// plus an Enabled toggle. The Edit modal (below) exposes the same
+	// price_monthly field too — the pre-migration page let admins edit price
+	// after creation, so this migration preserves that.
+	let showCreate = $state(false);
+	let creating = $state(false);
+	let createError = $state<string | null>(null);
+
+	type CreateForm = QuotaFormFields & { name: string; enabled: boolean; price_monthly: string };
+
+	function defaultCreateForm(): CreateForm {
+		return { ...emptyQuotaForm(), name: '', enabled: true, price_monthly: '0' };
+	}
+
+	let createForm = $state<CreateForm>(defaultCreateForm());
+
+	function openCreate() {
+		createForm = defaultCreateForm();
+		createError = null;
+		showCreate = true;
+	}
+
+	function closeCreate() {
+		showCreate = false;
+		createError = null;
 	}
 
 	async function createPlan() {
 		creating = true;
-		const res = await api.post('/admin/plans', form);
-		if (!res.error) {
-			showCreate = false;
-			form = defaultForm();
-			await load();
+		createError = null;
+		try {
+			const payload = {
+				name: createForm.name,
+				enabled: createForm.enabled,
+				price_monthly: planNumber(createForm.price_monthly),
+				cpu_cores: planNumber(createForm.cpu_cores),
+				memory_mb: planNumber(createForm.memory_mb),
+				max_replicas: planNumber(createForm.max_replicas),
+				node_count: planNumber(createForm.node_count),
+				max_members: planNumber(createForm.max_members),
+				max_projects: planNumber(createForm.max_projects),
+				max_orgs: planNumber(createForm.max_orgs),
+				max_parallel_deployments: planNumber(createForm.max_parallel_deployments),
+				max_git_providers: planNumber(createForm.max_git_providers)
+			};
+			const res = await api.post('/admin/plans', payload);
+			if (res.error) {
+				createError = res.error.message;
+			} else {
+				closeCreate();
+				await load();
+			}
+		} catch (e) {
+			// Belt-and-suspenders: an unexpected error here must never leave the
+			// modal permanently stuck mid-save with no feedback.
+			createError = e instanceof Error ? e.message : 'Failed to create plan.';
+		} finally {
+			creating = false;
 		}
-		creating = false;
 	}
 
-	type FieldDef = { key: keyof Omit<Plan, 'id' | 'name' | 'enabled'>; label: string; hint?: string };
-	const planFields: FieldDef[] = [
-		{ key: 'price_monthly',            label: 'Price / Month ($)',        hint: '0 = free' },
-		{ key: 'cpu_cores',                label: 'CPU Cores' },
-		{ key: 'memory_mb',                label: 'Memory (MB)' },
-		{ key: 'max_replicas',             label: 'Max Replicas',             hint: '-1 = unlimited' },
-		{ key: 'node_count',               label: 'Node Count' },
-		{ key: 'max_members',              label: 'Max Members',              hint: '-1 = unlimited' },
-		{ key: 'max_projects',             label: 'Max Projects',             hint: '-1 = unlimited' },
-		{ key: 'max_orgs',                 label: 'Max Orgs',                 hint: '-1 = unlimited' },
-		{ key: 'max_parallel_deployments', label: 'Parallel Deployments',     hint: '-1 = unlimited' },
-		{ key: 'max_git_providers',        label: 'Max Git Providers',        hint: '-1 = unlimited' },
-	];
+	// ── Edit modal ───────────────────────────────────────────────────────────
+	// The same 9 shared quota fields as orgs' quota modal, plus name, enabled,
+	// and price_monthly (11 fields total). The pre-migration page's planFields
+	// array had price_monthly as its first entry and was shared verbatim by
+	// both the Create and Edit modal templates — i.e. price was always
+	// editable after creation too. (Confirmed against pre-migration source;
+	// an earlier draft of this migration read too much into the task brief's
+	// paraphrased "9 numeric fields... plus name+enabled" description for
+	// Edit and dropped price here, which was a behavior regression — fixed.)
+	let editModalOpen = $state(false);
+	let editPlan = $state<Plan | null>(null);
+	let editSaving = $state(false);
+	let editError = $state<string | null>(null);
+
+	type EditForm = QuotaFormFields & { name: string; enabled: boolean; price_monthly: string };
+
+	let editForm = $state<EditForm>({ ...emptyQuotaForm(), name: '', enabled: true, price_monthly: '0' });
+
+	function openEdit(plan: Plan) {
+		editPlan = plan;
+		editForm = {
+			name: plan.name,
+			enabled: plan.enabled,
+			price_monthly: String(plan.price_monthly),
+			cpu_cores: String(plan.cpu_cores),
+			memory_mb: String(plan.memory_mb),
+			max_replicas: String(plan.max_replicas),
+			node_count: String(plan.node_count),
+			max_members: String(plan.max_members),
+			max_projects: String(plan.max_projects),
+			max_orgs: String(plan.max_orgs),
+			max_parallel_deployments: String(plan.max_parallel_deployments),
+			max_git_providers: String(plan.max_git_providers)
+		};
+		editError = null;
+		editModalOpen = true;
+	}
+
+	function closeEdit() {
+		editModalOpen = false;
+		editPlan = null;
+		editError = null;
+	}
+
+	// Modal can also close itself (Escape key / backdrop click) without going
+	// through closeEdit() — keep the rest of the edit state in sync either way.
+	$effect(() => {
+		if (!editModalOpen && editPlan) {
+			editPlan = null;
+			editError = null;
+		}
+	});
+
+	async function saveEdit() {
+		if (!editPlan) return;
+		editSaving = true;
+		editError = null;
+		try {
+			const payload = {
+				name: editForm.name,
+				enabled: editForm.enabled,
+				price_monthly: planNumber(editForm.price_monthly),
+				cpu_cores: planNumber(editForm.cpu_cores),
+				memory_mb: planNumber(editForm.memory_mb),
+				max_replicas: planNumber(editForm.max_replicas),
+				node_count: planNumber(editForm.node_count),
+				max_members: planNumber(editForm.max_members),
+				max_projects: planNumber(editForm.max_projects),
+				max_orgs: planNumber(editForm.max_orgs),
+				max_parallel_deployments: planNumber(editForm.max_parallel_deployments),
+				max_git_providers: planNumber(editForm.max_git_providers)
+			};
+			const res = await api.patch<unknown>(`/admin/plans/${editPlan.id}`, payload);
+			if (res.error) {
+				editError = res.error.message;
+			} else {
+				closeEdit();
+				await load();
+			}
+		} catch (e) {
+			editError = e instanceof Error ? e.message : 'Failed to save plan.';
+		} finally {
+			editSaving = false;
+		}
+	}
 </script>
 
-<div class="p">
-	<header class="hdr">
-		<div>
-			<h1 class="ttl">Subscription Plans</h1>
-			<p class="sub">Manage available plans for organizations.</p>
-		</div>
-		<button class="add-btn" onclick={() => (showCreate = true)}>+ New Plan</button>
-	</header>
+<PageHeader title="Subscription Plans" subtitle="Manage available plans for organizations.">
+	{#snippet actions()}
+		<Button size="sm" onclick={openCreate}>+ New Plan</Button>
+	{/snippet}
+</PageHeader>
 
-	{#if loading}
-		<div class="cards-grid">
-			{#each [0,1,2] as _}
-				<div class="plan-card sk-card">
-					<div class="sk" style="width:80px;height:16px;margin-bottom:10px"></div>
-					<div class="sk" style="width:100%;height:12px;margin-bottom:6px"></div>
-					<div class="sk" style="width:60%;height:12px"></div>
-				</div>
-			{/each}
-		</div>
-	{:else if error}
-		<div class="err">{error}</div>
-	{:else if plans.length === 0}
-		<div class="empty">No plans yet. Create one above.</div>
-	{:else}
-		<div class="cards-grid">
-			{#each plans as plan}
-				<div class="plan-card" class:plan-disabled={!plan.enabled}>
-					<div class="plan-hdr">
+{#if loading}
+	<div class="pl-grid">
+		{#each [0, 1, 2] as _}
+			<Card padding="18px">
+				<Skeleton variant="text" width="90px" />
+				<div class="pl-sk-gap"></div>
+				<Skeleton variant="row" height="100px" />
+			</Card>
+		{/each}
+	</div>
+{:else if error}
+	<InlineAlert tone="error">{error}</InlineAlert>
+{:else if plans.length === 0}
+	<EmptyState message="No plans yet." sub="Create one to get started." />
+{:else}
+	<div class="pl-grid">
+		{#each plans as plan (plan.id)}
+			<Card padding="18px">
+				<div class="pl-card" class:pl-card--disabled={!plan.enabled}>
+					<div class="pl-hdr">
 						<div>
-							<span class="plan-name">{plan.name}</span>
-							{#if plan.price_monthly > 0}
-								<span class="plan-price">${plan.price_monthly}/mo</span>
-							{:else}
-								<span class="plan-price">Free</span>
-							{/if}
+							<span class="pl-name">{plan.name}</span>
+							<span class="pl-price">{plan.price_monthly > 0 ? `$${plan.price_monthly}/mo` : 'Free'}</span>
 						</div>
-						<div class="plan-hdr-r">
-							<label class="toggle">
-								<input type="checkbox" checked={plan.enabled} onchange={() => toggleEnabled(plan)} disabled={saving === plan.id} />
-								<span class="toggle-track"></span>
-							</label>
-							<button class="edit-btn" onclick={() => openEdit(plan)} title="Edit plan">
-								<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13">
-									<path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/>
-								</svg>
-								Edit
-							</button>
+						<div class="pl-hdr-r">
+							<div
+								class="pl-toggle-wrap"
+								role="button"
+								tabindex="0"
+								aria-label="Toggle plan enabled"
+								onclick={() => toggleEnabled(plan)}
+								onkeydown={(e) => {
+									if (e.key === 'Enter' || e.key === ' ') {
+										e.preventDefault();
+										toggleEnabled(plan);
+									}
+								}}
+							>
+								<Toggle checked={plan.enabled} disabled={saving === plan.id} label="Enabled" />
+							</div>
+							<Button variant="secondary" size="sm" onclick={() => openEdit(plan)}>Edit</Button>
 						</div>
 					</div>
 					{#if !plan.enabled}
-						<div class="disabled-badge">Disabled</div>
+						<span class="pl-disabled-badge">Disabled</span>
 					{/if}
-					<div class="plan-grid">
-						<div class="plan-stat"><span class="stat-l">CPU Cores</span><span class="stat-v">{plan.cpu_cores}</span></div>
-						<div class="plan-stat"><span class="stat-l">Memory</span><span class="stat-v">{fmtMem(plan.memory_mb)}</span></div>
-						<div class="plan-stat"><span class="stat-l">Max Replicas</span><span class="stat-v">{plan.max_replicas === -1 ? '∞' : plan.max_replicas}</span></div>
-						<div class="plan-stat"><span class="stat-l">Nodes</span><span class="stat-v">{plan.node_count}</span></div>
-						<div class="plan-stat"><span class="stat-l">Members</span><span class="stat-v">{plan.max_members === -1 ? '∞' : plan.max_members}</span></div>
-						<div class="plan-stat"><span class="stat-l">Projects</span><span class="stat-v">{plan.max_projects === -1 ? '∞' : plan.max_projects}</span></div>
-						<div class="plan-stat"><span class="stat-l">Orgs</span><span class="stat-v">{plan.max_orgs === -1 ? '∞' : plan.max_orgs}</span></div>
-						<div class="plan-stat"><span class="stat-l">Parallel Deploys</span><span class="stat-v">{plan.max_parallel_deployments === -1 ? '∞' : plan.max_parallel_deployments}</span></div>
-						<div class="plan-stat"><span class="stat-l">Git Providers</span><span class="stat-v">{plan.max_git_providers === -1 ? '∞' : plan.max_git_providers}</span></div>
+					<div class="pl-stat-grid">
+						<div class="pl-stat"><span class="pl-stat-l">CPU Cores</span><span class="pl-stat-v">{fmtLimit(plan.cpu_cores)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Memory</span><span class="pl-stat-v">{fmtMem(plan.memory_mb)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Max Replicas</span><span class="pl-stat-v">{fmtLimit(plan.max_replicas)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Nodes</span><span class="pl-stat-v">{fmtLimit(plan.node_count)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Members</span><span class="pl-stat-v">{fmtLimit(plan.max_members)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Projects</span><span class="pl-stat-v">{fmtLimit(plan.max_projects)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Orgs</span><span class="pl-stat-v">{fmtLimit(plan.max_orgs)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Parallel Deploys</span><span class="pl-stat-v">{fmtLimit(plan.max_parallel_deployments)}</span></div>
+						<div class="pl-stat"><span class="pl-stat-l">Git Providers</span><span class="pl-stat-v">{fmtLimit(plan.max_git_providers)}</span></div>
 					</div>
 				</div>
-			{/each}
-		</div>
-	{/if}
-</div>
-
-<!-- ── Edit Plan Modal ─────────────────────────────────────────────────────── -->
-{#if editPlan && editForm}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="modal-bg" onclick={(e) => { if (e.target === e.currentTarget) closeEdit(); }}>
-		<div class="modal">
-			<div class="modal-hdr">
-				<div>
-					<h2 class="modal-title">Edit Plan</h2>
-					<span class="modal-sub">{editPlan.name}</span>
-				</div>
-				<button class="modal-close" onclick={closeEdit}>
-					<svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
-						<path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
-					</svg>
-				</button>
-			</div>
-			<div class="modal-body">
-				{#if editError}
-					<div class="edit-err">{editError}</div>
-				{/if}
-				<div class="form-grid">
-					<div class="field" style="grid-column:1/-1">
-						<label class="lbl">Plan Name</label>
-						<input class="inp" placeholder="e.g. Pro" bind:value={editForm.name} />
-					</div>
-					{#each planFields as field}
-						<div class="field">
-							<label class="lbl" for="ef-{field.key}">
-								{field.label}
-								{#if field.hint}<span class="field-hint">{field.hint}</span>{/if}
-							</label>
-							<input
-								id="ef-{field.key}"
-								class="inp"
-								type="number"
-								min="-1"
-								bind:value={editForm[field.key]}
-							/>
-						</div>
-					{/each}
-					<div class="field toggle-field">
-						<label class="toggle">
-							<input type="checkbox" bind:checked={editForm.enabled} />
-							<span class="toggle-track"></span>
-						</label>
-						<span class="lbl" style="margin:0">Enabled</span>
-					</div>
-				</div>
-			</div>
-			<div class="modal-foot">
-				<button class="btn-cancel" onclick={closeEdit} disabled={editSaving}>Cancel</button>
-				<button class="btn-confirm" onclick={saveEdit} disabled={editSaving || !editForm.name}>
-					{editSaving ? 'Saving…' : 'Save Changes'}
-				</button>
-			</div>
-		</div>
+			</Card>
+		{/each}
 	</div>
 {/if}
 
 <!-- ── Create Plan Modal ───────────────────────────────────────────────────── -->
-{#if showCreate}
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="modal-bg" onclick={() => (showCreate = false)}>
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="modal" onclick={(e) => e.stopPropagation()}>
-			<div class="modal-hdr">
-				<h2 class="modal-title">Create Plan</h2>
-				<button class="modal-close" onclick={() => (showCreate = false)}>✕</button>
+<Modal bind:open={showCreate} title="Create Plan">
+	{#snippet children()}
+		{#if createError}
+			<InlineAlert tone="error">{createError}</InlineAlert>
+		{/if}
+		<div class="pl-form-grid">
+			<div class="pl-field-wide">
+				<FormField label="Plan Name" for="cf-name">
+					<TextField id="cf-name" placeholder="e.g. Pro" bind:value={createForm.name} />
+				</FormField>
 			</div>
-			<div class="modal-body">
-				<div class="form-grid">
-					<div class="field">
-						<label class="lbl">Name</label>
-						<input class="inp" placeholder="e.g. Pro" bind:value={form.name} />
-					</div>
-					<div class="field">
-						<label class="lbl">Price/mo ($)</label>
-						<input class="inp" type="number" min="0" bind:value={form.price_monthly} />
-					</div>
-					<div class="field">
-						<label class="lbl">CPU Cores</label>
-						<input class="inp" type="number" min="1" bind:value={form.cpu_cores} />
-					</div>
-					<div class="field">
-						<label class="lbl">Memory (GB)</label>
-						<input class="inp" type="number" min="1" bind:value={form.memory_mb} />
-					</div>
-					<div class="field">
-						<label class="lbl">Max Replicas</label>
-						<input class="inp" type="number" min="1" bind:value={form.max_replicas} />
-					</div>
-					<div class="field">
-						<label class="lbl">Node Count</label>
-						<input class="inp" type="number" min="1" bind:value={form.node_count} />
-					</div>
-					<div class="field">
-						<label class="lbl">Max Members</label>
-						<input class="inp" type="number" min="1" bind:value={form.max_members} />
-					</div>
-					<div class="field">
-						<label class="lbl">Max Projects</label>
-						<input class="inp" type="number" min="1" bind:value={form.max_projects} />
-					</div>
-					<div class="field">
-						<label class="lbl">Max Orgs</label>
-						<input class="inp" type="number" min="1" bind:value={form.max_orgs} />
-					</div>
-					<div class="field">
-						<label class="lbl">Parallel Deploys (-1=fixed 1)</label>
-						<input class="inp" type="number" min="-1" bind:value={form.max_parallel_deployments} />
-					</div>
-					<div class="field">
-						<label class="lbl">Git Providers</label>
-						<input class="inp" type="number" min="1" bind:value={form.max_git_providers} />
-					</div>
-					<div class="field toggle-field">
-						<label class="toggle">
-							<input type="checkbox" bind:checked={form.enabled} />
-							<span class="toggle-track"></span>
-						</label>
-						<span class="lbl" style="margin:0">Enabled</span>
-					</div>
-				</div>
-			</div>
-			<div class="modal-foot">
-				<button class="btn-cancel" onclick={() => (showCreate = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={createPlan} disabled={creating || !form.name}>
-					{creating ? 'Creating…' : 'Create Plan'}
-				</button>
+			<FormField label="Price / Month ($)" hint="0 = free" for="cf-price">
+				<TextField id="cf-price" type="number" bind:value={createForm.price_monthly} />
+			</FormField>
+			{#each quotaFieldDefs as field}
+				<FormField label={field.label} hint={field.hint} for="cf-{field.key}">
+					<TextField id="cf-{field.key}" type="number" bind:value={createForm[field.key]} />
+				</FormField>
+			{/each}
+			<div class="pl-toggle-field">
+				<Toggle bind:checked={createForm.enabled} label="Enabled" />
+				<span class="pl-toggle-field-lbl">Enabled</span>
 			</div>
 		</div>
-	</div>
-{/if}
+	{/snippet}
+	{#snippet footer()}
+		<Button variant="secondary" size="sm" onclick={closeCreate} disabled={creating}>Cancel</Button>
+		<Button size="sm" onclick={createPlan} disabled={creating || !createForm.name}>
+			{creating ? 'Creating…' : 'Create Plan'}
+		</Button>
+	{/snippet}
+</Modal>
+
+<!-- ── Edit Plan Modal ─────────────────────────────────────────────────────── -->
+<Modal bind:open={editModalOpen} title={editPlan ? `Edit Plan — ${editPlan.name}` : 'Edit Plan'}>
+	{#snippet children()}
+		{#if editError}
+			<InlineAlert tone="error">{editError}</InlineAlert>
+		{/if}
+		<div class="pl-form-grid">
+			<div class="pl-field-wide">
+				<FormField label="Plan Name" for="ef-name">
+					<TextField id="ef-name" placeholder="e.g. Pro" bind:value={editForm.name} />
+				</FormField>
+			</div>
+			<FormField label="Price / Month ($)" hint="0 = free" for="ef-price">
+				<TextField id="ef-price" type="number" bind:value={editForm.price_monthly} />
+			</FormField>
+			{#each quotaFieldDefs as field}
+				<FormField label={field.label} hint={field.hint} for="ef-{field.key}">
+					<TextField id="ef-{field.key}" type="number" bind:value={editForm[field.key]} />
+				</FormField>
+			{/each}
+			<div class="pl-toggle-field">
+				<Toggle bind:checked={editForm.enabled} label="Enabled" />
+				<span class="pl-toggle-field-lbl">Enabled</span>
+			</div>
+		</div>
+	{/snippet}
+	{#snippet footer()}
+		<Button variant="secondary" size="sm" onclick={closeEdit} disabled={editSaving}>Cancel</Button>
+		<Button size="sm" onclick={saveEdit} disabled={editSaving || !editForm.name}>
+			{editSaving ? 'Saving…' : 'Save Changes'}
+		</Button>
+	{/snippet}
+</Modal>
 
 <style>
-	.p { max-width:1040px; margin:0 auto; padding:40px 36px; }
-	.hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:24px; }
-	.ttl { font-size:18px; font-weight:700; color:var(--text); margin:0 0 4px; letter-spacing:-0.02em; }
-	.sub { font-size:12.5px; color:var(--text-3); margin:0; }
-	.add-btn { padding:6px 14px; height:32px; border-radius:var(--radius-sm); font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; font-family:var(--font); white-space:nowrap; }
-	.add-btn:hover { opacity:.88; }
+	.pl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+	.pl-sk-gap { height: 10px; }
 
-	.cards-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
-	.plan-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-sm); }
-	.plan-card.plan-disabled { opacity:.65; }
-	.sk-card { min-height:200px; }
-	.plan-hdr { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; gap:8px; }
-	.plan-hdr-r { display:flex; align-items:center; gap:8px; flex-shrink:0; }
-	.plan-name { font-size:16px; font-weight:800; color:var(--text); display:block; letter-spacing:-0.01em; }
-	.plan-price { font-size:12px; font-weight:600; color:var(--text-3); display:block; margin-top:2px; }
-	.disabled-badge { display:inline-flex; padding:2px 9px; border-radius:999px; font-size:10.5px; font-weight:700; background:var(--danger-soft); color:var(--danger); border:1px solid rgba(220,38,38,0.18); margin-bottom:10px; }
-	.plan-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-	.plan-stat { display:flex; justify-content:space-between; padding:5px 8px; background:var(--surface-2); border-radius:5px; font-size:11.5px; }
-	.stat-l { color:var(--text-3); }
-	.stat-v { font-weight:700; color:var(--text); }
+	.pl-card.pl-card--disabled { opacity: 0.65; }
+	.pl-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 8px; }
+	.pl-hdr-r { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+	.pl-name { font-size: 15px; font-weight: 700; color: var(--text-primary); display: block; letter-spacing: -0.01em; }
+	.pl-price { font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-top: 2px; }
+	.pl-toggle-wrap { display: inline-flex; cursor: pointer; }
 
-	.edit-btn {
-		display:inline-flex; align-items:center; gap:4px;
-		padding:3px 9px; height:26px; border-radius:var(--radius-sm);
-		font-size:11px; font-weight:600; cursor:pointer;
-		border:1px solid var(--border); background:var(--surface-2); color:var(--text-2);
-		font-family:var(--font); transition:background .12s, color .12s, border-color .12s;
+	.pl-disabled-badge {
+		display: inline-flex;
+		padding: 2px 9px;
+		border-radius: 999px;
+		font-size: 10.5px;
+		font-weight: 700;
+		background: var(--accent-red-muted);
+		color: var(--accent-red);
+		margin-bottom: 10px;
 	}
-	.edit-btn:hover { background:var(--accent); color:#000; border-color:var(--accent); }
 
-	.toggle { position:relative; display:inline-flex; cursor:pointer; width:34px; height:20px; }
-	.toggle input { opacity:0; width:0; height:0; }
-	.toggle-track { position:absolute; inset:0; border-radius:999px; background:var(--border); transition:background .2s; }
-	.toggle-track::after { content:''; position:absolute; left:2px; top:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .2s; }
-	.toggle input:checked + .toggle-track { background:var(--accent); }
-	.toggle input:checked + .toggle-track::after { transform:translateX(14px); }
+	.pl-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+	.pl-stat { display: flex; justify-content: space-between; padding: 5px 8px; background: var(--bg-hover); border-radius: var(--radius-sm); font-size: 11.5px; }
+	.pl-stat-l { color: var(--text-muted); }
+	.pl-stat-v { font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
-	.err { padding:11px 14px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius); font-size:13px; color:var(--danger); }
-	.empty { display:flex; align-items:center; justify-content:center; padding:56px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text-3); font-size:13px; }
+	/* 2-column grid, same pattern as orgs' `.qd-grid` (Task 41) / smtp's
+	   `.smtp-row2` (Task 32), sized for this modal's numeric fields. */
+	.pl-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+	.pl-field-wide { grid-column: 1 / -1; }
+	.pl-toggle-field { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; }
+	.pl-toggle-field-lbl { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); }
 
-	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
-	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
-
-	.modal-bg { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(2px); }
-	.modal { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 20px 60px rgba(0,0,0,0.25); width:100%; max-width:520px; max-height:90vh; overflow-y:auto; display:flex; flex-direction:column; }
-	.modal-hdr { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--surface); z-index:1; gap:10px; }
-	.modal-title { font-size:14px; font-weight:700; color:var(--text); margin:0; }
-	.modal-sub { font-size:11.5px; color:var(--text-3); display:block; margin-top:2px; }
-	.modal-close { background:none; border:none; color:var(--text-3); font-size:14px; cursor:pointer; padding:4px; border-radius:4px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-	.modal-close:hover { color:var(--text); background:var(--surface-2); }
-	.modal-body { padding:20px; }
-	.modal-foot { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid var(--border); background:var(--surface-2); position:sticky; bottom:0; }
-
-	.edit-err { padding:9px 12px; background:var(--danger-soft); border:1px solid rgba(220,38,38,0.2); border-radius:var(--radius-sm); font-size:12.5px; color:var(--danger); margin-bottom:14px; }
-
-	.form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-	.field { display:flex; flex-direction:column; gap:5px; }
-	.toggle-field { flex-direction:row; align-items:center; gap:10px; padding-top:18px; }
-	.lbl { font-size:11.5px; font-weight:600; color:var(--text-2); }
-	.field-hint { font-size:10px; color:var(--text-3); font-weight:400; margin-left:4px; }
-	.inp { height:34px; padding:0 10px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:12.5px; color:var(--text); outline:none; width:100%; box-sizing:border-box; font-family:var(--font); transition:border-color .15s; }
-	.inp:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-ring); }
-
-	.btn-cancel { padding:6px 14px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); }
-	.btn-cancel:hover:not(:disabled) { background:var(--surface-2); }
-	.btn-cancel:disabled { opacity:.45; cursor:not-allowed; }
-	.btn-confirm { padding:6px 16px; border-radius:var(--radius-sm); font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; font-family:var(--font); }
-	.btn-confirm:hover:not(:disabled) { opacity:.88; }
-	.btn-confirm:disabled { opacity:.5; cursor:not-allowed; }
-
-	@media (max-width: 480px) {
-		.form-grid { grid-template-columns:1fr; }
-		.p { padding:20px 16px; }
+	@media (max-width: 420px) {
+		.pl-form-grid { grid-template-columns: 1fr; }
 	}
 </style>
