@@ -2,12 +2,11 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
-	import { Card, Button, InlineAlert, Skeleton, EmptyState } from '$lib/components/ui';
+	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable } from '$lib/components/ui';
 	import {
 		Folder,
 		File,
 		ChevronRight,
-		Search,
 		ArrowLeft,
 		HardDrive,
 		Calendar,
@@ -54,7 +53,6 @@
 	let commonPrefixes = $state<string[]>([]);
 	let loading = $state(false);
 	let error = $state('');
-	let search = $state('');
 
 	// Diagnostics
 	interface DiagResult {
@@ -240,19 +238,35 @@
 		});
 	}
 
-	let filteredFolders = $derived(
-		commonPrefixes.filter(p => {
-			const name = p.replace(/\/$/, '').split('/').pop() ?? '';
-			return !search || name.toLowerCase().includes(search.toLowerCase());
-		})
-	);
+	// Unified folder+file row model for the DataTable (client mode). Search
+	// filtering is now handled by DataTable's own built-in `searchFields`
+	// matching, replacing the page's previous hand-rolled `search` filter —
+	// the old page already had its own search input over the same in-memory
+	// per-directory listing, so this is a straightforward swap (Ruling 10).
+	interface BrowserRow {
+		type: 'folder' | 'file';
+		path: string;
+		name: string;
+		size: number | null;
+		lastModified: string | null;
+	}
 
-	let filteredFiles = $derived(
-		objects.filter(o => {
-			const name = o.key.split('/').pop() ?? '';
-			return !search || name.toLowerCase().includes(search.toLowerCase());
-		})
-	);
+	let browserRows = $derived<BrowserRow[]>([
+		...commonPrefixes.map((folder) => ({
+			type: 'folder' as const,
+			path: folder,
+			name: folder.replace(currentPrefix, ''),
+			size: null,
+			lastModified: null,
+		})),
+		...objects.map((file) => ({
+			type: 'file' as const,
+			path: file.key,
+			name: file.key.replace(currentPrefix, ''),
+			size: file.size,
+			lastModified: file.last_modified,
+		})),
+	]);
 
 </script>
 
@@ -338,95 +352,71 @@
 	{#if selectedBucket}
 		<!-- ── File Browser View ── -->
 
-		<!-- Breadcrumbs and Navigation bar -->
+		<!-- Breadcrumbs and Navigation bar — page-local, not a shared component
+		     (a one-off `/`-separated link trail specific to this page) -->
 		<div class="nav-bar">
 			<div class="breadcrumbs">
 				<button class="crumb-btn" onclick={backToBuckets}>
-					<Database width="14" height="14" style="margin-right: 4px;" />
+					<Database size={14} style="margin-right: 4px;" />
 					Buckets
 				</button>
-				<ChevronRight width="12" height="12" style="color: var(--text-3); flex-shrink: 0;" />
+				<ChevronRight size={12} class="crumb-sep" />
 				<button class="crumb-btn" onclick={() => navigateTo('')}>
-					<HardDrive width="14" height="14" style="margin-right: 4px;" />
+					<HardDrive size={14} style="margin-right: 4px;" />
 					{selectedBucket}
 				</button>
 				{#each getBreadcrumbs(currentPrefix) as crumb}
-					<ChevronRight width="12" height="12" style="color: var(--text-3); flex-shrink: 0;" />
+					<ChevronRight size={12} class="crumb-sep" />
 					<button class="crumb-btn" onclick={() => navigateTo(crumb.prefix)}>{crumb.label}</button>
 				{/each}
 			</div>
 
 			{#if currentPrefix}
-				<button class="up-btn" onclick={goUp}>
-					<ArrowLeft width="12" height="12" />
+				<Button variant="secondary" size="sm" onclick={goUp}>
+					<ArrowLeft size={12} />
 					Go Up
-				</button>
+				</Button>
 			{/if}
 		</div>
 
-		<!-- Search & Toolbar -->
-		<div class="toolbar">
-			<label class="search">
-				<Search width="14" height="14" style="position: absolute; left: 10px; color: var(--text-3); pointer-events: none;" />
-				<input type="text" placeholder="Filter items in folder…" bind:value={search} />
-			</label>
-		</div>
-
-		{#if loading && objects.length === 0 && commonPrefixes.length === 0}
-			<div class="loading-wrap">
-				<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:200px;height:14px"></div></div>
-				<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:140px;height:14px"></div></div>
-				<div class="sk-row"><div class="sk" style="width:30px;height:30px;border-radius:4px"></div><div class="sk" style="width:180px;height:14px"></div></div>
-			</div>
-		{:else if error}
-			<div class="err-banner">{error}</div>
-		{:else if filteredFolders.length === 0 && filteredFiles.length === 0}
-			<div class="empty">No files or folders found here.</div>
+		{#if error}
+			<InlineAlert tone="error">{error}</InlineAlert>
 		{:else}
-			<div class="explorer">
-				<div class="explorer-header">
-					<span style="flex: 3;">Name</span>
-					<span style="flex: 1; text-align: right;">Size</span>
-					<span style="flex: 1.5; text-align: right;">Last Modified</span>
-				</div>
-
-				<div class="items-list">
-					<!-- Folders -->
-					{#each filteredFolders as folder}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="item-row folder-row" onclick={() => handleItemClick({ type: 'folder', path: folder })}>
-							<div class="item-name" style="flex: 3;">
-								<Folder style="color: var(--accent); flex-shrink: 0;" width="16" height="16" />
-								<span class="mono">{folder.replace(currentPrefix, '')}</span>
-							</div>
-							<div class="item-size" style="flex: 1; text-align: right;">—</div>
-							<div class="item-date" style="flex: 1.5; text-align: right;">—</div>
-						</div>
-					{/each}
-
-					<!-- Files -->
-					{#each filteredFiles as file}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="item-row file-row" onclick={() => handleItemClick({ type: 'file', path: file.key })}>
-							<div class="item-name" style="flex: 3;">
-								<File style="color: var(--text-3); flex-shrink: 0;" width="16" height="16" />
-								<span class="mono trunc">{file.key.replace(currentPrefix, '')}</span>
-							</div>
-							<div class="item-size" style="flex: 1; text-align: right;">{fmtBytes(file.size)}</div>
-							<div class="item-date" style="flex: 1.5; text-align: right;">
-								{#if file.last_modified}
-									<Calendar width="11" height="11" style="display:inline; margin-right:4px; vertical-align:-1px;" />
-									{new Date(file.last_modified).toLocaleString()}
-								{:else}
-									—
-								{/if}
-							</div>
-						</div>
-					{/each}
-				</div>
-			</div>
+			<DataTable
+				items={browserRows}
+				rowKey={(r) => `${r.type}:${r.path}`}
+				searchFields={['name']}
+				columns={[
+					{ key: 'name', label: 'Name', width: '55%' },
+					{ key: 'size', label: 'Size', width: '20%' },
+					{ key: 'lastModified', label: 'Last Modified', width: '25%' }
+				]}
+				emptyMessage="No files or folders found here."
+			>
+				{#snippet row(item)}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<tr class="browser-row" onclick={() => handleItemClick({ type: item.type, path: item.path })}>
+						<td class="browser-name">
+							{#if item.type === 'folder'}
+								<Folder size={16} class="browser-icon-folder" />
+							{:else}
+								<File size={16} class="browser-icon-file" />
+							{/if}
+							<span class="mono trunc">{item.name}</span>
+						</td>
+						<td class="browser-dim">{item.type === 'folder' ? '—' : fmtBytes(item.size ?? 0)}</td>
+						<td class="browser-dim">
+							{#if item.lastModified}
+								<Calendar size={11} style="display:inline; margin-right:4px; vertical-align:-1px;" />
+								{new Date(item.lastModified).toLocaleString()}
+							{:else}
+								—
+							{/if}
+						</td>
+					</tr>
+				{/snippet}
+			</DataTable>
 		{/if}
 
 	{:else}
@@ -578,46 +568,21 @@
 
 	:global(.bucket-chevron) { color: var(--text-dim); flex-shrink: 0; }
 	/* Navigation and Breadcrumbs */
-	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; }
-	.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--text-2); }
-	.crumb-btn { display: inline-flex; align-items: center; background: transparent; border: none; padding: 2px 6px; border-radius: 4px; color: var(--text-2); font-weight: 500; cursor: pointer; font-family: var(--font); font-size: 13px; transition: color .1s, background .1s; }
-	.crumb-btn:hover { color: var(--accent); background: rgba(255,255,255,0.03); }
+	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; }
+	.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+	.crumb-btn { display: inline-flex; align-items: center; background: transparent; border: none; padding: 2px 6px; border-radius: 4px; color: var(--text-secondary); font-weight: 500; cursor: pointer; font-family: var(--font-sans); font-size: 13px; transition: color var(--transition-fast), background var(--transition-fast); }
+	.crumb-btn:hover { color: var(--accent); background: var(--bg-hover); }
+	:global(.crumb-sep) { color: var(--text-dim); flex-shrink: 0; }
 
-	.up-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; transition: background .15s; font-family: var(--font); }
-	.up-btn:hover { background: var(--surface-2); color: var(--text); }
+	/* Browser DataTable rows */
+	.browser-row { cursor: pointer; }
+	.browser-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+	:global(.browser-icon-folder) { color: var(--accent); flex-shrink: 0; }
+	:global(.browser-icon-file) { color: var(--text-dim); flex-shrink: 0; }
+	.browser-dim { color: var(--text-muted); font-size: 12px; }
 
-	/* Toolbar & Search */
-	.toolbar { display: flex; align-items: center; margin-bottom: 16px; }
-	.search { position: relative; display: flex; align-items: center; flex: 1; cursor: text; }
-	.search input { height: 34px; padding: 0 10px 0 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--text); outline: none; width: 100%; transition: border-color .15s, box-shadow .15s; font-family: var(--font); }
-	.search input::placeholder { color: var(--text-3); }
-	.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
-
-	/* Explorer Table */
-	.explorer { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
-	.explorer-header { display: flex; align-items: center; padding: 10px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .065em; }
-	.items-list { display: flex; flex-direction: column; }
-
-	.item-row { display: flex; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--border); transition: background .1s; cursor: pointer; font-size: 13px; color: var(--text-2); }
-	.item-row:last-child { border-bottom: none; }
-	.item-row:hover { background: var(--row-hover); }
-
-	.item-name { display: flex; align-items: center; gap: 10px; font-family: var(--mono); color: var(--text); min-width: 0; }
-
-	.item-size { color: var(--text-2); }
-	.item-date { color: var(--text-3); font-size: 12px; }
-
-	.mono { font-family: var(--mono); }
+	.mono { font-family: var(--font-mono); }
 	.trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
-
-	/* Loading Skeleton & Error/Empty */
-	.loading-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-	.sk-row { display: flex; align-items: center; gap: 12px; }
-	.sk { background: var(--border); border-radius: 4px; animation: sk 1.3s ease-in-out infinite; }
-	@keyframes sk { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
-
-	.err-banner { padding: 12px 16px; background: var(--danger-soft); border: 1px solid rgba(220,38,38,0.2); border-radius: var(--radius); font-size: 13px; color: var(--danger); }
-	.empty { padding: 56px; text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-3); font-size: 13px; }
 
 	/* Preview Overlay & Drawer */
 	.overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000; display: flex; justify-content: flex-end; }
@@ -690,10 +655,6 @@
 	/* Responsiveness */
 	@media (max-width: 768px) {
 		.p { padding: 24px 16px; }
-		.explorer-header { display: none; }
-		.item-row { flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; }
-		.item-name { width: 100%; }
-		.item-size, .item-date { width: 100%; text-align: left !important; font-size: 11px; padding-left: 26px; }
 
 		.overlay { justify-content: center; }
 		.drawer { height: 100%; max-width: 100%; border-left: none; }
