@@ -625,7 +625,8 @@
 		.members-page { gap: 16px; }
 		.section-header { padding: 14px 16px; }
 		.invite-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
-		.member-email { font-size: 12px; }
+		.member-email { font-size: 12px; max-width: 140px; }
+		.member-sub { max-width: 200px; }
 		.role-cell { display: none; }
 		.settings-section :global(.ui-data-table-el thead th:nth-child(2)) { display: none; }
 		.invite-item { padding: 10px 16px; }

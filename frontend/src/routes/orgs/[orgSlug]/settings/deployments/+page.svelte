@@ -288,6 +288,32 @@
 				{/snippet}
 			</DataTable>
 		{/key}
+
+		<!-- Phone card list: same page of data the table shows -->
+		<div class="mobile-cards">
+			{#each response?.data ?? [] as row (row.id)}
+				<div class="dep-card" onclick={() => navToDeployment(row)} role="button" tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && navToDeployment(row)}>
+					<Card padding="12px 14px">
+						<div class="card-inner">
+							<div class="card-header">
+								<div class="card-title">
+									<StatusDot status={deployDot(row.status)} />
+									<span class="service-name">{row.service_name}</span>
+								</div>
+								<span class="muted">{relativeTime(row.created_at)}</span>
+							</div>
+							<span class="project-name">{row.project_name}</span>
+							<div class="card-chips">
+								<span class="ref-badge"><Badge tone="neutral"><GitBranch size={11} />{row.source_ref}</Badge></span>
+								<span class="triggered"><User size={11} />{row.triggered_by}</span>
+								<span class="muted">{duration(row)}</span>
+							</div>
+						</div>
+					</Card>
+				</div>
+			{/each}
+		</div>
 	{/if}
 </div>
 {/if}
@@ -337,7 +363,17 @@
 	.ref-badge :global(.ui-badge) { gap: 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 	.triggered { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); }
 
+	/* ── Mobile cards ── */
+	.mobile-cards { display: none; flex-direction: column; gap: 8px; }
+	.dep-card { cursor: pointer; }
+	.card-inner { display: flex; flex-direction: column; gap: 8px; }
+	.card-header { display: flex; align-items: center; justify-content: space-between; }
+	.card-title { display: flex; align-items: center; gap: 8px; }
+	.card-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 	@media (max-width: 639px) {
+		.mobile-cards { display: flex; }
+		.page :global(.ui-data-table-scroll) { display: none; }
 		.parallelism-card { flex-direction: column; align-items: flex-start; }
 		.parallelism-controls { width: 100%; }
 		.parallel-input { flex: 1; }
