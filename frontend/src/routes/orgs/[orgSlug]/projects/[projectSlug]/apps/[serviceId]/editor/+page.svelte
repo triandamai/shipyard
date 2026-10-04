@@ -6,6 +6,7 @@
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SandboxTerminal from '$lib/components/SandboxTerminal.svelte';
 	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone, Share2, Check, Rocket } from '@lucide/svelte';
+	import { Tabs, Button, Spinner, EmptyState, Badge, InlineAlert } from '$lib/components/ui';
 	import type { SandboxFileEntry, SandboxInstance } from '$lib/api/types';
 
 	let serviceId = $derived(page.params.serviceId ?? '');
@@ -335,27 +336,32 @@
 <div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-sidebar={resizingSidebar}>
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">
+			<Spinner size={24} />
 			<div class="boot-message">Waking up your sandbox…</div>
 		</div>
 	{:else if bootState === 'error'}
 		<div class="boot-overlay error">
 			<div class="boot-message">{bootError}</div>
-			<button class="btn btn-primary" onclick={boot}>Retry</button>
+			<Button onclick={boot}>Retry</Button>
 		</div>
 	{:else}
 		<div class="panel-tabs">
-			<button class="panel-tab" class:active={activeTab === 'editor'} onclick={() => (activeTab = 'editor')}>
-				<Code2 size={13} /> Editor
-			</button>
-			<button class="panel-tab" class:active={activeTab === 'preview'} onclick={() => (activeTab = 'preview')}>
-				<Globe size={13} /> Preview
-			</button>
+			<Tabs
+				ariaLabel="Editor panels"
+				tabs={[
+					{ id: 'editor', label: 'Editor', icon: Code2 },
+					{ id: 'preview', label: 'Preview', icon: Globe }
+				]}
+				bind:value={activeTab}
+			/>
 		</div>
 
 		<div class="editor-view-wrap" class:hidden={activeTab !== 'editor'}>
 			{#if instance?.pending}
 				<div class="pending-banner">
-					No project detected yet — scaffold one in the Terminal below, then stop and start this sandbox from its app panel on the project canvas to apply it.
+					<InlineAlert tone="info">
+						No project detected yet — scaffold one in the Terminal below, then stop and start this sandbox from its app panel on the project canvas to apply it.
+					</InlineAlert>
 				</div>
 			{/if}
 			<div class="editor-view">
@@ -374,7 +380,7 @@
 					{#if openPath}
 						<div class="tab-bar">
 							<span class="tab">{openPath}</span>
-							{#if isSaving}<span class="saving">Saving…</span>{:else if justSaved}<span class="saved">Saved</span>{/if}
+							{#if isSaving}<Badge tone="neutral">Saving…</Badge>{:else if justSaved}<Badge tone="green">Saved</Badge>{/if}
 						</div>
 						<CodeEditor
 							bind:this={editorRef}
@@ -384,7 +390,7 @@
 							height="100%"
 						/>
 					{:else}
-						<div class="empty-state">Select a file to start editing</div>
+						<div class="empty-wrap"><EmptyState message="Select a file to start editing" /></div>
 					{/if}
 				</main>
 			</div>
@@ -393,15 +399,15 @@
 		<section class="preview-pane" class:hidden={activeTab !== 'preview'}>
 			{#if instance?.preview_url}
 				<div class="preview-toolbar">
-					<button class="preview-nav-btn" onclick={previewGoBack} disabled={!canGoBack} title="Back" aria-label="Back">
+					<Button variant="ghost" size="icon" onclick={previewGoBack} disabled={!canGoBack} title="Back" aria-label="Back">
 						<ArrowLeft size={13} />
-					</button>
-					<button class="preview-nav-btn" onclick={previewGoForward} disabled={!canGoForward} title="Forward" aria-label="Forward">
+					</Button>
+					<Button variant="ghost" size="icon" onclick={previewGoForward} disabled={!canGoForward} title="Forward" aria-label="Forward">
 						<ArrowRight size={13} />
-					</button>
-					<button class="preview-nav-btn" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
+					</Button>
+					<Button variant="ghost" size="icon" onclick={previewRefresh} title="Refresh" aria-label="Refresh">
 						<RotateCw size={12} />
-					</button>
+					</Button>
 					<form class="preview-url-form" onsubmit={previewNavigate}>
 						<input
 							class="preview-url-input"
@@ -412,44 +418,44 @@
 						/>
 					</form>
 					<div class="preview-device-btns">
-						<button
-							class="preview-nav-btn"
-							class:active={previewContentWidth === null}
+						<Button
+							variant={previewContentWidth === null ? 'secondary' : 'ghost'}
+							size="icon"
 							onclick={setPreviewDesktop}
 							title="Desktop width"
 							aria-label="Desktop width"
 						>
 							<Monitor size={13} />
-						</button>
-						<button
-							class="preview-nav-btn"
-							class:active={previewContentWidth === 375}
+						</Button>
+						<Button
+							variant={previewContentWidth === 375 ? 'secondary' : 'ghost'}
+							size="icon"
 							onclick={setPreviewMobile}
 							title="Mobile width"
 							aria-label="Mobile width"
 						>
 							<Smartphone size={13} />
-						</button>
+						</Button>
 					</div>
-					<button class="preview-action-btn" onclick={sharePreview} title="Copy the preview link to share">
+					<Button variant="secondary" size="sm" onclick={sharePreview} title="Copy the preview link to share">
 						{#if shareCopied}<Check size={13} />{:else}<Share2 size={13} />{/if}
 						{shareCopied ? 'Copied!' : 'Share Preview'}
-					</button>
-					<button class="preview-action-btn" disabled title="Coming soon — publish to production">
+					</Button>
+					<Button variant="secondary" size="sm" disabled title="Coming soon — publish to production">
 						<Rocket size={13} />
 						Publish
-					</button>
+					</Button>
 				</div>
 				{#if instance.status === 'starting'}
 					<div class="preview-loading">
-						<div class="spinner"></div>
+						<Spinner size={20} />
 						<p>Starting the dev server…</p>
 						<p class="hint">First boot on a framework template can take a minute or two — check the Terminal's Logs tab to watch progress.</p>
 					</div>
 				{:else if instance.last_error}
 					<div class="preview-loading error">
-						<p>{instance.last_error}</p>
-						<button class="btn btn-primary" onclick={boot}>Retry</button>
+						<InlineAlert tone="error">{instance.last_error}</InlineAlert>
+						<Button onclick={boot}>Retry</Button>
 					</div>
 				{:else}
 					<div class="preview-surface" bind:this={previewSurfaceEl}>
@@ -470,13 +476,15 @@
 					</div>
 				{/if}
 			{:else}
-				<div class="empty-state">No preview available</div>
+				<div class="empty-wrap"><EmptyState message="No preview available" /></div>
 			{/if}
 		</section>
 
-		<button class="terminal-toggle" onclick={() => (showTerminal = !showTerminal)}>
-			{showTerminal ? 'Hide' : 'Show'} Terminal
-		</button>
+		<div class="terminal-toggle">
+			<Button variant="ghost" size="sm" onclick={() => (showTerminal = !showTerminal)}>
+				{showTerminal ? 'Hide' : 'Show'} Terminal
+			</Button>
+		</div>
 		{#if showTerminal}
 			<div class="terminal-pane">
 				<SandboxTerminal {serviceId} sandboxStatus={instance?.status} />
@@ -506,35 +514,11 @@
 	.panel-tabs {
 		grid-row: 1;
 		display: flex;
-		gap: 2px;
-		padding: 6px 8px 0;
+		padding: 0 8px;
 		background: var(--bg-elevated);
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 	}
-	.panel-tab {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 14px;
-		border: none;
-		border-bottom: 2px solid transparent;
-		background: transparent;
-		color: var(--text-dim);
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		border-radius: var(--radius-sm, 4px) var(--radius-sm, 4px) 0 0;
-	}
-	.panel-tab:hover {
-		color: var(--text-secondary);
-		background: var(--bg-surface, rgba(127,127,127,0.08));
-	}
-	.panel-tab.active {
-		color: var(--text-primary);
-		border-bottom-color: var(--accent);
-	}
-
 	/* Sidebar + editor travel together, like VS Code — only shown as a pair
 	   on the Editor tab; the Preview tab gets the full width to itself. */
 	.editor-view-wrap {
@@ -551,10 +535,7 @@
 	.pending-banner {
 		flex-shrink: 0;
 		padding: 8px 14px;
-		background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
 		border-bottom: 1px solid var(--border);
-		color: var(--text-secondary);
-		font-size: 12px;
 	}
 	.sidebar {
 		flex-shrink: 0;
@@ -614,17 +595,6 @@
 		max-width: 420px;
 		color: var(--text-dim);
 		font-size: 12px;
-	}
-	.preview-loading .spinner {
-		width: 20px;
-		height: 20px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: preview-spin 0.7s linear infinite;
-	}
-	@keyframes preview-spin {
-		to { transform: rotate(360deg); }
 	}
 	/* The preview shows an arbitrary website that may be any color scheme —
 	   giving it its own neutral, always-light "browser content" surface
@@ -689,30 +659,6 @@
 		border-left: 1px solid var(--border);
 		flex-shrink: 0;
 	}
-	.preview-action-btn {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 4px 10px;
-		margin-left: 6px;
-		font-size: 12px;
-		font-weight: 500;
-		border: 1px solid var(--border);
-		background: transparent;
-		color: var(--text-secondary);
-		border-radius: var(--radius-sm, 4px);
-		cursor: pointer;
-		flex-shrink: 0;
-		white-space: nowrap;
-	}
-	.preview-action-btn:hover:not(:disabled) {
-		background: var(--bg-surface, rgba(127, 127, 127, 0.12));
-		color: var(--text-primary);
-	}
-	.preview-action-btn:disabled {
-		opacity: 0.45;
-		cursor: default;
-	}
 	.preview-toolbar {
 		display: flex;
 		align-items: center;
@@ -721,31 +667,6 @@
 		border-bottom: 1px solid var(--border);
 		background: var(--bg-elevated);
 		flex-shrink: 0;
-	}
-	.preview-nav-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
-		border: none;
-		background: transparent;
-		color: var(--text-secondary);
-		border-radius: var(--radius-sm, 4px);
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-	.preview-nav-btn:hover:not(:disabled) {
-		background: var(--bg-surface, rgba(127,127,127,0.12));
-		color: var(--text-primary);
-	}
-	.preview-nav-btn:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
-	.preview-nav-btn.active {
-		color: var(--accent);
-		background: var(--bg-surface, rgba(127,127,127,0.12));
 	}
 	.preview-url-form {
 		flex: 1;
@@ -776,21 +697,11 @@
 		font-size: 12px;
 		font-family: var(--font-mono);
 	}
-	.saving {
-		color: var(--text-dim);
-		font-size: 11px;
-	}
-	.saved {
-		color: var(--accent-green, #22c55e);
-		font-size: 11px;
-	}
-	.empty-state {
+	.empty-wrap {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		height: 100%;
-		color: var(--text-dim);
-		font-size: 13px;
 	}
 	.boot-overlay {
 		grid-column: 1 / -1;
@@ -813,13 +724,11 @@
 	}
 	.terminal-toggle {
 		grid-row: 3;
-		padding: 6px 12px;
+		display: flex;
+		justify-content: center;
+		padding: 2px 8px;
 		background: var(--bg-elevated);
-		border: none;
 		border-top: 1px solid var(--border);
-		color: var(--text-secondary);
-		font-size: 11px;
-		cursor: pointer;
 	}
 	.terminal-pane {
 		/* A normal grid row (not an overlay) — showing it shrinks the 1fr
