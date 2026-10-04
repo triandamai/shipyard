@@ -102,7 +102,7 @@
 			</Button>
 		</span>
 		<div class="app-nav-account">
-			<Dropdown placement="right-end" triggerLabel="Account">
+			<Dropdown placement="right-end" triggerLabel={hasUpdate ? 'Account, update available' : 'Account'}>
 				{#snippet trigger()}
 					<span class="app-nav-avatar">
 						{initials}
