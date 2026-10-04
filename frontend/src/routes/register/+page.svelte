@@ -47,7 +47,9 @@
 		<Card padding="28px">
 			<div class="reg-card-body">
 				{#if error}
-					<InlineAlert tone="error">{error}</InlineAlert>
+					<div role="alert">
+						<InlineAlert tone="error">{error}</InlineAlert>
+					</div>
 				{/if}
 
 				<form onsubmit={handleSubmit} class="reg-form">
@@ -87,7 +89,7 @@
 					<div class="reg-submit">
 						<Button type="submit" disabled={loading}>
 							{#if loading}
-								<Spinner size={14} />
+								<Spinner size={14} tone="current" />
 								Creating account…
 							{:else}
 								Register

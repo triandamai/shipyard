@@ -116,7 +116,7 @@
 				<div class="submit-wrap">
 					<Button type="submit" disabled={loading}>
 						{#if loading}
-							<Spinner size={14} />
+							<Spinner size={14} tone="current" />
 							Signing in…
 						{:else}
 							Sign in
