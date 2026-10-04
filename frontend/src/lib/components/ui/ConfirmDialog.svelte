@@ -1,3 +1,7 @@
+<script lang="ts" module>
+	let confirmCounter = 0;
+</script>
+
 <script lang="ts">
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
@@ -22,6 +26,8 @@
 		confirmText,
 		onConfirm
 	}: Props = $props();
+
+	const inputId = `ui-confirm-type-input-${++confirmCounter}`;
 
 	let typedConfirm = $state('');
 	let confirming = $state(false);
@@ -50,10 +56,10 @@
 	<p class="ui-confirm-message">{message}</p>
 	{#if confirmText}
 		<div class="ui-confirm-type-field">
-			<label class="ui-confirm-type-label" for="ui-confirm-type-input">
+			<label class="ui-confirm-type-label" for={inputId}>
 				Type <code class="ui-confirm-code">{confirmText}</code> to confirm
 			</label>
-			<TextField id="ui-confirm-type-input" bind:value={typedConfirm} />
+			<TextField id={inputId} bind:value={typedConfirm} />
 		</div>
 	{/if}
 	{#snippet footer()}
