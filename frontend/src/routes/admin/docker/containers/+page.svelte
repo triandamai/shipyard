@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { Trash2, RefreshCw, ChevronRight } from '@lucide/svelte';
-	import { DataTable, StatusDot, Button, InlineAlert } from '$lib/components/ui';
+	import { DataTable, StatusDot, Button, InlineAlert, ConfirmDialog } from '$lib/components/ui';
 
 	interface ContainerSummary {
 		id: string; names: string[]; image: string;
@@ -23,6 +23,7 @@
 
 	let pruning = $state(false);
 	let pruneMsg = $state('');
+	let showPruneConfirm = $state(false);
 
 	async function load() {
 		loading = true; error = '';
@@ -33,7 +34,6 @@
 	}
 
 	async function prune() {
-		if (!confirm('Prune unused containers? This cannot be undone.')) return;
 		pruning = true; pruneMsg = '';
 		const r = await api.post<{ message: string }>('/admin/docker/prune/containers');
 		pruneMsg = r.data?.message ?? r.error?.message ?? 'Done';
@@ -52,7 +52,7 @@
 </script>
 
 <div class="ct-toolbar">
-	<Button variant="danger-outline" size="sm" disabled={pruning} onclick={prune}>
+	<Button variant="danger-outline" size="sm" disabled={pruning} onclick={() => (showPruneConfirm = true)}>
 		<Trash2 size={12} />
 		{pruning ? 'Pruning…' : 'Prune Unused'}
 	</Button>
@@ -63,6 +63,14 @@
 		</Button>
 	</div>
 </div>
+
+<ConfirmDialog
+	bind:open={showPruneConfirm}
+	title="Prune unused containers"
+	message="This cannot be undone."
+	confirmLabel="Prune"
+	onConfirm={prune}
+/>
 
 {#if error}
 	<InlineAlert tone="error">{error}</InlineAlert>
