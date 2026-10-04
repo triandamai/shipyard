@@ -307,7 +307,9 @@
 	// toDotStatus has no 'success' state (it would render grey), so a finished
 	// deployment maps to the green dot.
 	function deployDot(status: string): DotStatus {
-		return status === 'success' ? 'running' : toDotStatus(status);
+		if (status === 'success') return 'running';
+		if (status === 'running') return 'deploying';
+		return toDotStatus(status);
 	}
 
 	function deployBadgeTone(status: string): 'green' | 'red' | 'yellow' | 'blue' | 'neutral' {
