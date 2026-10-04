@@ -48,12 +48,6 @@
 
 	let tableItems = $derived(containers.map((c) => ({ ...c, name: containerName(c) })));
 
-	function stateColor(s: string): string {
-		if (s === 'running') return 'var(--ok)';
-		if (s === 'exited' || s === 'dead') return 'var(--danger)';
-		return 'var(--text-3)';
-	}
-
 	onMount(load);
 </script>
 

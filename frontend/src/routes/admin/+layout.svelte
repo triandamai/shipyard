@@ -8,7 +8,7 @@
 		Home, Building2, Users, ShieldCheck, FolderKanban, Rocket, Server,
 		Cpu, Container, Waypoints, Package, HardDrive, Radio, Globe,
 		Mail, Database, ClipboardList, CreditCard, Wallet, RefreshCw, SlidersHorizontal,
-		Sun, Moon, LogOut
+		Sun, Moon, LogOut, Menu, Anchor
 	} from '@lucide/svelte';
 	import { NavRail, NavDrawer } from '$lib/components/ui';
 	import PanelContainer from '$lib/components/PanelContainer.svelte';
@@ -152,15 +152,11 @@
 			<!-- Mobile topbar -->
 			<div class="mob-topbar">
 				<button class="mob-menu-btn" onclick={() => (mobileOpen = !mobileOpen)} aria-label="Toggle menu">
-					<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
-						<path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/>
-					</svg>
+					<Menu size={18} />
 				</button>
 				<div class="mob-brand">
 					<div class="mob-brand-icon">
-						<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-							<circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
-						</svg>
+						<Anchor size={14} color="white" strokeWidth={2.5} />
 					</div>
 					<span class="mob-brand-name">Admin</span>
 				</div>
@@ -178,52 +174,11 @@
 	.gate-ring { width:24px; height:24px; border:2px solid rgba(255,255,255,0.1); border-top-color:rgba(59,130,246,0.8); border-radius:50%; animation:spin 0.75s linear infinite; }
 	@keyframes spin { to { transform:rotate(360deg); } }
 
-	/* ── Design tokens: alias admin's old var names onto the shared design
-	   system's real tokens (defined in frontend/src/routes/layout.css, which
-	   the root layout already imports globally). This keeps every
-	   not-yet-migrated admin page's existing `var(--bg)` etc. references
-	   working during the page-by-page migration (Part B of the plan) — once
-	   a page migrates, it stops using these names entirely and this alias
-	   layer becomes dead weight to delete in a final cleanup task. */
 	.shell {
-		--bg:            var(--bg-base);
-		--surface:       var(--bg-surface);
-		--surface-2:     var(--bg-elevated);
-		/* --border and --accent are intentionally NOT redeclared here: their
-		   new-token name is identical to the old admin name, and CSS treats
-		   `--border: var(--border);` on the same rule as a self-reference
-		   cycle, which resolves to an invalid (empty) value rather than the
-		   inherited one — verified live in-browser, where it silently broke
-		   every var(--border)/var(--accent) consumer (transparent borders,
-		   invisible accent-colored buttons). Omitting the declaration lets
-		   the identically-named token inherit straight from :root instead,
-		   which is what we actually want. */
-		--border-2:      var(--border-hover);
-		--text:          var(--text-primary);
-		--text-2:        var(--text-secondary);
-		--text-3:        var(--text-muted);
-		--text-4:        var(--text-dim);
-		--accent-soft:   var(--accent-muted);
-		--accent-ring:   color-mix(in srgb, var(--accent) 25%, transparent);
-		--ok:            var(--accent-green);
-		--ok-soft:       var(--accent-green-muted);
-		--warn:          var(--accent-yellow);
-		--warn-soft:     var(--accent-yellow-muted);
-		--danger:        var(--accent-red);
-		--danger-soft:   var(--accent-red-muted);
-		--row-hover:     var(--bg-hover);
-		/* --shadow-sm: same self-reference issue as --border/--accent above —
-		   omitted so it inherits :root's --shadow-sm directly. */
-		--shadow:        var(--shadow-md);
-		--shadow-md:     var(--shadow-lg);
-		--radius:        var(--radius-lg);
-		--radius-sm:     var(--radius-md);
-		--font:          var(--font-sans);
-		--mono:          var(--font-mono);
 		display:flex;
 		height:100vh;
 		overflow:hidden;
-		font-family:var(--font);
+		font-family:var(--font-sans);
 		font-size:13px;
 		-webkit-font-smoothing:antialiased;
 	}
@@ -258,7 +213,7 @@
 	.rail-footer-btn:hover { background:var(--bg-hover); color:var(--accent); }
 
 	/* ── Main ─────────────────────────────── */
-	.main { flex:1; overflow-y:auto; background:var(--bg); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
+	.main { flex:1; overflow-y:auto; background:var(--bg-base); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
 
 	/* ── Mobile topbar ────────────────────── */
 	/* NOTE: mob-menu-btn still toggles `mobileOpen`, which was wired to the

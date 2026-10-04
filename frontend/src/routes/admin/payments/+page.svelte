@@ -141,7 +141,7 @@
 		font-variant-numeric: tabular-nums;
 	}
 	.pm-mono {
-		font-family: var(--mono);
+		font-family: var(--font-mono);
 		font-size: 11px;
 		max-width: 160px;
 		overflow: hidden;

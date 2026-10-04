@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { Card, InlineAlert, Button, Badge } from '$lib/components/ui';
+	import { RefreshCw, ScrollText } from '@lucide/svelte';
 
 	interface VersionInfo {
 		current: string;
@@ -112,7 +113,7 @@
 				{#if checkingUpdate}
 					<span class="spin-dot"></span>Checking…
 				{:else}
-					<svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+					<RefreshCw size={12} />
 					Check for updates
 				{/if}
 			</Button>
@@ -166,7 +167,7 @@
 				{#if updateStatus === 'running'}
 					<span class="spin-dot"></span>Running update…
 				{:else}
-					<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+					<RefreshCw size={13} />
 					Pull &amp; Restart
 				{/if}
 			</Button>
@@ -179,7 +180,7 @@
 		{#if updateLog.length > 0}
 			<div class="log" bind:this={logEl}>
 				<div class="log-hdr">
-					<svg viewBox="0 0 20 20" fill="currentColor" width="11" height="11"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm14 1a1 1 0 11-2 0 1 1 0 012 0zM2 13a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H4a2 2 0 01-2-2v-2zm14 1a1 1 0 11-2 0 1 1 0 012 0z" clip-rule="evenodd"/></svg>
+					<ScrollText size={11} />
 					Update output
 				</div>
 				{#each updateLog as line, i (i)}

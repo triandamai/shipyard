@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onDestroy } from 'svelte';
+	import { RefreshCw } from '@lucide/svelte';
 
 	let { children } = $props();
 
@@ -47,7 +48,7 @@
 			<p class="sub">Platform-wide broker monitoring — clients, subscriptions, topics.</p>
 		</div>
 		<button class="refresh-btn" onclick={refreshChild}>
-			<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+			<RefreshCw size={13} />
 			Refresh
 		</button>
 	</header>
@@ -70,7 +71,7 @@
 			{:else}
 				<div style="display:flex;gap:6px;align-items:center">
 					<span class="conn-dot" class:conn-ok={logConnected}></span>
-					<span style="font-size:11.5px;color:var(--text-3)">{logConnected ? 'Live' : 'Connecting…'}</span>
+					<span style="font-size:11.5px;color:var(--text-muted)">{logConnected ? 'Live' : 'Connecting…'}</span>
 					<button class="copy-btn" onclick={openMqttLogs}>Reconnect</button>
 					<button class="copy-btn" onclick={() => { logLines = []; }}>Clear</button>
 					<button class="copy-btn" onclick={closeMqttLogs}>Disconnect</button>
@@ -96,27 +97,27 @@
 <style>
 	.p { max-width:1000px; margin:0 auto; padding:40px 36px; }
 	.hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:20px; }
-	.ttl { font-size:18px; font-weight:700; color:var(--text); margin:0 0 4px; letter-spacing:-0.02em; }
-	.sub { font-size:12.5px; color:var(--text-3); margin:0; }
-	.refresh-btn { display:flex; align-items:center; gap:6px; padding:6px 12px; height:32px; border-radius:var(--radius-sm); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); transition:background .15s; font-family:var(--font); }
-	.refresh-btn:hover { background:var(--surface-2); }
+	.ttl { font-size:18px; font-weight:700; color:var(--text-primary); margin:0 0 4px; letter-spacing:-0.02em; }
+	.sub { font-size:12.5px; color:var(--text-muted); margin:0; }
+	.refresh-btn { display:flex; align-items:center; gap:6px; padding:6px 12px; height:32px; border-radius:var(--radius-md); font-size:12px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg-surface); color:var(--text-secondary); transition:background .15s; font-family:var(--font-sans); }
+	.refresh-btn:hover { background:var(--bg-elevated); }
 
-	.tabs { display:flex; gap:2px; margin-bottom:14px; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:3px; width:fit-content; }
-	.tab { display:flex; align-items:center; gap:6px; padding:5px 14px; border-radius:5px; font-size:12.5px; font-weight:500; cursor:pointer; border:none; background:transparent; color:var(--text-2); transition:background .15s, color .15s; font-family:var(--font); text-decoration:none; }
-	.tab.active { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.07); }
-	.tab:hover:not(.active) { color:var(--text); }
+	.tabs { display:flex; gap:2px; margin-bottom:14px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-md); padding:3px; width:fit-content; }
+	.tab { display:flex; align-items:center; gap:6px; padding:5px 14px; border-radius:5px; font-size:12.5px; font-weight:500; cursor:pointer; border:none; background:transparent; color:var(--text-secondary); transition:background .15s, color .15s; font-family:var(--font-sans); text-decoration:none; }
+	.tab.active { background:var(--bg-surface); color:var(--text-primary); box-shadow:0 1px 2px rgba(0,0,0,.07); }
+	.tab:hover:not(.active) { color:var(--text-primary); }
 
 	.log-section { margin-top:28px; }
 	.log-hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
-	.log-title { font-size:13px; font-weight:700; color:var(--text); letter-spacing:-0.01em; }
-	.log-connect-btn { padding:5px 14px; height:28px; border-radius:var(--radius-sm); font-size:12px; font-weight:600; cursor:pointer; border:none; background:var(--accent); color:#fff; transition:opacity .15s; font-family:var(--font); }
+	.log-title { font-size:13px; font-weight:700; color:var(--text-primary); letter-spacing:-0.01em; }
+	.log-connect-btn { padding:5px 14px; height:28px; border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer; border:none; background:var(--accent); color:#fff; transition:opacity .15s; font-family:var(--font-sans); }
 	.log-connect-btn:hover { opacity:.88; }
-	.copy-btn { padding:3px 10px; height:24px; border-radius:var(--radius-sm); font-size:11.5px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--text-2); font-family:var(--font); transition:background .15s; }
-	.copy-btn:hover { background:var(--surface-2); }
-	.conn-dot { width:7px; height:7px; border-radius:50%; background:var(--text-3); transition:background .3s; }
-	.conn-dot.conn-ok { background:var(--ok); }
-	.log-shell { background:#0f1117; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius); overflow:hidden; }
-	.log-body { height:320px; overflow-y:auto; padding:12px 14px; font-family:var(--mono); font-size:11.5px; line-height:1.6; }
+	.copy-btn { padding:3px 10px; height:24px; border-radius:var(--radius-md); font-size:11.5px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg-surface); color:var(--text-secondary); font-family:var(--font-sans); transition:background .15s; }
+	.copy-btn:hover { background:var(--bg-elevated); }
+	.conn-dot { width:7px; height:7px; border-radius:50%; background:var(--text-muted); transition:background .3s; }
+	.conn-dot.conn-ok { background:var(--accent-green); }
+	.log-shell { background:#0f1117; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-lg); overflow:hidden; }
+	.log-body { height:320px; overflow-y:auto; padding:12px 14px; font-family:var(--font-mono); font-size:11.5px; line-height:1.6; }
 	.log-line { color:#c9d1d9; white-space:pre-wrap; word-break:break-all; }
 	.log-empty { color:#6e7681; font-style:italic; }
 

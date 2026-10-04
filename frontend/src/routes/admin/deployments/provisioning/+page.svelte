@@ -116,7 +116,7 @@
 <style>
 	.pv-link { color: var(--text-primary); text-decoration: none; }
 	.pv-link:hover { text-decoration: underline; color: var(--accent); }
-	.pv-mono { font-family: var(--mono); }
+	.pv-mono { font-family: var(--font-mono); }
 	.pv-status-cell { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); }
 	.pv-dim { color: var(--text-muted); font-size: 11.5px; }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { RefreshCw } from '@lucide/svelte';
 	import { DataTable, StatusDot, Badge, Button, PageHeader, Select, TextField } from '$lib/components/ui';
 
 	interface AppDeployment {
@@ -48,9 +49,9 @@
 	}
 
 	// Translates this page's pre-existing status grouping (previously used only
-	// to pick a CSS color via a hand-rolled dot: success/done -> var(--ok) green,
-	// failed/error -> var(--danger) red, running -> var(--accent) blue, anything
-	// else -> var(--text-3) neutral grey) onto StatusDot's fixed 5-state enum,
+	// to pick a CSS color via a hand-rolled dot: success/done -> green,
+	// failed/error -> red, running -> accent blue, anything
+	// else -> neutral grey) onto StatusDot's fixed 5-state enum,
 	// preserving the same groupings and color intent. `running` maps to the
 	// pulsing `deploying` dot rather than the static `running` one since it's
 	// the one state here that's still in flight (same reasoning as the Nodes
@@ -91,9 +92,7 @@
 		<Select bind:value={statusFilter} options={STATUS_OPTIONS} />
 	</div>
 	<Button variant="secondary" size="sm" onclick={() => refreshNonce++}>
-		<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13">
-			<path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/>
-		</svg>
+		<RefreshCw size={13} />
 		Refresh
 	</Button>
 </div>
