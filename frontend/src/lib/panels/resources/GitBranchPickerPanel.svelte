@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Search, GitBranch } from '@lucide/svelte';
+	import { GitBranch, ChevronRight } from '@lucide/svelte';
+	import { SearchInput, ActivityList, ListRow, Spinner, EmptyState, InlineAlert } from '$lib/components/ui';
 
 	interface Props {
 		provider: string;
@@ -62,36 +63,31 @@
 
 <div class="picker-wrap">
 	<div class="search-bar">
-		<Search size={14} class="search-icon" />
-		<input
-			class="search-input"
-			type="text"
-			placeholder="Search branches…"
-			bind:value={search}
-		/>
+		<SearchInput bind:value={search} placeholder="Search branches…" />
 	</div>
 
 	{#if loading}
 		<div class="state-msg">
-			<div class="spinner"></div>
+			<Spinner size={16} />
 			<span>Fetching branches…</span>
 		</div>
 	{:else if error}
-		<div class="state-msg error">{error}</div>
+		<div class="state-pad" role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{:else if filtered.length === 0}
-		<div class="state-msg">
-			{search.trim() ? 'No branches match your search.' : 'No branches found.'}
-		</div>
+		<EmptyState message={search.trim() ? 'No branches match your search.' : 'No branches found.'} />
 	{:else}
 		<div class="branch-count">{filtered.length} {filtered.length === 1 ? 'branch' : 'branches'}</div>
 		<div class="branch-list">
-			{#each filtered as branch (branch)}
-				<button type="button" class="branch-row" onclick={() => onSelect(branch)}>
-					<GitBranch size={13} class="branch-icon" />
-					<span class="branch-name">{branch}</span>
-					<span class="chevron">›</span>
-				</button>
-			{/each}
+			<ActivityList>
+				{#each filtered as branch (branch)}
+					<button type="button" class="pick-row" onclick={() => onSelect(branch)}>
+						<ListRow title={branch}>
+							{#snippet icon()}<GitBranch size={14} />{/snippet}
+							{#snippet trailing()}<ChevronRight size={16} />{/snippet}
+						</ListRow>
+					</button>
+				{/each}
+			</ActivityList>
 		</div>
 	{/if}
 </div>
@@ -99,55 +95,28 @@
 <style>
 	.picker-wrap { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-	.search-bar {
-		display: flex; align-items: center; gap: 8px;
-		padding: 12px 16px; border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-	}
-
-	:global(.search-icon) { color: var(--text-dim); flex-shrink: 0; }
-
-	.search-input {
-		flex: 1; background: transparent; border: none; outline: none;
-		color: var(--text-primary); font-size: 13px; font-family: var(--font-sans);
-	}
-	.search-input::placeholder { color: var(--text-dim); }
+	.search-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 
 	.state-msg {
 		display: flex; align-items: center; gap: 10px;
 		padding: 32px 16px; font-size: 13px; color: var(--text-muted);
 		justify-content: center; text-align: center;
 	}
-	.state-msg.error { color: var(--accent-red); }
+	.state-pad { padding: 16px; }
 
-	.spinner {
-		width: 16px; height: 16px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%;
-		animation: spin 0.7s linear infinite; flex-shrink: 0;
-	}
+	.branch-count { font-size: 11px; color: var(--text-dim); padding: 8px 16px 4px; flex-shrink: 0; }
 
-	.branch-count {
-		font-size: 11px; color: var(--text-dim); padding: 8px 16px 4px;
-		flex-shrink: 0;
-	}
+	.branch-list { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
 
-	.branch-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-
-	.branch-row {
-		display: flex; align-items: center; gap: 10px;
-		padding: 10px 16px; background: transparent; border: none;
-		border-bottom: 1px solid var(--border); color: var(--text-primary);
-		font-size: 13px; cursor: pointer; text-align: left; width: 100%;
+	.pick-row {
+		display: block; width: 100%; padding: 0 8px; margin: 0;
+		background: transparent; border: none; border-bottom: 1px solid var(--border);
+		color: inherit; font-family: var(--font-sans); text-align: left; cursor: pointer;
 		transition: background var(--transition-fast);
 	}
-	.branch-row:hover { background: var(--bg-elevated); }
-	.branch-row:last-child { border-bottom: none; }
-
-	:global(.branch-icon) { color: var(--text-dim); flex-shrink: 0; }
-
-	.branch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; }
-
-	.chevron { font-size: 18px; color: var(--text-dim); flex-shrink: 0; }
-
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.pick-row:last-child { border-bottom: none; }
+	.pick-row:hover { background: var(--bg-hover); }
+	.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.pick-row :global(.ui-list-row) { border-bottom: none; }
+	.pick-row :global(.ui-list-row-trailing) { color: var(--text-dim); display: flex; }
 </style>
