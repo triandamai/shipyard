@@ -44,6 +44,7 @@
 		{ id: 'stack', label: 'docker-stack.yml' }
 	];
 	let loading   = $state(true);
+	let loaded    = $state(false);
 	let saving    = $state(false);
 	let saved     = $state(false);
 	let saveError = $state('');
@@ -323,6 +324,7 @@ volumes:
 	// ── Config form save ──────────────────────────────────────────────
 	async function save(e: SubmitEvent) {
 		e.preventDefault();
+		if (!loaded) return;
 		saving = true; saved = false; saveError = '';
 		try {
 			const res = await api.put<TraefikSettings>('/settings', settings);
@@ -340,7 +342,7 @@ volumes:
 
 	onMount(async () => {
 		const res = await api.get<TraefikSettings>('/settings');
-		if (res.data) settings = { ...settings, ...res.data };
+		if (res.data) { settings = { ...settings, ...res.data }; loaded = true; }
 		loading = false;
 		// Eagerly load the static file (default tab)
 		await loadStaticFile();
@@ -388,7 +390,7 @@ volumes:
 						<AlertCircle size={12} />
 						Traefik must be deployed on the same Swarm and connected to the network above.
 					</span>
-					<Button type="submit" disabled={saving}>
+					<Button type="submit" disabled={saving || !loaded}>
 						{#if saving}<Spinner size={12} tone="current" />Saving…
 						{:else if saved}<Check size={14} />Saved
 						{:else}<Save size={14} />Save

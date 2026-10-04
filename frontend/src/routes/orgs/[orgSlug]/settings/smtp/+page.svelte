@@ -43,6 +43,7 @@
 		smtp_security: 'starttls'
 	});
 	let loading     = $state(true);
+	let loaded      = $state(false);
 	let saving      = $state(false);
 	let saved       = $state(false);
 	let saveError   = $state('');
@@ -73,7 +74,7 @@
 
 	async function save(e: SubmitEvent) {
 		e.preventDefault();
-		if (!canSmtpWrite || !orgId) return;
+		if (!canSmtpWrite || !orgId || !loaded) return;
 		saving = true; saved = false; saveError = '';
 		try {
 			const payload = {
@@ -89,6 +90,7 @@
 	onMount(async () => {
 		if (!canSmtpAny) { loading = false; return; }
 		const res = await api.get<Partial<SmtpSettings>>('/settings');
+		if (res.data) loaded = true;
 		if (res.data) settings = {
 			smtp_enabled:      res.data.smtp_enabled as boolean,
 			smtp_host:         res.data.smtp_host as string,
@@ -194,7 +196,7 @@
 
 			{#if canSmtpWrite}
 				<div class="save-bar">
-					<Button type="submit" disabled={saving}>
+					<Button type="submit" disabled={saving || !loaded}>
 						{#if saving}<Spinner size={12} tone="current" />Saving…
 						{:else if saved}<Check size={14} />Saved
 						{:else}<Save size={14} />Save Settings
