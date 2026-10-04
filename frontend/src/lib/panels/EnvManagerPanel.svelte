@@ -5,6 +5,7 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, permProject } from '$lib/auth/permissions';
 	import type { ServiceEnv } from '$lib/api/types';
+	import { Button, TextField, Textarea, Checkbox, InlineAlert, Spinner, ConfirmDialog } from '$lib/components/ui';
 
 	interface Props {
 		serviceId?: string; // Optional for pre-creation mode
@@ -203,8 +204,16 @@
 		saving = false;
 	}
 
+	// Delete confirmation (was a native confirm()): the row id awaiting confirmation.
+	let deleteId = $state<string | null>(null);
+	let showDeleteConfirm = $state(false);
+
+	function requestDelete(id: string) {
+		deleteId = id;
+		showDeleteConfirm = true;
+	}
+
 	async function deleteRow(id: string) {
-		if (!confirm('Delete this environment variable?')) return;
 		saving = true;
 		if (!serviceId) {
 			envs = envs.filter(e => e.id !== id);
@@ -334,43 +343,41 @@
 		</div>
 		<div class="header-actions">
 			{#if mode === 'list'}
-				<button class="btn btn-ghost btn-sm" onclick={enterRaw} title="Edit as raw text">
+				<Button variant="ghost" size="sm" onclick={enterRaw} title="Edit as raw text">
 					<Code size={13} />
 					Raw
-				</button>
+				</Button>
 				{#if canEnvWrite}
-				<button
-					class="btn btn-secondary btn-sm"
-					onclick={() => { showAddForm = !showAddForm; }}
-				>
-					<Plus size={13} />
-					Add
-				</button>
+					<Button variant="secondary" size="sm" onclick={() => { showAddForm = !showAddForm; }}>
+						<Plus size={13} />
+						Add
+					</Button>
 				{/if}
 			{:else}
-				<button class="btn btn-ghost btn-sm" onclick={() => { mode = 'list'; }}>
-					Cancel
-				</button>
-				<button
-					class="btn btn-primary btn-sm"
-					disabled={saving}
-					onclick={saveRaw}
-				>
+				<Button variant="ghost" size="sm" onclick={() => { mode = 'list'; }}>Cancel</Button>
+				<Button variant="primary" size="sm" disabled={saving} onclick={saveRaw}>
 					<Save size={13} />
 					{saving ? 'Saving…' : 'Save All'}
-				</button>
+				</Button>
 			{/if}
 		</div>
 	</div>
 
 	{#if error}
-		<div class="env-error">{error}<button class="dismiss" onclick={() => { error = null; }}>✕</button></div>
+		<div class="env-error" role="alert">
+			<InlineAlert tone="error">
+				<span class="env-error-row">
+					<span>{error}</span>
+					<button class="dismiss" aria-label="Dismiss error" onclick={() => { error = null; }}>✕</button>
+				</span>
+			</InlineAlert>
+		</div>
 	{/if}
 
 	<!-- Loading -->
 	{#if loading}
 		<div class="env-loading">
-			<div class="spinner-sm"></div>
+			<Spinner size={16} />
 			<span>Loading variables…</span>
 		</div>
 
@@ -380,17 +387,18 @@
 			<div class="raw-hint">
 				One variable per line: <span class="font-mono">KEY=value</span>. Lines starting with <span class="font-mono">#</span> are ignored. Secret variables are shown as comments and are <strong>not overwritten</strong> — reveal them in list mode to change their values.
 			</div>
-			<textarea
-				class="raw-textarea font-mono"
-				bind:value={rawText}
-				oninput={() => { rawDirty = true; }}
-				rows={20}
-				wrap="off"
-				placeholder="DATABASE_URL=postgres://...&#10;SECRET_KEY=my-secret"
-				spellcheck="false"
-				autocorrect="off"
-				autocapitalize="off"
-			></textarea>
+			<div class="raw-field">
+				<Textarea
+					bind:value={rawText}
+					oninput={() => { rawDirty = true; }}
+					rows={20}
+					wrap="off"
+					placeholder={'DATABASE_URL=postgres://...\nSECRET_KEY=my-secret'}
+					spellcheck={false}
+					{...{ autocorrect: 'off' }}
+					autocapitalize="off"
+				/>
+			</div>
 		</div>
 
 	<!-- List mode -->
@@ -398,29 +406,26 @@
 		<!-- Add-new form -->
 		{#if showAddForm}
 			<div class="add-form">
-				<input
-					class="input add-key"
-					placeholder="KEY"
-					bind:value={newKey}
-					onkeydown={(e) => { if (e.key === 'Enter') addNew(); }}
-				/>
-				<input
-					class="input add-value"
-					placeholder="value"
-					type={newIsSecret ? 'password' : 'text'}
-					bind:value={newValue}
-					onkeydown={(e) => { if (e.key === 'Enter') addNew(); }}
-				/>
-				<label class="secret-toggle" title="Mark as secret">
-					<input type="checkbox" bind:checked={newIsSecret} />
-					<span>Secret</span>
-				</label>
-				<button class="btn btn-primary btn-sm" disabled={saving || !newKey.trim() || !canEnvWrite} onclick={addNew}>
+				<div class="add-key mono-field">
+					<TextField
+						placeholder="KEY"
+						bind:value={newKey}
+						onkeydown={(e) => { if (e.key === 'Enter') addNew(); }}
+					/>
+				</div>
+				<div class="add-value mono-field">
+					<TextField
+						placeholder="value"
+						type={newIsSecret ? 'password' : 'text'}
+						bind:value={newValue}
+						onkeydown={(e) => { if (e.key === 'Enter') addNew(); }}
+					/>
+				</div>
+				<span title="Mark as secret"><Checkbox bind:checked={newIsSecret} label="Secret" /></span>
+				<Button variant="primary" size="sm" disabled={saving || !newKey.trim() || !canEnvWrite} onclick={addNew}>
 					{saving ? '…' : 'Add'}
-				</button>
-				<button class="btn btn-ghost btn-sm" onclick={() => { showAddForm = false; }}>
-					Cancel
-				</button>
+				</Button>
+				<Button variant="ghost" size="sm" onclick={() => { showAddForm = false; }}>Cancel</Button>
 			</div>
 		{/if}
 
@@ -429,10 +434,10 @@
 			<div class="env-empty">
 				<span>No environment variables yet.</span>
 				{#if canEnvWrite}
-				<button class="btn btn-secondary btn-sm" onclick={() => { showAddForm = true; }}>
-					<Plus size={13} />
-					Add first variable
-				</button>
+					<Button variant="secondary" size="sm" onclick={() => { showAddForm = true; }}>
+						<Plus size={13} />
+						Add first variable
+					</Button>
 				{/if}
 			</div>
 		{:else}
@@ -442,68 +447,77 @@
 					{#if edit}
 						<div class="env-row" class:dirty={edit.dirty}>
 							<!-- Key -->
-							<input
-								class="input env-key font-mono"
-								value={edit.key}
-								oninput={(e) => setEdit(env.id, 'key', (e.target as HTMLInputElement).value)}
-								placeholder="KEY"
-							/>
+							<div class="env-key mono-field">
+								<TextField
+									value={edit.key}
+									oninput={(e) => setEdit(env.id, 'key', (e.target as HTMLInputElement).value)}
+									placeholder="KEY"
+									aria-label="Variable name"
+								/>
+							</div>
 
 							<!-- Value -->
 							<div class="value-wrap">
-								<input
-									class="input env-value font-mono"
-									type={edit.is_secret && !edit.revealed ? 'password' : 'text'}
-									value={edit.value}
-									oninput={(e) => setEdit(env.id, 'value', (e.target as HTMLInputElement).value)}
-									placeholder="value"
-								/>
+								<div class="env-value mono-field">
+									<TextField
+										type={edit.is_secret && !edit.revealed ? 'password' : 'text'}
+										value={edit.value}
+										oninput={(e) => setEdit(env.id, 'value', (e.target as HTMLInputElement).value)}
+										placeholder="value"
+										aria-label="Variable value"
+									/>
+								</div>
 								{#if edit.is_secret}
-									<button
-										class="reveal-btn"
+									<Button
+										variant="ghost"
+										size="icon"
 										onclick={() => toggleReveal(env.id)}
 										disabled={edit.revealing}
 										title={edit.revealed ? 'Hide' : 'Reveal'}
+										aria-label={edit.revealed ? 'Hide value' : 'Reveal value'}
 									>
 										{#if edit.revealing}
-											<span class="reveal-spinner"></span>
+											<Spinner size={12} tone="current" />
 										{:else if edit.revealed}
 											<EyeOff size={13} />
 										{:else}
 											<Eye size={13} />
 										{/if}
-									</button>
+									</Button>
 								{/if}
 							</div>
 
 							<!-- Secret toggle -->
-							<label class="secret-toggle" title="Mark as secret">
-								<input
-									type="checkbox"
+							<span class="secret-toggle" title="Mark as secret">
+								<Checkbox
 									checked={edit.is_secret}
-									onchange={(e) => setEdit(env.id, 'is_secret', (e.target as HTMLInputElement).checked)}
+									onchange={(checked) => setEdit(env.id, 'is_secret', checked)}
 								/>
-							</label>
+							</span>
 
 							<!-- Save / Delete -->
 							{#if edit.dirty}
-								<button
-									class="btn btn-primary btn-sm row-action"
+								<Button
+									variant="primary"
+									size="icon"
 									disabled={saving}
 									onclick={() => saveRow(env.id)}
 									title="Save"
+									aria-label="Save variable"
 								>
 									<Save size={12} />
-								</button>
+								</Button>
 							{/if}
-							<button
-								class="btn btn-ghost btn-sm row-action danger"
-								onclick={() => deleteRow(env.id)}
+							<Button
+								variant="ghost"
+								size="icon"
+								onclick={() => requestDelete(env.id)}
 								title={canEnvWrite ? 'Delete' : 'Insufficient permissions'}
+								aria-label="Delete variable"
 								disabled={!canEnvWrite}
 							>
 								<Trash2 size={12} />
-							</button>
+							</Button>
 						</div>
 					{/if}
 				{/each}
@@ -517,6 +531,17 @@
 		{/if}
 	{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={showDeleteConfirm}
+	title="Delete variable"
+	message="Delete this environment variable?"
+	confirmLabel="Delete"
+	onConfirm={async () => {
+		if (deleteId) await deleteRow(deleteId);
+		deleteId = null;
+	}}
+/>
 
 <style>
 	.env-panel {
@@ -558,21 +583,21 @@
 	}
 
 	.env-error {
+		padding: 8px 16px;
+		flex-shrink: 0;
+	}
+
+	.env-error-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 8px 16px;
-		background: var(--accent-red-muted);
-		border-bottom: 1px solid var(--accent-red);
-		font-size: 12px;
-		color: var(--accent-red);
-		flex-shrink: 0;
+		gap: 8px;
 	}
 
 	.dismiss {
 		background: transparent;
 		border: none;
-		color: var(--accent-red);
+		color: inherit;
 		cursor: pointer;
 		font-size: 14px;
 		padding: 0 2px;
@@ -587,21 +612,17 @@
 		font-size: 13px;
 	}
 
-	.spinner-sm {
-		width: 16px;
-		height: 16px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
+	/* Monospace + compact text for variable inputs (TextField owns the rest) */
+	.mono-field :global(input) {
+		font-family: var(--font-mono);
+		font-size: 12px;
 	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 
 	/* Add form */
 	.add-form {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 6px;
 		padding: 10px 16px;
 		border-bottom: 1px solid var(--border);
@@ -609,8 +630,8 @@
 		flex-shrink: 0;
 	}
 
-	.add-key { width: 140px; flex-shrink: 0; }
-	.add-value { flex: 1; }
+	.add-key { width: 110px; flex-shrink: 0; }
+	.add-value { flex: 1; min-width: 80px; }
 
 	/* List */
 	.env-list {
@@ -621,6 +642,7 @@
 	.env-row {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 6px;
 		padding: 7px 16px;
 		border-bottom: 1px solid var(--border);
@@ -638,76 +660,26 @@
 	.env-key {
 		width: 150px;
 		flex-shrink: 0;
-		font-size: 12px;
-		padding: 5px 8px;
 	}
 
 	.value-wrap {
 		flex: 1;
-		position: relative;
+		min-width: 120px;
 		display: flex;
 		align-items: center;
+		gap: 4px;
 	}
 
-	.env-value {
-		flex: 1;
-		font-size: 12px;
-		padding: 5px 28px 5px 8px;
-	}
-
-	.reveal-btn {
-		position: absolute;
-		right: 6px;
-		background: transparent;
-		border: none;
-		color: var(--text-muted);
-		cursor: pointer;
-		padding: 2px;
-		display: flex;
-		align-items: center;
-		transition: color var(--transition-fast);
-	}
-
-	.reveal-btn:hover { color: var(--text-primary); }
-	.reveal-btn:disabled { opacity: 0.5; cursor: default; }
-	.reveal-spinner {
-		width: 12px;
-		height: 12px;
-		border: 2px solid var(--border);
-		border-top-color: var(--text-muted);
-		border-radius: 50%;
-		animation: spin 0.6s linear infinite;
-		display: inline-block;
-	}
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.env-value { flex: 1; min-width: 0; }
 
 	.secret-toggle {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		font-size: 11px;
-		color: var(--text-muted);
-		cursor: pointer;
-		user-select: none;
-		white-space: nowrap;
 		flex-shrink: 0;
 	}
 
-	.secret-toggle input { accent-color: var(--accent); }
-	.secret-toggle span { font-size: 11px; }
-
-	.row-action {
-		padding: 4px 6px;
-		flex-shrink: 0;
-	}
-
-	.row-action.danger {
-		color: var(--text-dim);
-	}
-
-	.row-action.danger:hover {
-		color: var(--accent-red);
-		background: var(--accent-red-muted);
+	@media (max-width: 639px) {
+		.env-key { width: 100%; }
 	}
 
 	.env-empty {
@@ -753,28 +725,22 @@
 		line-height: 1.5;
 	}
 
-	.raw-textarea {
+	.raw-field {
 		flex: 1;
-		width: 100%;
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		color: var(--text-primary);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.raw-field :global(textarea) {
+		flex: 1;
+		resize: none;
+		font-family: var(--font-mono);
 		font-size: 12px;
 		line-height: 1.6;
 		padding: 12px;
-		resize: none;
-		outline: none;
-		transition: border-color var(--transition-fast);
+		background: var(--bg-base);
 		white-space: pre;
-		overflow-x: auto;
-		overflow-y: auto;
-		box-sizing: border-box;
+		overflow: auto;
 	}
-
-	.raw-textarea:focus {
-		border-color: var(--accent);
-		box-shadow: 0 0 0 3px var(--accent-muted);
-	}
-
 </style>
