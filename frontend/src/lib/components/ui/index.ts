@@ -40,3 +40,5 @@ export { default as Autocomplete } from './Autocomplete.svelte';
 export type { AutocompleteOption } from './Autocomplete.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export type { TabItem } from './Tabs.svelte';
+export { default as KeyValueList } from './KeyValueList.svelte';
+export type { KeyValueItem } from './KeyValueList.svelte';
