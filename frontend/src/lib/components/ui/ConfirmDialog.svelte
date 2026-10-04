@@ -6,6 +6,7 @@
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import TextField from './TextField.svelte';
+	import InlineAlert from './InlineAlert.svelte';
 
 	interface Props {
 		open: boolean;
@@ -14,7 +15,8 @@
 		confirmLabel?: string;
 		danger?: boolean;
 		confirmText?: string;
-		onConfirm: () => void | Promise<void>;
+		error?: string;
+		onConfirm: () => void | boolean | Promise<void | boolean>;
 	}
 
 	let {
@@ -24,6 +26,7 @@
 		confirmLabel = 'Delete',
 		danger = true,
 		confirmText,
+		error,
 		onConfirm
 	}: Props = $props();
 
@@ -38,7 +41,9 @@
 		if (!canConfirm || confirming) return;
 		confirming = true;
 		try {
-			await onConfirm();
+			const result = await onConfirm();
+			// Returning false means the action failed: stay open, keep the typed text.
+			if (result === false) return;
 			typedConfirm = '';
 			open = false;
 		} finally {
@@ -61,6 +66,9 @@
 			</label>
 			<TextField id={inputId} bind:value={typedConfirm} />
 		</div>
+	{/if}
+	{#if error}
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{/if}
 	{#snippet footer()}
 		<Button variant="ghost" onclick={handleCancel}>Cancel</Button>

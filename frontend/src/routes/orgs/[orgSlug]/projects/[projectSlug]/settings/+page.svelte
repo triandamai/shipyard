@@ -103,13 +103,13 @@
 		});
 	}
 
-	async function confirmDelete() {
+	async function confirmDelete(): Promise<boolean | void> {
 		if (!project) return;
 		deleteError = '';
 		const res = await api.deleteProject(orgId, projectId);
 		if (res.error) {
 			deleteError = res.error.message;
-			return;
+			return false;
 		}
 		projectStore.setProjects(
 			$projectStore.projects.filter(p => p.id !== projectId)
@@ -294,9 +294,6 @@
 						Delete project
 					</Button>
 				</div>
-				{#if deleteError}
-					<div role="alert"><InlineAlert tone="error">{deleteError}</InlineAlert></div>
-				{/if}
 			</div>
 		</Card>
 	{/if}
@@ -311,6 +308,7 @@
 		message={`All resources will be permanently deleted: ${services.length} service${services.length !== 1 ? 's' : ''} (containers will be stopped), ${networkCount} network${networkCount !== 1 ? 's' : ''}, ${volumeCount} volume${volumeCount !== 1 ? 's' : ''}, ${domainCount} domain${domainCount !== 1 ? 's' : ''}, and all deployments and logs.`}
 		confirmLabel="Delete project"
 		confirmText={project.name}
+		error={deleteError}
 		onConfirm={confirmDelete}
 	/>
 {/if}
