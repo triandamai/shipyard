@@ -109,19 +109,6 @@
 		margin-bottom: 8px;
 	}
 
-	.node-icon {
-		width: 24px;
-		height: 24px;
-		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, #22c55e 12%, transparent);
-		color: #22c55e;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-
 	.node-title {
 		display: flex;
 		flex-direction: column;

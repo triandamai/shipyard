@@ -251,19 +251,6 @@
 		margin-bottom: 8px;
 	}
 
-	.node-icon {
-		width: 24px;
-		height: 24px;
-		border-radius: var(--radius-sm);
-		background: var(--accent-muted);
-		color: var(--accent);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-
 	.node-title {
 		display: flex;
 		flex-direction: column;
