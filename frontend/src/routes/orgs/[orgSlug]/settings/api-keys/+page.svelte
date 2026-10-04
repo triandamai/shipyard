@@ -1,6 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Copy, Trash2, Plus, Key, Eye, EyeOff, X, Check, Shield, AlertTriangle } from '@lucide/svelte';
+	import { Copy, Trash2, Plus, Key, Eye, EyeOff, Check, X } from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import Modal from '$lib/components/ui/Modal.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+	import FormField from '$lib/components/ui/FormField.svelte';
+	import TextField from '$lib/components/ui/TextField.svelte';
+	import Checkbox from '$lib/components/ui/Checkbox.svelte';
+	import DataTable from '$lib/components/ui/DataTable.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import api from '$lib/api/client';
 	import type { ApiKeyItem, CreatedApiKey, ApiKeyScope } from '$lib/api/types';
 	import { orgStore } from '$lib/stores/org.store';
@@ -163,79 +175,68 @@
 			<h2>API Keys</h2>
 			<p>Manage programmatic access keys for the Shipyard Open API.</p>
 		</div>
-		<button class="btn-primary" onclick={() => { showCreate = true; createError = ''; }}>
+		<Button onclick={() => { showCreate = true; createError = ''; }}>
 			<Plus size={14} />
 			New Key
-		</button>
+		</Button>
 	</div>
 
 	<!-- One-time key reveal modal -->
-	{#if createdKey}
-		<div class="modal-backdrop" role="dialog" aria-modal="true" aria-label="New API Key Created">
-			<div class="modal">
-				<div class="modal-header">
-					<div class="modal-title-row">
-						<Key size={16} />
-						<h3>API Key Created</h3>
-					</div>
-					<button class="icon-btn" onclick={() => (createdKey = null)} aria-label="Close"><X size={16} /></button>
-				</div>
-				<div class="modal-body">
-					<div class="key-alert">
-						<AlertTriangle size={14} />
-						<span>Copy this key now. It will never be shown again.</span>
-					</div>
-					<div class="key-display">
-						<code class="key-value" class:blurred={!keyVisible}>
-							{createdKey.key}
-						</code>
-						<div class="key-actions">
-							<button class="icon-btn" onclick={() => (keyVisible = !keyVisible)} aria-label="Toggle visibility">
-								{#if keyVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
-							</button>
-							<button class="icon-btn" class:copied={keyCopied} onclick={copyKey} aria-label="Copy key">
-								{#if keyCopied}<Check size={14} />{:else}<Copy size={14} />{/if}
-							</button>
-						</div>
-					</div>
-					<div class="key-meta">
-						<div class="meta-row"><span class="meta-label">Name</span><span>{createdKey.name}</span></div>
-						<div class="meta-row"><span class="meta-label">Prefix</span><code>{createdKey.key_prefix}</code></div>
-						<div class="meta-row">
-							<span class="meta-label">Scopes</span>
-							<div class="scope-chips">
-								{#each createdKey.scopes as s}<span class="scope-chip">{s}</span>{/each}
-							</div>
-						</div>
-						{#if createdKey.expires_at}
-							<div class="meta-row"><span class="meta-label">Expires</span><span>{formatDate(createdKey.expires_at)}</span></div>
-						{/if}
+	<Modal
+		bind:open={() => createdKey !== null, (v) => { if (!v) createdKey = null; }}
+		title="API Key Created"
+	>
+		{#if createdKey}
+			<div class="reveal-body">
+				<InlineAlert tone="warning">Copy this key now. It will never be shown again.</InlineAlert>
+				<div class="key-display">
+					<code class="key-value" class:blurred={!keyVisible}>
+						{createdKey.key}
+					</code>
+					<div class="key-actions">
+						<Button variant="ghost" size="icon" onclick={() => (keyVisible = !keyVisible)} aria-label="Toggle visibility">
+							{#if keyVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+						</Button>
+						<Button variant="ghost" size="icon" onclick={copyKey} aria-label="Copy key">
+							{#if keyCopied}<Check size={14} />{:else}<Copy size={14} />{/if}
+						</Button>
 					</div>
 				</div>
-				<div class="modal-footer">
-					<button class="btn-primary" onclick={copyKey}>
-						{#if keyCopied}<Check size={14} /> Copied!{:else}<Copy size={14} /> Copy Key{/if}
-					</button>
-					<button class="btn-secondary" onclick={() => (createdKey = null)}>Done</button>
+				<div class="key-meta">
+					<div class="meta-row"><span class="meta-label">Name</span><span>{createdKey.name}</span></div>
+					<div class="meta-row"><span class="meta-label">Prefix</span><code>{createdKey.key_prefix}</code></div>
+					<div class="meta-row">
+						<span class="meta-label">Scopes</span>
+						<div class="scope-chips">
+							{#each createdKey.scopes as s}<Badge tone="blue">{s}</Badge>{/each}
+						</div>
+					</div>
+					{#if createdKey.expires_at}
+						<div class="meta-row"><span class="meta-label">Expires</span><span>{formatDate(createdKey.expires_at)}</span></div>
+					{/if}
 				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
+		{#snippet footer()}
+			<Button onclick={copyKey}>
+				{#if keyCopied}<Check size={14} /> Copied!{:else}<Copy size={14} /> Copy Key{/if}
+			</Button>
+			<Button variant="secondary" onclick={() => (createdKey = null)}>Done</Button>
+		{/snippet}
+	</Modal>
 
 	<!-- Create key panel -->
 	{#if showCreate}
-		<div class="create-panel">
+		<Card padding="0">
 			<div class="panel-header">
 				<h3>New API Key</h3>
-				<button class="icon-btn" onclick={() => (showCreate = false)} aria-label="Close"><X size={14} /></button>
+				<Button variant="ghost" size="icon" onclick={() => (showCreate = false)} aria-label="Close"><X size={14} /></Button>
 			</div>
 			<div class="panel-body">
-				<div class="field">
-					<label for="key-name">Name</label>
-					<input id="key-name" type="text" bind:value={newName} placeholder="e.g. CI/CD Pipeline" />
-				</div>
-				<div class="field">
-					<label>Scopes</label>
+				<FormField label="Name" for="key-name">
+					<TextField id="key-name" type="text" bind:value={newName} placeholder="e.g. CI/CD Pipeline" />
+				</FormField>
+				<FormField label="Scopes">
 					<div class="scope-list">
 						{#each ALL_SCOPES as s, i}
 							{#if i > 0 && s.group === 'registry' && ALL_SCOPES[i - 1].group !== 'registry'}
@@ -243,144 +244,131 @@
 									<span>Registry permissions</span>
 								</div>
 							{/if}
-							<button
-								class="scope-toggle"
-								class:active={newScopes.includes(s.value)}
-								onclick={() => toggleScope(s.value)}
-								type="button"
-							>
-								<div class="scope-toggle-label">
-									<Shield size={12} />
-									{s.label}
-								</div>
+							<div class="scope-toggle" class:active={newScopes.includes(s.value)}>
+								<Checkbox
+									checked={newScopes.includes(s.value)}
+									label={s.label}
+									onchange={() => toggleScope(s.value)}
+								/>
 								<span class="scope-toggle-desc">{s.desc}</span>
-							</button>
+							</div>
 						{/each}
 					</div>
-				</div>
-				<div class="field">
-					<label for="key-expiry">Expiry (optional)</label>
-					<input id="key-expiry" type="date" bind:value={newExpiry} min={new Date().toISOString().slice(0, 10)} />
-				</div>
+				</FormField>
+				<FormField label="Expiry (optional)" for="key-expiry">
+					<TextField id="key-expiry" type="date" bind:value={newExpiry} min={new Date().toISOString().slice(0, 10)} />
+				</FormField>
 				{#if createError}
-					<p class="field-error">{createError}</p>
+					<div role="alert"><InlineAlert tone="error">{createError}</InlineAlert></div>
 				{/if}
 			</div>
 			<div class="panel-footer">
-				<button class="btn-primary" onclick={handleCreate} disabled={creating}>
+				<Button onclick={handleCreate} disabled={creating}>
 					{creating ? 'Creating…' : 'Create Key'}
-				</button>
-				<button class="btn-secondary" onclick={() => (showCreate = false)}>Cancel</button>
+				</Button>
+				<Button variant="secondary" onclick={() => (showCreate = false)}>Cancel</Button>
 			</div>
-		</div>
+		</Card>
 	{/if}
+
+	<!-- Revoke confirmation -->
+	<ConfirmDialog
+		bind:open={() => confirmRevoke !== null, (v) => { if (!v) confirmRevoke = null; }}
+		title="Revoke API key"
+		message="Revoke this key? Anything using it will stop working."
+		confirmLabel="Revoke"
+		onConfirm={() => { if (confirmRevoke) return handleRevoke(confirmRevoke); }}
+	/>
 
 	<!-- Keys table -->
 	{#if loading}
-		<div class="empty-state">Loading…</div>
+		<div class="loading-state"><Spinner size={16} /> Loading…</div>
 	{:else if error}
-		<div class="error-state">{error}</div>
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{:else if keys.length === 0}
-		<div class="empty-state">
-			<Key size={32} />
-			<p>No API keys yet. Create one to get started.</p>
-		</div>
+		<EmptyState message="No API keys yet. Create one to get started.">
+			{#snippet icon()}<Key size={32} />{/snippet}
+		</EmptyState>
 	{:else}
 		<div class="table-wrap">
-			<table>
-				<thead>
-					<tr>
-						<th>Name</th>
-						<th>Prefix</th>
-						<th>Scopes</th>
-						<th>Last Used</th>
-						<th>Expires</th>
-						<th>Created</th>
-						<th></th>
+			<DataTable
+				items={keys}
+				rowKey={(k) => k.id}
+				columns={[
+					{ key: 'name', label: 'Name' },
+					{ key: 'prefix', label: 'Prefix' },
+					{ key: 'scopes', label: 'Scopes' },
+					{ key: 'last_used', label: 'Last Used' },
+					{ key: 'expires', label: 'Expires' },
+					{ key: 'created', label: 'Created' },
+					{ key: 'actions', label: '', width: '60px' }
+				]}
+				searchable={false}
+				emptyMessage="No API keys."
+			>
+				{#snippet row(k)}
+					<tr class={isExpired(k.expires_at) ? 'expired' : ''}>
+						<td class="name-cell">{k.name}</td>
+						<td><code class="prefix">{k.key_prefix}…</code></td>
+						<td>
+							<div class="scope-chips">
+								{#each k.scopes as s}<Badge tone="blue">{s}</Badge>{/each}
+							</div>
+						</td>
+						<td class="muted">{k.last_used_at ? relativeTime(k.last_used_at) : '—'}</td>
+						<td class="muted" class:expired-text={isExpired(k.expires_at)}>
+							{k.expires_at ? formatDate(k.expires_at) : '—'}
+						</td>
+						<td class="muted">{formatDate(k.created_at)}</td>
+						<td class="action-cell">
+							<Button
+								variant="danger-outline"
+								size="icon"
+								disabled={revoking === k.id}
+								onclick={() => handleRevoke(k.id)}
+								aria-label="Revoke key"
+								title="Revoke key"
+							>
+								<Trash2 size={14} />
+							</Button>
+						</td>
 					</tr>
-				</thead>
-				<tbody>
-					{#each keys as k (k.id)}
-						<tr class:expired={isExpired(k.expires_at)}>
-							<td class="name-cell">{k.name}</td>
-							<td><code class="prefix">{k.key_prefix}…</code></td>
-							<td>
-								<div class="scope-chips">
-									{#each k.scopes as s}<span class="scope-chip">{s}</span>{/each}
-								</div>
-							</td>
-							<td class="muted">{k.last_used_at ? relativeTime(k.last_used_at) : '—'}</td>
-							<td class="muted" class:expired-text={isExpired(k.expires_at)}>
-								{k.expires_at ? formatDate(k.expires_at) : '—'}
-							</td>
-							<td class="muted">{formatDate(k.created_at)}</td>
-							<td class="action-cell">
-								{#if confirmRevoke === k.id}
-									<div class="confirm-row">
-										<span class="confirm-label">Revoke?</span>
-										<button
-											class="btn-danger-sm"
-											onclick={() => handleRevoke(k.id)}
-											disabled={revoking === k.id}
-										>
-											{revoking === k.id ? '…' : 'Yes'}
-										</button>
-										<button class="btn-ghost-sm" onclick={() => (confirmRevoke = null)}>No</button>
-									</div>
-								{:else}
-									<button
-										class="icon-btn danger"
-										onclick={() => handleRevoke(k.id)}
-										aria-label="Revoke key"
-									>
-										<Trash2 size={14} />
-									</button>
-								{/if}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+				{/snippet}
+			</DataTable>
 		</div>
 
 		<!-- Mobile cards -->
 		<div class="mobile-cards">
 			{#each keys as k (k.id)}
-				<div class="card" class:expired={isExpired(k.expires_at)}>
-					<div class="card-header">
-						<span class="card-name">{k.name}</span>
-						<code class="prefix">{k.key_prefix}…</code>
-					</div>
-					<div class="scope-chips">
-						{#each k.scopes as s}<span class="scope-chip">{s}</span>{/each}
-					</div>
-					<div class="card-rows">
-						{#if k.last_used_at}
-							<div class="card-row"><span>Last used</span><span>{relativeTime(k.last_used_at)}</span></div>
-						{/if}
-						{#if k.expires_at}
-							<div class="card-row">
-								<span>Expires</span>
-								<span class:expired-text={isExpired(k.expires_at)}>{formatDate(k.expires_at)}</span>
+				<div class={isExpired(k.expires_at) ? 'key-card expired' : 'key-card'}>
+					<Card padding="14px">
+						<div class="card-inner">
+							<div class="card-header">
+								<span class="card-name">{k.name}</span>
+								<code class="prefix">{k.key_prefix}…</code>
 							</div>
-						{/if}
-						<div class="card-row"><span>Created</span><span>{formatDate(k.created_at)}</span></div>
-					</div>
-					<div class="card-footer">
-						{#if confirmRevoke === k.id}
-							<div class="confirm-row">
-								<span class="confirm-label">Revoke this key?</span>
-								<button class="btn-danger-sm" onclick={() => handleRevoke(k.id)} disabled={revoking === k.id}>
-									{revoking === k.id ? '…' : 'Revoke'}
-								</button>
-								<button class="btn-ghost-sm" onclick={() => (confirmRevoke = null)}>Cancel</button>
+							<div class="scope-chips">
+								{#each k.scopes as s}<Badge tone="blue">{s}</Badge>{/each}
 							</div>
-						{:else}
-							<button class="btn-revoke" onclick={() => handleRevoke(k.id)}>
-								<Trash2 size={13} /> Revoke
-							</button>
-						{/if}
-					</div>
+							<div class="card-rows">
+								{#if k.last_used_at}
+									<div class="card-row"><span>Last used</span><span>{relativeTime(k.last_used_at)}</span></div>
+								{/if}
+								{#if k.expires_at}
+									<div class="card-row">
+										<span>Expires</span>
+										<span class:expired-text={isExpired(k.expires_at)}>{formatDate(k.expires_at)}</span>
+									</div>
+								{/if}
+								<div class="card-row"><span>Created</span><span>{formatDate(k.created_at)}</span></div>
+							</div>
+							<div class="card-footer">
+								<Button variant="danger-outline" size="sm" disabled={revoking === k.id} onclick={() => handleRevoke(k.id)}>
+									<Trash2 size={13} /> Revoke
+								</Button>
+							</div>
+						</div>
+					</Card>
 				</div>
 			{/each}
 		</div>
@@ -389,11 +377,7 @@
 {/if}
 
 <style>
-	.page {
-		display: flex;
-		flex-direction: column;
-		gap: 20px;
-	}
+	.page { display: flex; flex-direction: column; gap: 20px; }
 
 	.page-header {
 		display: flex;
@@ -401,154 +385,24 @@
 		justify-content: space-between;
 		gap: 16px;
 	}
+	.header-text h2 { font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 4px; }
+	.header-text p { font-size: 13px; color: var(--text-muted); margin: 0; }
 
-	.header-text h2 {
-		font-size: 16px;
-		font-weight: 600;
-		color: var(--text-primary);
-		margin: 0 0 4px;
-	}
-	.header-text p {
-		font-size: 13px;
-		color: var(--text-muted);
-		margin: 0;
+	.loading-state {
+		display: flex; align-items: center; justify-content: center; gap: 8px;
+		padding: 48px 16px; color: var(--text-muted); font-size: 13px;
 	}
 
-	/* ── Buttons ── */
-	.btn-primary {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 14px;
-		background: var(--accent);
-		color: #fff;
-		border: none;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		white-space: nowrap;
-	}
-	.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-	.btn-secondary {
-		padding: 7px 14px;
-		background: var(--bg-muted);
-		color: var(--text-primary);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-	}
-	.icon-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		border: none;
-		background: transparent;
-		color: var(--text-muted);
-		cursor: pointer;
-		border-radius: 4px;
-		transition: background 0.15s, color 0.15s;
-	}
-	.icon-btn:hover { background: var(--bg-muted); color: var(--text-primary); }
-	.icon-btn.danger:hover { background: rgba(239,68,68,.1); color: #ef4444; }
-	.icon-btn.copied { color: #16a34a; }
-	.btn-danger-sm {
-		padding: 3px 10px;
-		background: #ef4444;
-		color: #fff;
-		border: none;
-		border-radius: 4px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-	.btn-danger-sm:disabled { opacity: 0.6; cursor: not-allowed; }
-	.btn-ghost-sm {
-		padding: 3px 10px;
-		background: transparent;
-		color: var(--text-muted);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-	.btn-revoke {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 4px 10px;
-		background: transparent;
-		color: #ef4444;
-		border: 1px solid rgba(239,68,68,.3);
-		border-radius: 4px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-
-	/* ── Modal ── */
-	.modal-backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0,0,0,.45);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 200;
-		padding: 16px;
-	}
-	.modal {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		width: 100%;
-		max-width: 480px;
-		overflow: hidden;
-		box-shadow: 0 20px 60px rgba(0,0,0,.25);
-	}
-	.modal-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 16px 20px;
-		border-bottom: 1px solid var(--border);
-	}
-	.modal-title-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: var(--text-primary);
-	}
-	.modal-title-row h3 { margin: 0; font-size: 15px; font-weight: 600; }
-	.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-	.modal-footer {
-		padding: 12px 20px;
-		border-top: 1px solid var(--border);
-		display: flex;
-		gap: 8px;
-	}
-
-	.key-alert {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 10px 12px;
-		background: rgba(245,158,11,.08);
-		border: 1px solid rgba(245,158,11,.3);
-		border-radius: 6px;
-		font-size: 13px;
-		color: #b45309;
-	}
+	/* ── Key reveal ── */
+	.reveal-body { display: flex; flex-direction: column; gap: 16px; }
 	.key-display {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		padding: 10px 12px;
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: var(--radius-sm);
 	}
 	.key-value {
 		flex: 1;
@@ -556,27 +410,15 @@
 		font-family: var(--font-mono);
 		word-break: break-all;
 		color: var(--text-primary);
-		transition: filter 0.2s;
+		transition: filter var(--transition-normal);
 	}
 	.key-value.blurred { filter: blur(4px); user-select: none; }
 	.key-actions { display: flex; gap: 4px; flex-shrink: 0; }
-
 	.key-meta { display: flex; flex-direction: column; gap: 8px; }
-	.meta-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 13px;
-	}
+	.meta-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); }
 	.meta-label { color: var(--text-muted); min-width: 60px; }
 
 	/* ── Create panel ── */
-	.create-panel {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		overflow: hidden;
-	}
 	.panel-header {
 		display: flex;
 		align-items: center;
@@ -592,29 +434,10 @@
 		display: flex;
 		gap: 8px;
 	}
-	.field { display: flex; flex-direction: column; gap: 6px; }
-	.field label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
-	.field input {
-		padding: 7px 10px;
-		background: var(--bg-input, var(--bg-muted));
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		font-size: 13px;
-		color: var(--text-primary);
-		outline: none;
-		width: 100%;
-	}
-	.field input:focus { border-color: var(--accent); }
-	.field-error { font-size: 12px; color: #ef4444; margin: 0; }
 
 	.scope-list { display: flex; flex-direction: column; gap: 6px; }
-	.scope-divider {
-		display: flex; align-items: center; gap: 8px;
-		margin: 4px 0 2px;
-	}
-	.scope-divider::before, .scope-divider::after {
-		content: ''; flex: 1; height: 1px; background: var(--border);
-	}
+	.scope-divider { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
+	.scope-divider::before, .scope-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 	.scope-divider span {
 		font-size: 10px; font-weight: 600; color: var(--text-muted);
 		text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
@@ -623,118 +446,42 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 12px;
 		padding: 8px 12px;
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 		border: 1px solid var(--border);
-		border-radius: 6px;
-		cursor: pointer;
-		text-align: left;
-		transition: border-color 0.15s, background 0.15s;
+		border-radius: var(--radius-sm);
+		transition: border-color var(--transition-fast), background var(--transition-fast);
 	}
-	.scope-toggle.active { border-color: var(--accent); background: rgba(var(--accent-rgb, 99,102,241),.06); }
-	.scope-toggle-label {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--text-primary);
-	}
-	.scope-toggle-desc { font-size: 11px; color: var(--text-muted); }
+	.scope-toggle.active { border-color: var(--accent); background: var(--accent-muted); }
+	.scope-toggle-desc { font-size: 11px; color: var(--text-muted); text-align: right; }
 
 	/* ── Table ── */
-	.table-wrap {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		overflow: hidden;
-	}
-	table { width: 100%; border-collapse: collapse; font-size: 13px; }
-	thead { background: var(--bg-muted); }
-	th {
-		padding: 10px 14px;
-		text-align: left;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-	td { padding: 11px 14px; border-top: 1px solid var(--border); vertical-align: middle; }
-	tr.expired td { opacity: 0.5; }
+	.table-wrap { display: block; }
+	:global(.table-wrap tr.expired td) { opacity: 0.5; }
 	.name-cell { font-weight: 500; color: var(--text-primary); }
 	.muted { color: var(--text-muted); }
-	.expired-text { color: #ef4444; }
+	.expired-text { color: var(--accent-red); }
 	.prefix { font-family: var(--font-mono); font-size: 12px; }
 	.action-cell { text-align: right; }
-	.confirm-row { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
-	.confirm-label { font-size: 12px; color: var(--text-muted); }
-
-	/* ── Scope chips ── */
 	.scope-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-	.scope-chip {
-		padding: 2px 7px;
-		background: rgba(var(--accent-rgb, 99,102,241),.08);
-		color: var(--accent);
-		border: 1px solid rgba(var(--accent-rgb, 99,102,241),.2);
-		border-radius: 10px;
-		font-size: 11px;
-		font-weight: 500;
-	}
-
-	/* ── Empty / error states ── */
-	.empty-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		padding: 48px 16px;
-		color: var(--text-muted);
-		font-size: 13px;
-	}
-	.error-state {
-		padding: 16px;
-		background: rgba(239,68,68,.08);
-		border: 1px solid rgba(239,68,68,.2);
-		border-radius: 8px;
-		color: #ef4444;
-		font-size: 13px;
-	}
 
 	/* ── Mobile cards ── */
 	.mobile-cards { display: none; flex-direction: column; gap: 10px; }
-	.card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 14px;
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-	.card.expired { opacity: 0.55; }
-	.card-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-	}
+	.key-card.expired { opacity: 0.55; }
+	.card-inner { display: flex; flex-direction: column; gap: 10px; }
+	.card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 	.card-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
 	.card-rows { display: flex; flex-direction: column; gap: 6px; }
-	.card-row {
-		display: flex;
-		justify-content: space-between;
-		font-size: 12px;
-		color: var(--text-muted);
-	}
+	.card-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
 	.card-row span:last-child { color: var(--text-primary); }
-	.card-footer { padding-top: 4px; border-top: 1px solid var(--border); }
+	.card-footer { padding-top: 8px; border-top: 1px solid var(--border); }
 
 	@media (max-width: 639px) {
 		.table-wrap { display: none; }
 		.mobile-cards { display: flex; }
 		.page-header { flex-direction: column; gap: 10px; }
-		.page-header .btn-primary { align-self: flex-start; }
+		.scope-toggle { flex-direction: column; align-items: flex-start; gap: 4px; }
+		.scope-toggle-desc { text-align: left; }
 	}
 </style>
