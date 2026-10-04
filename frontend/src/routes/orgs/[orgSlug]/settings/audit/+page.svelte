@@ -129,36 +129,38 @@
 	{:else if logs.length === 0}
 		<EmptyState message="No audit events recorded yet." />
 	{:else}
-		<DataTable
-			items={logs}
-			rowKey={(entry: AuditLogEntry) => entry.id}
-			searchable={false}
-			pageSize={LIMIT}
-			{columns}
-		>
-			{#snippet row(entry: AuditLogEntry)}
-				<tr>
-					<td class="col-time font-mono">{formatTime(entry.created_at)}</td>
-					<td class="col-action">
-						<Badge tone={actionColor(entry.action)}><span class="action-label">{actionLabel(entry.action)}</span></Badge>
-					</td>
-					<td>
-						{#if entry.resource_type}
-							<span class="resource-type">{entry.resource_type}</span>
-							{#if entry.resource_id}
-								<span class="resource-id font-mono">{entry.resource_id.slice(0, 8)}…</span>
+		{#key pageNum}
+			<DataTable
+				items={logs}
+				rowKey={(entry: AuditLogEntry) => entry.id}
+				searchable={false}
+				pageSize={LIMIT}
+				{columns}
+			>
+				{#snippet row(entry: AuditLogEntry)}
+					<tr>
+						<td class="col-time font-mono">{formatTime(entry.created_at)}</td>
+						<td class="col-action">
+							<Badge tone={actionColor(entry.action)}><span class="action-label">{actionLabel(entry.action)}</span></Badge>
+						</td>
+						<td>
+							{#if entry.resource_type}
+								<span class="resource-type">{entry.resource_type}</span>
+								{#if entry.resource_id}
+									<span class="resource-id font-mono">{entry.resource_id.slice(0, 8)}…</span>
+								{/if}
+							{:else}
+								<span class="text-dim">—</span>
 							{/if}
-						{:else}
-							<span class="text-dim">—</span>
+						</td>
+						{#if !narrow.current}
+							<td class="col-user font-mono">{entry.user_id ? entry.user_id.slice(0, 8) + '…' : '—'}</td>
+							<td class="col-ip font-mono">{entry.ip_address ?? '—'}</td>
 						{/if}
-					</td>
-					{#if !narrow.current}
-						<td class="col-user font-mono">{entry.user_id ? entry.user_id.slice(0, 8) + '…' : '—'}</td>
-						<td class="col-ip font-mono">{entry.ip_address ?? '—'}</td>
-					{/if}
-				</tr>
-			{/snippet}
-		</DataTable>
+					</tr>
+				{/snippet}
+			</DataTable>
+		{/key}
 
 		<div class="pagination">
 			<Button variant="secondary" size="sm" onclick={prev} disabled={!hasPrev || loading}>
