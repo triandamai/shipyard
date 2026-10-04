@@ -80,6 +80,15 @@
 			if (id !== requestId) return;
 			serverRows = result.rows;
 			serverTotal = result.total;
+			// Rows vanished from under us (e.g. the last row of the last page was deleted):
+			// step back to the last real page; the page change triggers the next fetch.
+			if (result.rows.length === 0 && result.total > 0 && page > 0) {
+				const last = Math.max(0, Math.ceil(result.total / currentPageSize) - 1);
+				if (last < page) {
+					page = last;
+					return;
+				}
+			}
 		} catch (e) {
 			if (id !== requestId) return;
 			error = e instanceof Error ? e.message : 'Failed to load data.';
