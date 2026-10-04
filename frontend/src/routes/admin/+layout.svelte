@@ -11,6 +11,7 @@
 		Sun, Moon, LogOut
 	} from '@lucide/svelte';
 	import { NavRail, NavDrawer } from '$lib/components/ui';
+	import PanelContainer from '$lib/components/PanelContainer.svelte';
 
 	let { children } = $props();
 	let checking      = $state(true);
@@ -166,6 +167,8 @@
 			</div>
 			{@render children()}
 		</main>
+
+		<PanelContainer />
 	</div>
 {/if}
 

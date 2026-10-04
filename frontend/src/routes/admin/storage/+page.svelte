@@ -2,6 +2,8 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { uiStore } from '$lib/stores/ui.store';
+	import StoragePreviewPanel from '$lib/panels/StoragePreviewPanel.svelte';
 	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable, ListRow } from '$lib/components/ui';
 	import {
 		Folder,
@@ -11,10 +13,7 @@
 		HardDrive,
 		Calendar,
 		X,
-		Download,
 		RefreshCw,
-		Copy,
-		Check,
 		Database,
 		Server,
 		FlaskConical,
@@ -81,16 +80,6 @@
 		}
 		diagLoading = false;
 	}
-
-	// Preview overlay state
-	let previewKey = $state<string | null>(null);
-	let previewLoading = $state(false);
-	let previewContent = $state<string | null>(null);
-	let previewError = $state('');
-	let previewIsImage = $derived(
-		previewKey ? /\.(png|jpe?g|gif|svg|webp|ico)$/i.test(previewKey) : false
-	);
-	let copied = $state(false);
 
 	async function loadBuckets() {
 		bucketsLoading = true;
@@ -178,48 +167,19 @@
 		}
 	}
 
-	async function openPreview(key: string) {
-		previewKey = key;
-		previewError = '';
-		previewContent = null;
-		copied = false;
-
-		if (previewIsImage) {
-			previewContent = `/api/admin/storage/preview?key=${encodeURIComponent(key)}`;
-			return;
-		}
-
-		previewLoading = true;
-		try {
-			const token = localStorage.getItem('shipyard_token');
-			const response = await fetch(`/api/admin/storage/preview?key=${encodeURIComponent(key)}`, {
-				headers: token ? { Authorization: `Bearer ${token}` } : {}
-			});
-
-			if (!response.ok) {
-				throw new Error(`HTTP error ${response.status}`);
-			}
-
-			const text = await response.text();
-			previewContent = text;
-		} catch (e: any) {
-			previewError = e.message ?? 'Failed to load preview';
-		} finally {
-			previewLoading = false;
-		}
-	}
-
-	function closePreview() {
-		previewKey = null;
-		previewContent = null;
-		previewError = '';
-	}
-
-	function copyToClipboard() {
-		if (!previewContent) return;
-		navigator.clipboard.writeText(previewContent);
-		copied = true;
-		setTimeout(() => (copied = false), 2000);
+	// Opens the slide-in preview panel via the shared uiStore/SlidePanel
+	// mechanism (PanelContainer), replacing the page's previous hand-rolled
+	// overlay/drawer. `key` is the sole input to the panel's own render-mode
+	// decision (image vs text vs binary), preserved unchanged inside
+	// StoragePreviewPanel. Keyed so clicking another file replaces the
+	// existing preview panel instead of stacking duplicates.
+	function openPreview(key: string) {
+		uiStore.pushPanel({
+			component: StoragePreviewPanel,
+			title: 'File Preview',
+			key: 'storage-preview',
+			props: { fileKey: key }
+		});
 	}
 
 	function fmtBytes(n: number): string {
@@ -493,74 +453,6 @@
 	{/if}
 </div>
 
-<!-- Preview Drawer / Side Panel Overlay -->
-{#if previewKey}
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="overlay" onclick={closePreview}>
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="drawer" onclick={(e) => e.stopPropagation()}>
-			<div class="drawer-header">
-				<div class="drawer-title-area">
-					<span class="drawer-meta-label">FILE PREVIEW</span>
-					<h3 class="drawer-title mono trunc" title={previewKey}>{previewKey.split('/').pop()}</h3>
-				</div>
-				<div class="drawer-actions">
-					{#if previewContent && !previewIsImage}
-						<button class="drawer-btn" onclick={copyToClipboard} title="Copy Content">
-							{#if copied}
-								<Check width="14" height="14" style="color:var(--ok)" />
-							{:else}
-								<Copy width="14" height="14" />
-							{/if}
-						</button>
-					{/if}
-					<a class="drawer-btn" href={`/api/admin/storage/preview?key=${encodeURIComponent(previewKey)}`} download={previewKey.split('/').pop()} target="_blank" title="Download File">
-						<Download width="14" height="14" />
-					</a>
-					<button class="drawer-btn close-btn" onclick={closePreview}>
-						<X width="16" height="16" />
-					</button>
-				</div>
-			</div>
-
-			<div class="drawer-body">
-				{#if previewLoading}
-					<div class="preview-loading">
-						<div class="spinner"></div>
-						<span>Loading file content…</span>
-					</div>
-				{:else if previewError}
-					<div class="preview-error">
-						<h3>Failed to render preview</h3>
-						<p>{previewError}</p>
-					</div>
-				{:else if previewIsImage}
-					<div class="preview-image-container">
-						<!-- svelte-ignore a11y_missing_attribute -->
-						<img src={previewContent} class="preview-image" />
-					</div>
-				{:else if previewContent !== null}
-					<div class="preview-text-container">
-						<pre class="preview-code mono">{previewContent}</pre>
-					</div>
-				{:else}
-					<div class="preview-binary">
-						<File width="48" height="48" style="color: var(--text-3); margin-bottom: 12px;" />
-						<h3>Binary File</h3>
-						<p>Previews are not supported for this file type.</p>
-						<a class="download-link" href={`/api/admin/storage/preview?key=${encodeURIComponent(previewKey)}`} download={previewKey.split('/').pop()} target="_blank">
-							<Download width="14" height="14" style="margin-right: 6px;" />
-							Download File
-						</a>
-					</div>
-				{/if}
-			</div>
-		</div>
-	</div>
-{/if}
-
 <style>
 	.p { max-width: 1100px; margin: 0 auto; padding: 40px 36px; box-sizing: border-box; }
 	.hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
@@ -602,49 +494,6 @@
 	.mono { font-family: var(--font-mono); }
 	.trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 
-	/* Preview Overlay & Drawer */
-	.overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000; display: flex; justify-content: flex-end; }
-	.drawer { width: 100%; max-width: 600px; height: 100%; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4); animation: slideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
-
-	@keyframes slideIn {
-		from { transform: translateX(100%); }
-		to { transform: translateX(0); }
-	}
-
-	.drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
-	.drawer-title-area { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-	.drawer-meta-label { font-size: 9.5px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; }
-	.drawer-title { font-size: 16px; font-weight: 700; color: var(--text); margin: 0; }
-
-	.drawer-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-	.drawer-btn { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; }
-	.drawer-btn:hover { background: var(--surface-2); color: var(--text); }
-	.close-btn:hover { background: var(--danger-soft); color: var(--danger); border-color: rgba(220,38,38,0.2); }
-
-	.drawer-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; }
-
-	/* Preview Types */
-	.preview-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 12px; color: var(--text-3); font-size: 13px; }
-	.spinner { width: 24px; height: 24px; border: 2.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
-
-	.preview-error { text-align: center; margin: auto; max-width: 320px; }
-	.preview-error h3 { font-size: 15px; color: var(--danger); margin: 0 0 8px; }
-	.preview-error p { font-size: 13px; color: var(--text-3); margin: 0; line-height: 1.5; }
-
-	.preview-image-container { display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; overflow: auto; max-height: 100%; box-sizing: border-box; }
-	.preview-image { max-width: 100%; max-height: 480px; object-fit: contain; border-radius: var(--radius-sm); }
-
-	.preview-text-container { background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 1; max-height: 100%; }
-	.preview-code { margin: 0; padding: 16px; font-size: 12px; line-height: 1.6; color: var(--text-2); white-space: pre; font-family: var(--mono); }
-
-	.preview-binary { display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto; text-align: center; max-width: 320px; }
-	.preview-binary h3 { font-size: 15px; color: var(--text); margin: 0 0 6px; }
-	.preview-binary p { font-size: 13px; color: var(--text-3); margin: 0 0 20px; line-height: 1.5; }
-
-	.download-link { display: inline-flex; align-items: center; padding: 8px 16px; background: var(--accent); color: #000; font-size: 13px; font-weight: 600; text-decoration: none; border-radius: var(--radius-sm); transition: opacity .15s; }
-	.download-link:hover { opacity: 0.9; }
-
 	/* Diagnostics panel */
 	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
 	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; }
@@ -658,9 +507,6 @@
 	/* Responsiveness */
 	@media (max-width: 768px) {
 		.p { padding: 24px 16px; }
-
-		.overlay { justify-content: center; }
-		.drawer { height: 100%; max-width: 100%; border-left: none; }
 
 		.bucket-grid { grid-template-columns: 1fr; }
 	}
