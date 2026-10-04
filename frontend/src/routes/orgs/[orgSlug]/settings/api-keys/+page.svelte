@@ -149,7 +149,6 @@
 	async function handleRevoke(keyId: string) {
 		if (confirmRevoke !== keyId) { confirmRevoke = keyId; return; }
 		revoking = keyId;
-		confirmRevoke = null;
 		try {
 			await api.revokeApiKey(orgId, keyId);
 			await load();
@@ -157,6 +156,7 @@
 			error = 'Failed to revoke key';
 		} finally {
 			revoking = null;
+			confirmRevoke = null;
 		}
 	}
 </script>
