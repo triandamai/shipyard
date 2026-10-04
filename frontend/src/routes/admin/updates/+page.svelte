@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { Card, InlineAlert, Button, Badge } from '$lib/components/ui';
 
 	interface VersionInfo {
 		current: string;
@@ -104,17 +105,17 @@
 	</header>
 
 	<!-- Version card -->
-	<div class="card version-card">
+	<Card padding="0">
 		<div class="card-hdr">
 			<span class="card-title">Current Version</span>
-			<button class="check-btn" disabled={checkingUpdate || loadingVersion} onclick={() => loadVersion(true)}>
+			<Button variant="secondary" size="sm" disabled={checkingUpdate || loadingVersion} onclick={() => loadVersion(true)}>
 				{#if checkingUpdate}
 					<span class="spin-dot"></span>Checking…
 				{:else}
 					<svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
 					Check for updates
 				{/if}
-			</button>
+			</Button>
 		</div>
 
 		{#if loadingVersion}
@@ -123,7 +124,7 @@
 				<div class="sk" style="width:200px;height:11px;margin-top:6px"></div>
 			</div>
 		{:else if versionError}
-			<div class="err-inline">{versionError}</div>
+			<div class="version-error"><InlineAlert tone="error">{versionError}</InlineAlert></div>
 		{:else if info}
 			<div class="version-body">
 				<div class="v-row">
@@ -134,39 +135,24 @@
 					{/if}
 				</div>
 				{#if info.update_available && info.remote_sha}
-					<div class="update-avail-banner">
-						<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
-						Update available — <code>{info.remote_sha}</code>
-					</div>
+					<InlineAlert tone="info">Update available — <code class="v-remote-sha">{info.remote_sha}</code></InlineAlert>
 				{:else if info.remote_sha}
-					<div class="up-to-date-row">
-						<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-						Up to date
-					</div>
+					<InlineAlert tone="success">Up to date</InlineAlert>
 				{/if}
 			</div>
 		{/if}
-	</div>
+	</Card>
 
 	<!-- Update card -->
-	<div class="card update-card">
+	<Card padding="0">
 		<div class="card-hdr">
 			<span class="card-title">Pull &amp; Restart</span>
 			{#if updateStatus === 'done'}
-				<span class="status-badge badge-ok">
-					<svg viewBox="0 0 20 20" fill="currentColor" width="11" height="11"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-					Done
-				</span>
+				<Badge tone="green">Done</Badge>
 			{:else if updateStatus === 'error'}
-				<span class="status-badge badge-err">
-					<svg viewBox="0 0 20 20" fill="currentColor" width="11" height="11"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
-					Failed
-				</span>
+				<Badge tone="red">Failed</Badge>
 			{:else if updateStatus === 'disconnected'}
-				<span class="status-badge badge-warn">
-					<svg viewBox="0 0 20 20" fill="currentColor" width="11" height="11"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>
-					Restarting…
-				</span>
+				<Badge tone="yellow">Restarting…</Badge>
 			{/if}
 		</div>
 
@@ -176,21 +162,17 @@
 		</p>
 
 		<div class="update-actions">
-			<button
-				class="btn-update"
-				disabled={updateStatus === 'running'}
-				onclick={startUpdate}
-			>
+			<Button variant="primary" disabled={updateStatus === 'running'} onclick={startUpdate}>
 				{#if updateStatus === 'running'}
 					<span class="spin-dot"></span>Running update…
 				{:else}
 					<svg viewBox="0 0 20 20" fill="currentColor" width="13" height="13"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
 					Pull &amp; Restart
 				{/if}
-			</button>
+			</Button>
 
 			{#if updateLog.length > 0 && updateStatus !== 'running'}
-				<button class="btn-ghost" onclick={clearLog}>Clear log</button>
+				<Button variant="ghost" onclick={clearLog}>Clear log</Button>
 			{/if}
 		</div>
 
@@ -215,27 +197,23 @@
 		{/if}
 
 		{#if updateStatus === 'disconnected'}
-			<div class="reconnect-hint">
-				Services are restarting. Reload this page in a few seconds to confirm the update completed.
-				<button class="btn-ghost btn-sm" onclick={() => window.location.reload()}>Reload now</button>
+			<div class="reconnect-wrap">
+				<InlineAlert tone="warning">
+					<div class="reconnect-content">
+						<span>Services are restarting. Reload this page in a few seconds to confirm the update completed.</span>
+						<Button variant="ghost" size="sm" onclick={() => window.location.reload()}>Reload now</Button>
+					</div>
+				</InlineAlert>
 			</div>
 		{/if}
-	</div>
+	</Card>
 </div>
 
 <style>
 	.p { max-width: 680px; margin: 0 auto; padding: 40px 36px; display: flex; flex-direction: column; gap: 16px; }
 	.hdr { margin-bottom: 4px; }
-	.ttl { font-size: 18px; font-weight: 700; color: var(--text); margin: 0 0 4px; letter-spacing: -0.02em; }
-	.sub { font-size: 12.5px; color: var(--text-3); margin: 0; }
-
-	.card {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		overflow: hidden;
-		box-shadow: var(--shadow-sm);
-	}
+	.ttl { font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
+	.sub { font-size: 12.5px; color: var(--text-muted); margin: 0; }
 
 	.card-hdr {
 		display: flex;
@@ -243,110 +221,59 @@
 		gap: 10px;
 		padding: 12px 18px;
 		border-bottom: 1px solid var(--border);
-		background: var(--surface-2);
+		background: var(--bg-elevated);
 	}
-	.card-title { font-size: 12.5px; font-weight: 700; color: var(--text); flex: 1; }
+	.card-title { font-size: 12.5px; font-weight: 700; color: var(--text-primary); flex: 1; }
 
 	/* ── Version card ── */
 	.version-loading { padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
-	.err-inline { padding: 12px 18px; font-size: 12px; color: var(--danger); }
+	.version-error { padding: 14px 18px; }
 
 	.version-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
 	.v-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-	.v-label { font-size: 10.5px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .07em; }
+	.v-label { font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
 	.v-sha {
-		font-family: var(--mono);
+		font-family: var(--font-mono);
 		font-size: 12px;
-		background: var(--surface-2);
+		background: var(--bg-elevated);
 		border: 1px solid var(--border);
 		padding: 2px 8px;
 		border-radius: 5px;
-		color: var(--text);
+		color: var(--text-primary);
 	}
-	.v-date { font-size: 11px; color: var(--text-3); }
-
-	.update-avail-banner {
-		display: flex; align-items: center; gap: 6px;
-		padding: 8px 12px;
-		background: rgba(245,158,11,0.08);
-		border: 1px solid rgba(245,158,11,0.25);
-		border-radius: var(--radius-sm);
-		font-size: 12px; color: #b45309;
-	}
-	.update-avail-banner code {
-		font-family: var(--mono);
-		font-size: 11px;
-		background: rgba(245,158,11,0.12);
-		padding: 1px 5px;
-		border-radius: 3px;
-	}
-	.up-to-date-row {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; color: var(--ok);
-	}
-
-	.check-btn {
-		display: inline-flex; align-items: center; gap: 5px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-2);
-		font-size: 11.5px; font-family: var(--font);
-		padding: 4px 10px; cursor: pointer;
-		transition: all .15s;
-	}
-	.check-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.check-btn:disabled { opacity: .5; cursor: default; }
+	.v-date { font-size: 11px; color: var(--text-muted); }
+	.v-remote-sha { font-family: var(--font-mono); font-size: 11px; }
 
 	/* ── Update card ── */
-	.update-desc { margin: 0; padding: 12px 18px 0; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+	.update-desc { margin: 0; padding: 12px 18px 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 	.update-actions { display: flex; align-items: center; gap: 10px; padding: 14px 18px; flex-wrap: wrap; }
 
-	.btn-update {
-		display: inline-flex; align-items: center; gap: 7px;
-		padding: 8px 18px;
-		background: var(--accent);
-		color: #fff;
-		border: none;
-		border-radius: var(--radius-sm);
-		font-size: 12.5px; font-weight: 600; font-family: var(--font);
-		cursor: pointer;
-		transition: opacity .15s;
+	/* Spinner — uses currentColor so it stays visible both on the primary
+	   button's white text and the secondary button's dark/light text,
+	   across both themes (the pre-migration version hardcoded white, which
+	   only worked against the primary button's always-colored background). */
+	.spin-dot {
+		display: inline-block;
+		width: 11px; height: 11px;
+		border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+		border-top-color: currentColor;
+		border-radius: 50%;
+		animation: spin .7s linear infinite;
+		flex-shrink: 0;
 	}
-	.btn-update:hover:not(:disabled) { opacity: .88; }
-	.btn-update:disabled { opacity: .5; cursor: default; }
+	@keyframes spin { to { transform: rotate(360deg); } }
 
-	.btn-ghost {
-		padding: 7px 14px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-2);
-		font-size: 11.5px; font-family: var(--font);
-		cursor: pointer;
-		transition: background .15s;
-	}
-	.btn-ghost:hover { background: var(--surface-2); }
-	.btn-sm { padding: 5px 11px; font-size: 11px; }
-
-	.status-badge {
-		display: inline-flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 700;
-		padding: 3px 9px; border-radius: 999px;
-	}
-	.badge-ok   { background: var(--ok-soft);     color: var(--ok);     border: 1px solid rgba(22,163,74,0.25); }
-	.badge-err  { background: var(--danger-soft);  color: var(--danger); border: 1px solid rgba(220,38,38,0.25); }
-	.badge-warn { background: var(--warn-soft);    color: var(--warn);   border: 1px solid rgba(180,83,9,0.25); }
-
-	/* ── Log ── */
+	/* ── Log (intentionally a fixed dark terminal chrome regardless of
+	   site theme — only the per-line ok/err/warn categorization below uses
+	   theme-aware tokens, per the task brief). ── */
 	.log {
 		margin: 0 18px 18px;
 		background: #0d1117;
 		border: 1px solid #30363d;
-		border-radius: var(--radius-sm);
+		border-radius: var(--radius-md);
 		overflow-y: auto;
 		max-height: 400px;
-		font-family: var(--mono);
+		font-family: var(--font-mono);
 		font-size: 12px;
 	}
 	.log-hdr {
@@ -354,7 +281,7 @@
 		padding: 6px 12px;
 		border-bottom: 1px solid #21262d;
 		color: #8b949e; font-size: 11px;
-		font-family: var(--font);
+		font-family: var(--font-sans);
 	}
 	.log-line {
 		padding: 2px 14px;
@@ -363,35 +290,16 @@
 		word-break: break-all;
 		line-height: 1.6;
 	}
-	.log-ok   { color: #3fb950; }
-	.log-err  { color: #f85149; }
-	.log-warn { color: #d29922; }
+	.log-ok   { color: var(--accent-green); }
+	.log-err  { color: var(--accent-red); }
+	.log-warn { color: var(--accent-yellow); }
 	.log-cursor { padding: 2px 14px 8px; color: #e6edf3; animation: blink 1s step-end infinite; }
 	@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
-	.reconnect-hint {
-		display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-		margin: 0 18px 18px;
-		padding: 10px 14px;
-		background: var(--warn-soft);
-		border: 1px solid rgba(180,83,9,0.25);
-		border-radius: var(--radius-sm);
-		color: var(--warn); font-size: 12px;
-	}
+	.reconnect-wrap { margin: 0 18px 18px; }
+	.reconnect-content { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 	/* ── Skeletons ── */
 	.sk { background: var(--border); border-radius: 4px; animation: sk 1.3s ease-in-out infinite; }
 	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
-
-	/* ── Spinner ── */
-	.spin-dot {
-		display: inline-block;
-		width: 11px; height: 11px;
-		border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: #fff;
-		border-radius: 50%;
-		animation: spin .7s linear infinite;
-		flex-shrink: 0;
-	}
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>
