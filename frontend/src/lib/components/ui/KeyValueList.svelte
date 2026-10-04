@@ -30,9 +30,9 @@
 			<span
 				class="ui-kv-value"
 				class:ui-kv-value--mono={item.mono}
-				title={value ? undefined : display(item.value)}
+				title={item.value != null && item.value !== '' ? display(item.value) : undefined}
 			>
-				{#if value}{@render value(item)}{:else}{display(item.value)}{/if}
+				{#if value}{@render value(item)}{:else}<span class="ui-kv-text">{display(item.value)}</span>{/if}
 			</span>
 			{#if action}<span class="ui-kv-action">{@render action(item)}</span>{/if}
 		</div>
@@ -65,11 +65,15 @@
 		color: var(--text-primary);
 		font-weight: 500;
 		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+	.ui-kv-text {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.ui-kv-value--mono { font-family: var(--font-mono); font-size: 12px; }
 	.ui-kv-action { flex-shrink: 0; display: flex; align-items: center; }
