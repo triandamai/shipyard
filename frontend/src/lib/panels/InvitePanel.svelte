@@ -3,9 +3,10 @@
 	import { PERMISSION_GROUPS, PROJECT_PERM_OPTIONS, buildOrgPermission, expandProjectPermissions } from '$lib/api/types';
 	import type { MemberRole, Project, ProjectAssignment, ProjectPermTier } from '$lib/api/types';
 	import {
-		Mail, ChevronDown, Check, Lock, Folder, FolderOpen,
-		Search, X, Loader2, AlertCircle, UserPlus, ChevronRight
+		Mail, Lock, Folder, FolderOpen,
+		Search, X, UserPlus, ChevronRight
 	} from '@lucide/svelte';
+	import { Button, Badge, Checkbox, FormField, InlineAlert, SectionLabel, Select, Spinner, TextField } from '$lib/components/ui';
 
 	const ROLES: { value: MemberRole; label: string; desc: string }[] = [
 		{ value: 'owner',  label: 'Owner',  desc: 'Full control, can manage billing and delete org' },
@@ -133,62 +134,51 @@
 <div class="panel">
 	<!-- ── Details ─────────────────────────────────────────────────── -->
 	<section class="section">
-		<div class="section-label"><Mail size={13} />Details</div>
+		<SectionLabel><span class="label-inner"><Mail size={13} />Details</span></SectionLabel>
 
-		<div class="field">
-			<label class="field-label" for="invite-email">Email address</label>
-			<input
-				id="invite-email"
-				class="field-input"
-				type="email"
-				placeholder="colleague@example.com"
-				bind:value={email}
-				onkeydown={(e) => e.key === 'Enter' && handleInvite()}
-			/>
-		</div>
+		<div class="section-body">
+			<FormField label="Email address" for="invite-email">
+				<TextField
+					id="invite-email"
+					type="email"
+					placeholder="colleague@example.com"
+					bind:value={email}
+					onkeydown={(e) => e.key === 'Enter' && handleInvite()}
+				/>
+			</FormField>
 
-		<div class="field">
-			<label class="field-label" for="invite-role">Role</label>
-			<div class="select-wrap">
-				<select id="invite-role" class="field-input field-select" bind:value={role}>
-					{#each assignableRoles as r}
-						<option value={r.value}>{r.label} — {r.desc}</option>
-					{/each}
-				</select>
-				<ChevronDown size={13} class="select-chevron" />
-			</div>
+			<FormField label="Role" for="invite-role">
+				<Select
+					id="invite-role"
+					bind:value={() => role, (v) => (role = v as MemberRole)}
+					options={assignableRoles.map(r => ({ value: r.value, label: `${r.label} — ${r.desc}` }))}
+				/>
+			</FormField>
 		</div>
 	</section>
 
 	<!-- ── Org permissions ─────────────────────────────────────────── -->
 	<section class="section">
-		<div class="section-label">
-			<Lock size={13} />
-			Organization permissions
-			{#if permissions.size > 0}
-				<span class="count-badge">{permissions.size}</span>
-			{/if}
-		</div>
+		<SectionLabel>
+			<span class="label-inner">
+				<Lock size={13} />
+				Organization permissions
+				{#if permissions.size > 0}
+					<Badge tone="blue">{permissions.size}</Badge>
+				{/if}
+			</span>
+		</SectionLabel>
 
-		<div class="perm-groups">
+		<div class="section-body perm-groups">
 			{#each PERMISSION_GROUPS as group}
 				<div class="perm-group">
 					<div class="group-name">{group.group}</div>
 					<div class="perm-grid">
 						{#each group.permissions as perm}
 							{@const active = permissions.has(perm.id)}
-							<button
-								class="perm-row"
-								class:active
-								type="button"
-								onclick={() => togglePerm(perm.id)}
-								title={perm.description}
-							>
-								<span class="check-box" class:checked={active}>
-									{#if active}<Check size={9} />{/if}
-								</span>
-								<span class="perm-label-text">{perm.label}</span>
-							</button>
+							<div class="perm-row" class:active title={perm.description}>
+								<Checkbox checked={active} label={perm.label} onchange={() => togglePerm(perm.id)} />
+							</div>
 						{/each}
 					</div>
 				</div>
@@ -198,28 +188,27 @@
 
 	<!-- ── Project access ──────────────────────────────────────────── -->
 	<section class="section">
-		<div class="section-label">
-			<Folder size={13} />
-			Project access
-			{#if selectedProjects.size > 0}
-				<span class="count-badge">{selectedProjects.size} project{selectedProjects.size === 1 ? '' : 's'}</span>
-			{/if}
-		</div>
+		<SectionLabel>
+			<span class="label-inner">
+				<Folder size={13} />
+				Project access
+				{#if selectedProjects.size > 0}
+					<Badge tone="blue">{selectedProjects.size} project{selectedProjects.size === 1 ? '' : 's'}</Badge>
+				{/if}
+			</span>
+		</SectionLabel>
 
+		<div class="section-body">
 		{#if allProjects.length === 0}
 			<p class="empty-hint">No projects yet — create one first.</p>
 		{:else}
 			<!-- Search -->
 			<div class="search-wrap">
-				<Search size={13} class="search-icon" />
-				<input
-					class="search-input"
-					type="text"
-					placeholder="Search projects…"
-					bind:value={projectSearch}
-				/>
+				<TextField type="text" placeholder="Search projects…" bind:value={projectSearch}>
+					{#snippet icon()}<Search size={13} />{/snippet}
+				</TextField>
 				{#if projectSearch}
-					<button class="search-clear" onclick={() => (projectSearch = '')} type="button">
+					<button class="search-clear" onclick={() => (projectSearch = '')} type="button" aria-label="Clear search">
 						<X size={11} />
 					</button>
 				{/if}
@@ -238,16 +227,9 @@
 							<!-- Project row -->
 							<div class="project-row">
 								<!-- Checkbox -->
-								<button
-									class="check-box-btn"
-									type="button"
-									onclick={() => toggleProject(project.id)}
-									aria-label="{isSelected ? 'Remove' : 'Add'} {project.name}"
-								>
-									<span class="check-box" class:checked={isSelected}>
-										{#if isSelected}<Check size={9} />{/if}
-									</span>
-								</button>
+								<span role="group" aria-label="{isSelected ? 'Remove' : 'Add'} {project.name}">
+									<Checkbox checked={isSelected} onchange={() => toggleProject(project.id)} />
+								</span>
 
 								<!-- Name -->
 								<button
@@ -284,19 +266,10 @@
 								<div class="project-perms">
 									{#each PROJECT_PERM_OPTIONS as opt}
 										{@const hasPerm = projectPerms[project.id]?.has(opt.id) ?? false}
-										<button
-											class="perm-row perm-row-sm"
-											class:active={hasPerm}
-											type="button"
-											onclick={() => toggleProjectPerm(project.id, opt.id)}
-											title={opt.desc}
-										>
-											<span class="check-box" class:checked={hasPerm}>
-												{#if hasPerm}<Check size={9} />{/if}
-											</span>
-											<span class="perm-label-text">{opt.label}</span>
+										<div class="perm-row perm-row-sm" class:active={hasPerm} title={opt.desc}>
+											<Checkbox checked={hasPerm} label={opt.label} onchange={() => toggleProjectPerm(project.id, opt.id)} />
 											<span class="perm-desc">{opt.desc}</span>
-										</button>
+										</div>
 									{/each}
 								</div>
 							{/if}
@@ -305,30 +278,28 @@
 				{/if}
 			</div>
 		{/if}
+		</div>
 	</section>
 
 	<!-- ── Footer ──────────────────────────────────────────────────── -->
 	<div class="footer">
 		{#if inviteError}
-			<div class="status-msg error"><AlertCircle size={13} />{inviteError}</div>
+			<div role="alert"><InlineAlert tone="error">{inviteError}</InlineAlert></div>
 		{/if}
 		{#if inviteOk}
-			<div class="status-msg success"><Check size={13} />{inviteOk}</div>
+			<div role="status"><InlineAlert tone="success">{inviteOk}</InlineAlert></div>
 		{/if}
 		<div class="footer-actions">
-			<button class="btn-cancel" type="button" onclick={onClose}>Cancel</button>
-			<button
-				class="btn-invite"
-				type="button"
-				onclick={handleInvite}
-				disabled={!email.trim() || inviting}
-			>
-				{#if inviting}
-					<Loader2 size={14} class="spin" />Sending…
-				{:else}
-					<UserPlus size={14} />Send Invitation
-				{/if}
-			</button>
+			<Button variant="secondary" onclick={onClose}>Cancel</Button>
+			<div class="invite-btn">
+				<Button variant="primary" onclick={handleInvite} disabled={!email.trim() || inviting}>
+					{#if inviting}
+						<Spinner size={14} tone="current" />Sending…
+					{:else}
+						<UserPlus size={14} />Send Invitation
+					{/if}
+				</Button>
+			</div>
 		</div>
 	</div>
 </div>
@@ -344,60 +315,24 @@
 	.section {
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
 		padding: 16px;
 		border-bottom: 1px solid var(--border);
 	}
 
-	.section-label {
+	.section-body {
 		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.label-inner {
+		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 11px;
-		font-weight: 700;
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-
-	.count-badge {
-		margin-left: 2px;
-		padding: 1px 6px;
-		background: rgba(37,99,235,.1);
-		color: var(--accent);
-		border: 1px solid rgba(37,99,235,.2);
-		border-radius: 999px;
-		font-size: 10px;
-		font-weight: 700;
-	}
-
-	/* ── Fields ── */
-	.field { display: flex; flex-direction: column; gap: 5px; }
-	.field-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
-	.field-input {
-		width: 100%;
-		padding: 8px 10px;
-		background: var(--bg-muted);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		font-size: 13px;
-		color: var(--text-primary);
-		font-family: var(--font-sans);
-		outline: none;
-		box-sizing: border-box;
-		transition: border-color .15s;
-	}
-	.field-input:focus { border-color: var(--accent); }
-
-	.select-wrap { position: relative; }
-	.field-select { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 30px; }
-	:global(.select-chevron) {
-		position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-		color: var(--text-muted); pointer-events: none;
 	}
 
 	/* ── Permission groups ── */
-	.perm-groups { display: flex; flex-direction: column; gap: 12px; }
+	.perm-groups { gap: 12px; }
 	.perm-group  { display: flex; flex-direction: column; gap: 6px; }
 	.group-name  {
 		font-size: 10px; font-weight: 700; color: var(--text-dim);
@@ -410,57 +345,26 @@
 		align-items: center;
 		gap: 8px;
 		padding: 6px 8px;
-		background: transparent;
 		border: 1px solid transparent;
-		border-radius: 6px;
-		cursor: pointer;
-		text-align: left;
-		width: 100%;
-		transition: background .12s, border-color .12s;
+		border-radius: var(--radius-sm);
+		transition: background var(--transition-fast), border-color var(--transition-fast);
 	}
-	.perm-row:hover { background: var(--bg-muted); }
-	.perm-row.active { background: rgba(37,99,235,.05); border-color: rgba(37,99,235,.2); }
+	.perm-row:hover { background: var(--bg-hover); }
+	.perm-row.active {
+		background: color-mix(in srgb, var(--accent) 5%, transparent);
+		border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+	}
 
 	.perm-row-sm { padding: 5px 8px; }
 
-	.check-box {
-		width: 14px; height: 14px; flex-shrink: 0;
-		border: 1.5px solid var(--border);
-		border-radius: 3px;
-		background: var(--bg-surface);
-		display: flex; align-items: center; justify-content: center;
-		color: #fff;
-		transition: background .12s, border-color .12s;
-	}
-	.check-box.checked { background: var(--accent); border-color: var(--accent); }
-
-	.perm-label-text { font-size: 12px; color: var(--text-primary); flex: 1; }
 	.perm-desc { font-size: 11px; color: var(--text-muted); }
 
 	/* ── Search ── */
 	.search-wrap {
 		position: relative;
-		display: flex;
-		align-items: center;
 	}
-	:global(.search-icon) {
-		position: absolute; left: 10px;
-		color: var(--text-muted); pointer-events: none;
-	}
-	.search-input {
-		width: 100%;
-		padding: 7px 32px;
-		background: var(--bg-muted);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		font-size: 13px;
-		color: var(--text-primary);
-		outline: none;
-		box-sizing: border-box;
-	}
-	.search-input:focus { border-color: var(--accent); }
 	.search-clear {
-		position: absolute; right: 8px;
+		position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
 		background: transparent; border: none;
 		cursor: pointer; color: var(--text-muted);
 		display: flex; align-items: center; padding: 2px;
@@ -474,11 +378,11 @@
 
 	.project-card {
 		border: 1px solid var(--border);
-		border-radius: 7px;
+		border-radius: var(--radius-md);
 		overflow: hidden;
-		transition: border-color .15s;
+		transition: border-color var(--transition-fast);
 	}
-	.project-card.selected { border-color: rgba(37,99,235,.35); }
+	.project-card.selected { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 
 	.project-row {
 		display: flex;
@@ -487,12 +391,7 @@
 		padding: 8px 10px;
 		background: transparent;
 	}
-	.project-card.selected .project-row { background: rgba(37,99,235,.02); }
-
-	.check-box-btn {
-		background: transparent; border: none; cursor: pointer;
-		padding: 0; display: flex; align-items: center; flex-shrink: 0;
-	}
+	.project-card.selected .project-row { background: color-mix(in srgb, var(--accent) 2%, transparent); }
 
 	.project-name-btn {
 		display: flex; align-items: center; gap: 7px;
@@ -509,9 +408,9 @@
 		background: transparent; border: none; cursor: pointer;
 		color: var(--text-muted); display: flex; align-items: center;
 		padding: 4px; border-radius: 4px; flex-shrink: 0;
-		transition: color .12s, background .12s;
+		transition: color var(--transition-fast), background var(--transition-fast);
 	}
-	.expand-btn:hover { color: var(--text-primary); background: var(--bg-muted); }
+	.expand-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 	:global(.expand-btn .rotated) { transform: rotate(90deg); }
 
 	.project-perms {
@@ -520,7 +419,7 @@
 		gap: 2px;
 		padding: 6px 10px 8px;
 		border-top: 1px solid var(--border);
-		background: rgba(37,99,235,.02);
+		background: color-mix(in srgb, var(--accent) 2%, transparent);
 	}
 
 	/* ── Footer ── */
@@ -536,38 +435,7 @@
 		bottom: 0;
 	}
 
-	.status-msg {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; padding: 8px 10px; border-radius: 6px;
-	}
-	.status-msg.error   { background: rgba(239,68,68,.08);  color: #ef4444; border: 1px solid rgba(239,68,68,.2); }
-	.status-msg.success { background: rgba(22,163,74,.08);  color: #16a34a; border: 1px solid rgba(22,163,74,.2); }
-
 	.footer-actions { display: flex; gap: 8px; }
-
-	.btn-invite {
-		flex: 1;
-		display: flex; align-items: center; justify-content: center; gap: 6px;
-		padding: 8px 16px;
-		background: var(--accent);
-		color: #fff;
-		border: none; border-radius: 6px;
-		font-size: 13px; font-weight: 500;
-		cursor: pointer;
-		transition: opacity .15s;
-	}
-	.btn-invite:disabled { opacity: .55; cursor: not-allowed; }
-
-	.btn-cancel {
-		padding: 8px 14px;
-		background: var(--bg-muted);
-		color: var(--text-muted);
-		border: 1px solid var(--border); border-radius: 6px;
-		font-size: 13px; cursor: pointer;
-		transition: color .15s, background .15s;
-	}
-	.btn-cancel:hover { color: var(--text-primary); background: var(--bg-elevated); }
-
-	:global(.spin) { animation: spin .8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.invite-btn { flex: 1; display: flex; }
+	.invite-btn :global(.ui-btn) { width: 100%; }
 </style>
