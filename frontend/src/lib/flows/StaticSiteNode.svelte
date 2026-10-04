@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
+	import type { DotStatus } from '$lib/utils/status';
 
 	interface Props {
 		data: Record<string, unknown>;
@@ -15,11 +17,11 @@
 	let source       = $derived((data.source as string)       ?? 'git');
 	let domains      = $derived(Array.isArray(data.domains) ? (data.domains as string[]) : []);
 
-	function deployStatusClass(s: string): string {
+	function deployDotStatus(s: string): DotStatus {
 		if (s === 'success')                             return 'running';
 		if (s === 'running')                             return 'deploying';
 		if (s === 'pending' || s === 'queued')           return 'pending';
-		if (s === 'need_attention')                      return 'need_attention';
+		if (s === 'need_attention')                      return 'warning';
 		if (s === 'failed')                              return 'failed';
 		return 'stopped';
 	}
@@ -53,7 +55,7 @@
 
 	<div class="node-body">
 		<div class="node-status">
-			<span class="status-dot {deployStatusClass(deployStatus)}"></span>
+			<StatusDot status={deployDotStatus(deployStatus)} />
 			<span class="status-text">{deployStatusLabel(deployStatus)}</span>
 		</div>
 
@@ -213,16 +215,4 @@
 		font-size: 10px;
 		color: var(--text-dim);
 	}
-
-	:global .status-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		flex-shrink: 0;
-	}
-
-	:global .status-dot.running  { background: var(--status-running, #22c55e); }
-	:global .status-dot.pending  { background: var(--status-pending, #f59e0b); }
-	:global .status-dot.failed   { background: var(--status-failed,  #ef4444); }
-	:global .status-dot.stopped  { background: var(--status-stopped, #6b7280); }
 </style>

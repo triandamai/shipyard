@@ -2,6 +2,8 @@
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Globe, HardDrive, Layers, ExternalLink } from '@lucide/svelte';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
+	import { toDotStatus } from '$lib/utils/status';
 
 	interface Props {
 		data: Record<string, unknown>;
@@ -36,18 +38,6 @@
 	let replicaStackTitle = $derived(`${runningReplicas}/${replicas} replica${replicas === 1 ? '' : 's'} running`);
 	let volumeStackTitle  = $derived(`${volumeCount} volume${volumeCount === 1 ? '' : 's'} attached`);
 	let domainStackTitle  = $derived(`${domainCount} domain${domainCount === 1 ? '' : 's'} configured`);
-
-	type StatusKey = 'running' | 'deploying' | 'stopping' | 'pending' | 'failed' | 'need_attention' | 'stopped';
-
-	function statusClass(s: string): StatusKey {
-		if (s === 'running')                              return 'running';
-		if (s === 'deploying')                            return 'deploying';
-		if (s === 'stopping')                             return 'stopping';
-		if (s === 'need_attention')                       return 'need_attention';
-		if (s === 'pending' || s === 'preparing' || s === 'queued') return 'pending';
-		if (s === 'failed'  || s === 'rejected')          return 'failed';
-		return 'stopped';
-	}
 
 	function statusLabel(s: string): string {
 		return ({
@@ -118,7 +108,7 @@
 
 		<div class="node-body">
 			<div class="node-status">
-				<span class="status-dot {statusClass(status)}"></span>
+				<StatusDot status={toDotStatus(status)} />
 				<span class="status-text">{statusLabel(status)}</span>
 			</div>
 

@@ -333,7 +333,7 @@
 	});
 </script>
 
-<div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-sidebar={resizingSidebar}>
+<div class="editor-layout" class:resizing-preview={resizingPreviewContent} class:resizing-tree={resizingSidebar}>
 	{#if bootState === 'starting'}
 		<div class="boot-overlay">
 			<Spinner size={24} />
@@ -369,7 +369,7 @@
 					<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} onCreateFile={createFile} createError={newFileError} />
 				</aside>
 				<div
-					class="sidebar-resize-handle"
+					class="tree-resize-handle"
 					role="separator"
 					aria-orientation="vertical"
 					aria-label="Resize sidebar"
@@ -503,7 +503,7 @@
 		overflow: hidden;
 	}
 	.editor-layout.resizing-preview,
-	.editor-layout.resizing-sidebar {
+	.editor-layout.resizing-tree {
 		cursor: ew-resize;
 		user-select: none;
 	}
@@ -541,14 +541,14 @@
 		flex-shrink: 0;
 		overflow-y: auto;
 	}
-	.sidebar-resize-handle {
+	.tree-resize-handle {
 		flex-shrink: 0;
 		width: 6px;
 		cursor: ew-resize;
 		background: transparent;
 		position: relative;
 	}
-	.sidebar-resize-handle::after {
+	.tree-resize-handle::after {
 		content: '';
 		position: absolute;
 		top: 0;
@@ -557,8 +557,8 @@
 		width: 2px;
 		background: var(--border);
 	}
-	.sidebar-resize-handle:hover::after,
-	.editor-layout.resizing-sidebar .sidebar-resize-handle::after {
+	.tree-resize-handle:hover::after,
+	.editor-layout.resizing-tree .tree-resize-handle::after {
 		background: var(--accent);
 	}
 	.editor-main {

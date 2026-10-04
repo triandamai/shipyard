@@ -76,7 +76,7 @@
 				</Button>
 			{/if}
 			<a
-				class="btn btn-secondary"
+				class="dl-link dl-link--secondary"
 				href={`/api/admin/storage/preview?key=${encodeURIComponent(fileKey)}`}
 				download={fileKey.split('/').pop()}
 				target="_blank"
@@ -118,7 +118,7 @@
 					<h3>Binary File</h3>
 					<p>Previews are not supported for this file type.</p>
 					<a
-						class="btn btn-primary"
+						class="dl-link dl-link--primary"
 						href={`/api/admin/storage/preview?key=${encodeURIComponent(fileKey)}`}
 						download={fileKey.split('/').pop()}
 						target="_blank"
@@ -158,6 +158,11 @@
 	.preview-binary h3 { font-size: 14px; color: var(--text-primary); margin: 0 0 6px; }
 	.preview-binary p { font-size: 12.5px; color: var(--text-muted); margin: 0 0 16px; line-height: 1.5; }
 
+	.dl-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 16px; height: 36px; box-sizing: border-box; border-radius: var(--radius-md); border: 1px solid transparent; font-family: var(--font-sans); font-size: 13px; font-weight: 600; white-space: nowrap; text-decoration: none; transition: background var(--transition-fast), border-color var(--transition-fast); }
+	.dl-link--primary, .dl-link--primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+	.dl-link--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+	.dl-link--secondary, .dl-link--secondary:hover { background: var(--bg-surface); border-color: var(--border); color: var(--text-secondary); }
+	.dl-link--secondary:hover { background: var(--bg-hover); }
 	.mono { font-family: var(--font-mono); }
 	.trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 </style>

@@ -4,7 +4,7 @@
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
 	import StoragePreviewPanel from '$lib/panels/StoragePreviewPanel.svelte';
-	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable, ListRow } from '$lib/components/ui';
+	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable, ListRow, Spinner } from '$lib/components/ui';
 	import {
 		Folder,
 		File,
@@ -19,7 +19,6 @@
 		FlaskConical,
 		CheckCircle2,
 		XCircle,
-		Loader,
 	} from '@lucide/svelte';
 
 	interface StorageObject {
@@ -246,7 +245,7 @@
 				Diagnostics
 			</Button>
 			<Button variant="secondary" size="icon" onclick={() => selectedBucket ? loadList(currentPrefix) : loadBuckets()}>
-				<RefreshCw size={14} class={(loading || bucketsLoading) ? 'spin' : ''} />
+				{#if loading || bucketsLoading}<Spinner size={14} />{:else}<RefreshCw size={14} />{/if}
 			</Button>
 		</div>
 	</div>
@@ -257,14 +256,14 @@
 				<span class="diag-title">Storage Diagnostics</span>
 				<div style="display:flex;gap:8px;align-items:center;">
 					<Button variant="secondary" size="sm" onclick={runDiagnostics} disabled={diagLoading}>
-						<RefreshCw size={12} class={diagLoading ? 'spin' : ''} />
+						{#if diagLoading}<Spinner size={12} tone="current" />{:else}<RefreshCw size={12} />{/if}
 						Re-run
 					</Button>
 					<Button variant="ghost" size="icon" onclick={() => diagOpen = false}><X size={14} /></Button>
 				</div>
 			</div>
 			{#if diagLoading && !diagResult}
-				<div class="diag-loading"><Loader size={14} class="spin" /> Running storage probe…</div>
+				<div class="diag-loading"><Spinner size={14} /> Running storage probe…</div>
 			{:else if diagError}
 				<div class="diag-body">
 					<InlineAlert tone="error">Request failed: {diagError}</InlineAlert>

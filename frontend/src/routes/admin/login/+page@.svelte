@@ -45,7 +45,7 @@
 <svelte:window oncontextmenu={(e) => e.preventDefault()} />
 
 <div class="root">
-	<div class="card">
+	<div class="login-card">
 		<div class="logo">
 			<Anchor size={22} color="white" strokeWidth={2.5} />
 		</div>
@@ -83,7 +83,7 @@
 				/>
 			</div>
 
-			<button type="submit" class="btn" disabled={loading || !email || !password}>
+			<button type="submit" class="login-btn" disabled={loading || !email || !password}>
 				{#if loading}
 					<span class="spin"></span>
 					Signing in…
@@ -106,7 +106,7 @@
 		background:#0d0d0d;
 	}
 
-	.card {
+	.login-card {
 		width:100%; max-width:360px;
 		background:#1a1a1a;
 		border:1px solid rgba(255,255,255,0.08);
@@ -165,7 +165,7 @@
 		box-shadow:0 0 0 3px rgba(37,99,235,0.2);
 	}
 
-	.btn {
+	.login-btn {
 		height:40px; padding:0 16px; margin-top:4px;
 		background:#2563eb; color:#fff;
 		border:none; border-radius:8px;
@@ -174,8 +174,8 @@
 		display:flex; align-items:center; justify-content:center; gap:8px;
 		transition:background .15s, opacity .15s;
 	}
-	.btn:hover:not(:disabled) { background:#1d4ed8; }
-	.btn:disabled { opacity:.5; cursor:not-allowed; }
+	.login-btn:hover:not(:disabled) { background:#1d4ed8; }
+	.login-btn:disabled { opacity:.5; cursor:not-allowed; }
 
 	.spin {
 		width:14px; height:14px;

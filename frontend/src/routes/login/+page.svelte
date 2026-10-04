@@ -150,9 +150,12 @@
 		justify-content: space-between;
 		width: 420px;
 		flex-shrink: 0;
-		background: var(--sidebar-bg);
+		/* Brand panel is always dark (white title), independent of theme */
+		--brand-text: #5E7A96;
+		--brand-text-strong: #9DB8D0;
+		background: #0F1827;
 		padding: 48px 48px 36px;
-		border-right: 1px solid var(--sidebar-border);
+		border-right: 1px solid rgba(255, 255, 255, 0.07);
 	}
 
 	@media (min-width: 900px) {
@@ -189,7 +192,7 @@
 	.brand-tagline {
 		font-size: 15px;
 		line-height: 1.6;
-		color: var(--sidebar-text-hover);
+		color: var(--brand-text-strong);
 		margin: 0;
 		max-width: 300px;
 	}
@@ -205,7 +208,7 @@
 
 	.brand-features li {
 		font-size: 13px;
-		color: var(--sidebar-text);
+		color: var(--brand-text);
 		padding-left: 18px;
 		position: relative;
 	}
@@ -224,7 +227,7 @@
 
 	.brand-footer {
 		font-size: 12px;
-		color: var(--sidebar-text);
+		color: var(--brand-text);
 		margin: 0;
 		opacity: 0.5;
 	}
