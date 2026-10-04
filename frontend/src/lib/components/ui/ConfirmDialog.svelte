@@ -31,10 +31,13 @@
 	async function handleConfirm() {
 		if (!canConfirm || confirming) return;
 		confirming = true;
-		await onConfirm();
-		confirming = false;
-		typedConfirm = '';
-		open = false;
+		try {
+			await onConfirm();
+			typedConfirm = '';
+			open = false;
+		} finally {
+			confirming = false;
+		}
 	}
 
 	function handleCancel() {
