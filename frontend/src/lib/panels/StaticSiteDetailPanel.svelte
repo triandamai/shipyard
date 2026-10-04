@@ -3,12 +3,14 @@
 	import {
 		Globe, RefreshCw, Upload, Settings2, Play,
 		ChevronRight, CheckCircle2, XCircle, Clock, AlertCircle,
-		Plus, Trash2, X, CheckCircle, Loader2, AlertTriangle, Copy
+		Plus, Trash2, CheckCircle, AlertTriangle
 	} from '@lucide/svelte';
 	import {
 		Button, Badge, Card, ListRow, Tabs, KeyValueList, FormField, TextField, Select,
-		InlineAlert, Spinner, SectionLabel
+		InlineAlert, Spinner, SectionLabel, ActivityList, StatusDot, EmptyState, ConfirmDialog
 	} from '$lib/components/ui';
+	import { toDotStatus } from '$lib/utils/status';
+	import type { DotStatus } from '$lib/utils/status';
 	import type { KeyValueItem, TabItem } from '$lib/components/ui';
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
@@ -56,10 +58,8 @@
 
 	// ── Delete state ───────────────────────────────────────────────────────────
 	let showDeleteModal  = $state(false);
-	let deleteSlugInput  = $state('');
 	let isDeleting       = $state(false);
 	let deleteError      = $state('');
-	let deleteSlugValid  = $derived(deleteSlugInput === serviceSlug && serviceSlug !== '');
 
 
 	// ── Domains ────────────────────────────────────────────────────────────────
@@ -297,12 +297,17 @@
 		return AlertCircle;
 	}
 
-	function deployStatusClass(status: string): string {
-		if (status === 'success') return 'status-ok';
-		if (status === 'failed')  return 'status-err';
-		if (status === 'running') return 'status-run';
-		if (status === 'queued' || status === 'pending') return 'status-queue';
-		return 'status-dim';
+	function deployIconTone(status: string): 'green' | 'red' | 'yellow' | 'blue' {
+		if (status === 'success') return 'green';
+		if (status === 'failed')  return 'red';
+		if (status === 'running') return 'yellow';
+		return 'blue';
+	}
+
+	// toDotStatus has no 'success' state (it would render grey), so a finished
+	// deployment maps to the green dot.
+	function deployDot(status: string): DotStatus {
+		return status === 'success' ? 'running' : toDotStatus(status);
 	}
 
 	function deployBadgeTone(status: string): 'green' | 'red' | 'yellow' | 'blue' | 'neutral' {
@@ -410,7 +415,7 @@
 	}
 
 	async function deleteStaticSite() {
-		if (!deleteSlugValid || isDeleting) return;
+		if (isDeleting) return;
 		isDeleting = true;
 		deleteError = '';
 		const res = await api.deleteService(projectId, serviceId);
@@ -423,6 +428,13 @@
 		showDeleteModal = false;
 		onDeleted?.();
 		uiStore.clearPanels();
+	}
+
+	// ConfirmDialog owns the type-to-confirm text, so a failure returns false to
+	// keep the dialog open with `deleteError`.
+	async function confirmDeleteStaticSite(): Promise<boolean> {
+		await deleteStaticSite();
+		return !deleteError;
 	}
 
 	async function loadDeployments() {
@@ -553,64 +565,45 @@
 	onDestroy(() => {});
 </script>
 
-<!-- ─── Delete confirmation modal ────────────────────────────────────────────── -->
+<!-- ─── Delete confirmation (portalled to body) ──────────────────────────────── -->
 {#if showDeleteModal}
-	<div class="modal-backdrop" role="dialog" aria-modal="true">
-		<div class="modal-card">
-			<div class="modal-header">
-				<AlertTriangle size={18} style="color:#EF4444;flex-shrink:0" />
-				<span>Delete Static Site</span>
-			</div>
-			<div class="modal-body">
-				<p class="modal-warning">
-					This will permanently delete <strong>{serviceSlug}</strong> and remove:
-				</p>
-				<ul class="modal-list">
-					<li>All deployed file versions on disk</li>
-					<li>The nginx server block (site goes offline immediately)</li>
-					<li>All custom domains attached to this service</li>
-					<li>All deployment history and logs</li>
-					<li>The service record and build configuration</li>
-				</ul>
-				<p class="modal-warning"><strong>This cannot be undone.</strong></p>
-				<div class="modal-confirm-field">
-					<label class="modal-confirm-label">
-						Type <code class="modal-confirm-code">{serviceSlug}</code> to confirm
-					</label>
-					<input
-						class="modal-confirm-input"
-						type="text"
-						placeholder={serviceSlug}
-						bind:value={deleteSlugInput}
-						autocomplete="off"
-						spellcheck="false"
-					/>
-				</div>
-				{#if deleteError}
-					<div class="form-error">{deleteError}</div>
-				{/if}
-			</div>
-			<div class="modal-footer">
-				<button
-					class="btn-ghost"
-					onclick={() => { showDeleteModal = false; deleteSlugInput = ''; deleteError = ''; }}
-					disabled={isDeleting}
-				>Cancel</button>
-				<button
-					class="btn-danger"
-					disabled={!deleteSlugValid || isDeleting}
-					onclick={deleteStaticSite}
-				>
-					{#if isDeleting}
-						<div class="spinner-xs-dark"></div> Deleting…
-					{:else}
-						<Trash2 size={13} /> Delete Site
-					{/if}
-				</button>
-			</div>
-		</div>
+	<div use:portal>
+		<ConfirmDialog
+			bind:open={showDeleteModal}
+			title="Delete Static Site"
+			message={`This will permanently delete ${serviceSlug} and remove all deployed file versions on disk, the nginx server block (the site goes offline immediately), all custom domains attached to this service, all deployment history and logs, and the service record and build configuration. This cannot be undone.`}
+			confirmLabel="Delete Site"
+			confirmText={serviceSlug}
+			error={deleteError}
+			onConfirm={confirmDeleteStaticSite}
+		/>
 	</div>
 {/if}
+
+<!-- ─── Deployment row (Recent Deployments + Deployments tab) ─────────────────── -->
+{#snippet deployRow(dep: Deployment, full: boolean)}
+	{@const Icon = deployStatusIcon(dep.status)}
+	<button type="button" class="dep-row" onclick={() => openDeploymentLogs(dep)}>
+		<ListRow
+			title={full ? `${dep.id.slice(0, 8)}…` : dep.id.slice(0, 8)}
+			meta={full
+				? `${dep.source_ref ?? '—'} · ${dep.triggered_by ?? '—'} · ${formatTime(dep.created_at)}`
+				: (dep.source_ref ?? '—')}
+			iconTone={deployIconTone(dep.status)}
+		>
+			{#snippet icon()}
+				<Icon size={14} class={dep.status === 'running' ? 'spin-icon' : ''} />
+			{/snippet}
+			{#snippet trailing()}
+				<span class="dep-status">
+					<StatusDot status={deployDot(dep.status)} />
+					<span>{dep.status}</span>
+					<ChevronRight size={13} />
+				</span>
+			{/snippet}
+		</ListRow>
+	</button>
+{/snippet}
 
 <!-- ─── Main panel ──────────────────────────────────────────────────────────── -->
 <div class="panel-body">
@@ -759,26 +752,14 @@
 					</Card>
 				</section>
 			{/if}
-
 			{#if deployments.length > 0}
 				<section class="section">
 					<div class="section-title">Recent Deployments</div>
-					<div class="deploy-list">
+					<ActivityList>
 						{#each deployments.slice(0, 5) as dep (dep.id)}
-							{@const Icon = deployStatusIcon(dep.status)}
-							<button class="deploy-row" onclick={() => openDeploymentLogs(dep)}>
-								<div class="deploy-icon {deployStatusClass(dep.status)}">
-									<Icon size={13} class={dep.status === 'running' ? 'spin-icon' : ''} />
-								</div>
-								<div class="deploy-info">
-									<span class="deploy-id">{dep.id.slice(0, 8)}</span>
-									<span class="deploy-ref">{dep.source_ref ?? '—'}</span>
-								</div>
-								<span class="deploy-status {deployStatusClass(dep.status)}">{dep.status}</span>
-								<ChevronRight size={12} class="deploy-arrow" />
-							</button>
+							{@render deployRow(dep, false)}
 						{/each}
-					</div>
+					</ActivityList>
 				</section>
 			{/if}
 
@@ -799,7 +780,7 @@
 						<Button
 							variant="danger-outline"
 							size="sm"
-							onclick={() => { showDeleteModal = true; deleteSlugInput = ''; deleteError = ''; }}
+							onclick={() => { showDeleteModal = true; deleteError = ''; }}
 						>
 							<Trash2 size={12} /> Delete
 						</Button>
@@ -848,28 +829,13 @@
 		{#if activeTab === 'deployments'}
 			<section class="section">
 				{#if deployments.length === 0}
-					<div class="empty-state">No deployments yet.</div>
+					<EmptyState message="No deployments yet." />
 				{:else}
-					<div class="deploy-list-full">
+					<ActivityList>
 						{#each deployments as dep (dep.id)}
-							{@const Icon = deployStatusIcon(dep.status)}
-							<button class="deploy-full-row" onclick={() => openDeploymentLogs(dep)}>
-								<div class="deploy-icon-lg {deployStatusClass(dep.status)}">
-									<Icon size={14} class={dep.status === 'running' ? 'spin-icon' : ''} />
-								</div>
-								<div class="deploy-full-info">
-									<div class="deploy-full-id">{dep.id.slice(0, 8)}…</div>
-									<div class="deploy-full-meta">
-										<span>{dep.source_ref ?? '—'}</span>
-										<span>{dep.triggered_by ?? '—'}</span>
-										<span>{formatTime(dep.created_at)}</span>
-									</div>
-								</div>
-								<span class="deploy-status-pill {deployStatusClass(dep.status)}">{dep.status}</span>
-								<ChevronRight size={13} class="deploy-arrow" />
-							</button>
+							{@render deployRow(dep, true)}
 						{/each}
-					</div>
+					</ActivityList>
 				{/if}
 			</section>
 		{/if}
@@ -937,55 +903,60 @@
 			<section class="section">
 				<div class="domains-header">
 					<div class="section-title">Custom Domains</div>
-					<button class="btn-secondary btn-sm" onclick={openAddDomainPanel}>
+					<Button variant="secondary" size="sm" onclick={openAddDomainPanel}>
 						<Plus size={12} /> Add Domain
-					</button>
+					</Button>
 				</div>
 
 				{#if loadingDomains}
-					<div class="loading-row"><div class="spinner-sm"></div> Loading…</div>
+					<div class="loading-row"><Spinner size={16} /> Loading…</div>
 				{:else if domainError}
-					<div class="form-error">{domainError}</div>
+					<div role="alert"><InlineAlert tone="error">{domainError}</InlineAlert></div>
 				{:else if domains.length === 0}
-					<div class="empty-state">
-						No domains configured.<br />
-						<span class="empty-sub">Add a custom domain to serve this site on your own hostname.</span>
-					</div>
+					<EmptyState
+						message="No domains configured."
+						sub="Add a custom domain to serve this site on your own hostname."
+					/>
 				{:else}
-					<div class="domain-list">
+					<ActivityList>
 						{#each domains as domain (domain.id)}
-							<div class="domain-row">
-								<div class="domain-info">
-									<span class="domain-hostname">{domain.hostname}</span>
-									{#if dnsCheckState[domain.id] === 'ok'}
-										<span class="dns-badge dns-ok"><CheckCircle size={10} /> DNS OK</span>
-									{:else if dnsCheckState[domain.id] === 'fail'}
-										<span class="dns-badge dns-fail"><XCircle size={10} /> DNS fail</span>
-										{#if dnsCheckAddrs[domain.id]?.length}
-											<span class="dns-addrs">resolves to: {dnsCheckAddrs[domain.id].join(', ')}</span>
-										{/if}
-									{:else if dnsCheckState[domain.id] === 'checking'}
-										<span class="dns-badge dns-checking"><div class="spinner-xs-inline"></div> Checking…</span>
+							<div class="domain-item">
+							<ListRow title={domain.hostname}>
+								{#snippet icon()}<Globe size={14} />{/snippet}
+								{#snippet trailing()}
+									<div class="domain-actions">
+										<Button
+											variant="secondary"
+											size="sm"
+											onclick={() => checkDns(domain.id)}
+											disabled={dnsCheckState[domain.id] === 'checking'}
+										>Check DNS</Button>
+										<Button variant="ghost" size="icon" aria-label="Remove domain" title="Remove domain" onclick={() => removeDomain(domain.id)}>
+											<Trash2 size={13} />
+										</Button>
+									</div>
+								{/snippet}
+							</ListRow>
+							{#if dnsCheckState[domain.id] === 'ok'}
+								<div class="domain-dns"><Badge tone="green"><CheckCircle size={10} /> DNS OK</Badge></div>
+							{:else if dnsCheckState[domain.id] === 'fail'}
+								<div class="domain-dns">
+									<Badge tone="red"><XCircle size={10} /> DNS fail</Badge>
+									{#if dnsCheckAddrs[domain.id]?.length}
+										<span class="dns-addrs">resolves to: {dnsCheckAddrs[domain.id].join(', ')}</span>
 									{/if}
 								</div>
-								<div class="domain-actions">
-									<button
-										class="btn-ghost btn-xs"
-										onclick={() => checkDns(domain.id)}
-										disabled={dnsCheckState[domain.id] === 'checking'}
-									>Check DNS</button>
-									<button class="btn-ghost btn-xs btn-danger-ghost" onclick={() => removeDomain(domain.id)}>
-										<Trash2 size={11} />
-									</button>
-								</div>
+							{:else if dnsCheckState[domain.id] === 'checking'}
+								<div class="domain-dns"><Badge tone="neutral"><Spinner size={10} tone="current" /> Checking…</Badge></div>
+							{/if}
 							</div>
 						{/each}
-					</div>
+					</ActivityList>
 				{/if}
 
-				<div class="dns-hint">
+				<InlineAlert tone="info">
 					<strong>DNS setup:</strong> Point your domain's A record to the Shipyard server IP, or add a CNAME to your Shipyard hostname.
-				</div>
+				</InlineAlert>
 			</section>
 		{/if}
 
@@ -1092,6 +1063,13 @@ export default &#123;
 	.stack { display: flex; flex-direction: column; gap: 10px; }
 	.mono-field :global(input) { font-family: var(--font-mono); }
 
+	.dep-row { display: block; width: 100%; padding: 0; background: none; border: none; text-align: left; cursor: pointer; color: inherit; font: inherit; }
+	.dep-row + .dep-row, .domain-item + .domain-item { border-top: 1px solid var(--border); }
+	.dep-row :global(.ui-list-row), .domain-item :global(.ui-list-row) { border-bottom: none; }
+	.dep-row:hover :global(.ui-list-row-title) { color: var(--accent); }
+	.dep-status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+	.domain-dns { padding: 0 0 10px 42px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
 	.loading-row {
 		display: flex;
 		align-items: center;
@@ -1130,39 +1108,6 @@ export default &#123;
 		color: var(--text-muted);
 		line-height: 1.5;
 	}
-
-	.btn-secondary {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 14px;
-		font-size: 12px;
-		font-weight: 500;
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.btn-secondary:hover { border-color: var(--border-hover); }
-	.btn-secondary.btn-sm { padding: 5px 10px; font-size: 11px; }
-
-	.btn-ghost {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 12px;
-		font-size: 12px;
-		color: var(--text-muted);
-		background: none;
-		border: none;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-	}
-	.btn-ghost:hover { color: var(--text-primary); background: var(--bg-elevated); }
-	.btn-ghost.btn-xs { padding: 4px 8px; font-size: 11px; }
-	.btn-ghost.btn-danger-ghost:hover { color: #ef4444; }
 
 	.action-row { display: flex; align-items: center; gap: 8px; }
 
@@ -1215,157 +1160,12 @@ export default &#123;
 		flex-shrink: 0;
 	}
 
-	.form-error {
-		font-size: 12px;
-		color: var(--status-failed, #ef4444);
-		padding: 8px 10px;
-		background: color-mix(in srgb, #ef4444 8%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	/* ── Deploy lists ── */
-	.deploy-list { display: flex; flex-direction: column; gap: 4px; }
-
-	.deploy-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 6px 10px;
-		border-radius: var(--radius-sm);
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		cursor: pointer;
-		width: 100%;
-		text-align: left;
-		transition: border-color var(--transition-fast);
-	}
-	.deploy-row:hover { border-color: var(--accent); }
-
-	.deploy-icon {
-		width: 22px;
-		height: 22px;
-		border-radius: 50%;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-	}
-
-	.deploy-info {
-		flex: 1;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
-	}
-
-	.deploy-id { font-size: 11px; font-family: var(--font-mono); color: var(--text-primary); font-weight: 600; }
-	.deploy-ref { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-	.deploy-status { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-	:global(.deploy-arrow) { color: var(--text-dim); flex-shrink: 0; }
-
-	.deploy-list-full { display: flex; flex-direction: column; gap: 6px; }
-
-	.deploy-full-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 10px 12px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-surface);
-		cursor: pointer;
-		width: 100%;
-		text-align: left;
-		transition: border-color var(--transition-fast);
-	}
-	.deploy-full-row:hover { border-color: var(--accent); }
-
-	.deploy-icon-lg {
-		width: 28px;
-		height: 28px;
-		border-radius: 50%;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-	}
-
-	.deploy-full-info { flex: 1; min-width: 0; }
-	.deploy-full-id { font-size: 12px; font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); }
-	.deploy-full-meta { display: flex; gap: 8px; font-size: 11px; color: var(--text-dim); flex-wrap: wrap; }
-
-	.deploy-status-pill {
-		font-size: 10px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		padding: 2px 8px;
-		border-radius: 100px;
-	}
-
-	/* Status colours shared */
-	.status-ok   { color: #22c55e; background: color-mix(in srgb, #22c55e 12%, transparent); }
-	.status-err  { color: #ef4444; background: color-mix(in srgb, #ef4444 12%, transparent); }
-	.status-run  { color: #f59e0b; background: color-mix(in srgb, #f59e0b 12%, transparent); }
-	.status-queue { color: #6366f1; background: color-mix(in srgb, #6366f1 12%, transparent); }
-	.status-dim  { color: var(--text-dim); background: var(--bg-elevated); }
-
 	/* ── Domains ── */
 	.domains-header { display: flex; align-items: center; justify-content: space-between; }
-
-	.domain-list { display: flex; flex-direction: column; gap: 6px; }
-
-	.domain-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 12px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-	}
-
-	.domain-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-	.domain-hostname { font-size: 13px; font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); }
-
-	.dns-badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		font-size: 10px;
-		font-weight: 600;
-		padding: 2px 7px;
-		border-radius: 100px;
-		text-transform: uppercase;
-	}
-	.dns-ok      { background: color-mix(in srgb, #22c55e 12%, transparent); color: #22c55e; }
-	.dns-fail    { background: color-mix(in srgb, #ef4444 12%, transparent); color: #ef4444; }
-	.dns-checking { background: var(--bg-surface); color: var(--text-muted); }
 
 	.dns-addrs { font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); }
 
 	.domain-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-
-	.dns-hint {
-		font-size: 11px;
-		color: var(--text-muted);
-		padding: 8px 10px;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		line-height: 1.5;
-	}
-
-	/* ── Empty state ── */
-	.empty-state {
-		font-size: 13px;
-		color: var(--text-dim);
-		text-align: center;
-		padding: 24px;
-		line-height: 1.6;
-	}
-	.empty-sub { font-size: 11px; }
 
 	/* ── Docs ── */
 	.doc-block {
@@ -1405,28 +1205,9 @@ export default &#123;
 		margin: 0;
 	}
 
-	/* ── Spinners ── */
-	.spinner-sm {
-		width: 16px; height: 16px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-
-	.spinner-xs-inline {
-		width: 10px; height: 10px;
-		border: 1.5px solid var(--border);
-		border-top-color: var(--text-muted);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-		display: inline-block;
-	}
-
 	:global(.spin-icon) { animation: spin 0.7s linear infinite; }
 
 	@keyframes spin { to { transform: rotate(360deg); } }
-	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 	.danger-header {
 		display: flex;
@@ -1450,132 +1231,4 @@ export default &#123;
 	.danger-info { display: flex; flex-direction: column; gap: 3px; }
 	.danger-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 	.danger-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
-
-	/* ── Delete modal ── */
-	.modal-backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0,0,0,0.6);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 200;
-		padding: 16px;
-	}
-
-	.modal-card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		width: 100%;
-		max-width: 420px;
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-		box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-	}
-
-	.modal-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 14px 16px;
-		border-bottom: 1px solid var(--border);
-		font-size: 14px;
-		font-weight: 700;
-		color: var(--text-primary);
-	}
-
-	.modal-body {
-		padding: 16px;
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.modal-warning {
-		font-size: 12px;
-		color: var(--text-primary);
-		line-height: 1.5;
-		margin: 0;
-	}
-
-	.modal-list {
-		margin: 0;
-		padding-left: 18px;
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-	}
-
-	.modal-list li {
-		font-size: 12px;
-		color: var(--text-muted);
-	}
-
-	.modal-confirm-field { display: flex; flex-direction: column; gap: 5px; }
-
-	.modal-confirm-label {
-		font-size: 11px;
-		color: var(--text-muted);
-		font-weight: 500;
-	}
-
-	.modal-confirm-code {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		background: var(--bg-elevated);
-		padding: 1px 5px;
-		border-radius: 3px;
-		border: 1px solid var(--border);
-		color: var(--text-primary);
-	}
-
-	.modal-confirm-input {
-		padding: 8px 10px;
-		font-size: 12px;
-		font-family: var(--font-mono);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-		outline: none;
-	}
-	.modal-confirm-input:focus { border-color: #ef4444; }
-
-	.modal-footer {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 12px 16px;
-		border-top: 1px solid var(--border);
-	}
-
-	.btn-danger {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 14px;
-		font-size: 12px;
-		font-weight: 600;
-		background: #ef4444;
-		color: white;
-		border: none;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		transition: opacity var(--transition-fast);
-	}
-	.btn-danger:hover:not(:disabled) { opacity: 0.88; }
-	.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-
-	.spinner-xs-dark {
-		width: 12px; height: 12px;
-		border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white;
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-
-	.btn-sm { padding: 5px 10px; font-size: 11px; }
 </style>
