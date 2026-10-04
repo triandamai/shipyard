@@ -14,6 +14,7 @@
 	import type { VolumeMount } from '$lib/components/VolumeMountList.svelte';
 	import type { Network } from '$lib/api/types';
 	import EnvManagerPanel from '$lib/panels/EnvManagerPanel.svelte';
+	import { Button, FormField, TextField, Tabs, InlineAlert, Spinner, Divider } from '$lib/components/ui';
 
 	interface Props {
 		projectId: string;
@@ -253,32 +254,30 @@
 	<form class="form" onsubmit={handleSubmit}>
 
 		<!-- Name -->
-		<div class="form-group">
-			<label class="form-label" for="gr-name">Service Name</label>
-			<input id="gr-name" class="form-input" type="text" bind:value={name}
+		<FormField label="Service Name" for="gr-name">
+			<TextField id="gr-name" bind:value={name}
 				oninput={() => (slug = deriveSlug(name))} placeholder="my-service" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="gr-slug">Slug</label>
-			<input id="gr-slug" class="form-input font-mono" type="text" bind:value={slug}
-				placeholder="my-service" required />
-		</div>
+		</FormField>
+		<FormField label="Slug" for="gr-slug">
+			<span class="mono-field">
+				<TextField id="gr-slug" bind:value={slug} placeholder="my-service" required />
+			</span>
+		</FormField>
 
-		<div class="divider"></div>
+		<Divider margin="2px 0" />
 
 		<!-- Step 1: Account -->
-		<div class="form-group">
-			<label class="form-label">Step 1 — Git Account</label>
+		<FormField label="Step 1 — Git Account">
 			{#if accountsLoading}
 				<div class="picker-btn loading">
-					<div class="mini-spinner"></div>
+					<Spinner size={12} />
 					<span>Loading accounts…</span>
 				</div>
 			{:else if connectedAccounts.length === 0}
-				<a class="no-accounts-link" href="/orgs/{orgId}/settings">
+				<Button variant="secondary" href="/orgs/{orgId}/settings">
 					<Settings size={13} />
 					No Git providers connected — click to open Settings
-				</a>
+				</Button>
 			{:else}
 				<button type="button" class="picker-btn" onclick={openAccountPicker}>
 					{#if selectedAccount}
@@ -290,11 +289,10 @@
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Step 2: Repository -->
-		<div class="form-group">
-			<label class="form-label" class:dimmed={!selectedAccount}>Step 2 — Repository</label>
+		<FormField label="Step 2 — Repository">
 			<button type="button" class="picker-btn" disabled={!selectedAccount} onclick={openRepoPicker}>
 				{#if selectedRepo}
 					<span class="picker-value font-mono">{selectedRepo.fullName}</span>
@@ -303,11 +301,10 @@
 				{/if}
 				<ChevronRight size={14} class="picker-chevron" />
 			</button>
-		</div>
+		</FormField>
 
 		<!-- Step 3: Branch -->
-		<div class="form-group">
-			<label class="form-label" class:dimmed={!selectedRepo}>Step 3 — Branch</label>
+		<FormField label="Step 3 — Branch">
 			<button type="button" class="picker-btn" disabled={!selectedRepo} onclick={openBranchPicker}>
 				{#if selectedBranch}
 					<span class="picker-value font-mono">{selectedBranch}</span>
@@ -316,13 +313,12 @@
 				{/if}
 				<ChevronRight size={14} class="picker-chevron" />
 			</button>
-		</div>
+		</FormField>
 
-		<div class="divider"></div>
+		<Divider margin="2px 0" />
 
 		<!-- Port Mapping -->
-		<div class="form-group">
-			<label class="form-label">Port Mapping</label>
+		<FormField label="Port Mapping">
 			<button type="button" class="picker-btn" onclick={openPortMapping}>
 				<Plug size={13} class="picker-icon" />
 				<span class="picker-placeholder">
@@ -335,16 +331,15 @@
 					{#each ports as p, i (i)}
 						<span class="chip chip-port">
 							<span class="picker-value font-mono">{p}</span>
-							<button type="button" class="chip-remove" onclick={() => removePort(i)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove port {p}" onclick={() => removePort(i)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Networks -->
-		<div class="form-group">
-			<label class="form-label">Networks</label>
+		<FormField label="Networks">
 			<button type="button" class="picker-btn" onclick={openNetworkPicker}>
 				<NetworkIcon size={13} class="picker-icon" />
 				<span class="picker-placeholder">Select networks…</span>
@@ -355,23 +350,20 @@
 					{#each selectedNetworks as net (net.id)}
 						<span class="chip chip-blue">
 							{net.name}
-							<button type="button" class="chip-remove" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove network {net.name}" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Volume Mounts -->
-		<div class="form-group">
-			<label class="form-label">Volume Mounts</label>
-			<span class="form-hint" style="margin-bottom:4px">Bind named volumes or host paths into the container</span>
+		<FormField label="Volume Mounts" hint="Bind named volumes or host paths into the container">
 			<VolumeMountList {projectId} bind:mounts={volumeMounts} />
-		</div>
+		</FormField>
 
 		<!-- Environment Variables -->
-		<div class="form-group">
-			<label class="form-label">Environment Variables</label>
+		<FormField label="Environment Variables">
 			<button type="button" class="picker-btn" onclick={openEnvManager}>
 				<Settings size={13} class="picker-icon" />
 				<span class="picker-placeholder">
@@ -379,76 +371,54 @@
 				</span>
 				<ChevronRight size={14} class="picker-chevron" />
 			</button>
-		</div>
+		</FormField>
 
-		<div class="divider"></div>
+		<Divider margin="2px 0" />
 
 		<!-- Build type -->
-		<div class="form-group">
-			<label class="form-label">Build Type</label>
-			<div class="build-types">
-				{#each [
+		<FormField label="Build Type">
+			<Tabs
+				ariaLabel="Build type"
+				value={buildType}
+				onChange={(id) => (buildType = id as typeof buildType)}
+				tabs={[
 					{ id: 'auto',       label: 'Auto (SSR)' },
 					{ id: 'dockerfile', label: 'Dockerfile' },
 					{ id: 'compose',    label: 'Compose' },
 					{ id: 'nixpack',    label: 'Nixpack' },
 					{ id: 'buildpack',  label: 'Buildpack' },
 					{ id: 'railpack',   label: 'Railpack' },
-				] as bt (bt.id)}
-					<button type="button" class="build-btn" class:active={buildType === bt.id}
-						onclick={() => (buildType = bt.id as typeof buildType)}>
-						{bt.label}
-					</button>
-				{/each}
-			</div>
-		</div>
+				]}
+			/>
+		</FormField>
 
 		{#if buildType === 'dockerfile'}
-			<div class="form-group">
-				<label class="form-label" for="gr-dockerfile">Dockerfile Path</label>
-				<input id="gr-dockerfile" class="form-input font-mono" type="text"
-					bind:value={dockerfilePath} placeholder="./Dockerfile" />
-				<span class="form-hint">Relative to the repository root</span>
-			</div>
+			<FormField label="Dockerfile Path" for="gr-dockerfile" hint="Relative to the repository root">
+				<span class="mono-field">
+					<TextField id="gr-dockerfile" bind:value={dockerfilePath} placeholder="./Dockerfile" />
+				</span>
+			</FormField>
 		{/if}
 
 		{#if submitError}
-			<div class="error-msg">{submitError}</div>
+			<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 		{/if}
 
-		<button class="btn btn-primary submit-btn" type="submit" disabled={isSubmitting || !selectedRepo}>
+		<Button type="submit" disabled={isSubmitting || !selectedRepo}>
 			{#if isSubmitting}
-				<div class="btn-spinner"></div> Creating…
+				<Spinner size={12} tone="current" /> Creating…
 			{:else}
 				Add Git Service
 			{/if}
-		</button>
+		</Button>
 	</form>
 </div>
 
 <style>
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.form { display: flex; flex-direction: column; gap: 14px; }
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
-
-	.form-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-		transition: color var(--transition-fast);
-	}
-	.form-label.dimmed { color: color-mix(in srgb, var(--text-dim) 50%, transparent); }
-
-	.form-input {
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans); padding: 8px 10px;
-		outline: none; transition: border-color var(--transition-fast);
-	}
-	.form-input:focus { border-color: var(--accent); }
 	.font-mono { font-family: var(--font-mono); }
-	.form-hint { font-size: 11px; color: var(--text-dim); }
-
-	.divider { height: 1px; background: var(--border); margin: 2px 0; }
+	.mono-field :global(input) { font-family: var(--font-mono); }
 
 	/* Picker button — looks like an input but opens a sub-panel */
 	.picker-btn {
@@ -460,25 +430,19 @@
 		min-height: 36px;
 	}
 	.picker-btn:hover:not(:disabled) { border-color: var(--accent); }
+	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	.picker-btn:disabled { opacity: 0.45; cursor: default; }
 	.picker-btn.loading { cursor: default; }
 
 	.picker-placeholder { color: var(--text-dim); flex: 1; }
 	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-	.selected-dot {
-		width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-	}
+	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
+	.picker-btn :global(.picker-icon)    { color: var(--text-dim); flex-shrink: 0; }
+	.picker-btn :global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
 
-	.mini-spinner {
-		width: 12px; height: 12px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%;
-		animation: spin 0.7s linear infinite; flex-shrink: 0;
-	}
-
-	/* Picker + chips (shared with other panels) */
+	/* Chips */
 	.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
 	.chip {
 		display: inline-flex; align-items: center; gap: 4px;
@@ -489,10 +453,6 @@
 		background: var(--accent-blue-muted); color: var(--accent-blue);
 		border: 1px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
 	}
-	.chip-yellow {
-		background: var(--accent-yellow-muted); color: var(--accent-yellow);
-		border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-	}
 	.chip-port {
 		background: var(--bg-elevated); color: var(--text-secondary);
 		border: 1px solid var(--border);
@@ -502,46 +462,5 @@
 		color: inherit; opacity: 0.6; display: flex; align-items: center; border-radius: 50%;
 	}
 	.chip-remove:hover { opacity: 1; }
-
-	:global(.picker-icon)   { color: var(--text-dim); flex-shrink: 0; }
-	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; }
-
-	.no-accounts-link {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; color: var(--accent); text-decoration: none;
-		padding: 8px 10px; background: color-mix(in srgb, var(--accent) 6%, transparent);
-		border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.no-accounts-link:hover { text-decoration: underline; }
-
-	.build-types { display: flex; flex-wrap: wrap; gap: 6px; }
-
-	.build-btn {
-		padding: 5px 12px; font-size: 12px; font-weight: 500;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-elevated); color: var(--text-secondary);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.build-btn:hover { border-color: var(--accent); color: var(--accent); }
-	.build-btn.active {
-		background: color-mix(in srgb, var(--accent) 15%, transparent);
-		border-color: var(--accent); color: var(--accent); font-weight: 600;
-	}
-
-	.error-msg {
-		font-size: 12px; color: var(--accent-red); padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.submit-btn { margin-top: 4px; display: flex; align-items: center; gap: 6px; justify-content: center; }
-
-	.btn-spinner {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.chip-remove:focus-visible { outline: 2px solid var(--accent); opacity: 1; }
 </style>
