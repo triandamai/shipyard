@@ -4,6 +4,7 @@
 	import { authStore } from '$lib/stores/auth.store';
 	import { setAuthCookies } from '$lib/auth/cookies';
 	import type { Plan } from '$lib/api/types';
+	import { Card, Button, FormField, TextField, InlineAlert, Spinner } from '$lib/components/ui';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -127,7 +128,7 @@
 			<h1 style="font-size:24px;font-weight:700;margin:0 0 10px;color:var(--text-primary);">Shipyard is already set up</h1>
 			<p style="font-size:14px;line-height:1.7;color:var(--text-muted);margin:0;">This instance has already been initialized. Setup can only be performed once.</p>
 		</div>
-		<button class="btn btn-primary" onclick={() => goto('/login')}>Go to Login</button>
+		<Button onclick={() => goto('/login')}>Go to Login</Button>
 	</div>
 </div>
 {:else}
@@ -158,7 +159,7 @@
 		</div>
 
 		<!-- Step content card -->
-		<div class="step-card">
+		<Card padding="clamp(20px, 5vw, 32px)">
 
 			<!-- Step 1: Welcome / Docker check -->
 			{#if step === 'welcome'}
@@ -172,7 +173,7 @@
 						<div class="docker-icon"
 							style="background:{dockerStatus === 'ok' ? 'var(--accent-green-muted)' : dockerStatus === 'error' ? 'var(--accent-red-muted)' : 'var(--bg-hover)'}">
 							{#if dockerStatus === 'checking'}
-								<span class="spinner"></span>
+								<Spinner size={14} />
 							{:else if dockerStatus === 'ok'}✅
 							{:else if dockerStatus === 'error'}❌
 							{:else}🐳{/if}
@@ -186,15 +187,15 @@
 								{:else}{dockerMessage || 'Docker not available'}{/if}
 							</div>
 						</div>
-						<button class="btn btn-secondary btn-sm" onclick={checkDocker} disabled={dockerStatus === 'checking'}>
+						<Button variant="secondary" size="sm" onclick={checkDocker} disabled={dockerStatus === 'checking'}>
 							{dockerStatus === 'idle' ? 'Check' : 'Retry'}
-						</button>
+						</Button>
 					</div>
 
 					<div style="display:flex;justify-content:flex-end;">
-						<button class="btn btn-primary" disabled={dockerStatus !== 'ok'} onclick={() => (step = 'account')}>
+						<Button disabled={dockerStatus !== 'ok'} onclick={() => (step = 'account')}>
 							Continue
-						</button>
+						</Button>
 					</div>
 				</div>
 
@@ -207,36 +208,30 @@
 					</div>
 
 					{#if submitError}
-						<div class="form-error">{submitError}</div>
+						<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 					{/if}
 
 					<div style="display:flex;flex-direction:column;gap:16px;">
-						<div class="field">
-							<label for="admin-email" class="flbl">Admin Email</label>
-							<input id="admin-email" type="email" class="input" placeholder="admin@example.com" bind:value={adminEmail} autocomplete="email" />
-						</div>
-						<div class="field">
-							<label for="admin-password" class="flbl">Admin Password</label>
-							<input id="admin-password" type="password" class="input" placeholder="••••••••" bind:value={adminPassword} autocomplete="new-password" />
-						</div>
-						<div class="field">
-							<label for="org-name" class="flbl">Organization Name</label>
-							<input id="org-name" type="text" class="input" placeholder="My Organization" bind:value={orgName} />
-						</div>
-						<div class="field">
-							<label for="org-slug" class="flbl">Organization Slug</label>
-							<input id="org-slug" type="text" class="input" placeholder="my-organization" bind:value={orgSlug} pattern="[a-z0-9][a-z0-9-]*" />
-							<span style="font-size:11px;color:var(--text-dim);">Lowercase letters, numbers, and hyphens only</span>
-						</div>
+						<FormField label="Admin Email" for="admin-email">
+							<TextField id="admin-email" type="email" placeholder="admin@example.com" bind:value={adminEmail} autocomplete="email" />
+						</FormField>
+						<FormField label="Admin Password" for="admin-password">
+							<TextField id="admin-password" type="password" placeholder="••••••••" bind:value={adminPassword} autocomplete="new-password" />
+						</FormField>
+						<FormField label="Organization Name" for="org-name">
+							<TextField id="org-name" type="text" placeholder="My Organization" bind:value={orgName} />
+						</FormField>
+						<FormField label="Organization Slug" for="org-slug" hint="Lowercase letters, numbers, and hyphens only">
+							<TextField id="org-slug" type="text" placeholder="my-organization" bind:value={orgSlug} pattern="[a-z0-9][a-z0-9-]*" />
+						</FormField>
 						<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-							<button type="button" class="btn btn-ghost" onclick={() => (step = 'welcome')}>Back</button>
-							<button
-								class="btn btn-primary"
+							<Button variant="ghost" onclick={() => (step = 'welcome')}>Back</Button>
+							<Button
 								disabled={!adminEmail || !adminPassword || !orgName || !orgSlug || plansLoading}
 								onclick={goToPlan}
 							>
 								{plansLoading ? 'Loading plans…' : 'Continue'}
-							</button>
+							</Button>
 						</div>
 					</div>
 				</div>
@@ -250,7 +245,7 @@
 					</div>
 
 					{#if plansError}
-						<div class="form-error">{plansError}</div>
+						<div role="alert"><InlineAlert tone="error">{plansError}</InlineAlert></div>
 					{/if}
 
 					{#if plans.length === 0 && !plansError}
@@ -287,19 +282,19 @@
 					{/if}
 
 					{#if submitError}
-						<div class="form-error">{submitError}</div>
+						<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 					{/if}
 
 					<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-						<button class="btn btn-ghost" onclick={() => (step = 'account')} disabled={submitting}>Back</button>
-						<button class="btn btn-primary" onclick={handleSetupSubmit} disabled={submitting}>
+						<Button variant="ghost" onclick={() => (step = 'account')} disabled={submitting}>Back</Button>
+						<Button onclick={handleSetupSubmit} disabled={submitting}>
 							{#if submitting}
-								<span class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:white;"></span>
+								<Spinner size={14} tone="current" />
 								Setting up…
 							{:else}
 								Initialize Shipyard
 							{/if}
-						</button>
+						</Button>
 					</div>
 				</div>
 
@@ -311,20 +306,18 @@
 						<h2 class="done-title">Shipyard is ready!</h2>
 						<p class="step-desc">Your super admin account and organization have been created.</p>
 					</div>
-					<button class="btn btn-primary" style="margin-top:8px;" onclick={() => goto('/admin')}>
-						Go to Admin Panel
-					</button>
+					<div style="margin-top:8px;">
+						<Button onclick={() => goto('/admin')}>Go to Admin Panel</Button>
+					</div>
 				</div>
 			{/if}
 
-		</div>
+		</Card>
 	</div>
 </div>
 {/if}
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
-
 	.setup-wrap {
 		min-height:100vh; background:var(--bg-base);
 		display:flex; align-items:center; justify-content:center; padding:24px;
@@ -350,11 +343,6 @@
 	.step-line { height:1px; flex:1; margin-bottom:20px; background:var(--border); transition:background .3s; }
 	.step-line-done { background:var(--accent-green); }
 
-	/* Card */
-	.step-card {
-		background:var(--bg-surface); border:1px solid var(--border);
-		border-radius:var(--radius-lg); padding:32px;
-	}
 	.step-body { display:flex; flex-direction:column; gap:24px; }
 	.step-title { font-size:18px; margin-bottom:8px; }
 	.step-desc { color:var(--text-muted); font-size:14px; line-height:1.6; margin:0; }
@@ -367,15 +355,6 @@
 	.docker-icon {
 		width:36px; height:36px; border-radius:var(--radius-sm);
 		display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0;
-	}
-
-	/* Form */
-	.field { display:flex; flex-direction:column; gap:6px; }
-	.flbl { font-size:13px; font-weight:500; color:var(--text-secondary); }
-	.form-error {
-		padding:10px 14px; background:var(--accent-red-muted);
-		border:1px solid var(--accent-red); border-radius:var(--radius-md);
-		color:var(--accent-red); font-size:13px;
 	}
 
 	/* Plan grid */
@@ -415,15 +394,7 @@
 	}
 	.done-title { font-size:20px; margin-bottom:8px; color:var(--accent-green); }
 
-	/* Spinner */
-	.spinner {
-		width:14px; height:14px; border:2px solid var(--border);
-		border-top-color:var(--accent); border-radius:50%;
-		display:inline-block; animation:spin .7s linear infinite;
-	}
-
 	@media (max-width: 640px) {
-		.step-card { padding:20px; }
 		.plans-grid { grid-template-columns:1fr; }
 	}
 </style>
