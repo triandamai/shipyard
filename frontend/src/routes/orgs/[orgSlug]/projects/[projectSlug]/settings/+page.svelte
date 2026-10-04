@@ -6,10 +6,13 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { projectStore } from '$lib/stores/project.store';
 	import {
-		ArrowLeft, Settings2, Calendar, FolderOpen,
-		Trash2, AlertTriangle, Loader2, X, Save, Check,
+		ArrowLeft, Trash2, AlertTriangle, Save, Check,
 		Layers, Network, HardDrive, Globe, ChevronDown, ChevronRight
 	} from '@lucide/svelte';
+	import {
+		PageHeader, Card, FormField, TextField, Button, InlineAlert,
+		ConfirmDialog, KeyValueList, StatCard, Badge, Spinner
+	} from '$lib/components/ui';
 	import type { Project, Service } from '$lib/api/types';
 
 	let orgSlug    = $derived(page.params.orgSlug ?? '');
@@ -57,8 +60,6 @@
 	}
 
 	// Confirmation dialog
-	let confirmInput = $state('');
-	let deleting     = $state(false);
 	let deleteError  = $state('');
 	let showConfirm  = $state(false);
 
@@ -103,13 +104,11 @@
 	}
 
 	async function confirmDelete() {
-		if (!project || confirmInput !== project.name) return;
-		deleting = true;
+		if (!project) return;
 		deleteError = '';
 		const res = await api.deleteProject(orgId, projectId);
 		if (res.error) {
 			deleteError = res.error.message;
-			deleting = false;
 			return;
 		}
 		projectStore.setProjects(
@@ -127,270 +126,196 @@
 			<ArrowLeft size={15} />
 			Back to project
 		</a>
-		<div class="header-title">
-			<Settings2 size={18} />
-			<h1>Project Settings</h1>
-		</div>
+		<PageHeader title="Project Settings" />
 	</div>
 
 	{#if loading}
 		<div class="state-center">
-			<Loader2 size={20} class="spin" />
+			<Spinner size={20} />
 			<span>Loading…</span>
 		</div>
 	{:else if loadError}
-		<div class="state-center error">
-			<AlertTriangle size={18} />
-			<span>{loadError}</span>
-			<a class="btn btn-secondary btn-sm" href="/orgs/{orgSlug}">Go back</a>
+		<div class="state-center">
+			<InlineAlert tone="error">
+				<span class="load-error"><AlertTriangle size={14} /> {loadError}</span>
+			</InlineAlert>
+			<Button variant="secondary" size="sm" href="/orgs/{orgSlug}">Go back</Button>
 		</div>
 	{:else if project}
 		<!-- Project info card -->
-		<section class="card">
-			<h2 class="card-title">Project information</h2>
-			<div class="info-grid">
-				<div class="info-row">
-					<span class="info-label">Name</span>
-					<span class="info-value">{project.name}</span>
-				</div>
-				<div class="info-row">
-					<span class="info-label">Slug</span>
-					<code class="info-value mono">{project.slug}</code>
-				</div>
-				<div class="info-row">
-					<span class="info-label">Project ID</span>
-					<code class="info-value mono small">{project.id}</code>
-				</div>
-				<div class="info-row">
-					<span class="info-label">
-						<FolderOpen size={13} />
-						Directory
-					</span>
-					<code class="info-value mono small">{project.directory_path || '—'}</code>
-				</div>
-				<div class="info-row">
-					<span class="info-label">
-						<Calendar size={13} />
-						Created
-					</span>
-					<span class="info-value">{formatDate(project.created_at)}</span>
-				</div>
+		<Card padding="24px">
+			<div class="card-body">
+				<h2 class="card-title">Project information</h2>
+				<KeyValueList
+					keyWidth="120px"
+					items={[
+						{ key: 'Name', value: project.name },
+						{ key: 'Slug', value: project.slug, mono: true },
+						{ key: 'Project ID', value: project.id, mono: true },
+						{ key: 'Directory', value: project.directory_path || '—', mono: true },
+						{ key: 'Created', value: formatDate(project.created_at) }
+					]}
+				/>
 			</div>
-		</section>
+		</Card>
 
 		<!-- Rename card -->
-		<section class="card">
-			<h2 class="card-title">Rename project</h2>
-			<p class="card-desc">Change the display name. The URL slug stays the same.</p>
-			<form class="rename-form" onsubmit={(e) => { e.preventDefault(); saveRename(); }}>
-				<input
-					class="rename-input"
-					type="text"
-					bind:value={renameValue}
-					placeholder="Project name"
-					disabled={renaming}
-					maxlength={80}
-					autocomplete="off"
-				/>
-				{#if renameError}
-					<p class="rename-error">{renameError}</p>
-				{/if}
-				<div class="rename-actions">
-					<button
-						class="btn btn-primary rename-btn"
-						type="submit"
-						disabled={renaming || !renameValue.trim() || renameValue.trim() === project.name}
-					>
-						{#if renaming}
-							<Loader2 size={13} class="spin" /> Saving…
-						{:else if renameSaved}
-							<Check size={13} /> Saved
-						{:else}
-							<Save size={13} /> Save name
-						{/if}
-					</button>
-				</div>
-			</form>
-		</section>
+		<Card padding="24px">
+			<div class="card-body">
+				<h2 class="card-title">Rename project</h2>
+				<p class="card-desc">Change the display name. The URL slug stays the same.</p>
+				<form class="rename-form" onsubmit={(e) => { e.preventDefault(); saveRename(); }}>
+					<FormField label="Project name" for="project-rename">
+						<TextField
+							id="project-rename"
+							type="text"
+							bind:value={renameValue}
+							placeholder="Project name"
+							disabled={renaming}
+							maxlength={80}
+							autocomplete="off"
+						/>
+					</FormField>
+					{#if renameError}
+						<div role="alert"><InlineAlert tone="error">{renameError}</InlineAlert></div>
+					{/if}
+					<div class="rename-actions">
+						<Button
+							type="submit"
+							disabled={renaming || !renameValue.trim() || renameValue.trim() === project.name}
+						>
+							{#if renaming}
+								<Spinner size={13} tone="current" /> Saving…
+							{:else if renameSaved}
+								<Check size={13} /> Saved
+							{:else}
+								<Save size={13} /> Save name
+							{/if}
+						</Button>
+					</div>
+				</form>
+			</div>
+		</Card>
 
 		<!-- Resources card -->
-		<section class="card">
-			<h2 class="card-title">Resources</h2>
-			<div class="resource-grid">
-				<div class="resource-item">
-					<Layers size={20} />
-					<span class="resource-count">{services.length}</span>
-					<span class="resource-label">Service{services.length !== 1 ? 's' : ''}</span>
+		<Card padding="24px">
+			<div class="card-body">
+				<h2 class="card-title">Resources</h2>
+				<div class="resource-grid">
+					<StatCard value={services.length} label={`Service${services.length !== 1 ? 's' : ''}`}>
+						{#snippet icon()}<Layers size={16} />{/snippet}
+					</StatCard>
+					<StatCard value={networkCount} label={`Network${networkCount !== 1 ? 's' : ''}`}>
+						{#snippet icon()}<Network size={16} />{/snippet}
+					</StatCard>
+					<StatCard value={volumeCount} label={`Volume${volumeCount !== 1 ? 's' : ''}`}>
+						{#snippet icon()}<HardDrive size={16} />{/snippet}
+					</StatCard>
+					<StatCard value={domainCount} label={`Domain${domainCount !== 1 ? 's' : ''}`}>
+						{#snippet icon()}<Globe size={16} />{/snippet}
+					</StatCard>
 				</div>
-				<div class="resource-item">
-					<Network size={20} />
-					<span class="resource-count">{networkCount}</span>
-					<span class="resource-label">Network{networkCount !== 1 ? 's' : ''}</span>
-				</div>
-				<div class="resource-item">
-					<HardDrive size={20} />
-					<span class="resource-count">{volumeCount}</span>
-					<span class="resource-label">Volume{volumeCount !== 1 ? 's' : ''}</span>
-				</div>
-				<div class="resource-item">
-					<Globe size={20} />
-					<span class="resource-count">{domainCount}</span>
-					<span class="resource-label">Domain{domainCount !== 1 ? 's' : ''}</span>
-				</div>
-			</div>
 
-			{#if services.length > 0}
-				<div class="service-list">
-					{#each services as svc}
-						{@const expanded = expandedServices.has(svc.id)}
-						<div class="service-item" class:expanded>
-							<button class="service-header" onclick={() => toggleService(svc.id)}>
-								<span class="chevron-wrap">
-									{#if expanded}
-										<ChevronDown size={12} />
-									{:else}
-										<ChevronRight size={12} />
-									{/if}
-								</span>
-								<span class="service-name">{svc.name}</span>
-								<span class="service-type">{svc.type}</span>
-								<span class="service-status" class:running={svc.status === 'running'}>{svc.status}</span>
-							</button>
+				{#if services.length > 0}
+					<div class="service-list">
+						{#each services as svc}
+							{@const expanded = expandedServices.has(svc.id)}
+							<div class="service-item" class:expanded>
+								<button class="service-header" onclick={() => toggleService(svc.id)} aria-expanded={expanded}>
+									<span class="chevron-wrap">
+										{#if expanded}
+											<ChevronDown size={12} />
+										{:else}
+											<ChevronRight size={12} />
+										{/if}
+									</span>
+									<span class="service-name">{svc.name}</span>
+									<span class="service-type">{svc.type}</span>
+									<Badge tone={svc.status === 'running' ? 'green' : 'neutral'}>{svc.status}</Badge>
+								</button>
 
-							{#if expanded}
-								<div class="service-details">
-									{#if svc.image}
+								{#if expanded}
+									<div class="service-details">
+										{#if svc.image}
+											<div class="detail-row">
+												<span class="detail-key">Image</span>
+												<code class="detail-val">{svc.image}</code>
+											</div>
+										{/if}
+										{#if svc.git_repo_url}
+											<div class="detail-row">
+												<span class="detail-key">Repository</span>
+												<code class="detail-val">{svc.git_repo_url}</code>
+											</div>
+											<div class="detail-row">
+												<span class="detail-key">Branch</span>
+												<code class="detail-val">{svc.git_branch || 'main'}</code>
+											</div>
+										{/if}
+										{#if svc.ports?.length > 0}
+											<div class="detail-row">
+												<span class="detail-key">Ports</span>
+												<span class="detail-val">{svc.ports.join(', ')}</span>
+											</div>
+										{/if}
+										{#if svc.directory_path}
+											<div class="detail-row">
+												<span class="detail-key">Directory</span>
+												<code class="detail-val">{svc.directory_path}</code>
+											</div>
+										{/if}
 										<div class="detail-row">
-											<span class="detail-key">Image</span>
-											<code class="detail-val">{svc.image}</code>
+											<span class="detail-key">Service ID</span>
+											<code class="detail-val dim">{svc.id}</code>
 										</div>
-									{/if}
-									{#if svc.git_repo_url}
-										<div class="detail-row">
-											<span class="detail-key">Repository</span>
-											<code class="detail-val">{svc.git_repo_url}</code>
-										</div>
-										<div class="detail-row">
-											<span class="detail-key">Branch</span>
-											<code class="detail-val">{svc.git_branch || 'main'}</code>
-										</div>
-									{/if}
-									{#if svc.ports?.length > 0}
-										<div class="detail-row">
-											<span class="detail-key">Ports</span>
-											<span class="detail-val">{svc.ports.join(', ')}</span>
-										</div>
-									{/if}
-									{#if svc.directory_path}
-										<div class="detail-row">
-											<span class="detail-key">Directory</span>
-											<code class="detail-val">{svc.directory_path}</code>
-										</div>
-									{/if}
-									<div class="detail-row">
-										<span class="detail-key">Service ID</span>
-										<code class="detail-val dim">{svc.id}</code>
 									</div>
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</section>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</Card>
 
 		<!-- Danger zone -->
-		<section class="card danger-card">
-			<h2 class="card-title danger-title">
-				<AlertTriangle size={16} />
-				Danger zone
-			</h2>
-			<div class="danger-row">
-				<div class="danger-desc">
-					<strong>Delete this project</strong>
-					<p>Permanently removes the project and all its resources — services, networks, volumes, domains, deployments, and logs. Running containers will be stopped. This cannot be undone.</p>
+		<Card tone="danger" padding="24px">
+			<div class="card-body">
+				<h2 class="card-title danger-title">
+					<AlertTriangle size={16} />
+					Danger zone
+				</h2>
+				<div class="danger-row">
+					<div class="danger-desc">
+						<strong>Delete this project</strong>
+						<p>Permanently removes the project and all its resources — services, networks, volumes, domains, deployments, and logs. Running containers will be stopped. This cannot be undone.</p>
+					</div>
+					<Button variant="danger-outline" onclick={() => { showConfirm = true; deleteError = ''; }}>
+						<Trash2 size={13} />
+						Delete project
+					</Button>
 				</div>
-				<button class="btn btn-danger-outline" onclick={() => { showConfirm = true; confirmInput = ''; deleteError = ''; }}>
-					<Trash2 size={13} />
-					Delete project
-				</button>
+				{#if deleteError}
+					<div role="alert"><InlineAlert tone="error">{deleteError}</InlineAlert></div>
+				{/if}
 			</div>
-		</section>
+		</Card>
 	{/if}
 </div>
 </div>
 
-<!-- Delete confirmation modal -->
-{#if showConfirm && project}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="modal-backdrop" onclick={() => { if (!deleting) showConfirm = false; }} onkeydown={() => {}}></div>
-	<div class="modal" role="dialog" aria-modal="true">
-		<div class="modal-header">
-			<div class="modal-title">
-				<Trash2 size={15} />
-				Delete <strong>{project.name}</strong>
-			</div>
-			<button class="close-btn" onclick={() => showConfirm = false} disabled={deleting}>
-				<X size={15} />
-			</button>
-		</div>
-
-		<div class="modal-body">
-			<div class="danger-notice">
-				<AlertTriangle size={15} />
-				<div>
-					<strong>All resources will be permanently deleted:</strong>
-					<ul>
-						<li>{services.length} service{services.length !== 1 ? 's' : ''} (containers will be stopped)</li>
-						<li>{networkCount} network{networkCount !== 1 ? 's' : ''}</li>
-						<li>{volumeCount} volume{volumeCount !== 1 ? 's' : ''}</li>
-						<li>{domainCount} domain{domainCount !== 1 ? 's' : ''}</li>
-						<li>All deployments and logs</li>
-					</ul>
-				</div>
-			</div>
-
-			<p class="confirm-label">Type <strong>{project.name}</strong> to confirm:</p>
-			<input
-				class="confirm-input"
-				type="text"
-				placeholder={project.name}
-				bind:value={confirmInput}
-				disabled={deleting}
-				autocomplete="off"
-				spellcheck="false"
-			/>
-
-			{#if deleteError}
-				<p class="delete-error">{deleteError}</p>
-			{/if}
-		</div>
-
-		<div class="modal-footer">
-			<button class="btn btn-secondary" onclick={() => showConfirm = false} disabled={deleting}>
-				Cancel
-			</button>
-			<button
-				class="btn btn-danger"
-				onclick={confirmDelete}
-				disabled={deleting || confirmInput !== project.name}
-			>
-				{#if deleting}
-					<Loader2 size={13} class="spin" />
-					Deleting…
-				{:else}
-					<Trash2 size={13} />
-					Delete project
-				{/if}
-			</button>
-		</div>
-	</div>
+<!-- Delete confirmation -->
+{#if project}
+	<ConfirmDialog
+		bind:open={showConfirm}
+		title={`Delete ${project.name}`}
+		message={`All resources will be permanently deleted: ${services.length} service${services.length !== 1 ? 's' : ''} (containers will be stopped), ${networkCount} network${networkCount !== 1 ? 's' : ''}, ${volumeCount} volume${volumeCount !== 1 ? 's' : ''}, ${domainCount} domain${domainCount !== 1 ? 's' : ''}, and all deployments and logs.`}
+		confirmLabel="Delete project"
+		confirmText={project.name}
+		onConfirm={confirmDelete}
+	/>
 {/if}
 
 <style>
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
-
 	/* Scroll container — fills main-content (overflow: hidden) and scrolls internally */
 	.settings-scroll {
 		height: 100%;
@@ -412,6 +337,7 @@
 		flex-direction: column;
 		gap: 12px;
 	}
+	.page-header :global(.ui-page-header) { margin-bottom: 0; }
 
 	.back-link {
 		display: inline-flex;
@@ -421,23 +347,9 @@
 		color: var(--text-muted);
 		text-decoration: none;
 		width: fit-content;
-		transition: color 0.15s;
+		transition: color var(--transition-fast);
 	}
 	.back-link:hover { color: var(--text-primary); }
-
-	.header-title {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		color: var(--text-muted);
-	}
-
-	.header-title h1 {
-		font-size: 22px;
-		font-weight: 700;
-		color: var(--text-primary);
-		margin: 0;
-	}
 
 	/* Loading / error states */
 	.state-center {
@@ -450,14 +362,9 @@
 		color: var(--text-muted);
 		font-size: 13px;
 	}
-	.state-center.error { color: #dc2626; }
+	.load-error { display: inline-flex; align-items: center; gap: 8px; }
 
-	/* Cards */
-	.card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		padding: 24px;
+	.card-body {
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
@@ -473,36 +380,6 @@
 		gap: 8px;
 	}
 
-	/* Info grid */
-	.info-grid {
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-	}
-
-	.info-row {
-		display: grid;
-		grid-template-columns: 160px 1fr;
-		align-items: center;
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border);
-		font-size: 13px;
-		gap: 16px;
-	}
-	.info-row:last-child { border-bottom: none; }
-
-	.info-label {
-		color: var(--text-muted);
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		font-weight: 500;
-	}
-
-	.info-value { color: var(--text-primary); word-break: break-all; }
-	.info-value.mono { font-family: var(--font-mono, monospace); font-size: 12px; }
-	.info-value.small { font-size: 11px; }
-
 	/* Resource grid */
 	.resource-grid {
 		display: grid;
@@ -510,35 +387,10 @@
 		gap: 12px;
 	}
 
-	.resource-item {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 4px;
-		padding: 16px 8px;
-		background: var(--bg-elevated, #f9fafb);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		color: var(--text-muted);
-	}
-
-	.resource-count {
-		font-size: 24px;
-		font-weight: 700;
-		color: var(--text-primary);
-		line-height: 1;
-	}
-
-	.resource-label {
-		font-size: 11px;
-		color: var(--text-muted);
-		text-align: center;
-	}
-
 	/* Service list */
 	.service-list {
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: var(--radius-md);
 		overflow: hidden;
 	}
 
@@ -559,7 +411,7 @@
 		border: none;
 		cursor: pointer;
 		text-align: left;
-		transition: background 0.12s;
+		transition: background var(--transition-fast);
 		font-family: var(--font-sans);
 	}
 	.service-header:hover { background: var(--bg-elevated); }
@@ -569,24 +421,12 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: var(--text-dim, var(--text-muted));
+		color: var(--text-dim);
 		flex-shrink: 0;
 	}
 
 	.service-name { color: var(--text-primary); font-weight: 500; }
 	.service-type { color: var(--text-muted); font-size: 11px; text-transform: capitalize; }
-	.service-status {
-		font-size: 11px;
-		padding: 2px 7px;
-		border-radius: 10px;
-		background: var(--bg-elevated, #f3f4f6);
-		color: var(--text-muted);
-		font-weight: 500;
-	}
-	.service-status.running {
-		background: #dcfce7;
-		color: #15803d;
-	}
 
 	/* Expanded detail panel */
 	.service-details {
@@ -607,39 +447,25 @@
 	}
 
 	.detail-key {
-		color: var(--text-dim, var(--text-muted));
+		color: var(--text-dim);
 		font-weight: 500;
 		flex-shrink: 0;
 	}
 
 	.detail-val {
-		color: var(--text-secondary, var(--text-primary));
-		font-family: var(--font-mono, monospace);
+		color: var(--text-secondary);
+		font-family: var(--font-mono);
 		word-break: break-all;
 	}
-	.detail-val.dim { color: var(--text-dim, var(--text-muted)); font-size: 11px; }
+	.detail-val.dim { color: var(--text-dim); font-size: 11px; }
 
 	/* Rename */
 	.card-desc { font-size: 13px; color: var(--text-muted); margin: -8px 0 0; line-height: 1.5; }
 	.rename-form { display: flex; flex-direction: column; gap: 10px; }
-	.rename-input {
-		width: 100%; padding: 8px 12px;
-		font-size: 14px; font-family: var(--font-sans);
-		border: 1px solid var(--border); border-radius: 6px;
-		background: var(--bg-base); color: var(--text-primary);
-		box-sizing: border-box; outline: none;
-		transition: border-color 0.15s;
-	}
-	.rename-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
-	.rename-input:disabled { opacity: 0.6; }
-	.rename-error { font-size: 12px; color: #dc2626; margin: 0; }
 	.rename-actions { display: flex; justify-content: flex-end; }
-	.rename-btn { display: flex; align-items: center; gap: 6px; min-width: 110px; justify-content: center; }
 
 	/* Danger zone */
-	.danger-card { border-color: #fecaca; }
-
-	.danger-title { color: #dc2626; }
+	.danger-title { color: var(--accent-red); }
 
 	.danger-row {
 		display: flex;
@@ -650,161 +476,15 @@
 
 	.danger-desc {
 		font-size: 13px;
-		color: var(--text-secondary, var(--text-muted));
+		color: var(--text-secondary);
 	}
 	.danger-desc strong { color: var(--text-primary); display: block; margin-bottom: 4px; font-size: 14px; }
 	.danger-desc p { margin: 0; line-height: 1.5; }
-
-	.btn-danger-outline {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-shrink: 0;
-		background: transparent;
-		border: 1px solid #fca5a5;
-		color: #dc2626;
-		padding: 7px 14px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: all 0.15s;
-	}
-	.btn-danger-outline:hover { background: #fee2e2; border-color: #dc2626; }
-
-	/* Modal */
-	.modal-backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.45);
-		z-index: 100;
-	}
-
-	.modal {
-		position: fixed;
-		top: 50%;
-		left: 50%;
-		transform: translate(-50%, -50%);
-		width: min(500px, calc(100vw - 32px));
-		background: var(--bg-surface, #fff);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
-		z-index: 101;
-		display: flex;
-		flex-direction: column;
-	}
-
-	.modal-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 16px 20px;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.modal-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-
-	.close-btn {
-		background: none;
-		border: none;
-		color: var(--text-muted);
-		cursor: pointer;
-		padding: 4px;
-		border-radius: 4px;
-		display: flex;
-		align-items: center;
-	}
-	.close-btn:hover:not(:disabled) { color: var(--text-primary); }
-
-	.modal-body {
-		padding: 20px;
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-	}
-
-	.danger-notice {
-		display: flex;
-		gap: 12px;
-		padding: 14px;
-		background: #fef2f2;
-		border: 1px solid #fecaca;
-		border-radius: 6px;
-		color: #dc2626;
-		font-size: 13px;
-	}
-	.danger-notice :global(svg) { flex-shrink: 0; margin-top: 2px; }
-	.danger-notice strong { display: block; margin-bottom: 6px; }
-	.danger-notice ul {
-		margin: 0;
-		padding-left: 18px;
-		color: #7f1d1d;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.confirm-label {
-		font-size: 13px;
-		color: var(--text-secondary, var(--text-muted));
-		margin: 0;
-	}
-
-	.confirm-input {
-		width: 100%;
-		padding: 8px 12px;
-		font-size: 13px;
-		font-family: var(--font-mono, monospace);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		background: var(--bg-base);
-		color: var(--text-primary);
-		box-sizing: border-box;
-		outline: none;
-	}
-	.confirm-input:focus { border-color: #dc2626; box-shadow: 0 0 0 2px #fee2e2; }
-
-	.delete-error { font-size: 13px; color: #dc2626; margin: 0; }
-
-	.modal-footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 16px 20px;
-		border-top: 1px solid var(--border);
-	}
-
-	.btn-danger {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		background: #dc2626;
-		border: 1px solid #dc2626;
-		color: #fff;
-		padding: 7px 14px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.15s;
-	}
-	.btn-danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
-	.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
 	@media (max-width: 639px) {
 		.settings-page { padding: 16px; }
 		.resource-grid { grid-template-columns: repeat(2, 1fr); }
 		.danger-row { flex-direction: column; }
-		.info-row { grid-template-columns: 120px 1fr; }
 		.detail-row { grid-template-columns: 80px 1fr; }
 	}
 </style>
