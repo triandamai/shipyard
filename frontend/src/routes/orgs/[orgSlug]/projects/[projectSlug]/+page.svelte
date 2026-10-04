@@ -3,6 +3,7 @@
 	import '@xyflow/svelte/dist/style.css';
 	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff, MousePointerSquareDashed, Hand } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
+	import { Button, Badge, Spinner, EmptyState, Dropdown } from '$lib/components/ui';
 
 	import { page } from '$app/state';
 	import { api } from '$lib/api/client';
@@ -287,16 +288,12 @@
 	}
 
 	// ── App bar state ──────────────────────────────────────────────────────────
-	let projectMenuOpen = $state(false);
 	let activeProjectName = $derived(
 		$projectStore.projects.find((p) => p.slug === projectSlug)?.name ?? projectSlug
 	);
 	let allProjects = $derived($projectStore.projects);
 
-	function closeProjectMenu() { projectMenuOpen = false; }
-
 	function switchProject(slug: string) {
-		closeProjectMenu();
 		if (slug !== projectSlug) {
 			import('$app/navigation').then(({ goto }) => goto(`/orgs/${orgSlug}/projects/${slug}`));
 		}
@@ -379,152 +376,138 @@
 <div class="canvas-container">
 	<!-- Canvas app bar -->
 	<div class="canvas-appbar">
-	{#if projectMenuOpen}
-		<div class="appbar-backdrop" onclick={closeProjectMenu} role="presentation"></div>
-	{/if}
+		<div class="project-switcher">
+			<Dropdown triggerLabel="Switch project">
+				{#snippet trigger()}
+					<span class="project-btn">
+						<span class="project-name">{activeProjectName}</span>
+						<ChevronDown size={14} />
+					</span>
+				{/snippet}
+				{#snippet menu(close)}
+					{#each allProjects as project}
+						<button
+							type="button"
+							class={project.slug === projectSlug ? 'ui-dropdown-item project-menu-item active' : 'ui-dropdown-item project-menu-item'}
+							onclick={() => { close(); switchProject(project.slug); }}
+							role="menuitem"
+						>
+							{project.name}
+						</button>
+					{/each}
+					{#if allProjects.length === 0}
+						<div class="project-menu-empty">No projects</div>
+					{/if}
+				{/snippet}
+			</Dropdown>
+		</div>
 
-	<div class="project-switcher">
-		<button
-			class="project-btn"
-			onclick={() => projectMenuOpen = !projectMenuOpen}
-			aria-haspopup="true"
-			aria-expanded={projectMenuOpen}
+		<div class="appbar-spacer"></div>
+
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={() => syncTopology(orgId, projectId)}
+			title="Reload topology"
+			aria-label="Reload topology"
 		>
-			<span class="project-name">{activeProjectName}</span>
-			<ChevronDown size={14} class={projectMenuOpen ? 'rotate-180' : ''} />
-		</button>
+			<RefreshCw size={14} />
+		</Button>
 
-		{#if projectMenuOpen}
-			<div class="project-menu" role="menu">
-				{#each allProjects as project}
-					<button
-						class="project-menu-item"
-						class:active={project.slug === projectSlug}
-						onclick={() => switchProject(project.slug)}
-						role="menuitem"
-					>
-						{project.name}
-					</button>
-				{/each}
-				{#if allProjects.length === 0}
-					<div class="project-menu-empty">No projects</div>
+		{#if canEditProject}
+			<div class="appbar-divider"></div>
+
+			<Button
+				variant={interactionMode === 'select' ? 'secondary' : 'ghost'}
+				size="icon"
+				onclick={() => interactionMode = (interactionMode === 'pan' ? 'select' : 'pan')}
+				title={interactionMode === 'select' ? 'Switch to Pan mode' : 'Switch to Select mode (draw marquee box to move multiple nodes)'}
+				aria-label="Toggle selection mode"
+			>
+				{#if interactionMode === 'select'}
+					<MousePointerSquareDashed size={14} />
+				{:else}
+					<Hand size={14} />
 				{/if}
-			</div>
+			</Button>
+
+			<div class="appbar-divider"></div>
+
+			<Button size="sm" onclick={openAddResource}>
+				<Plus size={13} />
+				Add Resource
+			</Button>
+
+			<Button
+				variant="ghost"
+				size="icon"
+				onclick={() => goto(`/orgs/${orgSlug}/projects/${projectSlug}/settings`)}
+				title="Project settings"
+				aria-label="Project settings"
+			>
+				<Settings2 size={14} />
+			</Button>
 		{/if}
 	</div>
 
-	<button
-		class="appbar-action"
-		style="margin-left: auto;"
-		onclick={() => syncTopology(orgId, projectId)}
-		title="Reload topology"
-		aria-label="Reload topology"
-	>
-		<RefreshCw size={14} />
-	</button>
-
-	{#if canEditProject}
-		<div class="appbar-divider"></div>
-
-		<button
-			class="appbar-action"
-			class:active={interactionMode === 'select'}
-			onclick={() => interactionMode = (interactionMode === 'pan' ? 'select' : 'pan')}
-			title={interactionMode === 'select' ? 'Switch to Pan mode' : 'Switch to Select mode (draw marquee box to move multiple nodes)'}
-			aria-label="Toggle selection mode"
-		>
-			{#if interactionMode === 'select'}
-				<MousePointerSquareDashed size={14} />
-			{:else}
-				<Hand size={14} />
-			{/if}
-		</button>
-
-		<div class="appbar-divider"></div>
-
-		<button
-			class="appbar-add-btn"
-			onclick={openAddResource}
-		>
-			<Plus size={13} />
-			Add Resource
-		</button>
-
-		<button
-			class="appbar-action"
-			onclick={() => goto(`/orgs/${orgSlug}/projects/${projectSlug}/settings`)}
-			title="Project settings"
-			aria-label="Project settings"
-		>
-			<Settings2 size={14} />
-		</button>
-	{/if}
-</div>
-
-<div class="canvas-wrapper">
-	{#if memberLoaded && !canViewProject}
-		<!-- Access denied — user has no project permissions -->
-		<div class="access-denied">
-			<ShieldOff size={36} class="access-denied-icon" />
-			<h2 class="access-denied-title">Access Restricted</h2>
-			<p class="access-denied-desc">
-				You don't have permission to view this project.<br />
-				Contact your organization admin to request access.
-			</p>
-			<button class="btn btn-secondary btn-sm" onclick={() => goto(`/orgs/${orgSlug}`)}>
-				Back to overview
-			</button>
-		</div>
-	{:else if isLoading}
-		<div class="canvas-loading">
-			<div class="spinner"></div>
-			<span>Loading topology…</span>
-		</div>
-	{:else if error}
-		<div class="canvas-error">
-			<span>Failed to load topology: {error}</span>
-			<button
-				class="btn btn-secondary btn-sm"
-				onclick={() => loadTopology(orgId, projectId)}
+	<div class="canvas-wrapper">
+		{#if memberLoaded && !canViewProject}
+			<!-- Access denied — user has no project permissions -->
+			<div class="access-denied">
+				<EmptyState message="Access Restricted" sub="You don't have permission to view this project. Contact your organization admin to request access.">
+					{#snippet icon()}<ShieldOff size={36} />{/snippet}
+				</EmptyState>
+				<Button variant="secondary" size="sm" onclick={() => goto(`/orgs/${orgSlug}`)}>
+					Back to overview
+				</Button>
+			</div>
+		{:else if isLoading}
+			<div class="canvas-loading">
+				<Spinner size={32} />
+				<span>Loading topology…</span>
+			</div>
+		{:else if error}
+			<div class="canvas-error">
+				<span>Failed to load topology: {error}</span>
+				<Button variant="secondary" size="sm" onclick={() => loadTopology(orgId, projectId)}>
+					Retry
+				</Button>
+			</div>
+		{:else}
+			<SvelteFlow
+				bind:nodes
+				bind:edges
+				{nodeTypes}
+				fitView
+				nodesDraggable={canEditProject}
+				nodesConnectable={canEditProject}
+				elementsSelectable={canEditProject}
+				panOnDrag={interactionMode === 'pan'}
+				selectionOnDrag={interactionMode === 'select'}
+				selectionMode={SelectionMode.Partial}
+				onnodeclick={handleNodeClick}
+				onnodedragstop={handleNodeDragStop}
 			>
-				Retry
-			</button>
-		</div>
-	{:else}
-		<SvelteFlow
-			bind:nodes
-			bind:edges
-			{nodeTypes}
-			fitView
-			nodesDraggable={canEditProject}
-			nodesConnectable={canEditProject}
-			elementsSelectable={canEditProject}
-			panOnDrag={interactionMode === 'pan'}
-			selectionOnDrag={interactionMode === 'select'}
-			selectionMode={SelectionMode.Partial}
-			onnodeclick={handleNodeClick}
-			onnodedragstop={handleNodeDragStop}
-		>
-			<Controls />
-			<Background />
-			<MiniMap
-				style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);"
-			/>
-			{#if interactionMode === 'select'}
-				<Panel position="top-center" class="selection-banner">
-					<div class="selection-banner-content">
-						<MousePointerSquareDashed size={14} class="banner-icon" />
-						<span><strong>Select Mode Active</strong>: Drag on the canvas to draw a selection box. Hold Space or use right-click to pan.</span>
-						<button class="banner-close-btn" onclick={() => interactionMode = 'pan'}>Exit</button>
-					</div>
-				</Panel>
-			{/if}
-		</SvelteFlow>
+				<Controls />
+				<Background />
+				<MiniMap
+					style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);"
+				/>
+				{#if interactionMode === 'select'}
+					<Panel position="top-center" class="selection-banner">
+						<div class="selection-banner-content">
+							<MousePointerSquareDashed size={14} class="banner-icon" />
+							<span><strong>Select Mode Active</strong>: Drag on the canvas to draw a selection box. Hold Space or use right-click to pan.</span>
+							<Button variant="secondary" size="sm" onclick={() => interactionMode = 'pan'}>Exit</Button>
+						</div>
+					</Panel>
+				{/if}
+			</SvelteFlow>
 
-		{#if !canEditProject && canViewProject}
-			<div class="view-only-badge">View only</div>
+			{#if !canEditProject && canViewProject}
+				<div class="view-only-badge"><Badge tone="neutral">View only</Badge></div>
+			{/if}
 		{/if}
-	{/if}
 	</div>
 </div>
 
@@ -559,34 +542,12 @@
 		text-align: center;
 		padding: 32px;
 	}
-	:global(.access-denied-icon) { color: var(--text-dim); }
-	.access-denied-title {
-		font-size: 18px;
-		font-weight: 600;
-		margin: 0;
-	}
-	.access-denied-desc {
-		font-size: 13px;
-		color: var(--text-muted);
-		line-height: 1.6;
-		margin: 0;
-	}
-
-	/* ── View-only badge ────────────────────────────────────────────── */
+		/* ── View-only badge ────────────────────────────────────────────── */
 	.view-only-badge {
 		position: absolute;
 		bottom: 16px;
 		left: 50%;
 		transform: translateX(-50%);
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 20px;
-		padding: 4px 12px;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-muted);
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
 		pointer-events: none;
 		z-index: 10;
 	}
@@ -666,25 +627,6 @@
 		flex-shrink: 0;
 	}
 
-	.appbar-add-btn {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 10px;
-		background: var(--accent);
-		color: #fff;
-		border: none;
-		border-radius: var(--radius-md);
-		cursor: pointer;
-		font-size: 12px;
-		font-weight: 600;
-		font-family: var(--font-sans);
-		transition: background var(--transition-fast);
-		white-space: nowrap;
-	}
-
-	.appbar-add-btn:hover { background: var(--accent-hover); }
-
 	.canvas-loading,
 	.canvas-error {
 		display: flex;
@@ -695,21 +637,6 @@
 		height: 100%;
 		color: var(--text-muted);
 		font-size: 13px;
-	}
-
-	.spinner {
-		width: 32px;
-		height: 32px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
 	}
 
 	/* ── Canvas app bar ── */
@@ -725,12 +652,6 @@
 		box-shadow: var(--shadow-sm);
 	}
 
-	.appbar-backdrop {
-		position: fixed;
-		inset: 0;
-		z-index: 100;
-	}
-
 	.project-switcher { position: relative; }
 
 	.project-btn {
@@ -741,11 +662,10 @@
 		background: var(--bg-elevated);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
-		cursor: pointer;
 		font-size: 13px;
 		font-weight: 600;
 		color: var(--text-primary);
-		transition: all var(--transition-fast);
+		transition: background var(--transition-fast), border-color var(--transition-fast);
 	}
 
 	.project-btn:hover {
@@ -755,39 +675,7 @@
 
 	.project-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-	.project-menu {
-		position: absolute;
-		top: calc(100% + 6px);
-		left: 0;
-		min-width: 180px;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		box-shadow: var(--shadow-lg);
-		z-index: 200;
-		overflow: hidden;
-		padding: 4px;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-
-	.project-menu-item {
-		display: block;
-		width: 100%;
-		text-align: left;
-		padding: 7px 10px;
-		background: none;
-		border: none;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		font-size: 13px;
-		color: var(--text-secondary);
-		transition: all var(--transition-fast);
-	}
-
-	.project-menu-item:hover { background: var(--bg-elevated); color: var(--text-primary); }
-	.project-menu-item.active { color: var(--accent); font-weight: 600; background: var(--accent-muted); }
+	.project-switcher :global(.project-menu-item.active) { color: var(--accent); font-weight: 600; background: var(--accent-muted); }
 
 	.project-menu-empty {
 		padding: 8px 10px;
@@ -795,24 +683,7 @@
 		color: var(--text-muted);
 	}
 
-	.appbar-action {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		background: none;
-		border: none;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		color: var(--text-muted);
-		transition: all var(--transition-fast);
-	}
-
-	.appbar-action:hover { background: var(--bg-elevated); color: var(--text-primary); }
-	.appbar-action.active { background: var(--accent-muted); color: var(--accent); }
-
-	:global(.rotate-180) { transform: rotate(180deg); transition: transform var(--transition-fast); }
+	.appbar-spacer { flex: 1; }
 
 	:global(.svelte-flow .selection-banner) {
 		background: var(--bg-surface);
@@ -838,24 +709,6 @@
 	:global(.selection-banner .banner-icon) {
 		color: var(--accent);
 		flex-shrink: 0;
-	}
-
-	.banner-close-btn {
-		background: var(--accent-muted);
-		color: var(--accent);
-		border: none;
-		border-radius: var(--radius-sm);
-		padding: 2px 8px;
-		font-size: 11px;
-		font-weight: 600;
-		cursor: pointer;
-		margin-left: 8px;
-		transition: background var(--transition-fast);
-	}
-
-	.banner-close-btn:hover {
-		background: var(--accent);
-		color: white;
 	}
 
 	@keyframes slide-down {
