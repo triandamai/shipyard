@@ -1,33 +1,36 @@
 <script lang="ts">
 	import { toastStore, type Toast } from '$lib/stores/toast.store';
 	import { fly, fade } from 'svelte/transition';
+	import { Check, X, TriangleAlert, Info } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui';
 
-	const icons: Record<Toast['type'], string> = {
-		success: '✓',
-		error: '✕',
-		warning: '⚠',
-		info: 'ℹ'
+	const icons: Record<Toast['type'], typeof Check> = {
+		success: Check,
+		error: X,
+		warning: TriangleAlert,
+		info: Info
 	};
 </script>
 
 {#if $toastStore.length > 0}
 	<div class="toast-container" role="region" aria-label="Notifications" aria-live="polite">
 		{#each $toastStore as toast (toast.id)}
+			{@const Icon = icons[toast.type]}
 			<div
 				class="toast toast--{toast.type}"
 				in:fly={{ y: -20, duration: 200 }}
 				out:fade={{ duration: 150 }}
 			>
-				<span class="toast__icon">{icons[toast.type]}</span>
+				<span class="toast__icon"><Icon size={15} /></span>
 				<div class="toast__body">
 					<span class="toast__title">{toast.title}</span>
 					{#if toast.message}
 						<span class="toast__msg">{toast.message}</span>
 					{/if}
 				</div>
-				<button class="toast__close" onclick={() => toastStore.remove(toast.id)} aria-label="Dismiss">
-					✕
-				</button>
+				<Button variant="ghost" size="icon" onclick={() => toastStore.remove(toast.id)} aria-label="Dismiss">
+					<X size={14} />
+				</Button>
 			</div>
 		{/each}
 	</div>
@@ -53,7 +56,7 @@
 		display: flex;
 		align-items: flex-start;
 		gap: 0.625rem;
-		padding: 0.75rem 1rem;
+		padding: 0.625rem 0.5rem 0.625rem 1rem;
 		border-radius: var(--radius-lg);
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
@@ -71,7 +74,7 @@
 
 	.toast__icon {
 		flex-shrink: 0;
-		font-size: 0.875rem;
+		display: flex;
 		margin-top: 1px;
 	}
 
@@ -97,18 +100,4 @@
 		font-size: 0.75rem;
 		line-height: 1.4;
 	}
-
-	.toast__close {
-		flex-shrink: 0;
-		background: none;
-		border: none;
-		padding: 0;
-		cursor: pointer;
-		color: var(--text-muted);
-		font-size: 0.75rem;
-		line-height: 1;
-		opacity: 0.6;
-	}
-
-	.toast__close:hover { opacity: 1; }
 </style>

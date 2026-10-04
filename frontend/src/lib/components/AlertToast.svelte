@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Cpu, MemoryStick, HardDrive, Wifi, X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui';
 	import { alertsStore, type SpikeAlert } from '$lib/stores/alerts.store.svelte';
 
 	const ICONS = {
@@ -54,9 +55,9 @@
 					· {alert.node_id}
 				</span>
 			</div>
-			<button class="alert-close" onclick={() => alertsStore.dismiss(alert.id)} aria-label="Dismiss">
+			<Button variant="ghost" size="icon" onclick={() => alertsStore.dismiss(alert.id)} aria-label="Dismiss">
 				<X size={12} />
-			</button>
+			</Button>
 		</div>
 	{/each}
 </div>
@@ -77,11 +78,11 @@
 		display: flex;
 		align-items: flex-start;
 		gap: 10px;
-		padding: 10px 12px;
-		border-radius: var(--radius-md, 8px);
-		background: var(--surface-raised, #1e2535);
-		border: 1px solid var(--border, #2d3748);
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+		padding: 8px 6px 8px 12px;
+		border-radius: var(--radius-md);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		box-shadow: var(--shadow-lg);
 		min-width: 260px;
 		max-width: 340px;
 		pointer-events: all;
@@ -93,20 +94,20 @@
 		to   { transform: translateX(0);    opacity: 1; }
 	}
 
-	.alert-cpu  { border-left: 3px solid #f59e0b; }
-	.alert-mem  { border-left: 3px solid #8b5cf6; }
-	.alert-disk { border-left: 3px solid #ef4444; }
-	.alert-net  { border-left: 3px solid #3b82f6; }
+	.alert-cpu  { border-left: 3px solid var(--accent-yellow); }
+	.alert-mem  { border-left: 3px solid var(--accent); }
+	.alert-disk { border-left: 3px solid var(--accent-red); }
+	.alert-net  { border-left: 3px solid var(--accent-green); }
 
 	.alert-icon {
 		flex-shrink: 0;
 		margin-top: 1px;
 		color: var(--text-muted);
 	}
-	.alert-cpu  .alert-icon { color: #f59e0b; }
-	.alert-mem  .alert-icon { color: #8b5cf6; }
-	.alert-disk .alert-icon { color: #ef4444; }
-	.alert-net  .alert-icon { color: #3b82f6; }
+	.alert-cpu  .alert-icon { color: var(--accent-yellow); }
+	.alert-mem  .alert-icon { color: var(--accent); }
+	.alert-disk .alert-icon { color: var(--accent-red); }
+	.alert-net  .alert-icon { color: var(--accent-green); }
 
 	.alert-body {
 		flex: 1;
@@ -126,17 +127,4 @@
 		color: var(--text-muted);
 		line-height: 1.4;
 	}
-
-	.alert-close {
-		flex-shrink: 0;
-		background: none;
-		border: none;
-		cursor: pointer;
-		color: var(--text-dim, #4a5568);
-		padding: 0;
-		display: flex;
-		align-items: center;
-		margin-top: 1px;
-	}
-	.alert-close:hover { color: var(--text-muted); }
 </style>
