@@ -205,6 +205,13 @@
 		padding: 10px 16px;
 		color: var(--text-secondary);
 	}
+	/* Expanded detail rows (a full-width colspan cell) must never resize the
+	   table: zero their intrinsic width so only the header columns size the
+	   table, and wrap long unbroken values inside the available width. */
+	.ui-data-table-el :global(td[colspan] > *) {
+		contain: inline-size;
+		overflow-wrap: anywhere;
+	}
 	:global(.ui-data-table) :global(.ui-pagination) {
 		padding: 10px 16px;
 		border-top: 1px solid var(--border);
