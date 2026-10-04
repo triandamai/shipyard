@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { X } from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import ProgressBar from '$lib/components/ui/ProgressBar.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import { formatDistanceToNow } from 'date-fns';
 	import { api } from '$lib/api/client';
 	import type { Container, ContainerStats } from '$lib/api/types';
@@ -190,25 +194,26 @@
 					{#if runningContainers.length > 1}
 						<div class="mvo-replica-group">
 							{#each runningContainers as c (c.id)}
-								<button
-									class={monitorTarget?.id === c.id ? 'mvo-replica-btn active' : 'mvo-replica-btn'}
+								<Button
+									variant={monitorTarget?.id === c.id ? 'primary' : 'ghost'}
+									size="sm"
 									onclick={() => selectMonitorTarget(c)}
 								>
 									replica-{c.replica_index ?? '?'}
-								</button>
+								</Button>
 							{/each}
 						</div>
 					{/if}
 				</div>
 				<div class="mvo-controls">
-					<button class="mvo-close-btn" onclick={onClose} title="Close"><X size={15} /></button>
+					<Button variant="ghost" size="icon" onclick={onClose} title="Close" aria-label="Close"><X size={15} /></Button>
 				</div>
 			</div>
 
 			<!-- Body -->
 			<div class="mvo-body">
 				{#if loadingContainers}
-					<div class="mvo-loading"><div class="spinner-sm"></div> Loading containers…</div>
+					<div class="mvo-loading"><Spinner size={16} /> Loading containers…</div>
 
 				{:else if runningContainers.length === 0}
 					<div class="mvo-empty">No running replicas to monitor.</div>
@@ -217,7 +222,7 @@
 					<div class="mvo-error">{monitorError}</div>
 
 				{:else if monitorLoading && !currentStats}
-					<div class="mvo-loading"><div class="spinner-sm"></div> Fetching metrics…</div>
+					<div class="mvo-loading"><Spinner size={16} /> Fetching metrics…</div>
 
 				{:else}
 					<!-- 2×2 metric grid -->
@@ -229,11 +234,12 @@
 								<span class="metric-label">CPU</span>
 								<span class="metric-value cpu">{currentStats ? `${currentStats.cpu_percent.toFixed(1)}%` : '—'}</span>
 							</div>
+							<ProgressBar value={currentStats?.cpu_percent ?? 0} tone="blue" />
 							{#each [sparklinePaths(cpuHistory)] as cpu}
 								<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
 									{#if cpu.line}
-										<path d={cpu.area} fill="rgba(59,130,246,0.15)" />
-										<path d={cpu.line} fill="none" stroke="#3B82F6" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={cpu.area} style="fill:var(--accent);fill-opacity:0.15" />
+										<path d={cpu.line} style="stroke:var(--accent)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								</svg>
 							{/each}
@@ -250,11 +256,12 @@
 								<span class="metric-label">Memory</span>
 								<span class="metric-value mem">{currentStats ? `${currentStats.memory_percent.toFixed(1)}%` : '—'}</span>
 							</div>
+							<ProgressBar value={currentStats?.memory_percent ?? 0} tone="green" />
 							{#each [sparklinePaths(memHistory)] as mem}
 								<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
 									{#if mem.line}
-										<path d={mem.area} fill="rgba(16,185,129,0.15)" />
-										<path d={mem.line} fill="none" stroke="#10B981" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={mem.area} style="fill:var(--accent-green);fill-opacity:0.15" />
+										<path d={mem.line} style="stroke:var(--accent-green)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								</svg>
 							{/each}
@@ -273,20 +280,20 @@
 							<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
 								{#each [sparklinePaths(netRxHistory)] as netRx}
 									{#if netRx.line}
-										<path d={netRx.area} fill="rgba(99,102,241,0.12)" />
-										<path d={netRx.line} fill="none" stroke="#6366F1" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={netRx.area} style="fill:var(--accent);fill-opacity:0.12" />
+										<path d={netRx.line} style="stroke:var(--accent)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								{/each}
 								{#each [sparklinePaths(netTxHistory)] as netTx}
 									{#if netTx.line}
-										<path d={netTx.area} fill="rgba(244,114,182,0.10)" />
-										<path d={netTx.line} fill="none" stroke="#F472B6" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={netTx.area} style="fill:var(--accent-green);fill-opacity:0.10" />
+										<path d={netTx.line} style="stroke:var(--accent-green)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								{/each}
 							</svg>
 							<div class="metric-net-row">
-								<span class="net-chip rx">↓ {formatBytes(netRxDeltaPerSec)}/s</span>
-								<span class="net-chip tx">↑ {formatBytes(netTxDeltaPerSec)}/s</span>
+								<Badge tone="blue">↓ {formatBytes(netRxDeltaPerSec)}/s</Badge>
+								<Badge tone="green">↑ {formatBytes(netTxDeltaPerSec)}/s</Badge>
 							</div>
 						</div>
 
@@ -298,20 +305,20 @@
 							<svg class="spark" viewBox="0 0 200 50" preserveAspectRatio="none">
 								{#each [sparklinePaths(blkReadHistory)] as blkR}
 									{#if blkR.line}
-										<path d={blkR.area} fill="rgba(251,191,36,0.12)" />
-										<path d={blkR.line} fill="none" stroke="#FBBF24" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={blkR.area} style="fill:var(--accent-yellow);fill-opacity:0.12" />
+										<path d={blkR.line} style="stroke:var(--accent-yellow)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								{/each}
 								{#each [sparklinePaths(blkWriteHistory)] as blkW}
 									{#if blkW.line}
-										<path d={blkW.area} fill="rgba(249,115,22,0.10)" />
-										<path d={blkW.line} fill="none" stroke="#F97316" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+										<path d={blkW.area} style="fill:var(--accent-red);fill-opacity:0.10" />
+										<path d={blkW.line} style="stroke:var(--accent-red)" fill="none" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
 									{/if}
 								{/each}
 							</svg>
 							<div class="metric-net-row">
-								<span class="net-chip blk-r">R {formatBytes(currentStats?.block_read_bytes ?? 0)}</span>
-								<span class="net-chip blk-w">W {formatBytes(currentStats?.block_write_bytes ?? 0)}</span>
+								<Badge tone="yellow">R {formatBytes(currentStats?.block_read_bytes ?? 0)}</Badge>
+								<Badge tone="red">W {formatBytes(currentStats?.block_write_bytes ?? 0)}</Badge>
 							</div>
 						</div>
 					</div>
@@ -344,20 +351,20 @@
 		width: 100%; max-width: 1100px;
 		height: 58vh; min-height: 360px;
 		display: flex; flex-direction: column;
-		background: #0d1117;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
 		border-bottom: none;
-		border-radius: 10px 10px 0 0;
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 		overflow: hidden;
-		box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.6);
+		box-shadow: var(--shadow-lg);
 	}
 
 	/* ── Header ── */
 	.mvo-header {
 		display: flex; align-items: center;
 		padding: 10px 14px; gap: 10px;
-		background: #161b22;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+		background: var(--bg-elevated);
+		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 	}
 
@@ -366,7 +373,7 @@
 	}
 
 	.mvo-title {
-		font-size: 13px; font-weight: 700; color: #e6edf3;
+		font-size: 13px; font-weight: 700; color: var(--text-primary);
 		white-space: nowrap;
 	}
 
@@ -374,31 +381,7 @@
 		display: flex; align-items: center; gap: 8px; flex-shrink: 0;
 	}
 
-	.mvo-close-btn {
-		display: flex; align-items: center; justify-content: center;
-		width: 28px; height: 28px; border-radius: 6px;
-		background: none; border: none; cursor: pointer;
-		color: #8b949e; transition: all 0.12s;
-	}
-	.mvo-close-btn:hover { background: rgba(255, 255, 255, 0.08); color: #e6edf3; }
-
-	/* Replica selector */
-	.mvo-replica-group {
-		display: flex; flex-wrap: wrap; gap: 3px;
-		background: rgba(255, 255, 255, 0.04);
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 5px;
-		padding: 2px 4px;
-	}
-
-	.mvo-replica-btn {
-		font-size: 10px; font-weight: 600; font-family: var(--font-mono, monospace);
-		padding: 2px 7px; border-radius: 3px;
-		background: none; border: none; cursor: pointer;
-		color: #8b949e; transition: all 0.12s;
-	}
-	.mvo-replica-btn:hover { color: #e6edf3; background: rgba(255, 255, 255, 0.06); }
-	.mvo-replica-btn.active { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+	.mvo-replica-group { display: flex; flex-wrap: wrap; gap: 4px; }
 
 	/* ── Body ── */
 	.mvo-body {
@@ -409,22 +392,22 @@
 
 	.mvo-loading {
 		display: flex; align-items: center; gap: 10px;
-		padding: 32px; color: #8b949e; font-size: 13px;
+		padding: 32px; color: var(--text-muted); font-size: 13px;
 	}
 
 	.mvo-empty {
 		display: flex; align-items: center; justify-content: center;
 		flex: 1; min-height: 200px;
-		font-size: 13px; color: #484f58;
-		font-family: var(--font-mono, monospace);
+		font-size: 13px; color: var(--text-dim);
+		font-family: var(--font-mono);
 	}
 
 	.mvo-error {
 		margin: 16px; padding: 10px 12px;
-		font-size: 12px; color: #f85149;
-		background: rgba(248, 81, 73, 0.08);
-		border: 1px solid rgba(248, 81, 73, 0.2);
-		border-radius: 6px;
+		font-size: 12px; color: var(--accent-red);
+		background: var(--accent-red-muted);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 25%, transparent);
+		border-radius: var(--radius-md);
 	}
 
 	/* ── Metric grid ── */
@@ -432,13 +415,15 @@
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 1px;
-		background: rgba(255, 255, 255, 0.06);
-		flex: 1;
+		background: var(--border);
+		flex: 0 1 auto;
+		min-height: 0;
 		align-content: start;
+		overflow-y: auto;
 	}
 
 	.metric-card {
-		background: #0d1117;
+		background: var(--bg-surface);
 		padding: 14px 16px 12px;
 		display: flex; flex-direction: column; gap: 8px;
 	}
@@ -449,59 +434,51 @@
 	}
 
 	.metric-label {
-		font-size: 10px; font-weight: 600; color: #8b949e;
+		font-size: 10px; font-weight: 600; color: var(--text-muted);
 		text-transform: uppercase; letter-spacing: 0.07em; flex-shrink: 0;
 	}
 
 	.metric-value {
 		font-size: 20px; font-weight: 700;
-		font-family: var(--font-mono, monospace); line-height: 1;
+		font-family: var(--font-mono); line-height: 1;
 	}
-	.metric-value.cpu { color: #3B82F6; }
-	.metric-value.mem { color: #10B981; }
+	.metric-value.cpu { color: var(--accent); }
+	.metric-value.mem { color: var(--accent-green); }
 
+	/* Sparkline <svg> — documented chart-geometry exception (colors via tokens) */
 	.spark {
 		width: 100%; height: 46px; display: block;
-		border-radius: 4px;
-		background: rgba(255, 255, 255, 0.03);
+		border-radius: var(--radius-sm);
+		background: var(--bg-elevated);
 		overflow: visible;
 	}
 
 	.metric-sub {
-		font-size: 10px; color: #8b949e;
-		font-family: var(--font-mono, monospace);
+		font-size: 10px; color: var(--text-muted);
+		font-family: var(--font-mono);
 	}
 
 	.metric-net-row {
 		display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
 	}
 
-	.net-chip {
-		font-size: 10px; font-weight: 600;
-		font-family: var(--font-mono, monospace);
-		padding: 2px 7px; border-radius: 99px;
-	}
-	.net-chip.rx    { background: rgba(99,102,241,0.15);  color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
-	.net-chip.tx    { background: rgba(236,72,153,0.12);  color: #f472b6; border: 1px solid rgba(236,72,153,0.25); }
-	.net-chip.blk-r { background: rgba(251,191,36,0.12);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
-	.net-chip.blk-w { background: rgba(249,115,22,0.12);  color: #fb923c; border: 1px solid rgba(249,115,22,0.25); }
-
 	/* ── Footer ── */
 	.mvo-footer {
 		display: flex; align-items: center; justify-content: space-between;
 		padding: 7px 16px;
-		border-top: 1px solid rgba(255, 255, 255, 0.07);
-		background: #161b22;
+		border-top: 1px solid var(--border);
+		background: var(--bg-elevated);
 		flex-shrink: 0;
+		margin-top: auto;
 	}
 
 	.mvo-footer-pids {
-		font-size: 10px; font-weight: 600; color: #8b949e;
-		font-family: var(--font-mono, monospace);
+		font-size: 10px; font-weight: 600; color: var(--text-muted);
+		font-family: var(--font-mono);
 	}
 
 	.mvo-footer-ts {
-		font-size: 10px; color: #484f58;
+		font-size: 10px; color: var(--text-dim);
 	}
 
 	@media (max-width: 639px) {

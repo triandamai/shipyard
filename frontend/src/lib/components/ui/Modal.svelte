@@ -1,3 +1,7 @@
+<script lang="ts" module>
+	let modalCounter = 0;
+</script>
+
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
@@ -6,39 +10,70 @@
 		title: string;
 		children: Snippet;
 		footer?: Snippet;
+		/** When false, Escape and scrim clicks do not close the dialog. */
+		dismissible?: boolean;
 	}
 
-	let { open = $bindable(), title, children, footer }: Props = $props();
+	let { open = $bindable(), title, children, footer, dismissible = true }: Props = $props();
+
+	const titleId = `ui-modal-title-${++modalCounter}`;
+	const FOCUSABLE =
+		'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 	let dialogEl: HTMLDivElement | undefined = $state();
+	let returnFocusTo: HTMLElement | null = null;
 
 	function close() {
 		open = false;
 	}
 
-	function onBackdropKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') close();
+	function onKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.stopPropagation();
+			if (dismissible) close();
+			return;
+		}
+		if (e.key !== 'Tab' || !dialogEl) return;
+		const items = [...dialogEl.querySelectorAll<HTMLElement>(FOCUSABLE)];
+		if (items.length === 0) {
+			e.preventDefault();
+			dialogEl.focus();
+			return;
+		}
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		if (e.shiftKey && (active === first || active === dialogEl)) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && active === last) {
+			e.preventDefault();
+			first.focus();
+		}
 	}
 
 	$effect(() => {
-		if (open) dialogEl?.focus();
+		if (!open) return;
+		returnFocusTo = document.activeElement as HTMLElement | null;
+		dialogEl?.focus();
+		return () => returnFocusTo?.focus();
 	});
 </script>
 
 {#if open}
-	<div class="ui-modal-scrim" role="presentation" onclick={close}>
+	<div class="ui-modal-scrim" role="presentation" onclick={() => { if (dismissible) close(); }}>
 		<div
 			class="ui-modal"
 			role="dialog"
 			aria-modal="true"
-			aria-labelledby="ui-modal-title"
+			aria-labelledby={titleId}
 			tabindex="-1"
 			bind:this={dialogEl}
 			onclick={(e) => e.stopPropagation()}
-			onkeydown={onBackdropKeydown}
+			onkeydown={onKeydown}
 		>
 			<div class="ui-modal-header">
-				<span id="ui-modal-title">{title}</span>
+				<span id={titleId}>{title}</span>
 			</div>
 			<div class="ui-modal-body">
 				{@render children()}
@@ -70,6 +105,7 @@
 		width: 100%;
 		max-width: 420px;
 		box-shadow: var(--shadow-lg);
+		outline: none;
 	}
 	.ui-modal-header {
 		padding: 14px 16px;

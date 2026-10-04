@@ -1,15 +1,15 @@
 <script lang="ts">
-	interface Props {
+	import type { HTMLTextareaAttributes } from 'svelte/elements';
+
+	interface Props extends Omit<HTMLTextareaAttributes, 'value' | 'class'> {
 		value: string;
 		rows?: number;
-		placeholder?: string;
-		id?: string;
 	}
 
-	let { value = $bindable(), rows = 3, placeholder, id }: Props = $props();
+	let { value = $bindable(), rows = 3, ...rest }: Props = $props();
 </script>
 
-<textarea {id} {rows} {placeholder} bind:value class="ui-textarea"></textarea>
+<textarea {...rest} {rows} bind:value class="ui-textarea"></textarea>
 
 <style>
 	.ui-textarea {

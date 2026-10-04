@@ -4,7 +4,18 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm, isAdminRole } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
-	import { Cloud, Loader2, AlertCircle, Trash2, RefreshCw, Check } from '@lucide/svelte';
+	import { Cloud, AlertCircle, Trash2, RefreshCw, Check } from '@lucide/svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+	import FormField from '$lib/components/ui/FormField.svelte';
+	import TextField from '$lib/components/ui/TextField.svelte';
+	import Select from '$lib/components/ui/Select.svelte';
+	import Checkbox from '$lib/components/ui/Checkbox.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import IconBadge from '$lib/components/ui/IconBadge.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import type { CloudflareConnectionStatus, SandboxPreviewDnsStatus, Organization } from '$lib/api/types';
 
 	let orgId   = $derived($orgStore.activeOrg?.id ?? '');
@@ -42,9 +53,10 @@
 		}
 	}
 
+	let disconnectOpen = $state(false);
+
 	async function disconnect() {
 		if (!orgId) return;
-		if (!confirm('Disconnect this Cloudflare account? Existing DNS records it created will NOT be deleted automatically.')) return;
 		await api.disconnectCloudflare(orgId);
 		await loadStatus();
 	}
@@ -118,23 +130,21 @@
 />
 
 {#if loading}
-	<div class="loading"><div class="spinner"></div><span>Loading…</span></div>
+	<div class="loading"><Spinner size={18} /><span>Loading…</span></div>
 {:else if canRead}
 
 <div class="cf-page">
-	<section class="settings-section">
+	<Card padding="0">
 		<div class="section-header">
-			<div class="section-icon"><Cloud size={16} /></div>
-			<div style="flex: 1;">
+			<IconBadge tone="blue"><Cloud size={16} /></IconBadge>
+			<div class="section-text">
 				<h2 class="section-title">Cloudflare</h2>
 				<p class="section-desc">Connect a Cloudflare account to automatically create DNS records when you add a domain to a service.</p>
 			</div>
 		</div>
 
 		{#if errorMsg}
-			<div class="error-banner" style="margin: 0 20px 12px;">
-				<AlertCircle size={14} /><span>{errorMsg}</span>
-			</div>
+			<div role="alert" class="cf-alert"><InlineAlert tone="error">{errorMsg}</InlineAlert></div>
 		{/if}
 
 		{#if status?.account_id}
@@ -144,7 +154,7 @@
 					<span class="cf-zone-count">{status.zones.length} zone{status.zones.length === 1 ? '' : 's'} available</span>
 				</div>
 				{#if canWrite}
-					<button class="cf-btn disconnect" onclick={disconnect}><Trash2 size={13} /> Disconnect</button>
+					<Button variant="danger-outline" size="sm" onclick={() => (disconnectOpen = true)}><Trash2 size={13} /> Disconnect</Button>
 				{/if}
 			</div>
 			{#if status.zones.length > 0}
@@ -156,53 +166,50 @@
 			{/if}
 		{:else if canWrite}
 			<form class="cf-connect-form" onsubmit={connect}>
-				<div class="field">
-					<span class="field-label">Cloudflare API Token</span>
-					<input class="field-input font-mono" type="password" placeholder="Paste an API token with Zone:DNS:Edit permission…" bind:value={tokenInput} autocomplete="off" />
-					<p class="field-hint">Create one at <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: underline;">dash.cloudflare.com/profile/api-tokens</a> with "Zone / DNS / Edit" permission for the zones you want Shipyard to manage.</p>
-				</div>
+				<FormField label="Cloudflare API Token" for="cf-token">
+					<TextField id="cf-token" type="password" placeholder="Paste an API token with Zone:DNS:Edit permission…" bind:value={tokenInput} autocomplete="off" />
+					<p class="field-hint">Create one at <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">dash.cloudflare.com/profile/api-tokens</a> with "Zone / DNS / Edit" permission for the zones you want Shipyard to manage.</p>
+				</FormField>
 				<div class="save-bar">
-					<button type="submit" class="cf-btn connect" disabled={connecting}>
-						{#if connecting}<Loader2 size={12} class="spin" /> Connecting…{:else}Connect{/if}
-					</button>
+					<Button type="submit" size="sm" disabled={connecting}>
+						{#if connecting}<Spinner size={12} tone="current" /> Connecting…{:else}Connect{/if}
+					</Button>
 				</div>
 			</form>
 		{:else}
-			<div class="empty-state">No Cloudflare account connected.</div>
+			<EmptyState message="No Cloudflare account connected." />
 		{/if}
-	</section>
+	</Card>
 
 	{#if previewDns}
-		<section class="settings-section">
+		<Card padding="0">
 			<div class="section-header">
-				<div class="section-icon" style="background: rgba(139,92,246,0.1); color: #8B5CF6;"><RefreshCw size={16} /></div>
-				<div style="flex: 1;">
+				<IconBadge tone="yellow"><RefreshCw size={16} /></IconBadge>
+				<div class="section-text">
 					<h2 class="section-title">Sandbox Preview DNS</h2>
 					<p class="section-desc">Platform-wide: one wildcard DNS record for <code>*.{previewDns.preview_base_domain}</code>, owned by whichever org's Cloudflare connection covers that zone. Only visible/usable by platform owners or superadmins.</p>
 				</div>
 			</div>
 			<div class="fields">
-				<div class="field">
-					<span class="field-label">DNS-owner organization</span>
+				<FormField label="DNS-owner organization" for="cf-owner-org">
 					{#if myOrgs.length > 0}
-						<select class="field-input" bind:value={selectedOwnerOrgId}>
-							<option value="" disabled>Select an organization…</option>
-							{#each myOrgs as org (org.id)}
-								<option value={org.id}>{org.name}</option>
-							{/each}
-						</select>
+						<Select
+							id="cf-owner-org"
+							bind:value={selectedOwnerOrgId}
+							options={[
+								{ value: '', label: 'Select an organization…', disabled: true },
+								...myOrgs.map((org) => ({ value: org.id, label: org.name })),
+							]}
+						/>
 					{:else}
-						<input class="field-input font-mono" placeholder="org id (UUID)" bind:value={selectedOwnerOrgId} />
+						<TextField id="cf-owner-org" placeholder="org id (UUID)" bind:value={selectedOwnerOrgId} />
 					{/if}
 					<p class="field-hint">The org whose Cloudflare connection covers <code>{previewDns.preview_base_domain}</code>'s zone — almost always your own platform-operator org, not a customer org.</p>
-				</div>
+				</FormField>
 				<div class="field">
-					<label class="proxied-toggle">
-						<input type="checkbox" bind:checked={selectedProxied} />
-						<span>Proxy through Cloudflare (orange cloud)</span>
-					</label>
+					<Checkbox bind:checked={selectedProxied} label="Proxy through Cloudflare (orange cloud)" />
 					<p class="field-hint proxied-warning">
-						<AlertCircle size={12} style="display:inline;vertical-align:-2px;" />
+						<AlertCircle size={12} class="inline-icon" />
 						Not recommended: Shipyard issues its own TLS certificate per sandbox preview via Let's Encrypt,
 						which requires Cloudflare to pass the ACME HTTP challenge straight through. Proxying intercepts
 						that challenge instead, so enabling this will break HTTPS for every sandbox preview URL unless
@@ -211,41 +218,46 @@
 					</p>
 				</div>
 				{#if ownerError}
-					<div class="error-banner"><AlertCircle size={14} /><span>{ownerError}</span></div>
+					<div role="alert"><InlineAlert tone="error">{ownerError}</InlineAlert></div>
 				{/if}
-				<div class="save-bar" style="justify-content: flex-start; gap: 8px;">
-					<button class="cf-btn connect" onclick={saveOwner} disabled={savingOwner || !selectedOwnerOrgId}>
-						{#if savingOwner}<Loader2 size={12} class="spin" /> Saving…{:else}Save Owner{/if}
-					</button>
-					<button class="cf-btn connect" onclick={syncNow} disabled={syncing || !previewDns.owner_org_id}>
-						{#if syncing}<Loader2 size={12} class="spin" /> Syncing…{:else}<RefreshCw size={13} /> Sync DNS record{/if}
-					</button>
-					{#if syncMsg}<span class="sync-msg">{syncMsg}</span>{/if}
+				<div class="save-bar save-bar--start">
+					<Button size="sm" onclick={saveOwner} disabled={savingOwner || !selectedOwnerOrgId}>
+						{#if savingOwner}<Spinner size={12} tone="current" /> Saving…{:else}Save Owner{/if}
+					</Button>
+					<Button size="sm" onclick={syncNow} disabled={syncing || !previewDns.owner_org_id}>
+						{#if syncing}<Spinner size={12} tone="current" /> Syncing…{:else}<RefreshCw size={13} /> Sync DNS record{/if}
+					</Button>
+					{#if syncMsg}<span class="sync-msg" role="status">{syncMsg}</span>{/if}
 				</div>
 				{#if previewDns.cloudflare_record_id}
-					<p class="field-hint"><Check size={12} style="display:inline;vertical-align:-2px;" /> Last synced record: <code>{previewDns.cloudflare_record_id}</code></p>
+					<p class="field-hint"><Check size={12} class="inline-icon" /> Last synced record: <code>{previewDns.cloudflare_record_id}</code></p>
 				{/if}
 			</div>
-		</section>
+		</Card>
 	{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={disconnectOpen}
+	title="Disconnect Cloudflare"
+	message="Disconnect this Cloudflare account? Existing DNS records it created will NOT be deleted automatically."
+	confirmLabel="Disconnect"
+	onConfirm={disconnect}
+/>
 
 {/if}
 
 <style>
 	.loading { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; padding: 40px 0; }
-	.spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spin) { animation: spin 0.8s linear infinite; }
 
 	.cf-page { display: flex; flex-direction: column; gap: 20px; }
-	.settings-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-	.section-header { display: flex; gap: 14px; padding: 18px 20px; align-items: center; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
-	.section-icon { width: 32px; height: 32px; border-radius: var(--radius-md); background: rgba(37,99,235,0.1); color: var(--accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+	.section-header { display: flex; gap: 14px; padding: 18px 20px; align-items: center; border-bottom: 1px solid var(--border); background: var(--bg-elevated); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+	.section-text { flex: 1; min-width: 0; }
 	.section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
 	.section-desc { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 	.section-desc code { font-family: var(--font-mono); background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
 
+	.cf-alert { margin: 12px 20px; }
 	.cf-connected { display: flex; align-items: center; gap: 14px; padding: 14px 20px; }
 	.cf-connected-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 	.cf-account-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -255,28 +267,14 @@
 
 	.cf-connect-form { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
 	.field { display: flex; flex-direction: column; gap: 5px; }
-	.field-label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
-	.field-input { background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; font-family: var(--font-sans); padding: 8px 10px; outline: none; width: 100%; box-sizing: border-box; }
-	.field-input.font-mono { font-family: var(--font-mono); }
-	.field-input:focus { border-color: var(--accent); }
 	.field-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; margin: 2px 0 0; }
 	.field-hint code { font-family: var(--font-mono); background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
-	.field-hint.proxied-warning { color: #F59E0B; }
-
-	.proxied-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
-	.proxied-toggle input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+	.field-hint a { color: var(--accent); text-decoration: underline; }
+	.field-hint.proxied-warning { color: var(--accent-yellow); }
+	.field-hint :global(.inline-icon) { display: inline; vertical-align: -2px; }
 
 	.fields { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px; }
 	.save-bar { display: flex; justify-content: flex-end; align-items: center; }
+	.save-bar--start { justify-content: flex-start; gap: 8px; }
 	.sync-msg { font-size: 12px; color: var(--text-muted); }
-
-	.empty-state { padding: 30px; text-align: center; color: var(--text-muted); font-size: 13px; }
-	.error-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: var(--radius-md); color: #EF4444; font-size: 13px; }
-
-	.cf-btn { font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: var(--radius-sm); cursor: pointer; transition: all var(--transition-fast); border: 1px solid transparent; display: inline-flex; align-items: center; gap: 5px; }
-	.cf-btn.connect { background: var(--accent); color: white; border-color: var(--accent); }
-	.cf-btn.connect:hover:not(:disabled) { opacity: 0.85; }
-	.cf-btn.connect:disabled { opacity: 0.5; cursor: default; }
-	.cf-btn.disconnect { background: transparent; color: #EF4444; border-color: rgba(239,68,68,0.4); }
-	.cf-btn.disconnect:hover { background: rgba(239,68,68,0.08); }
 </style>

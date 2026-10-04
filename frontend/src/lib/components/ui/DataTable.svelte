@@ -65,24 +65,40 @@
 	let serverTotal = $state(0);
 	let loading = $state(false);
 	let error = $state('');
+	// Server mode fetches with the debounced search term, not the raw input value.
+	let appliedSearch = $state('');
+	// Monotonic id so a superseded (slower, older) response never overwrites a newer one.
+	let requestId = 0;
 
 	async function loadServerPage() {
 		if (!fetchPage) return;
+		const id = ++requestId;
 		loading = true;
 		error = '';
 		try {
-			const result = await fetchPage({ page, pageSize: currentPageSize, search });
+			const result = await fetchPage({ page, pageSize: currentPageSize, search: appliedSearch });
+			if (id !== requestId) return;
 			serverRows = result.rows;
 			serverTotal = result.total;
+			// Rows vanished from under us (e.g. the last row of the last page was deleted):
+			// step back to the last real page; the page change triggers the next fetch.
+			if (result.rows.length === 0 && result.total > 0 && page > 0) {
+				const last = Math.max(0, Math.ceil(result.total / currentPageSize) - 1);
+				if (last < page) {
+					page = last;
+					return;
+				}
+			}
 		} catch (e) {
+			if (id !== requestId) return;
 			error = e instanceof Error ? e.message : 'Failed to load data.';
 		}
-		loading = false;
+		if (id === requestId) loading = false;
 	}
 
 	$effect(() => {
 		// Re-fetch whenever page, page size, or (debounced) search changes.
-		page; currentPageSize; search;
+		page; currentPageSize; appliedSearch;
 		if (fetchPage) loadServerPage();
 	});
 
@@ -100,10 +116,29 @@
 		items ? clientFiltered.slice(page * currentPageSize, (page + 1) * currentPageSize) : []
 	);
 
-	// Reset to page 0 whenever the search term changes, in either mode.
+	// Client mode: reset to page 0 whenever the search term changes.
+	// Server mode: debounce 300ms, then reset the page and apply the term in one
+	// batched update so exactly one fetch fires.
 	$effect(() => {
-		search;
-		page = 0;
+		const s = search;
+		if (!fetchPage) {
+			page = 0;
+			return;
+		}
+		const t = setTimeout(() => {
+			if (s !== appliedSearch) {
+				page = 0;
+				appliedSearch = s;
+			}
+		}, 300);
+		return () => clearTimeout(t);
+	});
+
+	// Client mode: never leave the user on a page past the end (items shrank or were replaced).
+	$effect(() => {
+		if (!items) return;
+		const last = Math.max(0, Math.ceil(clientTotal / currentPageSize) - 1);
+		if (page > last) page = last;
 	});
 
 	let displayRows = $derived(items ? clientPageRows : serverRows);

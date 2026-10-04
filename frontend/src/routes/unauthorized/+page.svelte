@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ShieldOff, ArrowLeft, Home } from '@lucide/svelte';
-	import { page } from '$app/state';
-
+	import { Card, Button } from '$lib/components/ui';
+	
 	function goBack() {
 		history.length > 1 ? history.back() : goto('/');
 	}
@@ -13,27 +13,31 @@
 </svelte:head>
 
 <div class="page">
-	<div class="card">
-		<div class="icon-wrap">
-			<ShieldOff size={32} />
-		</div>
+	<div class="card-wrap">
+		<Card padding="40px 32px">
+			<div class="content">
+				<div class="icon-wrap">
+					<ShieldOff size={32} />
+				</div>
 
-		<h1 class="title">Access Denied</h1>
-		<p class="desc">
-			You don't have permission to perform this action. Contact your organization owner or admin
-			to request access.
-		</p>
+				<h1 class="title">Access Denied</h1>
+				<p class="desc">
+					You don't have permission to perform this action. Contact your organization owner or admin
+					to request access.
+				</p>
 
-		<div class="actions">
-			<button class="btn btn-secondary" onclick={goBack}>
-				<ArrowLeft size={15} />
-				Go back
-			</button>
-			<a class="btn btn-primary" href="/">
-				<Home size={15} />
-				Home
-			</a>
-		</div>
+				<div class="actions">
+					<Button variant="secondary" onclick={goBack}>
+						<ArrowLeft size={15} />
+						Go back
+					</Button>
+					<Button href="/">
+						<Home size={15} />
+						Home
+					</Button>
+				</div>
+			</div>
+		</Card>
 	</div>
 </div>
 
@@ -47,18 +51,17 @@
 		padding: 24px;
 	}
 
-	.card {
+	.card-wrap {
+		max-width: 400px;
+		width: 100%;
+	}
+
+	.content {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		gap: 16px;
-		max-width: 400px;
-		width: 100%;
 		text-align: center;
-		padding: 40px 32px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
 	}
 
 	.icon-wrap {
@@ -68,9 +71,9 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: color-mix(in srgb, var(--accent-red, #ef4444) 10%, transparent);
-		color: var(--accent-red, #ef4444);
-		border: 1px solid color-mix(in srgb, var(--accent-red, #ef4444) 25%, transparent);
+		background: var(--accent-red-muted);
+		color: var(--accent-red);
+		border: 1px solid color-mix(in srgb, var(--accent-red) 25%, transparent);
 	}
 
 	.title {
@@ -89,41 +92,9 @@
 
 	.actions {
 		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
 		gap: 10px;
 		margin-top: 8px;
-	}
-
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 9px 18px;
-		border-radius: var(--radius-sm);
-		font-size: 14px;
-		font-weight: 600;
-		cursor: pointer;
-		text-decoration: none;
-		border: none;
-		transition: all var(--transition-fast);
-	}
-
-	.btn-secondary {
-		background: var(--bg-surface);
-		color: var(--text-secondary);
-		border: 1px solid var(--border);
-	}
-
-	.btn-secondary:hover {
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-	}
-
-	.btn-primary {
-		background: var(--accent);
-		color: white;
-	}
-
-	.btn-primary:hover {
-		opacity: 0.88;
 	}
 </style>

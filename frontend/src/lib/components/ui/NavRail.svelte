@@ -1,30 +1,49 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { Anchor } from '@lucide/svelte';
 
 	interface Group {
 		key: string;
 		icon: typeof Anchor;
 		label: string;
+		href?: string;
+		active?: boolean;
 	}
 
 	interface Props {
 		groups: Group[];
-		activeGroup: string | null;
+		activeGroup?: string | null;
 		/** Group containing the current route; highlighted when no drawer is open. */
 		currentGroup?: string | null;
 		/** How a label wider than the rail is handled: truncated with "…" or wrapped onto more lines. */
 		labelOverflow?: 'ellipsis' | 'wrap';
-		onSelectGroup: (key: string | null) => void;
+		onSelectGroup?: (key: string | null) => void;
+		footer?: Snippet;
+		/** At ≤639px render as a bottom navigation bar instead of a side rail. */
+		phoneBar?: boolean;
 	}
 
-	let { groups, activeGroup = $bindable(), currentGroup = null, labelOverflow = 'ellipsis', onSelectGroup }: Props = $props();
+	let {
+		groups,
+		activeGroup = $bindable(null),
+		currentGroup = null,
+		labelOverflow = 'ellipsis',
+		onSelectGroup,
+		footer,
+		phoneBar = false
+	}: Props = $props();
 
 	function handleClick(key: string) {
-		onSelectGroup(activeGroup === key ? null : key);
+		onSelectGroup?.(activeGroup === key ? null : key);
+	}
+
+	function isHighlighted(g: Group): boolean {
+		if (g.href) return !!g.active;
+		return activeGroup === g.key || (activeGroup === null && currentGroup === g.key);
 	}
 </script>
 
-<aside class="ui-nav-rail">
+<aside class="ui-nav-rail" class:ui-nav-rail--phone-bar={phoneBar}>
 	<div class="ui-nav-rail-logo">
 		<Anchor size={16} strokeWidth={2.5} />
 	</div>
@@ -32,16 +51,28 @@
 		{#each groups as g (g.key)}
 			{@const Icon = g.icon}
 			<div class="ui-nav-rail-group">
-				<button
-					type="button"
-					class="ui-nav-rail-btn"
-					class:ui-nav-rail-btn--active={activeGroup === g.key || (activeGroup === null && currentGroup === g.key)}
-					onclick={() => handleClick(g.key)}
-					aria-label={g.label}
-					aria-expanded={activeGroup === g.key}
-				>
-					<Icon size={20} />
-				</button>
+				{#if g.href}
+					<a
+						href={g.href}
+						class="ui-nav-rail-btn"
+						class:ui-nav-rail-btn--active={isHighlighted(g)}
+						aria-label={g.label}
+						aria-current={g.active ? 'page' : undefined}
+					>
+						<Icon size={20} />
+					</a>
+				{:else}
+					<button
+						type="button"
+						class="ui-nav-rail-btn"
+						class:ui-nav-rail-btn--active={isHighlighted(g)}
+						onclick={() => handleClick(g.key)}
+						aria-label={g.label}
+						aria-expanded={activeGroup === g.key}
+					>
+						<Icon size={20} />
+					</button>
+				{/if}
 				<span
 					class="ui-nav-rail-label ui-nav-rail-label--{labelOverflow}"
 					title={labelOverflow === 'ellipsis' ? g.label : undefined}
@@ -49,6 +80,9 @@
 			</div>
 		{/each}
 	</nav>
+	{#if footer}
+		<div class="ui-nav-rail-footer">{@render footer()}</div>
+	{/if}
 </aside>
 
 <style>
@@ -104,9 +138,11 @@
 		background: none;
 		border: none;
 		cursor: pointer;
+		text-decoration: none;
 		transition: background var(--transition-fast), color var(--transition-fast);
 	}
 	.ui-nav-rail-btn:hover { background: var(--bg-hover); color: var(--accent); }
+	.ui-nav-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	.ui-nav-rail-btn--active { background: var(--accent-muted); color: var(--accent); }
 	.ui-nav-rail-label {
 		font-size: 8.5px;
@@ -124,5 +160,45 @@
 		white-space: normal;
 		overflow-wrap: anywhere;
 		line-height: 1.2;
+	}
+	.ui-nav-rail-footer {
+		margin-top: auto;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		width: 100%;
+	}
+
+	@media (max-width: 639px) {
+		.ui-nav-rail--phone-bar {
+			position: fixed;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			width: 100%;
+			height: 56px;
+			flex-direction: row;
+			padding: 0 4px;
+			gap: 0;
+			border-right: none;
+			border-top: 1px solid var(--border);
+			z-index: 60;
+		}
+		.ui-nav-rail--phone-bar .ui-nav-rail-logo { display: none; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-items {
+			flex-direction: row;
+			justify-content: space-around;
+			flex: 1;
+			gap: 0;
+		}
+		.ui-nav-rail--phone-bar .ui-nav-rail-group { width: auto; padding: 0 6px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-btn { width: 36px; height: 32px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-footer {
+			flex-direction: row;
+			margin-top: 0;
+			width: auto;
+			gap: 2px;
+		}
 	}
 </style>

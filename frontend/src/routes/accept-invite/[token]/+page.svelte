@@ -6,7 +6,8 @@
 	import { authStore } from '$lib/stores/auth.store';
 	import { setAuthCookies } from '$lib/auth/cookies';
 	import type { PublicInvite } from '$lib/api/types';
-	import { CheckCircle, AlertCircle, Loader2, Eye, EyeOff, Lock, Shield, UserCheck, XCircle } from '@lucide/svelte';
+	import { CheckCircle, AlertCircle, Eye, EyeOff, Lock, Shield, UserCheck, XCircle } from '@lucide/svelte';
+	import { Button, Card, FormField, TextField, InlineAlert, Spinner, Avatar } from '$lib/components/ui';
 
 	let token = $derived($page.params.token ?? '');
 
@@ -113,212 +114,205 @@
 <svelte:head><title>Accept Invitation — Shipyard</title></svelte:head>
 
 <div class="accept-page">
-	<div class="accept-card">
-		<!-- Header -->
-		<div class="card-header">
-			<div class="logo-mark"><Shield size={20} /></div>
-			<h1 class="card-title">Shipyard</h1>
-		</div>
-
-		{#if loading}
-			<div class="state-block">
-				<div class="spinner"></div>
-				<span class="state-text">Loading invitation…</span>
+	<div class="accept-wrap">
+		<Card padding="0">
+			<!-- Header -->
+			<div class="card-header">
+				<div class="logo-mark"><Shield size={20} /></div>
+				<h1 class="card-title">Shipyard</h1>
 			</div>
 
-		{:else if loadError}
-			<div class="state-block error-block">
-				<AlertCircle size={32} class="state-icon error-icon" />
-				<p class="state-title">Invitation not found</p>
-				<p class="state-sub">{loadError}</p>
-				<a class="btn btn-primary" href="/login">Go to login</a>
-			</div>
-
-		{:else if invite?.is_expired}
-			<div class="state-block error-block">
-				<AlertCircle size={32} class="state-icon error-icon" />
-				<p class="state-title">This invitation has expired</p>
-				<p class="state-sub">Ask an admin to send a new invite to <strong>{invite.email}</strong>.</p>
-				<a class="btn btn-primary" href="/login">Go to login</a>
-			</div>
-
-		{:else if invite?.is_accepted}
-			<div class="state-block success-block">
-				<CheckCircle size={32} class="state-icon success-icon" />
-				<p class="state-title">Invitation already accepted</p>
-				<p class="state-sub">This link has already been used. Log in to access <strong>{invite.org_name}</strong>.</p>
-				<a class="btn btn-primary" href="/login">Log in</a>
-			</div>
-
-		{:else if declined}
-			<div class="state-block">
-				<XCircle size={32} class="state-icon decline-icon" />
-				<p class="state-title">Invitation declined</p>
-				<p class="state-sub">You have declined the invitation to <strong>{invite?.org_name}</strong>. The admin can send a new invite if needed.</p>
-				<a class="btn btn-primary" href="/login">Go to login</a>
-			</div>
-
-		{:else if done}
-			<div class="state-block success-block">
-				<CheckCircle size={32} class="state-icon success-icon" />
-				<p class="state-title">Welcome to {invite?.org_name}!</p>
-				<p class="state-sub">{isLoggedIn ? 'You now have access.' : 'Your account is ready.'} Redirecting you to the dashboard…</p>
-			</div>
-
-		{:else if invite}
-			<!-- Invitation details (shared) -->
-			<div class="invite-details">
-				<p class="invite-greeting">You've been invited to join</p>
-				<h2 class="invite-org">{invite.org_name}</h2>
-				<div class="invite-meta">
-					<span class="meta-item">
-						<span class="meta-label">Email</span>
-						<span class="meta-value mono">{invite.email}</span>
-					</span>
-					<span class="meta-item">
-						<span class="meta-label">Role</span>
-						<span class="meta-value role-chip">{ROLE_LABELS[invite.role] ?? invite.role}</span>
-					</span>
-					{#if invite.permissions.length > 0}
-						<span class="meta-item">
-							<span class="meta-label">Permissions</span>
-							<span class="meta-value">{invite.permissions.length} granted</span>
-						</span>
-					{/if}
-					{#if Array.isArray(invite.project_assignments) && invite.project_assignments.length > 0}
-						<span class="meta-item">
-							<span class="meta-label">Projects</span>
-							<span class="meta-value">{invite.project_assignments.length} assigned</span>
-						</span>
-					{/if}
+			{#if loading}
+				<div class="state-block">
+					<Spinner size={22} />
+					<span class="state-text">Loading invitation…</span>
 				</div>
-			</div>
 
-			{#if isLoggedIn}
-				<!-- ── Already logged in — just accept ───────────────────────────────── -->
-				<div class="accept-section">
-					<div class="logged-in-note">
-						<UserCheck size={14} />
-						Logged in as <strong>{$authStore.user?.email}</strong>
+			{:else if loadError}
+				<div class="state-block">
+					<span class="state-icon error-icon"><AlertCircle size={32} /></span>
+					<p class="state-title">Invitation not found</p>
+					<p class="state-sub">{loadError}</p>
+					<Button href="/login">Go to login</Button>
+				</div>
+
+			{:else if invite?.is_expired}
+				<div class="state-block">
+					<span class="state-icon error-icon"><AlertCircle size={32} /></span>
+					<p class="state-title">This invitation has expired</p>
+					<p class="state-sub">Ask an admin to send a new invite to <strong>{invite.email}</strong>.</p>
+					<Button href="/login">Go to login</Button>
+				</div>
+
+			{:else if invite?.is_accepted}
+				<div class="state-block">
+					<span class="state-icon success-icon"><CheckCircle size={32} /></span>
+					<p class="state-title">Invitation already accepted</p>
+					<p class="state-sub">This link has already been used. Log in to access <strong>{invite.org_name}</strong>.</p>
+					<Button href="/login">Log in</Button>
+				</div>
+
+			{:else if declined}
+				<div class="state-block">
+					<span class="state-icon decline-icon"><XCircle size={32} /></span>
+					<p class="state-title">Invitation declined</p>
+					<p class="state-sub">You have declined the invitation to <strong>{invite?.org_name}</strong>. The admin can send a new invite if needed.</p>
+					<Button href="/login">Go to login</Button>
+				</div>
+
+			{:else if done}
+				<div class="state-block" role="status">
+					<span class="state-icon success-icon"><CheckCircle size={32} /></span>
+					<p class="state-title">Welcome to {invite?.org_name}!</p>
+					<p class="state-sub">{isLoggedIn ? 'You now have access.' : 'Your account is ready.'} Redirecting you to the dashboard…</p>
+				</div>
+
+			{:else if invite}
+				<!-- Invitation details (shared) -->
+				<div class="invite-details">
+					<div class="invite-avatar"><Avatar initials={invite.org_name} size={44} /></div>
+					<p class="invite-greeting">You've been invited to join</p>
+					<h2 class="invite-org">{invite.org_name}</h2>
+					<div class="invite-meta">
+						<span class="meta-item">
+							<span class="meta-label">Email</span>
+							<span class="meta-value mono">{invite.email}</span>
+						</span>
+						<span class="meta-item">
+							<span class="meta-label">Role</span>
+							<span class="meta-value role-chip">{ROLE_LABELS[invite.role] ?? invite.role}</span>
+						</span>
+						{#if invite.permissions.length > 0}
+							<span class="meta-item">
+								<span class="meta-label">Permissions</span>
+								<span class="meta-value">{invite.permissions.length} granted</span>
+							</span>
+						{/if}
+						{#if Array.isArray(invite.project_assignments) && invite.project_assignments.length > 0}
+							<span class="meta-item">
+								<span class="meta-label">Projects</span>
+								<span class="meta-value">{invite.project_assignments.length} assigned</span>
+							</span>
+						{/if}
 					</div>
-
-					{#if acceptError}
-						<div class="error-banner"><AlertCircle size={13} />{acceptError}</div>
-					{/if}
-
-					<button
-						class="btn btn-primary accept-btn"
-						onclick={handleAccept}
-						disabled={accepting || declining}
-					>
-						{#if accepting}
-							<Loader2 size={14} class="spin" />Joining…
-						{:else}
-							<UserCheck size={14} />Accept &amp; join {invite.org_name}
-						{/if}
-					</button>
-
-					{#if declineError}
-						<div class="error-banner"><AlertCircle size={13} />{declineError}</div>
-					{/if}
-
-					<button
-						class="btn btn-decline"
-						onclick={handleDecline}
-						disabled={accepting || declining}
-					>
-						{#if declining}
-							<Loader2 size={13} class="spin" />Declining…
-						{:else}
-							<XCircle size={13} />Decline invitation
-						{/if}
-					</button>
 				</div>
 
-			{:else}
-				<!-- ── New user — create password ─────────────────────────────────────── -->
-				<form class="password-form" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-					<p class="form-label-top">Create a password for your new account</p>
+				{#if isLoggedIn}
+					<!-- ── Already logged in — just accept ───────────────────────────────── -->
+					<div class="accept-section">
+						<div class="logged-in-note">
+							<UserCheck size={14} />
+							Logged in as <strong>{$authStore.user?.email}</strong>
+						</div>
 
-					<div class="field-wrap">
-						<label class="field-label" for="pw">Password</label>
-						<div class="pw-wrap">
-							<Lock size={13} class="field-icon" />
-							<input
-								id="pw"
-								class="field-input"
-								type={showPw ? 'text' : 'password'}
-								placeholder="At least 8 characters"
-								bind:value={password}
-								autocomplete="new-password"
-							/>
-							<button type="button" class="pw-toggle" onclick={() => showPw = !showPw} tabindex="-1">
-								{#if showPw}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
-							</button>
+						{#if acceptError}
+							<div role="alert"><InlineAlert tone="error">{acceptError}</InlineAlert></div>
+						{/if}
+
+						<div class="full">
+							<Button onclick={handleAccept} disabled={accepting || declining}>
+								{#if accepting}
+									<Spinner size={14} tone="current" />Joining…
+								{:else}
+									<UserCheck size={14} />Accept &amp; join {invite.org_name}
+								{/if}
+							</Button>
+						</div>
+
+						{#if declineError}
+							<div role="alert"><InlineAlert tone="error">{declineError}</InlineAlert></div>
+						{/if}
+
+						<div class="full">
+							<Button variant="ghost" onclick={handleDecline} disabled={accepting || declining}>
+								{#if declining}
+									<Spinner size={13} tone="current" />Declining…
+								{:else}
+									<XCircle size={13} />Decline invitation
+								{/if}
+							</Button>
 						</div>
 					</div>
 
-					<div class="field-wrap">
-						<label class="field-label" for="pw2">Confirm password</label>
-						<div class="pw-wrap">
-							<Lock size={13} class="field-icon" />
-							<input
+				{:else}
+					<!-- ── New user — create password ─────────────────────────────────────── -->
+					<form class="password-form" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+						<p class="form-label-top">Create a password for your new account</p>
+
+						<FormField label="Password" for="pw">
+							<div class="pw-wrap">
+								<TextField
+									id="pw"
+									type={showPw ? 'text' : 'password'}
+									placeholder="At least 8 characters"
+									bind:value={password}
+									autocomplete="new-password"
+								>
+									{#snippet icon()}<Lock size={13} />{/snippet}
+								</TextField>
+								<button
+									type="button"
+									class="pw-toggle"
+									onclick={() => showPw = !showPw}
+									tabindex="-1"
+									aria-label={showPw ? 'Hide password' : 'Show password'}
+								>
+									{#if showPw}<EyeOff size={13} />{:else}<Eye size={13} />{/if}
+								</button>
+							</div>
+						</FormField>
+
+						<FormField label="Confirm password" for="pw2">
+							<TextField
 								id="pw2"
-								class="field-input"
 								type={showPw ? 'text' : 'password'}
 								placeholder="Repeat password"
 								bind:value={password2}
 								autocomplete="new-password"
-							/>
+							>
+								{#snippet icon()}<Lock size={13} />{/snippet}
+							</TextField>
+						</FormField>
+
+						{#if submitError}
+							<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
+						{/if}
+
+						<div class="full">
+							<Button type="submit" disabled={!password || !password2 || submitting || declining}>
+								{#if submitting}
+									<Spinner size={14} tone="current" />Creating account…
+								{:else}
+									Create account &amp; join {invite.org_name}
+								{/if}
+							</Button>
 						</div>
-					</div>
 
-					{#if submitError}
-						<div class="error-banner"><AlertCircle size={13} />{submitError}</div>
-					{/if}
-
-					<button
-						type="submit"
-						class="btn btn-primary submit-btn"
-						disabled={!password || !password2 || submitting || declining}
-					>
-						{#if submitting}
-							<Loader2 size={14} class="spin" />Creating account…
-						{:else}
-							Create account &amp; join {invite.org_name}
+						{#if declineError}
+							<div role="alert"><InlineAlert tone="error">{declineError}</InlineAlert></div>
 						{/if}
-					</button>
 
-					{#if declineError}
-						<div class="error-banner"><AlertCircle size={13} />{declineError}</div>
-					{/if}
+						<div class="full">
+							<Button variant="ghost" onclick={handleDecline} disabled={submitting || declining}>
+								{#if declining}
+									<Spinner size={13} tone="current" />Declining…
+								{:else}
+									<XCircle size={13} />Decline invitation
+								{/if}
+							</Button>
+						</div>
 
-					<button
-						type="button"
-						class="btn btn-decline"
-						onclick={handleDecline}
-						disabled={submitting || declining}
-					>
-						{#if declining}
-							<Loader2 size={13} class="spin" />Declining…
-						{:else}
-							<XCircle size={13} />Decline invitation
-						{/if}
-					</button>
-
-					<p class="login-hint">
-						Already have an account? <a href="/login">Log in</a> — then revisit this link to accept.
-					</p>
-				</form>
+						<p class="login-hint">
+							Already have an account? <a href="/login">Log in</a> — then revisit this link to accept.
+						</p>
+					</form>
+				{/if}
 			{/if}
-		{/if}
+		</Card>
 	</div>
 </div>
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-
 	.accept-page {
 		min-height: 100vh;
 		display: flex;
@@ -328,11 +322,9 @@
 		padding: 20px;
 	}
 
-	.accept-card {
+	.accept-wrap {
 		width: 100%;
 		max-width: 440px;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
 		border-radius: var(--radius-lg);
 		overflow: hidden;
 	}
@@ -373,23 +365,15 @@
 		gap: 12px;
 	}
 
-	.spinner {
-		width: 22px; height: 22px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-
 	.state-text { font-size: 13px; color: var(--text-muted); }
 	.state-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
 	.state-sub { font-size: 13px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 	.state-sub strong { color: var(--text-primary); }
 
-	:global(.state-icon) { opacity: 0.85; }
-	:global(.error-icon)   { color: #EF4444; }
-	:global(.success-icon) { color: #10B981; }
-	:global(.decline-icon) { color: var(--text-muted); }
+	.state-icon { display: flex; opacity: 0.85; }
+	.error-icon { color: var(--accent-red); }
+	.success-icon { color: var(--accent-green); }
+	.decline-icon { color: var(--text-muted); }
 
 	/* ── Invite details ── */
 	.invite-details {
@@ -397,6 +381,7 @@
 		text-align: center;
 	}
 
+	.invite-avatar { display: flex; justify-content: center; margin-bottom: 10px; }
 	.invite-greeting { font-size: 13px; color: var(--text-muted); margin: 0 0 4px; }
 	.invite-org {
 		font-size: 20px; font-weight: 700; color: var(--text-primary);
@@ -420,14 +405,14 @@
 		font-weight: 600; color: var(--text-dim);
 		text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em;
 	}
-	.meta-value { color: var(--text-primary); }
+	.meta-value { color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
 	.meta-value.mono { font-family: var(--font-mono); font-size: 12px; }
 	.role-chip {
 		display: inline-block;
 		font-size: 11px; font-weight: 600;
 		padding: 2px 8px; border-radius: 999px;
-		background: rgba(37,99,235,0.1); color: var(--accent);
-		border: 1px solid rgba(37,99,235,0.2);
+		background: var(--accent-muted); color: var(--accent);
+		border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 	}
 
 	/* ── Authenticated accept section ── */
@@ -446,10 +431,7 @@
 	}
 	.logged-in-note strong { color: var(--text-primary); }
 
-	.accept-btn {
-		display: flex; align-items: center; justify-content: center; gap: 8px;
-		padding: 10px 16px; font-size: 14px; font-weight: 600;
-	}
+	.full :global(.ui-btn) { width: 100%; }
 
 	/* ── Password form ── */
 	.password-form {
@@ -462,43 +444,16 @@
 		margin: 0; text-align: center;
 	}
 
-	.field-wrap { display: flex; flex-direction: column; gap: 5px; }
-	.field-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-
-	.pw-wrap { position: relative; display: flex; align-items: center; }
-	:global(.field-icon) { position: absolute; left: 10px; color: var(--text-dim); pointer-events: none; }
-	.field-input {
-		width: 100%; padding: 9px 36px; box-sizing: border-box;
-		background: var(--bg-base); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans); outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.field-input:focus { border-color: var(--accent); }
-
+	.pw-wrap { position: relative; }
+	.pw-wrap :global(.ui-textfield) { padding-right: 36px; }
 	.pw-toggle {
-		position: absolute; right: 8px;
+		position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
 		background: none; border: none; cursor: pointer;
 		color: var(--text-dim); padding: 4px;
 		display: flex; align-items: center;
 		transition: color var(--transition-fast);
 	}
 	.pw-toggle:hover { color: var(--text-primary); }
-
-	.error-banner {
-		display: flex; align-items: center; gap: 7px;
-		padding: 9px 12px; font-size: 12px;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-		color: #EF4444;
-	}
-
-	.submit-btn {
-		display: flex; align-items: center; justify-content: center; gap: 8px;
-		padding: 10px 16px; font-size: 14px; font-weight: 600;
-		margin-top: 2px;
-	}
 
 	.login-hint {
 		font-size: 12px; color: var(--text-dim);
@@ -507,29 +462,9 @@
 	.login-hint a { color: var(--accent); text-decoration: none; }
 	.login-hint a:hover { text-decoration: underline; }
 
-	/* ── btn ── */
-	.btn {
-		display: inline-flex; align-items: center; justify-content: center;
-		padding: 8px 16px; border-radius: var(--radius-sm);
-		font-size: 13px; font-weight: 500; cursor: pointer;
-		border: none; text-decoration: none; transition: opacity var(--transition-fast);
-	}
-	.btn:disabled { opacity: 0.55; cursor: not-allowed; }
-	.btn-primary { background: var(--accent); color: white; }
-	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
-
-	.btn-decline {
-		display: flex; align-items: center; justify-content: center; gap: 6px;
-		padding: 8px 16px; border-radius: var(--radius-sm);
-		font-size: 12px; font-weight: 500; cursor: pointer;
-		background: transparent; border: 1px solid var(--border);
-		color: var(--text-muted); transition: all var(--transition-fast);
-	}
-	.btn-decline:hover:not(:disabled) { border-color: #EF4444; color: #EF4444; background: rgba(239,68,68,0.06); }
-	.btn-decline:disabled { opacity: 0.45; cursor: not-allowed; }
-
 	@media (max-width: 480px) {
-		.accept-card { border-radius: 0; border-left: none; border-right: none; }
+		.accept-wrap { border-radius: 0; }
+		.accept-wrap :global(.ui-card) { border-radius: 0; border-left: none; border-right: none; }
 		.accept-page { padding: 0; align-items: flex-start; }
 	}
 </style>

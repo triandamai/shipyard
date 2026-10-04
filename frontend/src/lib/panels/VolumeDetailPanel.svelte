@@ -5,6 +5,14 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, permProject } from '$lib/auth/permissions';
 	import { HardDrive, Trash2, AlertTriangle } from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import FormField from '$lib/components/ui/FormField.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import KeyValueList from '$lib/components/ui/KeyValueList.svelte';
+	import ListRow from '$lib/components/ui/ListRow.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import TextField from '$lib/components/ui/TextField.svelte';
 
 	interface Props {
 		volumeId: string;
@@ -76,92 +84,66 @@
 <div class="panel-wrap">
 	{#if loading}
 		<div class="center-state">
-			<div class="spinner"></div>
+			<Spinner size={18} />
 			<span>Loading…</span>
 		</div>
 	{:else if loadError}
 		<div class="center-state error">{loadError}</div>
 	{:else if volume}
 		<!-- Header -->
-		<div class="detail-header">
-			<div class="detail-icon">
-				<HardDrive size={18} />
-			</div>
-			<div class="detail-title-block">
-				<h2 class="detail-name">{volume.name}</h2>
-				<span class="detail-badge">{volume.driver}</span>
-			</div>
-		</div>
+		<Card padding="12px 16px">
+			<ListRow title={volume.name} meta={volume.driver} iconTone="yellow">
+				{#snippet icon()}<HardDrive size={18} />{/snippet}
+			</ListRow>
+		</Card>
 
 		<!-- Properties -->
 		<section class="detail-section">
 			<h3 class="section-title">Properties</h3>
-			<div class="prop-list">
-				<div class="prop-row">
-					<span class="prop-key">Name</span>
-					<span class="prop-value mono">{volume.name}</span>
-				</div>
-				<div class="prop-row">
-					<span class="prop-key">Driver</span>
-					<span class="prop-value">{volume.driver}</span>
-				</div>
-				<div class="prop-row">
-					<span class="prop-key">Mount</span>
-					<span class="prop-value mono">{volume.mount_path || '—'}</span>
-				</div>
-				{#if volume.size_mb > 0}
-					<div class="prop-row">
-						<span class="prop-key">Size</span>
-						<span class="prop-value">{fmtSize(volume.size_mb)}</span>
-					</div>
-				{/if}
-				<div class="prop-row">
-					<span class="prop-key">Scope</span>
-					<span class="prop-value">{volume.service_id ? 'Service' : 'Project'}</span>
-				</div>
-				<div class="prop-row">
-					<span class="prop-key">Created</span>
-					<span class="prop-value">{fmtDate(volume.created_at)}</span>
-				</div>
-			</div>
+			<KeyValueList
+				keyWidth="70px"
+				items={[
+					{ key: 'Name', value: volume.name, mono: true },
+					{ key: 'Driver', value: volume.driver },
+					{ key: 'Mount', value: volume.mount_path || '—', mono: true },
+					...(volume.size_mb > 0 ? [{ key: 'Size', value: fmtSize(volume.size_mb) }] : []),
+					{ key: 'Scope', value: volume.service_id ? 'Service' : 'Project' },
+					{ key: 'Created', value: fmtDate(volume.created_at) }
+				]}
+			/>
 		</section>
 
 		<!-- Danger Zone -->
 		{#if canVolumeWrite}
-		<section class="danger-zone">
-			<div class="danger-header">
-				<AlertTriangle size={14} />
-				<h3 class="danger-title">Danger Zone</h3>
+		<div class="danger-wrap">
+		<Card tone="danger">
+			<div class="danger-zone">
+				<div class="danger-header">
+					<AlertTriangle size={14} />
+					<h3 class="danger-title">Danger Zone</h3>
+				</div>
+				<p class="danger-desc">
+					Deleting this volume will remove it from Docker and permanently destroy any data stored on it.
+					This action cannot be undone.
+				</p>
+				<FormField label={`Type ${volume.name} to confirm`} for="confirm-vol-name">
+					<TextField
+						id="confirm-vol-name"
+						type="text"
+						placeholder={volume.name}
+						bind:value={confirmName}
+					/>
+				</FormField>
+				{#if deleteError}
+					<div role="alert"><InlineAlert tone="error">{deleteError}</InlineAlert></div>
+				{/if}
+				<Button variant="danger-outline" disabled={!canDelete || deleting} onclick={deleteVolume}>
+					<Trash2 size={13} />
+					{deleting ? 'Deleting…' : 'Delete Volume'}
+				</Button>
 			</div>
-			<p class="danger-desc">
-				Deleting this volume will remove it from Docker and permanently destroy any data stored on it.
-				This action cannot be undone.
-			</p>
-			<div class="danger-confirm">
-				<label class="danger-label" for="confirm-vol-name">
-					Type <strong>{volume.name}</strong> to confirm
-				</label>
-				<input
-					id="confirm-vol-name"
-					class="danger-input"
-					type="text"
-					placeholder={volume.name}
-					bind:value={confirmName}
-				/>
-			</div>
-			{#if deleteError}
-				<div class="delete-error">{deleteError}</div>
-			{/if}
-			<button
-				class="btn-delete"
-				type="button"
-				disabled={!canDelete || deleting}
-				onclick={deleteVolume}
-			>
-				<Trash2 size={13} />
-				{deleting ? 'Deleting…' : 'Delete Volume'}
-			</button>
-		</section>
+		</Card>
+		</div>
 		{/if}
 	{/if}
 </div>
@@ -183,42 +165,6 @@
 	}
 	.center-state.error { color: var(--accent-red); }
 
-	.spinner {
-		width: 18px; height: 18px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite; flex-shrink: 0;
-	}
-
-	/* Header */
-	.detail-header {
-		display: flex; align-items: center; gap: 14px;
-		padding-bottom: 16px; border-bottom: 1px solid var(--border);
-	}
-
-	.detail-icon {
-		width: 42px; height: 42px; border-radius: var(--radius-md);
-		background: var(--accent-yellow-muted); color: var(--accent-yellow);
-		display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-	}
-
-	.detail-title-block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-
-	.detail-name {
-		font-size: 17px; font-weight: 700; color: var(--text-primary); margin: 0;
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
-
-	.detail-badge {
-		display: inline-block;
-		font-size: 10px; font-weight: 600; font-family: var(--font-mono);
-		padding: 2px 7px; border-radius: 99px;
-		background: var(--accent-yellow-muted); color: var(--accent-yellow);
-		text-transform: uppercase; letter-spacing: 0.04em;
-	}
-
-	/* Properties */
 	.detail-section { display: flex; flex-direction: column; gap: 10px; }
 
 	.section-title {
@@ -226,82 +172,10 @@
 		text-transform: uppercase; letter-spacing: 0.07em; margin: 0;
 	}
 
-	.prop-list {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md); overflow: hidden;
-	}
-
-	.prop-row {
-		display: flex; align-items: center;
-		padding: 9px 14px; border-bottom: 1px solid var(--border); gap: 12px;
-	}
-	.prop-row:last-child { border-bottom: none; }
-
-	.prop-key {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		width: 70px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.05em;
-	}
-
-	.prop-value {
-		font-size: 12px; color: var(--text-secondary); flex: 1; min-width: 0;
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
-	.prop-value.mono { font-family: var(--font-mono); }
-
 	/* Danger Zone */
-	.danger-zone {
-		background: color-mix(in srgb, var(--accent-red, #EF4444) 4%, var(--bg-elevated));
-		border: 1px solid color-mix(in srgb, var(--accent-red, #EF4444) 25%, transparent);
-		border-radius: var(--radius-md); padding: 16px;
-		display: flex; flex-direction: column; gap: 12px;
-		margin-top: auto;
-	}
-
-	.danger-header { display: flex; align-items: center; gap: 7px; color: var(--accent-red, #EF4444); }
-
-	.danger-title {
-		font-size: 13px; font-weight: 700; color: var(--accent-red, #EF4444); margin: 0;
-	}
-
-	.danger-desc {
-		font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5;
-	}
-
-	.danger-confirm { display: flex; flex-direction: column; gap: 5px; }
-
-	.danger-label { font-size: 11px; color: var(--text-dim); }
-	.danger-label strong { color: var(--text-secondary); font-family: var(--font-mono); }
-
-	.danger-input {
-		background: var(--bg-base);
-		border: 1px solid color-mix(in srgb, var(--accent-red, #EF4444) 30%, transparent);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary); font-size: 13px; font-family: var(--font-mono);
-		padding: 7px 10px; outline: none;
-	}
-	.danger-input:focus { border-color: var(--accent-red, #EF4444); }
-
-	.delete-error {
-		font-size: 12px; color: var(--accent-red);
-		padding: 7px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.btn-delete {
-		display: flex; align-items: center; gap: 6px; justify-content: center;
-		padding: 8px 16px; border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--accent-red, #EF4444) 12%, transparent);
-		color: var(--accent-red, #EF4444);
-		border: 1px solid color-mix(in srgb, var(--accent-red, #EF4444) 35%, transparent);
-		font-size: 13px; font-weight: 600; cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.btn-delete:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--accent-red, #EF4444) 20%, transparent);
-	}
-	.btn-delete:disabled { opacity: 0.4; cursor: default; }
-
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.danger-wrap { margin-top: auto; }
+	.danger-zone { display: flex; flex-direction: column; gap: 12px; }
+	.danger-header { display: flex; align-items: center; gap: 7px; color: var(--accent-red); }
+	.danger-title { font-size: 13px; font-weight: 700; color: var(--accent-red); margin: 0; }
+	.danger-desc { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 </style>

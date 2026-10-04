@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { Settings2, Users, KeyRound, Rocket, ShieldCheck, GitBranch, Cloud } from '@lucide/svelte';
+	import PageHeader from '$lib/components/ui/PageHeader.svelte';
+	import Tabs from '$lib/components/ui/Tabs.svelte';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import { orgStore } from '$lib/stores/org.store';
 	import { isAdminRole, can, perm } from '$lib/auth/permissions';
@@ -47,33 +49,27 @@
 	function isActive(tabHref: string) {
 		return currentPath === tabHref || currentPath.startsWith(tabHref + '/');
 	}
+
+	let tabItems = $derived(
+		tabs.map((tab) => ({
+			id: tab.label,
+			label: tab.label,
+			href: tab.href(orgSlug),
+			icon: tab.icon,
+			// Same as before: the Admin pill only shows to non-admins on admin-only tabs.
+			badge: tab.badge === 'admin' && !isAdmin ? 'Admin' : undefined,
+		}))
+	);
+	let activeTab = $derived(tabItems.find((t) => isActive(t.href))?.id ?? '');
 </script>
 
 <div class="settings-layout">
 	<div class="settings-header">
-		<div class="page-header">
-			<h1 class="page-title">Settings</h1>
-			<p class="page-subtitle">Organization configuration and team management</p>
-		</div>
-		<nav class="tab-bar">
-			{#each tabs as tab}
-				{@const href = tab.href(orgSlug)}
-				{@const restricted = tab.badge === 'admin' && !isAdmin}
-				<a
-					class="tab-btn"
-					class:active={isActive(href)}
-					class:tab-restricted={restricted}
-					{href}
-					title={restricted ? 'Admin or Owner only' : undefined}
-				>
-					<tab.icon size={14} />
-					{tab.label}
-					{#if tab.badge === 'admin' && !isAdmin}
-						<span class="tab-badge tab-badge--admin">Admin</span>
-					{/if}
-				</a>
-			{/each}
-		</nav>
+		<PageHeader
+			title="Settings"
+			subtitle="Organization configuration and team management"
+		/>
+		<Tabs tabs={tabItems} value={activeTab} ariaLabel="Settings sections" />
 	</div>
 
 	{#if !membershipLoaded || canViewSettings}
@@ -106,63 +102,7 @@
 		gap: 16px;
 	}
 
-	.page-header { display: flex; flex-direction: column; gap: 2px; }
-	.page-title { font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin: 0; }
-	.page-subtitle { font-size: 13px; color: var(--text-muted); margin: 0; }
-
-	.tab-bar {
-		display: flex;
-		gap: 2px;
-		border-bottom: 1px solid var(--border);
-		overflow-x: auto;
-		overflow-y: hidden;
-		flex-wrap: nowrap;
-		-webkit-overflow-scrolling: touch;
-		scrollbar-width: none;
-	}
-	.tab-bar::-webkit-scrollbar { display: none; }
-
-	.tab-btn {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 9px 14px;
-		font-size: 13px;
-		font-weight: 500;
-		font-family: var(--font-sans);
-		background: transparent;
-		border: none;
-		border-bottom: 2px solid transparent;
-		color: var(--text-muted);
-		cursor: pointer;
-		margin-bottom: -1px;
-		text-decoration: none;
-		white-space: nowrap;
-		transition: color var(--transition-fast), border-color var(--transition-fast);
-	}
-	.tab-btn:hover { color: var(--text-primary); }
-	.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-	/* Restricted tabs: dim but still navigable — server will enforce permissions */
-	.tab-btn.tab-restricted { opacity: 0.55; }
-	.tab-btn.tab-restricted:hover { opacity: 0.8; }
-
-	/* Role / platform badge pills inside a tab */
-	.tab-badge {
-		font-size: 9px;
-		font-weight: 700;
-		padding: 1px 5px;
-		border-radius: 999px;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		flex-shrink: 0;
-		line-height: 1.6;
-	}
-	.tab-badge--admin {
-		background: rgba(99,102,241,0.1);
-		color: #6366F1;
-		border: 1px solid rgba(99,102,241,0.25);
-	}
+	.settings-header :global(.ui-page-header) { margin-bottom: 0; }
 
 	.settings-content {
 		flex: 1;

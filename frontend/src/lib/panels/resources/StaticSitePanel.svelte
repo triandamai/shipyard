@@ -9,6 +9,7 @@
 	import GitBranchPickerPanel from './GitBranchPickerPanel.svelte';
 	import { ChevronRight, Settings, Package } from '@lucide/svelte';
 	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
+	import { Button, FormField, TextField, Select, Checkbox, RadioGroup, InlineAlert, Spinner, Divider, SectionLabel } from '$lib/components/ui';
 
 	interface Props {
 		projectId: string;
@@ -30,7 +31,8 @@
 	let name       = $state('');
 	let slug       = $state('');
 	let slugEdited = $state(false);
-	let source     = $state<'git' | 'upload' | 'artifactory'>('git');
+	// Widened to string: RadioGroup binds a plain string ('git' | 'upload' | 'artifactory').
+	let source     = $state<string>('git');
 
 	// ── Artifactory source ─────────────────────────────────────────────────────
 	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
@@ -272,62 +274,57 @@
 
 	<!-- Name + Slug -->
 	<div class="form-section">
-		<div class="form-group">
-			<label class="form-label">Site name <span class="required">*</span></label>
-			<input class="form-input" bind:value={name} placeholder="my-site" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label">Slug</label>
-			<input
-				class="form-input mono"
-				bind:value={slug}
-				placeholder="auto-derived from name"
-				oninput={(e) => {
-					const v = (e.target as HTMLInputElement).value;
-					slugEdited = v.length > 0;
-				}}
-			/>
-		</div>
+		<FormField label="Site name *" for="ss-name">
+			<TextField id="ss-name" bind:value={name} placeholder="my-site" required />
+		</FormField>
+		<FormField label="Slug" for="ss-slug">
+			<span class="mono-field">
+				<TextField
+					id="ss-slug"
+					bind:value={slug}
+					placeholder="auto-derived from name"
+					oninput={(e) => {
+						const v = (e.target as HTMLInputElement).value;
+						slugEdited = v.length > 0;
+					}}
+				/>
+			</span>
+		</FormField>
 	</div>
 
-	<div class="divider"></div>
+	<Divider margin="0" />
 
 	<!-- Source toggle -->
 	<div class="form-section">
-		<div class="section-title">Source</div>
-		<div class="source-options">
-			<label class="source-opt" class:active={source === 'git'}>
-				<input type="radio" name="source" value="git" bind:group={source} />
-				<span class="opt-label">Git — build from source</span>
-			</label>
-			<label class="source-opt" class:active={source === 'upload'}>
-				<input type="radio" name="source" value="upload" bind:group={source} />
-				<span class="opt-label">Upload — pre-built files</span>
-			</label>
-			<label class="source-opt" class:active={source === 'artifactory'}>
-				<input type="radio" name="source" value="artifactory" bind:group={source} />
-				<span class="opt-label">Shipyard Artifactory — deploy from registry</span>
-			</label>
-		</div>
+		<FormField label="Source">
+			<RadioGroup
+				name="source"
+				bind:value={source}
+				options={[
+					{ value: 'git', label: 'Git — build from source' },
+					{ value: 'upload', label: 'Upload — pre-built files' },
+					{ value: 'artifactory', label: 'Shipyard Artifactory — deploy from registry' },
+				]}
+			/>
+		</FormField>
 	</div>
 
 	{#if source === 'git'}
-		<div class="divider"></div>
+		<Divider margin="0" />
 
 		<!-- Step 1: Git account -->
 		<div class="form-section">
-			<div class="form-group">
-				<label class="form-label">Step 1 — Git Account</label>
+			<FormField label="Step 1 — Git Account">
 				{#if accountsLoading}
 					<div class="picker-btn loading">
-						<div class="mini-spinner"></div>
+						<Spinner size={12} />
 						<span>Loading accounts…</span>
 					</div>
 				{:else if connectedAccounts.length === 0}
-					<a class="no-accounts-link" href="/orgs/{orgId}/settings">
+					<Button variant="secondary" href="/orgs/{orgId}/settings">
 						<Settings size={13} />
 						No Git providers connected — click to open Settings
-					</a>
+					</Button>
 				{:else}
 					<button type="button" class="picker-btn" onclick={openAccountPicker}>
 						{#if selectedAccount}
@@ -339,11 +336,10 @@
 						<ChevronRight size={14} class="picker-chevron" />
 					</button>
 				{/if}
-			</div>
+			</FormField>
 
 			<!-- Step 2: Repository -->
-			<div class="form-group">
-				<label class="form-label" class:dimmed={!selectedAccount}>Step 2 — Repository</label>
+			<FormField label="Step 2 — Repository">
 				<button type="button" class="picker-btn" disabled={!selectedAccount} onclick={openRepoPicker}>
 					{#if selectedRepo}
 						<span class="picker-value mono">{selectedRepo.fullName}</span>
@@ -352,103 +348,96 @@
 					{/if}
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
-			</div>
+			</FormField>
 
 			<!-- Step 3: Branch -->
-			<div class="form-group">
-				<label class="form-label" class:dimmed={!selectedRepo}>Step 3 — Branch</label>
+			<FormField label="Step 3 — Branch">
 				<button type="button" class="picker-btn" disabled={!selectedRepo} onclick={openBranchPicker}>
-					<span class="{selectedBranch ? 'picker-value mono' : 'picker-placeholder'}">
+					<span class={selectedBranch ? 'picker-value mono' : 'picker-placeholder'}>
 						{selectedBranch || (selectedRepo ? 'Select branch…' : 'Select repository first')}
 					</span>
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
-			</div>
+			</FormField>
 		</div>
 
-		<div class="divider"></div>
+		<Divider margin="0" />
 
 		<!-- Build config -->
 		<div class="form-section">
-			<div class="section-title">Build Config</div>
+			<SectionLabel>Build Config</SectionLabel>
 
 			<!-- shipyard.json checkbox -->
-			<label class="toggle-row">
-				<input type="checkbox" bind:checked={useShipyardJson} />
-				<div class="toggle-text">
-					<span class="toggle-label">Use <code>shipyard.json</code> or auto-detect</span>
-					<span class="toggle-hint">
-						{#if useShipyardJson}
-							Shipyard will read <code>shipyard.json</code> from your repo, or auto-detect the framework if absent.
-						{:else}
-							Manually specify build settings below. These are saved as the default and can still be overridden by <code>shipyard.json</code>.
-						{/if}
-					</span>
-				</div>
-			</label>
+			<div class="toggle-box" class:on={useShipyardJson}>
+				<Checkbox bind:checked={useShipyardJson} label="Use shipyard.json or auto-detect" />
+				<span class="toggle-hint">
+					{#if useShipyardJson}
+						Shipyard will read <code>shipyard.json</code> from your repo, or auto-detect the framework if absent.
+					{:else}
+						Manually specify build settings below. These are saved as the default and can still be overridden by <code>shipyard.json</code>.
+					{/if}
+				</span>
+			</div>
 
 			{#if !useShipyardJson}
 				<div class="build-fields">
-					<div class="form-group">
-						<label class="form-label">Framework</label>
-						<select
-							class="form-select"
+					<FormField label="Framework" for="ss-framework" hint="Selecting a framework fills in the commands below.">
+						<Select
+							id="ss-framework"
 							value={framework}
+							options={FRAMEWORKS}
 							onchange={(e) => applyFrameworkPreset((e.target as HTMLSelectElement).value)}
-						>
-							{#each FRAMEWORKS as f (f.value)}
-								<option value={f.value}>{f.label}</option>
-							{/each}
-						</select>
-						<span class="field-hint">Selecting a framework fills in the commands below.</span>
-					</div>
+						/>
+					</FormField>
 					<div class="form-row">
-						<div class="form-group">
-							<label class="form-label">Bun / Node version</label>
-							<input class="form-input" bind:value={nodeVer} placeholder="1" />
-						</div>
-						<div class="form-group">
-							<label class="form-label">Output dir</label>
-							<input class="form-input mono" bind:value={outputDir} placeholder="dist" />
-						</div>
+						<FormField label="Bun / Node version" for="ss-nodever">
+							<TextField id="ss-nodever" bind:value={nodeVer} placeholder="1" />
+						</FormField>
+						<FormField label="Output dir" for="ss-outdir">
+							<span class="mono-field">
+								<TextField id="ss-outdir" bind:value={outputDir} placeholder="dist" />
+							</span>
+						</FormField>
 					</div>
-					<div class="form-group">
-						<label class="form-label">Install command</label>
-						<input class="form-input mono" bind:value={installCmd} placeholder="bun install" />
-					</div>
-					<div class="form-group">
-						<label class="form-label">Build command</label>
-						<input class="form-input mono" bind:value={buildCmd} placeholder="bun run build" />
-					</div>
+					<FormField label="Install command" for="ss-install">
+						<span class="mono-field">
+							<TextField id="ss-install" bind:value={installCmd} placeholder="bun install" />
+						</span>
+					</FormField>
+					<FormField label="Build command" for="ss-build">
+						<span class="mono-field">
+							<TextField id="ss-build" bind:value={buildCmd} placeholder="bun run build" />
+						</span>
+					</FormField>
 				</div>
 			{/if}
 		</div>
 	{/if}
 
 	{#if source === 'artifactory'}
-		<div class="divider"></div>
+		<Divider margin="0" />
 		<div class="form-section">
-			<div class="section-title">Artifact</div>
-			<button type="button" class="picker-btn" onclick={openArtifactoryPicker}>
-				{#if selectedArtifact}
-					<Package size={13} style="color:#8b5cf6;flex-shrink:0" />
-					<span class="picker-value mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
-				{:else}
-					<span class="picker-placeholder">Select from Shipyard registry…</span>
-				{/if}
-				<ChevronRight size={14} class="picker-chevron" />
-			</button>
+			<FormField label="Artifact">
+				<button type="button" class="picker-btn" onclick={openArtifactoryPicker}>
+					{#if selectedArtifact}
+						<Package size={13} class="picker-icon" />
+						<span class="picker-value mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
+					{:else}
+						<span class="picker-placeholder">Select from Shipyard registry…</span>
+					{/if}
+					<ChevronRight size={14} class="picker-chevron" />
+				</button>
+			</FormField>
 		</div>
 	{/if}
 
 	{#if error}
-		<div class="form-error">{error}</div>
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{/if}
 
 	<div class="form-actions">
-		<button
+		<Button
 			type="submit"
-			class="btn-primary"
 			disabled={submitting || !name.trim() || (source === 'git' && !selectedRepo) || (source === 'artifactory' && !selectedArtifact)}
 		>
 			{#if submitting}
@@ -456,7 +445,7 @@
 			{:else}
 				Create Static Site
 			{/if}
-		</button>
+		</Button>
 	</div>
 </form>
 
@@ -472,69 +461,13 @@
 
 	.form-section { display: flex; flex-direction: column; gap: 10px; }
 
-	.section-title {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-
-	.divider { height: 1px; background: var(--border); }
-
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
-
 	.form-row {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 10px;
 	}
 
-	.form-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		transition: color var(--transition-fast);
-	}
-	.form-label.dimmed { color: color-mix(in srgb, var(--text-dim) 50%, transparent); }
-
-	.required { color: var(--accent-red, #ef4444); }
-
-	.form-input, .form-select {
-		padding: 8px 10px;
-		font-size: 13px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-		outline: none;
-		font-family: var(--font-sans);
-		transition: border-color var(--transition-fast);
-	}
-	.form-input:focus, .form-select:focus { border-color: var(--accent); }
-	.form-input.mono, .mono { font-family: var(--font-mono); }
-
-	/* Source radio */
-	.source-options { display: flex; flex-direction: column; gap: 6px; }
-
-	.source-opt {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 10px 12px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.source-opt input[type="radio"] { cursor: pointer; }
-	.source-opt.active {
-		border-color: var(--accent);
-		background: color-mix(in srgb, var(--accent) 6%, transparent);
-	}
-	.opt-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+	.mono, .mono-field :global(input) { font-family: var(--font-mono); }
 
 	/* Picker button */
 	.picker-btn {
@@ -555,6 +488,7 @@
 		transition: border-color var(--transition-fast), opacity var(--transition-fast);
 	}
 	.picker-btn:hover:not(:disabled) { border-color: var(--accent); }
+	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	.picker-btn:disabled { opacity: 0.45; cursor: default; }
 	.picker-btn.loading { cursor: default; }
 
@@ -563,64 +497,23 @@
 
 	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
+	.picker-btn :global(.picker-icon) { color: var(--text-dim); flex-shrink: 0; }
+	.picker-btn :global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
 
-	.mini-spinner {
-		width: 12px;
-		height: 12px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-		flex-shrink: 0;
-	}
-
-	.no-accounts-link {
+	/* shipyard.json checkbox box */
+	.toggle-box {
 		display: flex;
-		align-items: center;
+		flex-direction: column;
 		gap: 6px;
-		font-size: 12px;
-		color: var(--accent);
-		text-decoration: none;
-		padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent) 6%, transparent);
-		border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.no-accounts-link:hover { text-decoration: underline; }
-
-	/* shipyard.json toggle row */
-	.toggle-row {
-		display: flex;
-		align-items: flex-start;
-		gap: 10px;
 		padding: 10px 12px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		cursor: pointer;
-		transition: all var(--transition-fast);
 		background: var(--bg-elevated);
+		transition: border-color var(--transition-fast), background var(--transition-fast);
 	}
-	.toggle-row:has(input:checked) {
+	.toggle-box.on {
 		border-color: var(--accent);
 		background: color-mix(in srgb, var(--accent) 5%, transparent);
-	}
-	.toggle-row input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; cursor: pointer; }
-
-	.toggle-text { display: flex; flex-direction: column; gap: 3px; }
-
-	.toggle-label {
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-	.toggle-label code {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		background: var(--bg-base);
-		padding: 1px 4px;
-		border-radius: 3px;
-		border: 1px solid var(--border);
 	}
 
 	.toggle-hint {
@@ -636,14 +529,6 @@
 		border-radius: 3px;
 	}
 
-	.field-hint {
-		font-size: 10px;
-		color: var(--text-dim);
-		margin-top: 2px;
-	}
-
-	.optional { color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: 0; }
-
 	.build-fields {
 		display: flex;
 		flex-direction: column;
@@ -654,32 +539,5 @@
 		border-radius: var(--radius-sm);
 	}
 
-	.form-error {
-		font-size: 12px;
-		color: var(--accent-red, #ef4444);
-		padding: 8px 10px;
-		background: color-mix(in srgb, #ef4444 8%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
 	.form-actions { padding-top: 4px; }
-
-	.btn-primary {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 8px 18px;
-		font-size: 13px;
-		font-weight: 600;
-		background: var(--accent);
-		color: white;
-		border: none;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		transition: opacity var(--transition-fast);
-	}
-	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
-	.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

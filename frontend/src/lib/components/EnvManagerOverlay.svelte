@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui';
 	import EnvManagerPanel from '$lib/panels/EnvManagerPanel.svelte';
 
 	interface Props {
@@ -29,9 +30,9 @@
 					<span class="emo-title">Environment Variables</span>
 					<span class="emo-subtitle">{serviceName}</span>
 				</div>
-				<button class="emo-close-btn" onclick={onClose} title="Close">
+				<Button variant="ghost" size="icon" onclick={onClose} title="Close" aria-label="Close">
 					<X size={15} />
-				</button>
+				</Button>
 			</div>
 
 			<!-- Body -->
@@ -45,7 +46,7 @@
 <style>
 	.emo-backdrop {
 		position: fixed; inset: 0;
-		background: rgba(0, 0, 0, 0.65);
+		background: rgba(0, 0, 0, 0.55);
 		display: flex; align-items: flex-end; justify-content: center;
 		z-index: 500;
 		padding: 0;
@@ -55,19 +56,19 @@
 		width: 100%; max-width: 1100px;
 		height: 68vh; min-height: 400px;
 		display: flex; flex-direction: column;
-		background: #0d1117;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
 		border-bottom: none;
-		border-radius: 10px 10px 0 0;
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 		overflow: hidden;
-		box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.6);
+		box-shadow: var(--shadow-lg);
 	}
 
 	.emo-header {
 		display: flex; align-items: center;
 		padding: 10px 14px; gap: 10px;
-		background: #161b22;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+		background: var(--bg-surface);
+		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 	}
 
@@ -76,23 +77,15 @@
 	}
 
 	.emo-title {
-		font-size: 13px; font-weight: 700; color: #e6edf3;
+		font-size: 13px; font-weight: 700; color: var(--text-primary);
 		white-space: nowrap;
 	}
 
 	.emo-subtitle {
-		font-size: 11px; color: #8b949e;
-		font-family: var(--font-mono, monospace);
+		font-size: 11px; color: var(--text-muted);
+		font-family: var(--font-mono);
 		white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 	}
-
-	.emo-close-btn {
-		display: flex; align-items: center; justify-content: center;
-		width: 28px; height: 28px; border-radius: 6px;
-		background: none; border: none; cursor: pointer;
-		color: #8b949e; transition: all 0.12s;
-	}
-	.emo-close-btn:hover { background: rgba(255, 255, 255, 0.08); color: #e6edf3; }
 
 	.emo-body {
 		flex: 1; min-height: 0; overflow: hidden;

@@ -6,6 +6,8 @@
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Deployment, DeploymentStep, DeploymentLog, MqttPayload } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
+	import { StatusDot, Badge, Spinner } from '$lib/components/ui';
+	import type { DotStatus } from '$lib/utils/status';
 
 	interface Props {
 		orgId:      string;
@@ -42,12 +44,22 @@
 	let globalLogs = $derived(stepLogsMap['__global__'] ?? []);
 
 	// ── Helpers ─────────────────────────────────────────────────────────────────
-	function statusClass(status: string) {
-		if (status === 'success') return 'status-ok';
-		if (status === 'failed')  return 'status-err';
-		if (status === 'running') return 'status-run';
-		if (status === 'queued' || status === 'pending') return 'status-queue';
-		return 'status-dim';
+	// Page-local mapping that preserves the old header colors
+	// (toDotStatus has no `success`, which would turn green into grey).
+	function headerDot(status: string): DotStatus {
+		if (status === 'success') return 'running';
+		if (status === 'failed') return 'failed';
+		if (status === 'running') return 'pending';
+		if (status === 'queued' || status === 'pending') return 'deploying';
+		return 'stopped';
+	}
+
+	function badgeTone(status: string): 'green' | 'red' | 'yellow' | 'blue' | 'neutral' {
+		if (status === 'success') return 'green';
+		if (status === 'failed') return 'red';
+		if (status === 'running') return 'yellow';
+		if (status === 'queued' || status === 'pending') return 'blue';
+		return 'neutral';
 	}
 
 	function stepIcon(s: string) {
@@ -179,21 +191,21 @@
 
 <!-- ── Header strip ──────────────────────────────────────────────────────────── -->
 <div class="dep-header">
-	<div class="dep-status-dot {statusClass(dep.status)}"></div>
+	<StatusDot status={headerDot(dep.status)} />
 	<span class="dep-id">{dep.id.slice(0, 8)}</span>
 	{#if dep.source_ref}
 		<span class="dep-ref">{dep.source_ref}</span>
 	{/if}
 	<span class="dep-time">{formatTime(dep.created_at)}</span>
 	{#if isLive}
-		<span class="live-badge">LIVE</span>
+		<Badge tone="green">LIVE</Badge>
 	{/if}
-	<span class="dep-status-label {statusClass(dep.status)}">{dep.status}</span>
+	<Badge tone={badgeTone(dep.status)}>{dep.status}</Badge>
 </div>
 
 <!-- ── Body ─────────────────────────────────────────────────────────────────── -->
 {#if loading}
-	<div class="state-row"><div class="spinner"></div> Loading logs…</div>
+	<div class="state-row"><Spinner size={16} /> Loading logs…</div>
 {:else if steps.length === 0 && globalLogs.length === 0}
 	<div class="state-row muted">No log entries recorded for this deployment.</div>
 {:else}
@@ -270,18 +282,6 @@
 		flex-wrap: wrap;
 	}
 
-	.dep-status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		flex-shrink: 0;
-	}
-	.dep-status-dot.status-ok    { background: #22c55e; }
-	.dep-status-dot.status-err   { background: #ef4444; }
-	.dep-status-dot.status-run   { background: #f59e0b; animation: pulse 1.2s ease-in-out infinite; }
-	.dep-status-dot.status-queue { background: #6366f1; }
-	.dep-status-dot.status-dim   { background: var(--text-dim); }
-
 	.dep-id {
 		font-size: 12px;
 		font-family: var(--font-mono);
@@ -305,30 +305,6 @@
 		flex: 1;
 	}
 
-	.live-badge {
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		padding: 2px 6px;
-		border-radius: 100px;
-		background: #22c55e;
-		color: white;
-	}
-
-	.dep-status-label {
-		font-size: 10px;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		padding: 2px 8px;
-		border-radius: 100px;
-	}
-	.dep-status-label.status-ok    { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
-	.dep-status-label.status-err   { background: color-mix(in srgb, #ef4444 15%, transparent); color: #ef4444; }
-	.dep-status-label.status-run   { background: color-mix(in srgb, #f59e0b 15%, transparent); color: #f59e0b; }
-	.dep-status-label.status-queue { background: color-mix(in srgb, #6366f1 15%, transparent); color: #6366f1; }
-	.dep-status-label.status-dim   { background: var(--bg-surface); color: var(--text-dim); }
-
 	/* ── States ── */
 	.state-row {
 		display: flex;
@@ -340,16 +316,6 @@
 		justify-content: center;
 	}
 	.state-row.muted { color: var(--text-dim); }
-
-	.spinner {
-		width: 16px;
-		height: 16px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-		flex-shrink: 0;
-	}
 
 	/* ── Accordion ── */
 	.accordion-list {
@@ -397,9 +363,9 @@
 		font-weight: 700;
 		flex-shrink: 0;
 	}
-	.acc-success { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
-	.acc-running { background: color-mix(in srgb, #f59e0b 15%, transparent); color: #f59e0b; }
-	.acc-failed  { background: color-mix(in srgb, #ef4444 15%, transparent); color: #ef4444; }
+	.acc-success { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+	.acc-running { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); color: var(--accent-yellow); }
+	.acc-failed  { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
 	.acc-skipped { background: var(--bg-surface); color: var(--text-dim); }
 	.acc-pending { background: var(--bg-surface); color: var(--text-dim); }
 
@@ -411,7 +377,7 @@
 
 	.acc-logs {
 		padding: 8px;
-		background: var(--bg-base, #0d1117);
+		background: var(--bg-base);
 		display: flex;
 		flex-direction: column;
 		gap: 1px;
@@ -436,13 +402,11 @@
 	.log-lvl { font-weight: 700; }
 	.log-msg { word-break: break-all; color: var(--text-primary); }
 
-	.log-info  .log-lvl { color: #60a5fa; }
-	.log-warn  .log-lvl { color: #fbbf24; }
-	.log-error .log-lvl { color: #f87171; }
+	.log-info  .log-lvl { color: var(--accent); }
+	.log-warn  .log-lvl { color: var(--accent-yellow); }
+	.log-error .log-lvl { color: var(--accent-red); }
 	.log-info  { background: transparent; }
-	.log-warn  { background: color-mix(in srgb, #fbbf24 5%, transparent); }
-	.log-error { background: color-mix(in srgb, #f87171 8%, transparent); }
+	.log-warn  { background: color-mix(in srgb, var(--accent-yellow) 5%, transparent); }
+	.log-error { background: color-mix(in srgb, var(--accent-red) 8%, transparent); }
 
-	@keyframes spin  { to { transform: rotate(360deg); } }
-	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 </style>

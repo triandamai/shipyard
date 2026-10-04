@@ -2,10 +2,14 @@
 	import { api } from '$lib/api/client';
 	import { PERMISSION_GROUPS, PROJECT_PERM_OPTIONS, buildOrgPermission, parseOrgPermissionSuffix, expandProjectPermissions, collapseProjectPermissions } from '$lib/api/types';
 	import type { OrgMember, MemberRole, Project, MemberProjectAssignment, ProjectPermTier } from '$lib/api/types';
-	import {
-		Check, Loader2, AlertCircle, Lock, Folder, FolderOpen,
-		X, Plus, Trash2, Crown, Eye, ChevronDown
-	} from '@lucide/svelte';
+	import { Check, Lock, Folder, FolderOpen, X, Plus, Crown } from '@lucide/svelte';
+	import Avatar from '$lib/components/ui/Avatar.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Checkbox from '$lib/components/ui/Checkbox.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import Select from '$lib/components/ui/Select.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
 
 	const ROLES: { value: MemberRole; label: string }[] = [
 		{ value: 'owner',  label: 'Owner' },
@@ -181,15 +185,6 @@
 		loadProjectAssignments();
 	});
 
-	function roleColor(r: string) {
-		switch (r) {
-			case 'owner':  return 'role-owner';
-			case 'admin':  return 'role-admin';
-			case 'member': return 'role-member';
-			default:       return 'role-viewer';
-		}
-	}
-
 	function assignableRoles(): MemberRole[] {
 		return isOwner ? ['owner', 'admin', 'member', 'viewer'] : ['admin', 'member', 'viewer'];
 	}
@@ -198,7 +193,7 @@
 <div class="panel-wrap">
 	<!-- ── Member header ── -->
 	<div class="member-header">
-		<div class="member-avatar">{member.email[0]?.toUpperCase() ?? '?'}</div>
+		<Avatar initials={member.email[0] ?? '?'} size={38} />
 		<div class="member-info">
 			<span class="member-email">{member.email}</span>
 			<span class="member-since">Member</span>
@@ -210,21 +205,17 @@
 		<div class="section-label"><Crown size={12} />Role</div>
 		<div class="role-row">
 			<div class="role-select-wrap">
-				<select
-					class="role-select {roleColor(role)}"
+				<Select
 					bind:value={role}
+					options={assignableRoles().map((r) => ({ value: r, label: ROLES.find((x) => x.value === r)?.label ?? r }))}
 					disabled={savingRole}
 					onchange={saveRole}
-				>
-					{#each assignableRoles() as r}
-						<option value={r}>{ROLES.find(x => x.value === r)?.label ?? r}</option>
-					{/each}
-				</select>
-				<ChevronDown size={11} class="role-chevron" />
-				{#if savingRole}<Loader2 size={12} class="spin role-loading" />{/if}
+					aria-label="Role"
+				/>
+				{#if savingRole}<span class="role-loading"><Spinner size={12} /></span>{/if}
 			</div>
 			{#if roleError}
-				<span class="inline-error"><AlertCircle size={11} />{roleError}</span>
+				<div role="alert"><InlineAlert tone="error">{roleError}</InlineAlert></div>
 			{/if}
 		</div>
 	</section>
@@ -233,7 +224,7 @@
 	<section class="panel-section">
 		<div class="section-label"><Lock size={12} />Org Permissions
 			{#if orgPerms.size > 0}
-				<span class="count-chip">{orgPerms.size}</span>
+				<Badge tone="blue">{orgPerms.size}</Badge>
 			{/if}
 		</div>
 
@@ -243,11 +234,9 @@
 					<div class="perm-group-name">{group.group}</div>
 					<div class="perm-grid">
 						{#each group.permissions as perm}
-							<label class="perm-check" class:checked={orgPerms.has(perm.id)} title={perm.description}>
-								<input type="checkbox" checked={orgPerms.has(perm.id)} onchange={() => togglePerm(perm.id)} />
-								<span class="perm-check-box">{#if orgPerms.has(perm.id)}<Check size={9} />{/if}</span>
-								<span class="perm-label">{perm.label}</span>
-							</label>
+							<span class="perm-check" title={perm.description}>
+								<Checkbox checked={orgPerms.has(perm.id)} label={perm.label} onchange={() => togglePerm(perm.id)} />
+							</span>
 						{/each}
 					</div>
 				</div>
@@ -255,14 +244,14 @@
 		</div>
 
 		{#if permsError}
-			<div class="error-banner"><AlertCircle size={12} />{permsError}</div>
+			<div role="alert"><InlineAlert tone="error">{permsError}</InlineAlert></div>
 		{/if}
 		<div class="section-actions">
-			<button class="btn btn-primary btn-sm" disabled={savingPerms} onclick={savePerms}>
-				{#if savingPerms}<Loader2 size={12} class="spin" />Saving…
+			<Button size="sm" disabled={savingPerms} onclick={savePerms}>
+				{#if savingPerms}<Spinner size={12} tone="current" />Saving…
 				{:else if permsSaved}<Check size={12} />Saved
 				{:else}<Check size={12} />Save permissions{/if}
-			</button>
+			</Button>
 		</div>
 	</section>
 
@@ -270,14 +259,14 @@
 	<section class="panel-section">
 		<div class="section-label"><Folder size={12} />Project Access
 			{#if pendingAssignments.length > 0}
-				<span class="count-chip">{pendingAssignments.length}</span>
+				<Badge tone="blue">{pendingAssignments.length}</Badge>
 			{/if}
 		</div>
 
 		{#if loadingProjects}
-			<div class="loading-row"><div class="spinner"></div><span>Loading…</span></div>
+			<div class="loading-row"><Spinner size={12} /><span>Loading…</span></div>
 		{:else if projectsError}
-			<div class="error-banner"><AlertCircle size={12} />{projectsError}</div>
+			<div role="alert"><InlineAlert tone="error">{projectsError}</InlineAlert></div>
 		{:else}
 			<!-- Current assignments -->
 			{#if pendingAssignments.length === 0}
@@ -289,26 +278,25 @@
 							<div class="assignment-header">
 								<FolderOpen size={13} class="folder-icon" />
 								<span class="assignment-name">{assignment.project_name}</span>
-								<button
-									class="revoke-btn"
+								<Button
+									variant="ghost"
+									size="icon"
 									onclick={() => removeProject(assignment.project_id)}
 									title="Remove project access"
+									aria-label="Remove project access"
 								>
 									<X size={12} />
-								</button>
+								</Button>
 							</div>
 							<div class="perm-chip-row">
 								{#each PROJECT_PERM_OPTIONS as opt}
-									{@const has = assignment.permissions.has(opt.id)}
-									<label class="perm-chip" class:active={has} title={opt.desc}>
-										<input
-											type="checkbox"
-											checked={has}
+									<span title={opt.desc}>
+										<Checkbox
+											checked={assignment.permissions.has(opt.id)}
+											label={opt.label}
 											onchange={() => toggleProjectPerm(assignment.project_id, opt.id)}
 										/>
-										{#if has}<Check size={8} />{/if}
-										{opt.label}
-									</label>
+									</span>
 								{/each}
 							</div>
 						</div>
@@ -322,35 +310,29 @@
 					<span class="add-label"><Plus size={11} />Add project</span>
 					<div class="project-chips">
 						{#each unassignedProjects as project}
-							<button
-								class="project-add-chip"
-								onclick={() => addProject(project)}
-							>
+							<Button variant="secondary" size="sm" onclick={() => addProject(project)}>
 								<Folder size={11} />{project.name}
-							</button>
+							</Button>
 						{/each}
 					</div>
 				</div>
 			{/if}
 
 			{#if projectsError}
-				<div class="error-banner"><AlertCircle size={12} />{projectsError}</div>
+				<div role="alert"><InlineAlert tone="error">{projectsError}</InlineAlert></div>
 			{/if}
 			<div class="section-actions">
-				<button class="btn btn-primary btn-sm" disabled={savingProjects} onclick={saveProjectAssignments}>
-					{#if savingProjects}<Loader2 size={12} class="spin" />Saving…
+				<Button size="sm" disabled={savingProjects} onclick={saveProjectAssignments}>
+					{#if savingProjects}<Spinner size={12} tone="current" />Saving…
 					{:else if projectsSaved}<Check size={12} />Saved
 					{:else}<Check size={12} />Save project access{/if}
-				</button>
+				</Button>
 			</div>
 		{/if}
 	</section>
 </div>
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-
 	.panel-wrap {
 		display: flex; flex-direction: column;
 		padding: 0;
@@ -362,13 +344,6 @@
 		padding: 16px 20px;
 		border-bottom: 1px solid var(--border);
 		background: var(--bg-elevated);
-	}
-
-	.member-avatar {
-		width: 38px; height: 38px; border-radius: 50%;
-		background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #7C3AED));
-		color: white; font-size: 14px; font-weight: 700;
-		display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 	}
 
 	.member-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -388,64 +363,17 @@
 		text-transform: uppercase; letter-spacing: 0.08em;
 	}
 
-	.count-chip {
-		font-size: 10px; font-weight: 700;
-		padding: 1px 6px; border-radius: 999px;
-		background: rgba(37,99,235,0.1); color: var(--accent);
-		border: 1px solid rgba(37,99,235,0.2);
-	}
-
 	/* ── Role ── */
 	.role-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-
-	.role-select-wrap { position: relative; display: inline-flex; align-items: center; }
-
-	.role-select {
-		appearance: none; -webkit-appearance: none;
-		font-size: 12px; font-weight: 600;
-		padding: 5px 28px 5px 10px;
-		border-radius: 999px; border: 1px solid;
-		cursor: pointer; outline: none;
-		background: transparent; font-family: var(--font-sans);
-		transition: opacity var(--transition-fast);
-	}
-	.role-select:disabled { opacity: 0.6; cursor: default; }
-	.role-owner  { color: #D97706; border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.08) !important; }
-	.role-admin  { color: #6366F1; border-color: rgba(99,102,241,0.4); background: rgba(99,102,241,0.08) !important; }
-	.role-member { color: #10B981; border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08) !important; }
-	.role-viewer { color: var(--text-muted); border-color: var(--border); background: var(--bg-elevated) !important; }
-
-	:global(.role-chevron) { position: absolute; right: 8px; pointer-events: none; color: currentColor; opacity: 0.6; }
-	:global(.role-loading) { margin-left: 8px; color: var(--text-muted); }
+	.role-select-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 140px; }
 
 	/* ── Permissions ── */
 	.perm-groups { display: flex; flex-direction: column; gap: 10px; }
 	.perm-group { display: flex; flex-direction: column; gap: 5px; }
 	.perm-group-name { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
 	.perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
-
-	.perm-check {
-		display: flex; align-items: center; gap: 6px;
-		padding: 4px 7px; border-radius: var(--radius-sm);
-		cursor: pointer; user-select: none;
-		font-size: 11px; color: var(--text-muted);
-		border: 1px solid transparent;
-		transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-	}
-	.perm-check:hover { background: var(--bg-elevated); color: var(--text-primary); }
-	.perm-check.checked { background: rgba(37,99,235,0.06); border-color: rgba(37,99,235,0.2); color: var(--text-primary); }
-	.perm-check input { display: none; }
-
-	.perm-check-box {
-		width: 13px; height: 13px; flex-shrink: 0;
-		border: 1.5px solid var(--border);
-		border-radius: 3px;
-		display: flex; align-items: center; justify-content: center;
-		background: var(--bg-base); color: white;
-		transition: background var(--transition-fast), border-color var(--transition-fast);
-	}
-	.perm-check.checked .perm-check-box { background: var(--accent); border-color: var(--accent); }
-	.perm-label { line-height: 1; font-size: 11px; }
+	.perm-check { display: flex; padding: 4px 7px; font-size: 11px; }
+	.perm-check :global(.ui-checkbox), .perm-chip-row :global(.ui-checkbox) { font-size: 11px; }
 
 	/* ── Project assignments ── */
 	.assignment-list { display: flex; flex-direction: column; gap: 6px; }
@@ -466,33 +394,10 @@
 	:global(.folder-icon) { color: var(--accent); flex-shrink: 0; }
 	.assignment-name { flex: 1; font-size: 12px; font-weight: 500; color: var(--text-primary); }
 
-	.revoke-btn {
-		width: 22px; height: 22px; background: transparent; border: none;
-		cursor: pointer; color: var(--text-dim);
-		display: flex; align-items: center; justify-content: center;
-		border-radius: var(--radius-sm);
-		transition: color var(--transition-fast), background var(--transition-fast);
-		flex-shrink: 0;
-	}
-	.revoke-btn:hover { color: #EF4444; background: rgba(239,68,68,0.08); }
-
 	.perm-chip-row {
-		display: flex; gap: 4px; flex-wrap: wrap;
-		padding: 7px 10px;
+		display: flex; gap: 4px 14px; flex-wrap: wrap;
+		padding: 8px 10px;
 	}
-
-	.perm-chip {
-		display: inline-flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 500;
-		padding: 3px 8px; border-radius: 999px;
-		border: 1px solid var(--border);
-		cursor: pointer; user-select: none;
-		background: var(--bg-elevated); color: var(--text-dim);
-		transition: all var(--transition-fast);
-	}
-	.perm-chip input { display: none; }
-	.perm-chip:hover { border-color: rgba(37,99,235,0.3); color: var(--accent); }
-	.perm-chip.active { background: rgba(37,99,235,0.08); border-color: rgba(37,99,235,0.3); color: var(--accent); }
 
 	/* ── Add project ── */
 	.empty-hint { font-size: 12px; color: var(--text-dim); font-style: italic; margin: 0; }
@@ -508,20 +413,8 @@
 		text-transform: uppercase; letter-spacing: 0.07em;
 	}
 	.project-chips { display: flex; gap: 4px; flex-wrap: wrap; }
-	.project-add-chip {
-		display: inline-flex; align-items: center; gap: 5px;
-		font-size: 11px; font-weight: 500; padding: 4px 9px;
-		border-radius: 999px;
-		border: 1px dashed var(--border); background: transparent;
-		cursor: pointer; color: var(--text-muted);
-		transition: all var(--transition-fast);
-	}
-	.project-add-chip:hover { border-color: var(--accent); color: var(--accent); background: rgba(37,99,235,0.06); border-style: solid; }
 
 	/* ── Common ── */
 	.section-actions { display: flex; justify-content: flex-end; }
 	.loading-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
-	.spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
-	.error-banner { display: flex; align-items: center; gap: 6px; padding: 8px 10px; font-size: 12px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); border-radius: var(--radius-sm); color: #EF4444; }
-	.inline-error { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #EF4444; }
 </style>

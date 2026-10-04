@@ -8,21 +8,47 @@
 		title: string;
 		meta?: string;
 		trailing?: Snippet;
+		onclick?: (e: MouseEvent) => void;
+		ariaLabel?: string;
+		ariaExpanded?: boolean;
 	}
 
-	let { icon, iconTone = 'blue', title, meta, trailing }: Props = $props();
+	let { icon, iconTone = 'blue', title, meta, trailing, onclick, ariaLabel, ariaExpanded }: Props = $props();
+
+	// Clickable rows are a <button>, so everything inside must be phrasing content (spans).
+	// Non-clickable rows keep block containers so trailing content may hold divs.
+	let clickable = $derived(!!onclick);
 </script>
 
-<div class="ui-list-row">
-	<IconBadge tone={iconTone} size={30}>{@render icon()}</IconBadge>
-	<div class="ui-list-row-text">
-		<span class="ui-list-row-title">{title}</span>
-		{#if meta}<span class="ui-list-row-meta">{meta}</span>{/if}
+{#if clickable}
+	<button
+		type="button"
+		class="ui-list-row ui-list-row--clickable"
+		{onclick}
+		aria-label={ariaLabel}
+		aria-expanded={ariaExpanded}
+	>
+		<IconBadge tone={iconTone} size={30}>{@render icon()}</IconBadge>
+		<span class="ui-list-row-text">
+			<span class="ui-list-row-title">{title}</span>
+			{#if meta}<span class="ui-list-row-meta">{meta}</span>{/if}
+		</span>
+		{#if trailing}
+			<span class="ui-list-row-trailing">{@render trailing()}</span>
+		{/if}
+	</button>
+{:else}
+	<div class="ui-list-row">
+		<IconBadge tone={iconTone} size={30}>{@render icon()}</IconBadge>
+		<div class="ui-list-row-text">
+			<span class="ui-list-row-title">{title}</span>
+			{#if meta}<span class="ui-list-row-meta">{meta}</span>{/if}
+		</div>
+		{#if trailing}
+			<div class="ui-list-row-trailing">{@render trailing()}</div>
+		{/if}
 	</div>
-	{#if trailing}
-		<div class="ui-list-row-trailing">{@render trailing()}</div>
-	{/if}
-</div>
+{/if}
 
 <style>
 	.ui-list-row {
@@ -52,4 +78,24 @@
 		margin-top: 1px;
 	}
 	.ui-list-row-trailing { margin-left: auto; flex-shrink: 0; }
+
+	/* Clickable variant: native button chrome removed, same geometry as the static row */
+	.ui-list-row--clickable {
+		box-sizing: border-box;
+		width: calc(100% + 16px);
+		margin: 0 -8px;
+		padding: 10px 8px;
+		background: transparent;
+		border: none;
+		border-bottom: 1px solid var(--border);
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+		transition: background var(--transition-fast);
+	}
+	.ui-list-row--clickable:last-child { border-bottom: none; }
+	.ui-list-row--clickable:hover { background: var(--bg-hover); }
+	.ui-list-row--clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.ui-list-row--clickable .ui-list-row-text { flex: 1; align-items: flex-start; }
 </style>

@@ -1,13 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { Home, ArrowLeft } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui';
 
 	let status = $derived(page.status ?? 404);
 	let message = $derived(page.error?.message ?? 'Page not found');
-
-	function goHome() {
-		goto('/orgs');
-	}
 
 	function goBack() {
 		if (typeof history !== 'undefined') {
@@ -26,7 +24,7 @@
 	<div class="glow-sphere s1"></div>
 	<div class="glow-sphere s2"></div>
 
-	<div class="card">
+	<div class="err-card">
 		<div class="code-badge">{status}</div>
 		
 		<h1 class="title">
@@ -55,14 +53,8 @@
 		</div>
 
 		<div class="actions">
-			<button class="btn-primary" onclick={goHome}>
-				<svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" style="margin-right: 6px;"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 01-1-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>
-				Return Home
-			</button>
-			<button class="btn-secondary" onclick={goBack}>
-				<svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" style="margin-right: 6px;"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>
-				Go Back
-			</button>
+			<Button href="/orgs"><Home size={14} /> Return Home</Button>
+			<Button variant="secondary" onclick={goBack}><ArrowLeft size={14} /> Go Back</Button>
 		</div>
 	</div>
 </div>
@@ -103,7 +95,7 @@
 	}
 
 	/* Glassmorphism Card styling */
-	.card {
+	.err-card {
 		position: relative;
 		z-index: 10;
 		width: 100%;
@@ -186,60 +178,17 @@
 		gap: 12px;
 		justify-content: center;
 	}
-	.btn-primary {
-		display: inline-flex;
-		align-items: center;
-		padding: 9px 18px;
-		height: 38px;
-		background: #6366f1;
-		color: #ffffff;
-		border: none;
-		border-radius: 8px;
-		font-size: 13.5px;
-		font-weight: 600;
-		cursor: pointer;
-		transition: background 0.15s, transform 0.1s;
-	}
-	.btn-primary:hover {
-		background: #4f46e5;
-	}
-	.btn-primary:active {
-		transform: scale(0.98);
-	}
-
-	.btn-secondary {
-		display: inline-flex;
-		align-items: center;
-		padding: 9px 18px;
-		height: 38px;
-		background: transparent;
-		color: #e2e8f0;
-		border: 1px solid rgba(255, 255, 255, 0.15);
-		border-radius: 8px;
-		font-size: 13.5px;
-		font-weight: 600;
-		cursor: pointer;
-		transition: background 0.15s, border-color 0.15s, transform 0.1s;
-	}
-	.btn-secondary:hover {
-		background: rgba(255, 255, 255, 0.05);
-		border-color: rgba(255, 255, 255, 0.25);
-	}
-	.btn-secondary:active {
-		transform: scale(0.98);
-	}
 
 	@media (max-width: 480px) {
-		.card {
+		.err-card {
 			padding: 30px 20px;
 		}
 		.actions {
 			flex-direction: column;
 			width: 100%;
 		}
-		.btn-primary, .btn-secondary {
+		.actions > :global(.ui-btn) {
 			width: 100%;
-			justify-content: center;
 		}
 	}
 </style>

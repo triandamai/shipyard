@@ -7,6 +7,7 @@
 	import GitRepoPickerPanel from './GitRepoPickerPanel.svelte';
 	import GitBranchPickerPanel from './GitBranchPickerPanel.svelte';
 	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
+	import { Button, FormField, RadioGroup, InlineAlert, Spinner, Divider } from '$lib/components/ui';
 
 	interface Props {
 		projectId: string;
@@ -30,7 +31,8 @@
 		bitbucket: '#0052CC',
 	};
 
-	let source = $state<'git' | 'artifactory'>('git');
+	// Widened to string: RadioGroup binds a plain string ('git' | 'artifactory').
+	let source = $state<string>('git');
 
 	let connectedAccounts = $state<ConnectedAccount[]>([]);
 	let accountsLoading   = $state(true);
@@ -185,66 +187,63 @@
 				active. Shipyard will redeploy on every push to
 				<span class="mono">{selectedBranch}</span>.
 			</p>
-			<button class="btn btn-secondary" onclick={() => uiStore.clearPanels()}>Close</button>
+			<Button variant="secondary" onclick={() => uiStore.clearPanels()}>Close</Button>
 		</div>
 	{:else}
 		<form class="form" onsubmit={handleSubmit}>
-			<div class="form-hint-box">
-				<Zap size={13} />
-				<span>
-					Shipyard detects functions in <span class="mono">functions/</span> or from
-					<span class="mono">shipyard.json</span>. No Dockerfile needed.
-				</span>
-			</div>
+			<InlineAlert tone="info">
+				<div class="hint-box">
+					<Zap size={13} />
+					<span>
+						Shipyard detects functions in <span class="mono">functions/</span> or from
+						<span class="mono">shipyard.json</span>. No Dockerfile needed.
+					</span>
+				</div>
+			</InlineAlert>
 
-			<div class="divider"></div>
+			<Divider margin="2px 0" />
 
 			<!-- Source selection -->
-			<div class="form-group">
-				<label class="form-label">Source</label>
-				<div class="source-options">
-					<label class="source-opt" class:active={source === 'git'}>
-						<input type="radio" name="ef-source" value="git" bind:group={source} />
-						<span class="opt-label">Git repository</span>
-					</label>
-					<label class="source-opt" class:active={source === 'artifactory'}>
-						<input type="radio" name="ef-source" value="artifactory" bind:group={source} />
-						<span class="opt-label">Shipyard Artifactory</span>
-					</label>
-				</div>
-			</div>
+			<FormField label="Source">
+				<RadioGroup
+					name="ef-source"
+					bind:value={source}
+					options={[
+						{ value: 'git', label: 'Git repository' },
+						{ value: 'artifactory', label: 'Shipyard Artifactory' },
+					]}
+				/>
+			</FormField>
 
 			{#if source === 'artifactory'}
-				<div class="form-group">
-					<label class="form-label">Artifact</label>
+				<FormField label="Artifact">
 					<button type="button" class="picker-btn" onclick={openArtifactoryPicker}>
 						{#if selectedArtifact}
-							<Package size={13} style="color:#f59e0b;flex-shrink:0" />
+							<Package size={13} class="picker-icon" />
 							<span class="picker-value font-mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
 						{:else}
 							<span class="picker-placeholder">Select from Shipyard registry…</span>
 						{/if}
 						<ChevronRight size={14} class="picker-chevron" />
 					</button>
-				</div>
+				</FormField>
 			{/if}
 
 			{#if source === 'git'}
-			<div class="divider"></div>
+			<Divider margin="2px 0" />
 
 			<!-- Step 1: Account -->
-			<div class="form-group">
-				<label class="form-label">Step 1 — Git Account</label>
+			<FormField label="Step 1 — Git Account">
 				{#if accountsLoading}
 					<div class="picker-btn loading">
-						<div class="mini-spinner"></div>
+						<Spinner size={12} />
 						<span>Loading accounts…</span>
 					</div>
 				{:else if connectedAccounts.length === 0}
-					<a class="no-accounts-link" href="/orgs/{orgId}/settings">
+					<Button variant="secondary" href="/orgs/{orgId}/settings">
 						<Settings size={13} />
 						No Git providers connected — click to open Settings
-					</a>
+					</Button>
 				{:else}
 					<button type="button" class="picker-btn" onclick={openAccountPicker}>
 						{#if selectedAccount}
@@ -256,11 +255,10 @@
 						<ChevronRight size={14} class="picker-chevron" />
 					</button>
 				{/if}
-			</div>
+			</FormField>
 
 			<!-- Step 2: Repository -->
-			<div class="form-group">
-				<label class="form-label" class:dimmed={!selectedAccount}>Step 2 — Repository</label>
+			<FormField label="Step 2 — Repository">
 				<button type="button" class="picker-btn" disabled={!selectedAccount} onclick={openRepoPicker}>
 					{#if selectedRepo}
 						<span class="picker-value font-mono">{selectedRepo.fullName}</span>
@@ -269,11 +267,10 @@
 					{/if}
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
-			</div>
+			</FormField>
 
 			<!-- Step 3: Branch -->
-			<div class="form-group">
-				<label class="form-label" class:dimmed={!selectedRepo}>Step 3 — Branch</label>
+			<FormField label="Step 3 — Branch">
 				<button type="button" class="picker-btn" disabled={!selectedRepo} onclick={openBranchPicker}>
 					{#if selectedBranch}
 						<span class="picker-value font-mono">{selectedBranch}</span>
@@ -282,23 +279,23 @@
 					{/if}
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
-			</div>
+			</FormField>
 
 			{/if}<!-- end {#if source === 'git'} -->
 
 			{#if submitError}
-				<div class="error-msg">{submitError}</div>
+				<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 			{/if}
 
-			<button class="btn btn-primary submit-btn" type="submit"
+			<Button type="submit"
 				disabled={isSubmitting || (source === 'git' && !selectedRepo) || (source === 'artifactory' && !selectedArtifact)}
 			>
 				{#if isSubmitting}
-					<div class="btn-spinner"></div> Deploying…
+					<Spinner size={12} tone="current" /> Deploying…
 				{:else}
 					Deploy Edge Functions
 				{/if}
-			</button>
+			</Button>
 		</form>
 	{/if}
 </div>
@@ -306,27 +303,10 @@
 <style>
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.form { display: flex; flex-direction: column; gap: 14px; }
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
 
-	.form-hint-box {
-		display: flex; align-items: flex-start; gap: 8px;
-		font-size: 12px; color: var(--text-dim); line-height: 1.5;
-		padding: 10px 12px;
-		background: color-mix(in srgb, var(--accent) 6%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.form-hint-box :global(svg) { flex-shrink: 0; margin-top: 1px; color: var(--accent); }
+	.hint-box { display: flex; align-items: flex-start; gap: 8px; }
+	.hint-box :global(svg) { flex-shrink: 0; margin-top: 2px; }
 	.mono { font-family: var(--font-mono); font-size: 11px; }
-
-	.form-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-		transition: color var(--transition-fast);
-	}
-	.form-label.dimmed { color: color-mix(in srgb, var(--text-dim) 50%, transparent); }
-
-	.divider { height: 1px; background: var(--border); margin: 2px 0; }
 
 	.picker-btn {
 		display: flex; align-items: center; gap: 8px;
@@ -337,6 +317,7 @@
 		min-height: 36px;
 	}
 	.picker-btn:hover:not(:disabled) { border-color: var(--accent); }
+	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	.picker-btn:disabled { opacity: 0.45; cursor: default; }
 	.picker-btn.loading { cursor: default; }
 
@@ -345,49 +326,8 @@
 	.font-mono { font-family: var(--font-mono); }
 
 	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+	:global(.picker-icon) { color: var(--text-dim); flex-shrink: 0; }
 	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
-
-	.mini-spinner {
-		width: 12px; height: 12px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%;
-		animation: spin 0.7s linear infinite; flex-shrink: 0;
-	}
-
-	.no-accounts-link {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; color: var(--accent); text-decoration: none;
-		padding: 8px 10px; background: color-mix(in srgb, var(--accent) 6%, transparent);
-		border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.no-accounts-link:hover { text-decoration: underline; }
-
-	.source-options { display: flex; flex-direction: column; gap: 6px; }
-	.source-opt {
-		display: flex; align-items: center; gap: 8px;
-		padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; font-size: 12px; font-weight: 500; color: var(--text-primary);
-		transition: all var(--transition-fast);
-	}
-	.source-opt input[type="radio"] { cursor: pointer; }
-	.source-opt.active {
-		border-color: var(--accent);
-		background: color-mix(in srgb, var(--accent) 6%, transparent);
-	}
-	.opt-label { font-size: 12px; font-weight: 500; }
-
-	.error-msg {
-		font-size: 12px; color: var(--accent-red); padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.submit-btn { margin-top: 4px; display: flex; align-items: center; gap: 6px; justify-content: center; }
-	.btn-spinner {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
 
 	/* Success state */
 	.success-wrap {
@@ -397,6 +337,4 @@
 	.success-icon { color: var(--accent-green); }
 	.success-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0; }
 	.success-sub { font-size: 13px; color: var(--text-dim); line-height: 1.6; margin: 0; max-width: 280px; }
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Code2 } from '@lucide/svelte';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
 
 	interface Props {
 		data: Record<string, unknown>;
@@ -26,7 +27,7 @@
 			{/if}
 		</div>
 	</div>
-	<span class="status-dot" class:running={status === 'running'}></span>
+	<StatusDot status={status === 'running' ? 'running' : 'stopped'} />
 </div>
 
 <Handle type="source" position={Position.Right} />
@@ -90,16 +91,5 @@
 		font-size: 10px;
 		color: var(--text-dim);
 		font-family: var(--font-mono);
-	}
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--text-dim);
-		flex-shrink: 0;
-		margin-left: auto;
-	}
-	.status-dot.running {
-		background: var(--status-running, #22c55e);
 	}
 </style>

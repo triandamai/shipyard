@@ -1,46 +1,23 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import type { HTMLInputAttributes } from 'svelte/elements';
 
-	interface Props {
+	interface Props extends Omit<HTMLInputAttributes, 'value' | 'type' | 'class'> {
 		value: string;
 		type?: string;
-		placeholder?: string;
-		disabled?: boolean;
-		id?: string;
 		icon?: Snippet;
 	}
 
-	let {
-		value = $bindable(),
-		type = 'text',
-		placeholder,
-		disabled = false,
-		id,
-		icon
-	}: Props = $props();
+	let { value = $bindable(), type = 'text', icon, ...rest }: Props = $props();
 </script>
 
 {#if icon}
 	<div class="ui-textfield-icon-wrap">
 		<span class="ui-textfield-icon">{@render icon()}</span>
-		<input
-			{id}
-			{type}
-			{placeholder}
-			{disabled}
-			bind:value
-			class="ui-textfield ui-textfield--with-icon"
-		/>
+		<input {...rest} {type} bind:value class="ui-textfield ui-textfield--with-icon" />
 	</div>
 {:else}
-	<input
-		{id}
-		{type}
-		{placeholder}
-		{disabled}
-		bind:value
-		class="ui-textfield"
-	/>
+	<input {...rest} {type} bind:value class="ui-textfield" />
 {/if}
 
 <style>
@@ -61,6 +38,7 @@
 	.ui-textfield::placeholder { color: var(--text-dim); }
 	.ui-textfield:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
 	.ui-textfield:disabled { opacity: 0.5; cursor: not-allowed; }
+	.ui-textfield:read-only { color: var(--text-muted); }
 
 	.ui-textfield-icon-wrap { position: relative; display: flex; align-items: center; }
 	.ui-textfield-icon {

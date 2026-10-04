@@ -2,8 +2,8 @@
 	import { page } from '$app/state';
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
-	import { Package, ChevronRight, RefreshCw, FolderOpen } from '@lucide/svelte';
-	import { onMount } from 'svelte';
+	import { ChevronRight, RefreshCw, FolderOpen } from '@lucide/svelte';
+	import { Button, DataTable } from '$lib/components/ui';
 
 	let orgId   = $derived($orgStore.activeOrg?.id ?? '');
 	let orgSlug = $derived(page.params.orgSlug ?? '');
@@ -16,25 +16,13 @@
 		last_pushed: string | null;
 	};
 
-	let namespaces: Namespace[] = $state([]);
-	let loading = $state(false);
-	let page_n  = $state(1);
-	let perPage = $state(20);
-	let total   = $state(0);
+	let refreshKey = $state(0);
 
-	async function load() {
-		if (!orgId) return;
-		loading = true;
-		const res = await api.get(`/orgs/${orgId}/registry/namespaces?page=${page_n}&per_page=${perPage}`);
-		namespaces = res.data?.items ?? res.data ?? [];
-		total      = res.data?.total ?? namespaces.length;
-		loading    = false;
+	async function fetchNamespaces({ page: pageIdx, pageSize }: { page: number; pageSize: number; search: string }) {
+		const res = await api.get(`/orgs/${orgId}/registry/namespaces?page=${pageIdx + 1}&per_page=${pageSize}`);
+		const rows: Namespace[] = res.data?.items ?? res.data ?? [];
+		return { rows, total: res.data?.total ?? rows.length };
 	}
-
-	onMount(load);
-	$effect(() => { if (orgId) load(); });
-
-	let pageCount = $derived(Math.max(1, Math.ceil(total / perPage)));
 
 	function fmtBytes(n: number) {
 		if (!n) return '0 B';
@@ -59,97 +47,59 @@
 		<nav class="breadcrumb" aria-label="Registry navigation">
 			<span class="bc-item bc-active"><FolderOpen size={13} /> Namespaces</span>
 		</nav>
-		<button class="icon-btn" onclick={load} title="Refresh" aria-label="Refresh">
+		<Button variant="secondary" size="icon" title="Refresh" aria-label="Refresh" onclick={() => refreshKey++}>
 			<RefreshCw size={13} />
-		</button>
+		</Button>
 	</div>
 
-	{#if loading}
-		<div class="skel-list">
-			{#each [1,2,3,4,5] as _}<div class="skel"></div>{/each}
-		</div>
-	{:else if namespaces.length === 0}
-		<div class="empty">
-			<Package size={32} />
-			<p>No namespaces yet.</p>
-			<span>Deploy a project or push an image to create your first namespace.</span>
-		</div>
-	{:else}
-		<div class="table-wrap">
-			<table class="table">
-				<thead>
-					<tr>
-						<th>Namespace</th>
-						<th class="num-col">Artifacts</th>
-						<th class="num-col">Size</th>
-						<th class="num-col">Last pushed</th>
-						<th class="action-col"></th>
+	{#if orgId}
+		{#key `${orgId}:${refreshKey}`}
+			<DataTable
+				fetchPage={fetchNamespaces}
+				rowKey={(ns: Namespace) => ns.id}
+				searchable={false}
+				pageSize={20}
+				columns={[
+					{ key: 'slug', label: 'Namespace' },
+					{ key: 'artifact_count', label: 'Artifacts' },
+					{ key: 'total_size', label: 'Size' },
+					{ key: 'last_pushed', label: 'Last pushed' },
+					{ key: 'go', label: '', width: '32px' }
+				]}
+				emptyMessage="No namespaces yet. Deploy a project or push an image to create your first namespace."
+			>
+				{#snippet row(ns: Namespace)}
+					<tr class="clickable" role="button" tabindex="0"
+						onclick={() => (location.href = `/orgs/${orgSlug}/registry/${ns.id}`)}
+						onkeydown={(e) => e.key === 'Enter' && (location.href = `/orgs/${orgSlug}/registry/${ns.id}`)}>
+						<td>
+							<div class="ns-name">
+								<div class="ns-icon"><FolderOpen size={13} /></div>
+								<span class="mono">{ns.slug}</span>
+							</div>
+						</td>
+						<td class="muted">{ns.artifact_count}</td>
+						<td class="muted">{fmtBytes(ns.total_size)}</td>
+						<td class="muted">{timeAgo(ns.last_pushed)}</td>
+						<td class="action-col"><ChevronRight size={14} class="row-arrow" /></td>
 					</tr>
-				</thead>
-				<tbody>
-					{#each namespaces as ns}
-						<tr class="clickable" role="button" tabindex="0"
-							onclick={() => (location.href = `/orgs/${orgSlug}/registry/${ns.id}`)}
-							onkeydown={(e) => e.key === 'Enter' && (location.href = `/orgs/${orgSlug}/registry/${ns.id}`)}>
-							<td>
-								<div class="ns-name">
-									<div class="ns-icon"><FolderOpen size={13} /></div>
-									<span class="mono">{ns.slug}</span>
-								</div>
-							</td>
-							<td class="num-col muted">{ns.artifact_count}</td>
-							<td class="num-col muted">{fmtBytes(ns.total_size)}</td>
-							<td class="num-col muted">{timeAgo(ns.last_pushed)}</td>
-							<td class="action-col"><ChevronRight size={14} class="row-arrow" /></td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-
-		{#if pageCount > 1}
-			<div class="pagination">
-				<button class="page-btn" disabled={page_n <= 1}
-					onclick={() => { page_n--; load(); }}>← Prev</button>
-				<span class="page-info">Page {page_n} of {pageCount}</span>
-				<button class="page-btn" disabled={page_n >= pageCount}
-					onclick={() => { page_n++; load(); }}>Next →</button>
-			</div>
-		{/if}
+				{/snippet}
+			</DataTable>
+		{/key}
 	{/if}
 </div>
 
 <style>
-.browser { padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 1000px; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.breadcrumb { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.bc-item { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: var(--text-muted); padding: 3px 5px; border-radius: 5px; }
-.bc-item.bc-active { color: var(--text-primary); }
-.icon-btn { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; flex-shrink: 0; transition: background var(--transition-fast), color var(--transition-fast); }
-.icon-btn:hover { background: var(--surface-2); color: var(--text-primary); }
-.table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.table th { background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 8px 14px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
-.table td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-primary); vertical-align: middle; }
-.table tr:last-child td { border-bottom: none; }
-.table tr.clickable { cursor: pointer; }
-.table tr.clickable:hover td { background: var(--surface-2); }
-:global(.row-arrow) { color: var(--text-muted); }
-.num-col { text-align: right; white-space: nowrap; }
-.action-col { width: 32px; text-align: right; }
-.muted { color: var(--text-muted); font-size: 12px; }
-.mono { font-family: var(--font-mono, monospace); font-size: 12px; }
-.ns-name { display: flex; align-items: center; gap: 8px; }
-.ns-icon { width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-muted); flex-shrink: 0; }
-.pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.page-btn { font-size: 12px; font-weight: 500; padding: 5px 14px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast); }
-.page-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text-primary); }
-.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.page-info { font-size: 12px; color: var(--text-muted); }
-.empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 60px 20px; color: var(--text-muted); background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; text-align: center; }
-.empty p { font-size: 14px; font-weight: 600; margin: 0; color: var(--text-primary); }
-.empty span { font-size: 13px; color: var(--text-muted); max-width: 340px; }
-.skel-list { display: flex; flex-direction: column; gap: 6px; }
-.skel { height: 44px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; animation: pulse 1.5s ease-in-out infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+	.browser { padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 1000px; }
+	.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+	.breadcrumb { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+	.bc-item { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: var(--text-muted); padding: 3px 5px; border-radius: var(--radius-sm); }
+	.bc-item.bc-active { color: var(--text-primary); }
+	.clickable { cursor: pointer; }
+	:global(.row-arrow) { color: var(--text-muted); }
+	.action-col { text-align: right; }
+	.muted { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+	.mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
+	.ns-name { display: flex; align-items: center; gap: 8px; }
+	.ns-icon { width: 26px; height: 26px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); color: var(--text-muted); flex-shrink: 0; }
 </style>

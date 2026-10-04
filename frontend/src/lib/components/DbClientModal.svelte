@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Database, Play, Loader2, AlertTriangle, Info, ChevronDown, RefreshCw } from '@lucide/svelte';
+	import { X, Database, Play, AlertTriangle, Info, RefreshCw } from '@lucide/svelte';
+	import { Button, Badge, Select, TextField, FormField, InlineAlert, Spinner, ConfirmDialog } from '$lib/components/ui';
 	import { api } from '$lib/api/client';
 	import type { DbEngine, DbMeta, DbQueryResult } from '$lib/api/types';
 
@@ -215,9 +216,16 @@
 	}
 
 	function confirmClose() {
-		showCloseConfirm = false;
 		onClose();
 	}
+
+	const ENGINE_TONE: Record<DbEngine, 'blue' | 'yellow' | 'neutral' | 'red' | 'green'> = {
+		postgres: 'blue',
+		mysql:    'yellow',
+		mariadb:  'neutral',
+		redis:    'red',
+		mongodb:  'green',
+	};
 
 	function formatCell(val: unknown): string {
 		if (val === null || val === undefined) return 'NULL';
@@ -240,35 +248,22 @@
 			<Database size={15} />
 			<span>Database Client</span>
 			{#if connected}
-				<span class="conn-badge connected">Connected</span>
+				<Badge tone="green">Connected</Badge>
 			{/if}
 		</div>
-		<button class="icon-btn" onclick={requestClose} aria-label="Close"><X size={15} /></button>
+		<Button variant="ghost" size="icon" onclick={requestClose} aria-label="Close"><X size={15} /></Button>
 	</div>
-
-	{#if showCloseConfirm}
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCloseConfirm = false; }} onkeydown={() => {}}>
-			<div class="confirm-card">
-				<p class="confirm-title">Close database client?</p>
-				<p class="confirm-sub">Your connection and any unsaved query results will be lost.</p>
-				<div class="confirm-actions">
-					<button class="btn btn-ghost" onclick={() => showCloseConfirm = false}>Cancel</button>
-					<button class="btn btn-danger" onclick={confirmClose}>Close</button>
-				</div>
-			</div>
-		</div>
-	{/if}
 
 	{#if metaLoading}
 		<div class="state-center">
-			<Loader2 size={18} class="spin" />
+			<Spinner size={18} />
 			<span>Detecting database…</span>
 		</div>
 	{:else if metaError}
-		<div class="state-center error">
-			<AlertTriangle size={16} />
-			<span>{metaError}</span>
+		<div class="state-pad" role="alert">
+			<InlineAlert tone="error">
+				<span class="alert-row"><AlertTriangle size={16} /><span>{metaError}</span></span>
+			</InlineAlert>
 		</div>
 	{:else}
 		<div class="modal-body">
@@ -276,96 +271,105 @@
 			{#if !connected}
 				<section class="conn-section">
 					{#if isDockerInternalHost}
-						<div class="warn-notice">
-							<AlertTriangle size={13} />
-							<span>
-								This service has no published port. The host <code>{host}</code> is a Docker-internal name — it only resolves when Shipyard itself runs inside Docker (production).
-								To connect in dev, publish the port in the service settings first.
+						<InlineAlert tone="warning">
+							<span class="alert-row">
+								<AlertTriangle size={13} />
+								<span>
+									This service has no published port. The host <code>{host}</code> is a Docker-internal name — it only resolves when Shipyard itself runs inside Docker (production).
+									To connect in dev, publish the port in the service settings first.
+								</span>
 							</span>
-						</div>
+						</InlineAlert>
 					{:else if meta?.detected}
-						<div class="auto-detect-notice">
-							<Info size={13} />
-							<span>
-								Auto-detected <strong>{meta.engine}</strong> at <code>{meta.host}:{meta.port}</code>.
-								{#if meta.password}Credentials prefilled from the service — just click Connect.{:else}Enter credentials to connect.{/if}
+						<InlineAlert tone="info">
+							<span class="alert-row">
+								<Info size={13} />
+								<span>
+									Auto-detected <strong>{meta.engine}</strong> at <code>{meta.host}:{meta.port}</code>.
+									{#if meta.password}Credentials prefilled from the service — just click Connect.{:else}Enter credentials to connect.{/if}
+								</span>
 							</span>
-						</div>
+						</InlineAlert>
 					{/if}
 
 					<div class="form-grid">
 						<!-- Engine selector -->
 						<div class="field">
-							<label for="db-engine">Engine</label>
-							<div class="select-wrap">
-								<select id="db-engine" bind:value={engine} onchange={onEngineChange}>
-									{#each ENGINE_OPTIONS as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
-								<ChevronDown size={12} class="select-chevron" />
-							</div>
+							<FormField label="Engine" for="db-engine">
+								<Select
+									id="db-engine"
+									bind:value={() => engine, (v) => { engine = v as DbEngine; onEngineChange(); }}
+									options={ENGINE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+								/>
+							</FormField>
 						</div>
 
 						<!-- Host + Port (all engines) -->
 						<div class="field field-wide">
-							<label for="db-host">Host</label>
-							<input id="db-host" type="text" bind:value={host} placeholder="platform-uuid" spellcheck="false" />
+							<FormField label="Host" for="db-host">
+								<TextField id="db-host" type="text" bind:value={host} placeholder="platform-uuid" spellcheck="false" />
+							</FormField>
 						</div>
 
 						<div class="field field-narrow">
-							<label for="db-port">Port</label>
-							<input id="db-port" type="number" bind:value={port} min="1" max="65535" />
+							<FormField label="Port" for="db-port">
+								<!-- port stays a number (native number-input binding); TextField types its value as string -->
+								<TextField id="db-port" type="number" bind:value={() => port as unknown as string, (v) => { port = v as unknown as number; }} min="1" max="65535" />
+							</FormField>
 						</div>
 
 						<!-- Database / DB index (hide for Redis when not needed, relabel) -->
 						{#if !isRedis || true}
 							<div class="field {isSqlEngine || isMongo ? 'field-wide' : ''}">
-								<label for="db-database">{dbFieldLabel}</label>
-								<input
-									id="db-database"
-									type="text"
-									bind:value={database}
-									placeholder={isRedis ? '0' : 'mydb'}
-									spellcheck="false"
-								/>
+								<FormField label={dbFieldLabel} for="db-database">
+									<TextField
+										id="db-database"
+										type="text"
+										bind:value={database}
+										placeholder={isRedis ? '0' : 'mydb'}
+										spellcheck="false"
+									/>
+								</FormField>
 							</div>
 						{/if}
 
 						<!-- Username — hidden for Redis (no username concept in basic Redis) -->
 						{#if !isRedis}
 							<div class="field">
-								<label for="db-user">Username</label>
-								<input id="db-user" type="text" bind:value={username}
-									placeholder={isMongo ? 'admin' : 'postgres'}
-									autocomplete="off" spellcheck="false" />
+								<FormField label="Username" for="db-user">
+									<TextField id="db-user" type="text" bind:value={username}
+										placeholder={isMongo ? 'admin' : 'postgres'}
+										autocomplete="off" spellcheck="false" />
+								</FormField>
 							</div>
 						{/if}
 
 						<!-- Password (all engines) -->
 						<div class="field">
-							<label for="db-pass">Password{isRedis ? ' (optional)' : ''}</label>
-							<input id="db-pass" type="password" bind:value={password} autocomplete="new-password" />
+							<FormField label="Password{isRedis ? ' (optional)' : ''}" for="db-pass">
+								<TextField id="db-pass" type="password" bind:value={password} autocomplete="new-password" />
+							</FormField>
 						</div>
 					</div>
 
 					{#if connectError}
-						<div class="error-banner">
-							<AlertTriangle size={13} />
-							<span>{connectError}</span>
+						<div role="alert">
+							<InlineAlert tone="error">
+								<span class="alert-row"><AlertTriangle size={13} /><span>{connectError}</span></span>
+							</InlineAlert>
 						</div>
 					{/if}
 
 					<div class="conn-footer">
-						<button class="btn btn-primary" onclick={connect} disabled={connecting}>
+						<Button variant="primary" onclick={connect} disabled={connecting}>
 							{#if connecting}
-								<Loader2 size={13} class="spin" />
+								<Spinner size={13} tone="current" />
 								Connecting…
 							{:else}
 								<Play size={13} />
 								Connect
 							{/if}
-						</button>
+						</Button>
 					</div>
 				</section>
 			{:else}
@@ -374,7 +378,7 @@
 					<!-- Connection status bar (full width) -->
 					<div class="conn-bar">
 						<span class="conn-detail">
-							<span class="engine-badge {engine}">{engine}</span>
+							<Badge tone={ENGINE_TONE[engine]}><span class="engine-label">{engine}</span></Badge>
 							<code>{host}:{port}</code>
 							<span class="sep">·</span>
 							<code>{database}</code>
@@ -383,7 +387,7 @@
 								<span>{username}</span>
 							{/if}
 						</span>
-						<button class="btn-link" onclick={disconnect}>Disconnect</button>
+						<Button variant="ghost" size="sm" onclick={disconnect}>Disconnect</Button>
 					</div>
 
 					<!-- Two-column: schema sidebar + editor/results -->
@@ -392,13 +396,13 @@
 						<div class="browser-sidebar">
 							<div class="browser-header">
 								<span>{browserLabel}</span>
-								<button class="browser-refresh" onclick={loadBrowser} title="Refresh" aria-label="Refresh {browserLabel}">
+								<Button variant="ghost" size="icon" onclick={loadBrowser} title="Refresh" aria-label="Refresh {browserLabel}">
 									<RefreshCw size={11} />
-								</button>
+								</Button>
 							</div>
 							{#if browserLoading}
 								<div class="browser-state">
-									<Loader2 size={14} class="spin" />
+									<Spinner size={14} />
 								</div>
 							{:else if browserError}
 								<div class="browser-state browser-err" title={browserError}>
@@ -439,30 +443,31 @@
 								></textarea>
 								<div class="editor-actions">
 									<span class="editor-hint">{queryHint}</span>
-									<button class="btn btn-primary btn-sm" onclick={runQuery} disabled={running || !sql.trim()}>
+									<Button variant="primary" size="sm" onclick={runQuery} disabled={running || !sql.trim()}>
 										{#if running}
-											<Loader2 size={12} class="spin" />
+											<Spinner size={12} tone="current" />
 											Running…
 										{:else}
 											<Play size={12} />
 											Run
 										{/if}
-									</button>
+									</Button>
 								</div>
 							</div>
 
 							<!-- Results -->
 							{#if queryError}
-								<div class="error-banner">
-									<AlertTriangle size={13} />
-									<pre class="error-pre">{queryError}</pre>
+								<div class="result-error" role="alert">
+									<InlineAlert tone="error">
+										<span class="alert-row"><AlertTriangle size={13} /><pre class="error-pre">{queryError}</pre></span>
+									</InlineAlert>
 								</div>
 							{:else if result}
 								<div class="results-section">
 									<div class="results-meta">
 										<span>{result.row_count} row{result.row_count !== 1 ? 's' : ''}</span>
 										{#if result.truncated}
-											<span class="truncated-badge">Limited to 1 000 rows</span>
+											<Badge tone="yellow">Limited to 1 000 rows</Badge>
 										{/if}
 										<span class="exec-time">{result.execution_time_ms}ms</span>
 									</div>
@@ -501,10 +506,16 @@
 	{/if}
 </div>
 
-<style>
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
+<!-- Sibling of .modal (not a child): .modal's transform would otherwise contain the dialog's fixed positioning. -->
+<ConfirmDialog
+	bind:open={showCloseConfirm}
+	title="Close database client?"
+	message="Your connection and any unsaved query results will be lost."
+	confirmLabel="Close"
+	onConfirm={confirmClose}
+/>
 
+<style>
 	.backdrop {
 		position: fixed;
 		inset: 0;
@@ -521,8 +532,8 @@
 		max-height: calc(100vh - 48px);
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
-		border-radius: 10px;
-		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-lg);
 		z-index: 301;
 		display: flex;
 		flex-direction: column;
@@ -534,7 +545,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 14px 18px;
+		padding: 10px 18px;
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 	}
@@ -547,31 +558,6 @@
 		font-weight: 600;
 		color: var(--text-primary);
 	}
-
-	.conn-badge {
-		font-size: 10px;
-		font-weight: 600;
-		padding: 2px 7px;
-		border-radius: 10px;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-	.conn-badge.connected { background: #dcfce7; color: #15803d; }
-
-	.icon-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		border: none;
-		background: transparent;
-		color: var(--text-muted);
-		cursor: pointer;
-		border-radius: 4px;
-		transition: background 0.12s;
-	}
-	.icon-btn:hover { background: var(--bg-muted); color: var(--text-primary); }
 
 	.modal-body {
 		flex: 1;
@@ -591,7 +577,11 @@
 		color: var(--text-muted);
 		font-size: 13px;
 	}
-	.state-center.error { color: #dc2626; }
+	.state-pad { padding: 20px; }
+
+	.alert-row { display: flex; align-items: flex-start; gap: 8px; }
+	.alert-row :global(svg) { flex-shrink: 0; margin-top: 1px; }
+	.alert-row code { font-family: var(--font-mono); font-size: 12px; }
 
 	/* Connection form */
 	.conn-section {
@@ -603,118 +593,19 @@
 		overflow-y: auto;
 	}
 
-	.warn-notice {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		padding: 10px 14px;
-		background: rgba(245, 158, 11, 0.08);
-		border: 1px solid rgba(245, 158, 11, 0.3);
-		border-radius: 6px;
-		font-size: 13px;
-		color: #92400e;
-	}
-	.warn-notice :global(svg) { flex-shrink: 0; margin-top: 1px; color: #d97706; }
-	.warn-notice code { font-family: var(--font-mono, monospace); font-size: 12px; }
-
-	.auto-detect-notice {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		padding: 10px 14px;
-		background: rgba(59, 130, 246, 0.07);
-		border: 1px solid rgba(59, 130, 246, 0.2);
-		border-radius: 6px;
-		font-size: 13px;
-		color: var(--text-secondary, var(--text-muted));
-	}
-	.auto-detect-notice :global(svg) { flex-shrink: 0; margin-top: 1px; color: #3b82f6; }
-	.auto-detect-notice code { font-family: var(--font-mono, monospace); font-size: 12px; }
-
 	.form-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr 80px;
 		gap: 12px;
 	}
 
-	.field { display: flex; flex-direction: column; gap: 5px; }
+	.field { min-width: 0; }
 	.field-wide { grid-column: span 2; }
 	.field-narrow { grid-column: span 1; }
 
-	.field label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-
-	.field input,
-	.field select {
-		padding: 7px 10px;
-		background: var(--bg-input, var(--bg-muted));
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		font-size: 13px;
-		color: var(--text-primary);
-		outline: none;
-		font-family: inherit;
-	}
-	.field input:focus,
-	.field select:focus { border-color: var(--accent); }
-
-	.select-wrap { position: relative; }
-	.select-wrap select { width: 100%; appearance: none; padding-right: 28px; }
-	.select-wrap :global(.select-chevron) {
-		position: absolute;
-		right: 9px;
-		top: 50%;
-		transform: translateY(-50%);
-		pointer-events: none;
-		color: var(--text-muted);
-	}
-
-	.error-banner {
-		display: flex;
-		align-items: flex-start;
-		gap: 8px;
-		padding: 10px 14px;
-		background: rgba(220, 38, 38, 0.06);
-		border: 1px solid rgba(220, 38, 38, 0.25);
-		border-radius: 6px;
-		font-size: 13px;
-		color: #dc2626;
-	}
-	.error-pre { margin: 0; font-family: var(--font-mono, monospace); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+	.error-pre { margin: 0; font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
 
 	.conn-footer { display: flex; justify-content: flex-end; }
-
-	/* Buttons */
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 14px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		border: 1px solid transparent;
-		transition: all 0.12s;
-	}
-	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-	.btn-primary { background: var(--accent, #6366f1); color: #fff; border-color: var(--accent, #6366f1); }
-	.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-	.btn-sm { padding: 5px 10px; font-size: 12px; }
-	.btn-link {
-		background: none;
-		border: none;
-		color: var(--text-muted);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 2px 4px;
-	}
-	.btn-link:hover { color: var(--text-primary); }
 
 	/* Connected editor section */
 	.editor-section {
@@ -729,11 +620,12 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 8px 18px;
-		background: var(--bg-muted);
+		padding: 6px 18px;
+		background: var(--bg-elevated);
 		border-bottom: 1px solid var(--border);
 		font-size: 12px;
 		flex-shrink: 0;
+		gap: 8px;
 	}
 
 	.conn-detail {
@@ -741,23 +633,12 @@
 		align-items: center;
 		gap: 6px;
 		color: var(--text-muted);
+		min-width: 0;
+		flex-wrap: wrap;
 	}
-	.conn-detail code { font-family: var(--font-mono, monospace); }
-	.sep { color: var(--border); }
-
-	.engine-badge {
-		font-size: 10px;
-		font-weight: 700;
-		padding: 2px 6px;
-		border-radius: 4px;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-	.engine-badge.postgres { background: #dbeafe; color: #1d4ed8; }
-	.engine-badge.mysql    { background: #fef9c3; color: #a16207; }
-	.engine-badge.mariadb  { background: #fce7f3; color: #9d174d; }
-	.engine-badge.redis    { background: #fee2e2; color: #b91c1c; }
-	.engine-badge.mongodb  { background: #dcfce7; color: #15803d; }
+	.conn-detail code { font-family: var(--font-mono); }
+	.sep { color: var(--border-hover); }
+	.engine-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
 
 	.editor-wrap {
 		display: flex;
@@ -780,25 +661,26 @@
 		min-height: 100px;
 		max-height: 220px;
 		padding: 12px 18px;
-		background: var(--bg-base, #fafafa);
+		background: var(--bg-base);
 		border: none;
 		outline: none;
 		resize: vertical;
-		font-family: var(--font-mono, 'Fira Mono', 'Consolas', monospace);
+		font-family: var(--font-mono);
 		font-size: 13px;
 		color: var(--text-primary);
 		line-height: 1.6;
 		box-sizing: border-box;
 	}
+	.sql-editor:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-muted), inset 0 2px 0 var(--accent); }
 
 	.editor-actions {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		padding: 8px 14px;
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 	}
-	.editor-hint { font-size: 11px; color: var(--text-dim, var(--text-muted)); }
+	.editor-hint { font-size: 11px; color: var(--text-dim); }
 
 	/* Redis command: single-line style */
 	.redis-editor {
@@ -809,6 +691,8 @@
 	}
 
 	/* Results */
+	.result-error { padding: 12px 18px; }
+
 	.results-section {
 		display: flex;
 		flex-direction: column;
@@ -828,16 +712,7 @@
 		flex-shrink: 0;
 	}
 
-	.truncated-badge {
-		padding: 1px 7px;
-		background: rgba(245, 158, 11, 0.1);
-		border: 1px solid rgba(245, 158, 11, 0.3);
-		color: #92400e;
-		border-radius: 10px;
-		font-size: 11px;
-	}
-
-	.exec-time { margin-left: auto; color: var(--text-dim, var(--text-muted)); }
+	.exec-time { margin-left: auto; color: var(--text-dim); }
 
 	.empty-result {
 		padding: 24px 18px;
@@ -855,13 +730,13 @@
 		width: 100%;
 		border-collapse: collapse;
 		font-size: 12px;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 	}
 
 	.results-table th {
 		position: sticky;
 		top: 0;
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 		padding: 6px 14px;
 		text-align: left;
 		font-size: 11px;
@@ -883,9 +758,9 @@
 		text-overflow: ellipsis;
 	}
 
-	.results-table tr:hover td { background: var(--bg-elevated, #f9fafb); }
+	.results-table tr:hover td { background: var(--bg-hover); }
 
-	.null-cell { color: var(--text-dim, var(--text-muted)) !important; font-style: italic; }
+	.null-cell { color: var(--text-dim) !important; font-style: italic; }
 
 	/* ── Schema browser ── */
 	.browser-layout {
@@ -902,14 +777,14 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 	}
 
 	.browser-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 7px 12px;
+		padding: 2px 4px 2px 12px;
 		border-bottom: 1px solid var(--border);
 		font-size: 10px;
 		font-weight: 700;
@@ -918,19 +793,6 @@
 		letter-spacing: 0.06em;
 		flex-shrink: 0;
 	}
-
-	.browser-refresh {
-		display: flex;
-		align-items: center;
-		background: none;
-		border: none;
-		color: var(--text-dim, var(--text-muted));
-		cursor: pointer;
-		padding: 3px;
-		border-radius: 3px;
-		transition: background 0.1s, color 0.1s;
-	}
-	.browser-refresh:hover { background: var(--border); color: var(--text-primary); }
 
 	.browser-state {
 		display: flex;
@@ -944,7 +806,7 @@
 		font-size: 11px;
 		text-align: center;
 	}
-	.browser-state.browser-err { color: #dc2626; }
+	.browser-state.browser-err { color: var(--accent-red); }
 
 	.browser-list {
 		flex: 1;
@@ -957,7 +819,7 @@
 		width: 100%;
 		padding: 5px 12px;
 		font-size: 12px;
-		font-family: var(--font-mono, monospace);
+		font-family: var(--font-mono);
 		color: var(--text-primary);
 		background: transparent;
 		border: none;
@@ -966,12 +828,13 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		transition: background 0.08s;
+		transition: background var(--transition-fast);
 	}
-	.browser-item:hover { background: var(--bg-elevated, #f0f4f8); }
+	.browser-item:hover { background: var(--bg-hover); }
+	.browser-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 	.browser-item.active {
-		background: rgba(99, 102, 241, 0.1);
-		color: var(--accent, #6366f1);
+		background: var(--accent-muted);
+		color: var(--accent);
 	}
 
 	.browser-main {
@@ -986,59 +849,4 @@
 		.form-grid { grid-template-columns: 1fr; }
 		.field-wide, .field-narrow { grid-column: span 1; }
 	}
-
-	/* ── Close confirmation overlay ── */
-	.confirm-overlay {
-		position: absolute;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.45);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 10;
-		border-radius: 10px;
-	}
-
-	.confirm-card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 10px;
-		padding: 24px 28px;
-		width: min(340px, calc(100% - 40px));
-		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
-	}
-
-	.confirm-title {
-		margin: 0 0 8px;
-		font-size: 15px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-
-	.confirm-sub {
-		margin: 0 0 20px;
-		font-size: 13px;
-		color: var(--text-muted);
-		line-height: 1.5;
-	}
-
-	.confirm-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-	}
-
-	.btn-ghost {
-		background: transparent;
-		border-color: var(--border);
-		color: var(--text-secondary, var(--text-muted));
-	}
-	.btn-ghost:hover { background: var(--bg-muted); }
-
-	.btn-danger {
-		background: #dc2626;
-		border-color: #dc2626;
-		color: #fff;
-	}
-	.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
 </style>

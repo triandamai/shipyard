@@ -5,6 +5,10 @@
 		GitBranch, AlertTriangle, ExternalLink, Code2, FileText,
 		Terminal, Copy, ChevronRight, X, RotateCcw, BookOpen, Settings, Key
 	} from '@lucide/svelte';
+	import {
+		Button, Badge, Card, ListRow, Tabs, KeyValueList, TextField, SectionLabel, InlineAlert, Spinner, ActivityList, EmptyState, ConfirmDialog
+	} from '$lib/components/ui';
+	import type { KeyValueItem, TabItem } from '$lib/components/ui';
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { formatDistanceToNow } from 'date-fns';
@@ -134,10 +138,7 @@
 
 	// Delete
 	let showDeleteModal = $state(false);
-	let deleteInput     = $state('');
-	let isDeleting      = $state(false);
 	let deleteError     = $state('');
-	let deleteValid     = $derived(deleteInput.trim() === (group?.branch ?? '') && deleteInput !== '');
 
 	// Git tab
 	let autoDeployEnabled  = $state(true);
@@ -182,6 +183,28 @@
 	function repoName(url: string) {
 		return url.trim().replace(/\.git$/, '').split('/').pop() ?? url;
 	}
+
+	const tabs = $derived<TabItem[]>([
+		{ id: 'overview',  label: 'Overview' },
+		{ id: 'functions', label: 'Functions', badge: functions.length > 0 ? String(functions.length) : undefined },
+		{ id: 'git',       label: 'Git' },
+		{ id: 'domains',   label: 'Domains' },
+	]);
+
+	const overviewItems = $derived<KeyValueItem[]>(group ? [
+		{ key: 'Repository', value: group.repo_url, mono: true },
+		{ key: 'Branch',     value: group.branch, mono: true },
+		{ key: 'Provider',   value: group.provider },
+		{ key: 'Last SHA',   value: group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : null, mono: true },
+		{ key: 'Functions',  value: functions.length },
+		{ key: 'Created',    value: formatTime(group.created_at) },
+	] : []);
+
+	const repoItems = $derived<KeyValueItem[]>(group ? [
+		{ key: 'Provider', value: group.provider },
+		{ key: 'URL',      value: group.repo_url, mono: true },
+		...(group.last_deployed_sha ? [{ key: 'Last SHA', value: group.last_deployed_sha.slice(0, 7), mono: true }] : []),
+	] : []);
 
 	// ── Load ───────────────────────────────────────────────────────────────────
 
@@ -481,14 +504,16 @@
 		}
 	}
 
-	async function deleteGroup() {
-		if (!deleteValid || isDeleting) return;
-		isDeleting = true; deleteError = '';
+	// ConfirmDialog owns the typed text and the in-flight state; returning false
+	// keeps it open with `deleteError` shown.
+	async function deleteGroup(): Promise<boolean> {
+		deleteError = '';
 		const res = await api.delete(`/orgs/${orgId}/edge-functions/groups/${groupId}`);
-		if (res.error) { deleteError = res.error.message; isDeleting = false; return; }
+		if (res.error) { deleteError = res.error.message; return false; }
 		showDeleteModal = false;
 		onDeleted?.();
 		uiStore.clearPanels();
+		return true;
 	}
 
 	onDestroy(() => { codeEditorView?.destroy(); });
@@ -505,15 +530,15 @@
 					<span class="overlay-subtitle">{codeSubtitle}</span>
 				</div>
 				<div class="overlay-actions">
-					<button class="btn-icon" onclick={copyCode} title="Copy code">
-						{#if copied}<CheckCircle size={14} style="color:#22c55e" />{:else}<Copy size={14} />{/if}
-					</button>
-					<button class="btn-icon" onclick={closeCode} title="Close"><X size={14} /></button>
+					<Button variant="ghost" size="icon" onclick={copyCode} title="Copy code" aria-label="Copy code">
+						{#if copied}<CheckCircle size={14} style="color:var(--accent-green)" />{:else}<Copy size={14} />{/if}
+					</Button>
+					<Button variant="ghost" size="icon" onclick={closeCode} title="Close" aria-label="Close"><X size={14} /></Button>
 				</div>
 			</div>
 			<div class="code-body">
 				{#if codeLoading}
-					<div class="overlay-loading"><div class="spinner-sm"></div> Loading code…</div>
+					<div class="overlay-loading"><Spinner size={16} /> Loading code…</div>
 				{:else}
 					<div class="editor-wrap" bind:this={codeEditorEl}></div>
 				{/if}
@@ -566,164 +591,109 @@
 	</div>
 {/if}
 
-<!-- ── Delete modal ──────────────────────────────────────────────────────────── -->
+<!-- ── Delete confirmation (portalled to body) ───────────────────────────────── -->
 {#if showDeleteModal}
-	<div class="modal-backdrop" role="dialog" aria-modal="true">
-		<div class="modal-card">
-			<div class="modal-header">
-				<AlertTriangle size={16} style="color:#ef4444;flex-shrink:0" />
-				<span>Delete Edge Function Group</span>
-			</div>
-			<div class="modal-body">
-				<p class="modal-warning">
-					Permanently removes the group, all deployed functions, code, invocation logs, and custom domains.
-					<strong>This cannot be undone.</strong>
-				</p>
-				<div class="modal-confirm-field">
-					<label class="modal-confirm-label">
-						Type the branch name <code class="modal-confirm-code">{group?.branch}</code> to confirm
-					</label>
-					<input class="modal-confirm-input" type="text" placeholder={group?.branch ?? ''}
-						bind:value={deleteInput} autocomplete="off" />
-				</div>
-				{#if deleteError}<div class="form-error">{deleteError}</div>{/if}
-			</div>
-			<div class="modal-footer">
-				<button class="btn btn-ghost" onclick={() => { showDeleteModal = false; deleteInput = ''; }}
-					disabled={isDeleting}>Cancel</button>
-				<button class="btn btn-danger" disabled={!deleteValid || isDeleting} onclick={deleteGroup}>
-					{#if isDeleting}<div class="spinner-xs"></div> Deleting…{:else}<Trash2 size={13} /> Delete{/if}
-				</button>
-			</div>
-		</div>
+	<div use:portal>
+		<ConfirmDialog
+			bind:open={showDeleteModal}
+			title="Delete Edge Function Group"
+			message="Permanently removes the group, all deployed functions, code, invocation logs, and custom domains. This cannot be undone."
+			confirmLabel="Delete"
+			confirmText={group?.branch ?? ''}
+			error={deleteError}
+			onConfirm={deleteGroup}
+		/>
 	</div>
 {/if}
 
 <!-- ── Panel body ────────────────────────────────────────────────────────────── -->
 <div class="panel-body">
 	{#if loading}
-		<div class="loading-row"><div class="spinner-sm"></div> Loading…</div>
+		<div class="loading-row"><Spinner size={16} /> Loading…</div>
 	{:else if loadError}
-		<div class="form-error">{loadError}</div>
+		<div role="alert"><InlineAlert tone="error">{loadError}</InlineAlert></div>
 	{:else if group}
 
-		<div class="tabs">
-			{#each [['overview','Overview'],['functions','Functions'],['git','Git'],['domains','Domains']] as [id, label]}
-				<button class="tab" class:active={activeTab === id}
-					class:tab-danger={id === 'danger'}
-					onclick={() => switchTab(id as Tab)}>{label}
-					{#if id === 'functions' && functions.length > 0}
-						<span class="tab-count">{functions.length}</span>
-					{/if}
-				</button>
-			{/each}
+		<div class="tabs-wrap">
+			<Tabs {tabs} value={activeTab} onChange={(id) => switchTab(id as Tab)} ariaLabel="Edge function sections" />
 		</div>
 
 		<div class="tab-content">
 		<!-- ── Overview ── -->
 		{#if activeTab === 'overview'}
 			<section class="section">
-				<div class="info-card">
-					<div class="info-card-header">
-						<Zap size={13} />
-						<span>Edge Function Group</span>
-					</div>
-					<div class="info-card-body">
-						<div class="info-row">
-							<span class="info-key">Repository</span>
-							<code class="info-val mono">{group.repo_url}</code>
-						</div>
-						<div class="info-row">
-							<span class="info-key">Branch</span>
-							<code class="info-val mono">{group.branch}</code>
-						</div>
-						<div class="info-row">
-							<span class="info-key">Provider</span>
-							<span class="info-val">{group.provider}</span>
-						</div>
-						<div class="info-row">
-							<span class="info-key">Last SHA</span>
-							<code class="info-val mono">{group.last_deployed_sha ? group.last_deployed_sha.slice(0, 7) : '—'}</code>
-						</div>
-						<div class="info-row">
-							<span class="info-key">Functions</span>
-							<span class="info-val">{functions.length}</span>
-						</div>
-						<div class="info-row">
-							<span class="info-key">Created</span>
-							<span class="info-val">{formatTime(group.created_at)}</span>
-						</div>
-					</div>
-				</div>
+				<Card padding="4px 14px 12px">
+					<ListRow title="Edge Function Group" meta={repoName(group.repo_url)}>
+						{#snippet icon()}<Zap size={16} />{/snippet}
+					</ListRow>
+					<KeyValueList items={overviewItems} keyWidth="100px" />
+				</Card>
 			</section>
 
 			<section class="section">
-				{#if redeployError}<div class="form-error">{redeployError}</div>{/if}
+				{#if redeployError}<div role="alert"><InlineAlert tone="error">{redeployError}</InlineAlert></div>{/if}
 				{#if redeployOk}
 					{#if lastReport}
 						{#if lastReport.deployed.length > 0}
-							<div class="form-success">
-								✓ {lastReport.deployed.length} function{lastReport.deployed.length !== 1 ? 's' : ''} deployed
-								{#if lastReport.failed.length > 0} · {lastReport.failed.length} failed{/if}
+							<div role="status">
+								<InlineAlert tone="success">
+									✓ {lastReport.deployed.length} function{lastReport.deployed.length !== 1 ? 's' : ''} deployed
+									{#if lastReport.failed.length > 0} · {lastReport.failed.length} failed{/if}
+								</InlineAlert>
 							</div>
 						{:else if lastReport.failed.length > 0}
-							<div class="form-error">
-								Deploy ran but {lastReport.failed.length} function{lastReport.failed.length !== 1 ? 's' : ''} failed:
-								{lastReport.failed.map(([name, err]) => `${name}: ${err}`).join(', ')}
+							<div role="alert">
+								<InlineAlert tone="error">
+									Deploy ran but {lastReport.failed.length} function{lastReport.failed.length !== 1 ? 's' : ''} failed:
+									{lastReport.failed.map(([name, err]) => `${name}: ${err}`).join(', ')}
+								</InlineAlert>
 							</div>
 						{:else}
-							<div class="warn-msg">
-								No functions detected. Ensure your repo has a <code class="mono-inline">functions/</code> directory
-								with <code class="mono-inline">.ts</code> or <code class="mono-inline">.js</code> files
-								containing <code class="mono-inline">export default</code>.
+							<div role="status">
+								<InlineAlert tone="warning">
+									No functions detected. Ensure your repo has a <code class="mono-inline">functions/</code> directory
+									with <code class="mono-inline">.ts</code> or <code class="mono-inline">.js</code> files
+									containing <code class="mono-inline">export default</code>.
+								</InlineAlert>
 							</div>
 						{/if}
 					{:else}
-						<div class="form-success">Redeploy triggered.</div>
+						<div role="status"><InlineAlert tone="success">Redeploy triggered.</InlineAlert></div>
 					{/if}
 				{/if}
 				<div class="overview-actions">
-					<button class="btn btn-primary" onclick={redeploy} disabled={redeploying}>
-						{#if redeploying}<div class="spinner-xs"></div> Redeploying…
+					<Button size="sm" onclick={redeploy} disabled={redeploying}>
+						{#if redeploying}<Spinner size={12} tone="current" /> Redeploying…
 						{:else}<RefreshCw size={13} /> Redeploy Now{/if}
-					</button>
+					</Button>
 					{#if serviceId}
-						<button class="btn btn-secondary" onclick={() => { monitorOpen = true; }}>
-							Monitor
-						</button>
-						<button class="btn btn-secondary" onclick={() => { envOpen = true; }}>
-							Env Vars
-						</button>
+						<Button variant="secondary" size="sm" onclick={() => { monitorOpen = true; }}>Monitor</Button>
+						<Button variant="secondary" size="sm" onclick={() => { envOpen = true; }}>Env Vars</Button>
 					{/if}
-					<a class="btn btn-secondary" href="/docs/edge-functions" target="_blank" rel="noopener">
+					<Button variant="secondary" size="sm" href="/docs/edge-functions" target="_blank" rel="noopener">
 						<BookOpen size={12} /> Docs
-					</a>
+					</Button>
 				</div>
 			</section>
 			<section class="section">
 				<!-- Danger zone -->
 				{#if canDelete}
-					<div class="danger-zone">
+					<Card tone="danger" padding="12px">
 						<div class="danger-header">
 							<AlertTriangle size={13} />
 							<span>Danger Zone</span>
 						</div>
-						<div class="danger-body">
-							<div class="danger-row">
-								<div class="danger-info">
-									<span class="danger-title">Delete this service</span>
-									<span class="danger-desc">Stops the service and permanently removes all data.</span>
-								</div>
-								<button
-										class="btn btn-danger-outline btn-sm"
-										onclick={() => {  }}
-								>
-									<Trash2 size={12} />
-									Delete
-								</button>
+						<div class="danger-row">
+							<div class="danger-info">
+								<span class="danger-title">Delete this service</span>
+								<span class="danger-desc">Stops the service and permanently removes all data.</span>
 							</div>
+							<Button variant="danger-outline" size="sm" onclick={() => {  }}>
+								<Trash2 size={12} />
+								Delete
+							</Button>
 						</div>
-					</div>
+					</Card>
 				{/if}
 			</section>
 		{/if}
@@ -731,38 +701,38 @@
 		<!-- ── Functions ── -->
 		{#if activeTab === 'functions'}
 			{#if functions.length === 0}
-				<div class="empty-state">
-					No functions deployed yet.
-					<span class="empty-sub">
-						Click <strong>Redeploy Now</strong> on the Overview tab, or push to
-						<code class="mono-inline">{group?.branch ?? 'main'}</code>.
-					</span>
-					<span class="empty-sub">
-						Repo must have a <code class="mono-inline">functions/</code> directory with
-						<code class="mono-inline">.ts</code>/<code class="mono-inline">.js</code> files
-						that contain <code class="mono-inline">export default</code>.
-					</span>
-				</div>
+				<EmptyState
+					message="No functions deployed yet."
+					sub={`Click Redeploy Now on the Overview tab, or push to ${group?.branch ?? 'main'}.`}
+				/>
+				<p class="empty-note">
+					Repo must have a <code class="mono-inline">functions/</code> directory with
+					<code class="mono-inline">.ts</code>/<code class="mono-inline">.js</code> files
+					that contain <code class="mono-inline">export default</code>.
+				</p>
 			{:else}
-				<div class="fn-cards">
+				<ActivityList>
 					{#each functions as fn (fn.id)}
 						{@const expanded = expandedFnId === fn.id}
-						<div class="fn-card" class:expanded>
-							<button class="fn-card-header" onclick={() => toggleFn(fn.id)}>
-								<div class="fn-dot" class:active={fn.status === 'active'}></div>
-								<span class="fn-name mono">{fn.name}</span>
-								<span class="fn-rt">{fn.runtime}</span>
-								<span class="fn-deployed">{formatTime(fn.last_deployed_at)}</span>
-								<ChevronRight size={13} class={expanded ? 'fn-chevron rotated' : 'fn-chevron'} />
-							</button>
+						<div class="fn-item">
+							<ListRow
+									ariaExpanded={expanded}
+									onclick={() => toggleFn(fn.id)}
+									title={fn.name}
+									meta={`${fn.runtime} · ${formatTime(fn.last_deployed_at)}`}
+									iconTone={fn.status === 'active' ? 'green' : 'blue'}
+								>
+									{#snippet icon()}<Zap size={14} />{/snippet}
+									{#snippet trailing()}
+										<ChevronRight size={13} class={expanded ? 'fn-chevron rotated' : 'fn-chevron'} />
+									{/snippet}
+								</ListRow>
 
 							{#if expanded}
 								<div class="fn-detail">
 									<!-- Status + URL -->
 									<div class="fn-status-row">
-										<span class="fn-status-badge" class:status-active={fn.status === 'active'}>
-											{fn.status}
-										</span>
+										<Badge tone={fn.status === 'active' ? 'green' : 'neutral'}>{fn.status}</Badge>
 										{#if fn.public_url}
 											<a class="fn-url mono" href={fn.public_url} target="_blank" rel="noopener">
 												{fn.public_url}<ExternalLink size={10} style="margin-left:4px;flex-shrink:0" />
@@ -772,12 +742,12 @@
 
 									<!-- Action buttons -->
 									<div class="fn-actions">
-										<button class="btn btn-secondary btn-sm" onclick={() => openCode(fn)}>
+										<Button variant="secondary" size="sm" onclick={() => openCode(fn)}>
 											<Code2 size={12} /> View Code
-										</button>
-										<button class="btn btn-secondary btn-sm" onclick={() => openLogs(fn)}>
+										</Button>
+										<Button variant="secondary" size="sm" onclick={() => openLogs(fn)}>
 											<FileText size={12} /> Invocation Logs
-										</button>
+										</Button>
 									</div>
 
 									<!-- Deployment History -->
@@ -786,12 +756,12 @@
 											<GitBranch size={11} /> Deployment History
 										</div>
 										{#if fnDeploymentsLoading[fn.id]}
-											<div class="dep-loading"><div class="spinner-xs-inline"></div> Loading…</div>
+											<div class="dep-loading"><Spinner size={10} /> Loading…</div>
 										{:else if !fnDeployments[fn.id] || fnDeployments[fn.id].length === 0}
 											<div class="dep-empty">No deployments recorded.</div>
 										{:else}
 											{#if rollbackError[fn.id]}
-												<div class="dep-error">{rollbackError[fn.id]}</div>
+												<div class="dep-alert" role="alert"><InlineAlert tone="error">{rollbackError[fn.id]}</InlineAlert></div>
 											{/if}
 											<div class="dep-list">
 												{#each fnDeployments[fn.id] as dep (dep.id)}
@@ -800,28 +770,29 @@
 															<div class="ver-label-row">
 																<span class="ver-dot" class:ver-dot-live={dep.status === 'live'}></span>
 																<span class="ver-label mono">{dep.version}</span>
-																{#if dep.status === 'live'}<span class="ver-latest">latest</span>{/if}
+																{#if dep.status === 'live'}<Badge tone="blue">latest</Badge>{/if}
 																{#if dep.commit_sha}
 																	<span class="ver-sha mono">{dep.commit_sha.slice(0, 7)}</span>
 																{/if}
 																<span class="ver-time">{formatTime(dep.created_at)}</span>
 															</div>
 															<div class="dep-btns">
-																<button class="dep-btn" onclick={() => openCode(fn, dep)}>
+																<Button variant="secondary" size="sm" onclick={() => openCode(fn, dep)}>
 																	<Code2 size={10} /> Code
-																</button>
+																</Button>
 																{#if dep.status !== 'live'}
-																	<button
-																		class="dep-btn dep-btn-restore"
+																	<Button
+																		variant="secondary"
+																		size="sm"
 																		disabled={rollingBackId === dep.id}
 																		onclick={() => rollbackDeployment(fn, dep)}
 																	>
 																		{#if rollingBackId === dep.id}
-																			<div class="spinner-xs-inline"></div>
+																			<Spinner size={10} tone="current" />
 																		{:else}
 																			<RotateCcw size={10} /> Restore
 																		{/if}
-																	</button>
+																	</Button>
 																{/if}
 															</div>
 														</div>
@@ -845,12 +816,14 @@
 									<div class="dep-history">
 										<div class="dep-history-title">
 											<Key size={11} /> Environment Variables
-											<button class="dep-btn" style="margin-left:auto" onclick={() => addEnvVar(fn.id)}>
-												<Plus size={10} /> Add
-											</button>
+											<span class="dep-title-action">
+												<Button variant="secondary" size="sm" onclick={() => addEnvVar(fn.id)}>
+													<Plus size={10} /> Add
+												</Button>
+											</span>
 										</div>
 										{#if fnEnvLoading[fn.id]}
-											<div class="dep-loading"><div class="spinner-xs-inline"></div> Loading…</div>
+											<div class="dep-loading"><Spinner size={10} /> Loading…</div>
 										{:else}
 											{@const envEntries = Object.entries(fnEnvEditing[fn.id] ?? {})}
 											{#if envEntries.length === 0}
@@ -859,26 +832,30 @@
 												<div class="env-rows">
 													{#each envEntries as [k, v] (k)}
 														<div class="env-row">
-															<input class="env-input env-key mono" placeholder="KEY"
-																value={k}
-																onchange={(e) => updateEnvKey(fn.id, k, (e.target as HTMLInputElement).value)} />
+															<div class="env-key">
+																<TextField placeholder="KEY" aria-label="Variable name"
+																	value={k}
+																	onchange={(e) => updateEnvKey(fn.id, k, (e.target as HTMLInputElement).value)} />
+															</div>
 															<span class="env-eq">=</span>
-															<input class="env-input env-val mono" placeholder="value"
-																value={v}
-																oninput={(e) => updateEnvVal(fn.id, k, (e.target as HTMLInputElement).value)} />
-															<button class="env-rm" onclick={() => removeEnvVar(fn.id, k)}>
-																<X size={10} />
-															</button>
+															<div class="env-val">
+																<TextField placeholder="value" aria-label="Variable value"
+																	value={v}
+																	oninput={(e) => updateEnvVal(fn.id, k, (e.target as HTMLInputElement).value)} />
+															</div>
+															<Button variant="ghost" size="icon" aria-label="Remove variable" title="Remove variable" onclick={() => removeEnvVar(fn.id, k)}>
+																<X size={12} />
+															</Button>
 														</div>
 													{/each}
 												</div>
 											{/if}
-											{#if fnEnvError[fn.id]}<div class="form-error" style="margin:6px 12px">{fnEnvError[fn.id]}</div>{/if}
-											{#if fnEnvOk[fn.id]}<div class="form-success" style="margin:6px 12px">Saved.</div>{/if}
-											<div style="display:flex;justify-content:flex-end;padding:8px 12px">
-												<button class="btn btn-primary btn-sm" disabled={fnEnvSaving[fn.id]} onclick={() => saveFnEnvVars(fn.id)}>
-													{#if fnEnvSaving[fn.id]}<div class="spinner-xs"></div> Saving…{:else}<CheckCircle size={11} /> Save{/if}
-												</button>
+											{#if fnEnvError[fn.id]}<div class="dep-alert" role="alert"><InlineAlert tone="error">{fnEnvError[fn.id]}</InlineAlert></div>{/if}
+											{#if fnEnvOk[fn.id]}<div class="dep-alert" role="status"><InlineAlert tone="success">Saved.</InlineAlert></div>{/if}
+											<div class="env-save">
+												<Button size="sm" disabled={fnEnvSaving[fn.id]} onclick={() => saveFnEnvVars(fn.id)}>
+													{#if fnEnvSaving[fn.id]}<Spinner size={12} tone="current" /> Saving…{:else}<CheckCircle size={11} /> Save{/if}
+												</Button>
 											</div>
 										{/if}
 									</div>
@@ -909,7 +886,7 @@
 							{/if}
 						</div>
 					{/each}
-				</div>
+				</ActivityList>
 			{/if}
 		{/if}
 
@@ -941,24 +918,11 @@
 			/>
 
 			<!-- Repo info (read-only) — more detailed than generic card -->
-			<div class="git-card" style="margin-top:12px">
-				<div class="git-card-title">Repository</div>
-				<div class="git-repo-info">
-					<div class="git-repo-row">
-						<span class="git-repo-label">Provider</span>
-						<span class="git-repo-val">{group.provider}</span>
-					</div>
-					<div class="git-repo-row">
-						<span class="git-repo-label">URL</span>
-						<code class="git-repo-val mono">{group.repo_url}</code>
-					</div>
-					{#if group.last_deployed_sha}
-						<div class="git-repo-row">
-							<span class="git-repo-label">Last SHA</span>
-							<code class="git-repo-val mono">{group.last_deployed_sha.slice(0, 7)}</code>
-						</div>
-					{/if}
-				</div>
+			<div class="git-repo">
+				<SectionLabel>Repository</SectionLabel>
+				<Card padding="4px 14px">
+					<KeyValueList items={repoItems} keyWidth="72px" />
+				</Card>
 			</div>
 		{/if}
 
@@ -967,48 +931,53 @@
 			<section class="section">
 				<div class="section-head">
 					<span class="section-title">Custom Domains</span>
-					<button class="btn btn-secondary btn-sm" onclick={openAddDomainPanel}>
+					<Button variant="secondary" size="sm" onclick={openAddDomainPanel}>
 						<Plus size={12} /> Add Domain
-					</button>
+					</Button>
 				</div>
 
 				{#if domains.length === 0}
-					<div class="empty-state">
-						No domains configured.<br />
-						<span class="empty-sub">Add a custom domain to route traffic to your edge functions.</span>
-					</div>
+					<EmptyState
+						message="No domains configured."
+						sub="Add a custom domain to route traffic to your edge functions."
+					/>
 				{:else}
-					<div class="domain-list">
+					<ActivityList>
 						{#each domains as domain (domain.id)}
-							<div class="domain-row">
-								<div class="domain-info">
-									<Globe size={12} class="domain-globe" />
-									<span class="domain-hostname mono">{domain.hostname}</span>
-									{#if domain.tls_enabled}<span class="tls-badge">HTTPS</span>{/if}
-									{#if dnsState[domain.id] === 'ok'}
-										<span class="dns-ok"><CheckCircle size={10} /> DNS OK</span>
-									{:else if dnsState[domain.id] === 'fail'}
-										<span class="dns-fail"><XCircle size={10} /> No DNS</span>
-									{/if}
-								</div>
-								<div class="domain-actions">
-									<button class="btn btn-ghost btn-xs" onclick={() => checkDns(domain)}
-										disabled={dnsState[domain.id] === 'checking'}>
-										{dnsState[domain.id] === 'checking' ? '…' : 'DNS'}
-									</button>
-									<button class="btn btn-ghost btn-xs danger-ghost" onclick={() => removeDomain(domain.id)}>
-										<Trash2 size={11} />
-									</button>
-								</div>
+							<div class="domain-item">
+								<ListRow title={domain.hostname}>
+									{#snippet icon()}<Globe size={14} />{/snippet}
+									{#snippet trailing()}
+										<div class="domain-actions">
+											<Button variant="secondary" size="sm" onclick={() => checkDns(domain)}
+												disabled={dnsState[domain.id] === 'checking'}>
+												{#if dnsState[domain.id] === 'checking'}<Spinner size={12} tone="current" />{:else}Check DNS{/if}
+											</Button>
+											<Button variant="ghost" size="icon" aria-label="Remove domain" title="Remove domain" onclick={() => removeDomain(domain.id)}>
+												<Trash2 size={13} />
+											</Button>
+										</div>
+									{/snippet}
+								</ListRow>
+								{#if domain.tls_enabled || dnsState[domain.id] === 'ok' || dnsState[domain.id] === 'fail'}
+									<div class="domain-badges">
+										{#if domain.tls_enabled}<Badge tone="green">HTTPS</Badge>{/if}
+										{#if dnsState[domain.id] === 'ok'}
+											<Badge tone="green"><CheckCircle size={10} /> DNS OK</Badge>
+										{:else if dnsState[domain.id] === 'fail'}
+											<Badge tone="red"><XCircle size={10} /> No DNS</Badge>
+										{/if}
+									</div>
+								{/if}
 							</div>
 						{/each}
-					</div>
+					</ActivityList>
 				{/if}
 
-				<div class="dns-hint">
+				<InlineAlert tone="info">
 					<strong>DNS:</strong> Point your domain's A record to the Shipyard server IP,
 					or CNAME to your Shipyard hostname.
-				</div>
+				</InlineAlert>
 			</section>
 		{/if}
 		</div><!-- .tab-content -->
@@ -1027,46 +996,11 @@
 		overflow: hidden;
 	}
 
-	/* ── Tabs ── */
-	.tabs {
-		display: flex;
-		flex-shrink: 0;
-		gap: 2px;
-		border-bottom: 1px solid var(--border);
-		margin-bottom: 0;
-		overflow-x: auto;
-		scrollbar-width: none;
-	}
-	.tabs::-webkit-scrollbar { display: none; }
-
 	.tab-content {
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
 		padding: 16px 0;
-	}
-
-	.tab {
-		display: flex; align-items: center; gap: 5px;
-		padding: 7px 12px;
-		font-size: 12px; font-weight: 500;
-		color: var(--text-muted);
-		background: none; border: none;
-		border-bottom: 2px solid transparent;
-		cursor: pointer; margin-bottom: -1px;
-		transition: all var(--transition-fast);
-		white-space: nowrap;
-	}
-	.tab:hover { color: var(--text-primary); }
-	.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-	.tab.tab-danger:hover { color: #ef4444; }
-	.tab.tab-danger.active { color: #ef4444; border-bottom-color: #ef4444; }
-
-	.tab-count {
-		font-size: 10px; font-weight: 700;
-		padding: 1px 5px; border-radius: 99px;
-		background: color-mix(in srgb, var(--accent) 15%, transparent);
-		color: var(--accent);
 	}
 
 	/* ── Sections ── */
@@ -1082,107 +1016,7 @@
 		text-transform: uppercase; letter-spacing: 0.05em;
 	}
 
-	/* ── Info card (overview) ── */
-	.info-card {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-		overflow: hidden;
-	}
-	.info-card-header {
-		display: flex; align-items: center; gap: 7px;
-		padding: 9px 12px;
-		font-size: 11px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
-		border-bottom: 1px solid var(--border);
-		background: var(--bg-base);
-	}
-	.info-card-body { padding: 4px 0; }
-	.info-row {
-		display: flex; align-items: center; padding: 6px 12px;
-		font-size: 12px; border-bottom: 1px solid var(--border);
-	}
-	.info-row:last-child { border-bottom: none; }
-	.info-key { color: var(--text-muted); width: 100px; flex-shrink: 0; }
-	.info-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-
-	/* ── Git repo card (remaining after GitSettingsSection refactor) ── */
-	.git-card {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 14px 16px;
-		display: flex; flex-direction: column; gap: 10px;
-	}
-	.git-card-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
-	.git-repo-info { display: flex; flex-direction: column; gap: 0; }
-	.git-repo-row {
-		display: flex; align-items: center; gap: 10px;
-		padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px;
-	}
-	.git-repo-row:last-child { border-bottom: none; }
-	.git-repo-label { color: var(--text-muted); width: 72px; flex-shrink: 0; font-size: 11px; }
-	.git-repo-val { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-
-	/* ── Function cards ── */
-	.fn-cards { display: flex; flex-direction: column; gap: 6px; }
-
-	.fn-card {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-		overflow: hidden;
-		transition: border-color var(--transition-fast);
-	}
-	.fn-card:hover { border-color: var(--border-hover); }
-	.fn-card.expanded { border-color: var(--accent); }
-
-	.fn-card-header {
-		display: flex; align-items: center; gap: 8px;
-		padding: 9px 12px; width: 100%;
-		background: none; border: none; cursor: pointer;
-		font-family: var(--font-sans); text-align: left;
-		transition: background var(--transition-fast);
-	}
-	.fn-card-header:hover { background: var(--bg-surface); }
-
-	.fn-dot {
-		width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-		background: var(--text-dim);
-	}
-	.fn-dot.active { background: #22c55e; box-shadow: 0 0 4px #22c55e66; }
-
-	.fn-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.fn-rt   { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
-	.fn-deployed { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
-
-	:global(.fn-chevron) { color: var(--text-dim); flex-shrink: 0; transition: transform var(--transition-fast); }
-	:global(.fn-chevron.rotated) { transform: rotate(90deg); }
-
-	.fn-detail {
-		border-top: 1px solid var(--border);
-		padding: 12px;
-		display: flex; flex-direction: column; gap: 10px;
-	}
-
-	.fn-status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-	.fn-status-badge {
-		font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 99px;
-		background: color-mix(in srgb, var(--text-dim) 15%, transparent);
-		color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em;
-	}
-	.fn-status-badge.status-active {
-		background: color-mix(in srgb, #22c55e 15%, transparent);
-		color: #22c55e;
-	}
-	.fn-url {
-		font-size: 11px; color: var(--text-muted); text-decoration: none;
-		display: inline-flex; align-items: center; gap: 3px;
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
-	}
-	.fn-url:hover { color: var(--accent); }
-
-	.fn-actions { display: flex; gap: 6px; }
+	.git-repo { margin-top: 12px; }
 
 	/* ── Deployment history / shared section card ── */
 	.dep-history {
@@ -1199,12 +1033,6 @@
 	.dep-loading, .dep-empty {
 		padding: 10px 12px; font-size: 11px; color: var(--text-dim);
 		display: flex; align-items: center; gap: 6px;
-	}
-	.dep-error {
-		margin: 6px 12px 0; padding: 6px 8px; font-size: 11px; color: #ef4444;
-		background: color-mix(in srgb, #ef4444 8%, transparent);
-		border: 1px solid color-mix(in srgb, #ef4444 25%, transparent);
-		border-radius: 4px;
 	}
 	.dep-list { display: flex; flex-direction: column; }
 
@@ -1230,13 +1058,8 @@
 		width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 		background: var(--text-dim);
 	}
-	.ver-dot-live { background: #22c55e; box-shadow: 0 0 4px #22c55e66; }
+	.ver-dot-live { background: var(--accent-green); box-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 40%, transparent); }
 	.ver-label { font-size: 12px; font-weight: 700; color: var(--text-primary); flex-shrink: 0; }
-	.ver-latest {
-		font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 99px;
-		background: color-mix(in srgb, var(--accent) 15%, transparent);
-		color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
-	}
 	.ver-sha { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
 	.ver-time { font-size: 10px; color: var(--text-dim); }
 
@@ -1250,19 +1073,6 @@
 	}
 	:global(.ver-file svg) { color: var(--text-dim); flex-shrink: 0; }
 
-	.dep-btns { display: flex; gap: 4px; flex-shrink: 0; }
-	.dep-btn {
-		display: inline-flex; align-items: center; gap: 4px;
-		padding: 3px 8px; font-size: 10px; font-weight: 600;
-		background: var(--bg-elevated); color: var(--text-muted);
-		border: 1px solid var(--border); border-radius: 4px;
-		cursor: pointer; transition: all var(--transition-fast);
-		font-family: var(--font-sans);
-	}
-	.dep-btn:hover { border-color: var(--accent); color: var(--accent); }
-	.dep-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-	.dep-btn-restore:hover { border-color: #f59e0b; color: #f59e0b; }
-
 	/* ── Env vars ── */
 	.env-rows { display: flex; flex-direction: column; }
 	.env-row {
@@ -1270,25 +1080,7 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.env-row:last-child { border-bottom: none; }
-	.env-input {
-		padding: 4px 7px; font-size: 11px;
-		border: 1px solid var(--border); border-radius: 4px;
-		background: var(--bg-surface); color: var(--text-primary); outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.env-input:focus { border-color: var(--accent); }
-	.env-key { width: 120px; flex-shrink: 0; }
-	.env-val { flex: 1; min-width: 0; }
 	.env-eq { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
-	.env-rm {
-		display: flex; align-items: center; justify-content: center;
-		width: 22px; height: 22px; border-radius: 4px;
-		background: none; border: none; cursor: pointer;
-		color: var(--text-dim); flex-shrink: 0;
-		transition: all var(--transition-fast);
-	}
-	.env-rm:hover { color: #ef4444; background: color-mix(in srgb, #ef4444 10%, transparent); }
-
 	/* ── Invoke section (inside dep-history) ── */
 	.invoke-block { border-bottom: 1px solid var(--border); }
 	.invoke-block:last-child { border-bottom: none; }
@@ -1303,47 +1095,22 @@
 		line-height: 1.7;
 	}
 
-	/* ── Domain list ── */
-	.domain-list { display: flex; flex-direction: column; gap: 6px; }
-	.domain-row {
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 9px 12px; border: 1px solid var(--border);
-		border-radius: var(--radius-sm); background: var(--bg-elevated);
-	}
-	.domain-info { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; flex: 1; min-width: 0; }
-	:global(.domain-globe) { color: var(--text-dim); flex-shrink: 0; }
-	.domain-hostname { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-	.tls-badge {
-		font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 100px;
-		background: color-mix(in srgb, #22c55e 12%, transparent); color: #22c55e;
-	}
-	.dns-ok  { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; color: #22c55e; }
-	.dns-fail{ display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; color: #ef4444; }
-	.domain-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-	.dns-hint {
-		font-size: 11px; color: var(--text-muted);
-		padding: 8px 10px; background: var(--bg-surface);
-		border: 1px solid var(--border); border-radius: var(--radius-sm); line-height: 1.5;
-	}
+	/* ── Domains ── */
+	.domain-item + .domain-item { border-top: 1px solid var(--border); }
+	.domain-item :global(.ui-list-row) { border-bottom: none; }
+	.domain-item :global(.ui-list-row-title) { font-family: var(--font-mono); font-size: 12px; }
+	.domain-badges { padding: 0 0 10px 42px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+	.domain-actions { display: flex; align-items: center; gap: 4px; }
 
 	/* ── Danger zone ── */
-	.danger-zone {
-		border: 1px solid color-mix(in srgb, #ef4444 40%, var(--border));
-		border-radius: var(--radius-sm); overflow: hidden;
-	}
 	.danger-header {
 		display: flex; align-items: center; gap: 6px;
-		padding: 8px 12px;
-		background: color-mix(in srgb, #ef4444 8%, transparent);
-		color: #ef4444;
+		color: var(--accent-red); margin-bottom: 10px;
 		font-size: 11px; font-weight: 700;
 		text-transform: uppercase; letter-spacing: 0.05em;
 	}
-	.danger-body { padding: 12px; }
-	.danger-row {
-		display: flex; align-items: center; gap: 12px; justify-content: space-between;
-	}
-	.danger-info { display: flex; flex-direction: column; gap: 3px; }
+	.danger-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+	.danger-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.danger-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 	.danger-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
 
@@ -1363,7 +1130,7 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
 		overflow: hidden;
-		box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+		box-shadow: var(--shadow-lg);
 	}
 
 	.overlay-header {
@@ -1379,14 +1146,6 @@
 	}
 	.overlay-subtitle { font-size: 11px; font-weight: 400; color: var(--text-dim); }
 	.overlay-actions { display: flex; align-items: center; gap: 4px; }
-
-	.btn-icon {
-		display: flex; align-items: center; justify-content: center;
-		width: 28px; height: 28px; border-radius: var(--radius-sm);
-		background: none; border: none; cursor: pointer;
-		color: var(--text-muted); transition: all var(--transition-fast);
-	}
-	.btn-icon:hover { background: var(--bg-surface); color: var(--text-primary); }
 
 	.code-body {
 		flex: 1; overflow: hidden; display: flex; flex-direction: column;
@@ -1405,135 +1164,46 @@
 		padding: 32px; color: var(--text-muted); font-size: 13px;
 	}
 
-	/* ── Buttons ── */
-	.overview-actions { display: flex; gap: 8px; align-items: center; }
+	.overview-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
-	.btn {
-		display: inline-flex; align-items: center; gap: 6px;
-		font-size: 12px; font-weight: 600; font-family: var(--font-sans);
-		border-radius: var(--radius-sm); cursor: pointer;
-		transition: all var(--transition-fast); border: none;
-		padding: 7px 14px;
-	}
-	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+	/* ── Tabs / functions (shared components own the chrome) ── */
+	.tabs-wrap { flex-shrink: 0; }
+	.empty-note { font-size: 11px; color: var(--text-dim); text-align: center; line-height: 1.7; margin: 0; }
 
-	.btn-primary {
-		background: var(--accent); color: white;
-	}
-	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
+	.fn-item + .fn-item { border-top: 1px solid var(--border); }
+	.fn-item :global(.ui-list-row) { border-bottom: none; }
+	:global(.fn-chevron) { color: var(--text-dim); flex-shrink: 0; transition: transform var(--transition-fast); }
+	:global(.fn-chevron.rotated) { transform: rotate(90deg); }
 
-	.btn-secondary {
-		background: var(--bg-elevated); color: var(--text-primary);
-		border: 1px solid var(--border);
+	.fn-detail {
+		border-top: 1px solid var(--border);
+		padding: 12px 0 6px;
+		display: flex; flex-direction: column; gap: 10px;
 	}
-	.btn-secondary:hover:not(:disabled) { border-color: var(--border-hover); }
+	.fn-status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+	.fn-url {
+		font-size: 11px; color: var(--text-muted); text-decoration: none;
+		display: inline-flex; align-items: center; gap: 3px;
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+	}
+	.fn-url:hover { color: var(--accent); }
+	.fn-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 
-	.btn-ghost {
-		background: none; color: var(--text-muted); border: none;
-		padding: 5px 10px; font-weight: 500;
-	}
-	.btn-ghost:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text-primary); }
-
-	.btn-danger {
-		background: #ef4444; color: white;
-	}
-	.btn-danger:hover:not(:disabled) { opacity: 0.88; }
-
-	.btn-danger-outline {
-		background: transparent; color: #ef4444;
-		border: 1px solid color-mix(in srgb, #ef4444 50%, transparent);
-	}
-	.btn-danger-outline:hover:not(:disabled) {
-		background: color-mix(in srgb, #ef4444 10%, transparent);
-		border-color: #ef4444;
-	}
-
-	.btn-sm { padding: 5px 10px; font-size: 11px; }
-	.btn-xs { padding: 3px 7px; font-size: 11px; }
-	.danger-ghost:hover { color: #ef4444 !important; }
+	.dep-title-action { margin-left: auto; }
+	.dep-alert { margin: 6px 12px 0; }
+	.ver-header { flex-wrap: wrap; }
+	.dep-btns { display: flex; gap: 4px; flex-shrink: 0; }
+	.env-key { width: 120px; flex-shrink: 0; }
+	.env-val { flex: 1; min-width: 0; }
+	.env-row :global(.ui-textfield) { height: 30px; font-size: 11px; font-family: var(--font-mono); padding: 0 8px; }
+	.env-save { display: flex; justify-content: flex-end; padding: 8px 12px; }
 
 	/* ── Misc ── */
 	.mono { font-family: var(--font-mono); font-size: 11px; }
 	.loading-row { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; padding: 24px 0; }
 
-	.form-error {
-		font-size: 12px; color: #ef4444; padding: 8px 10px;
-		background: color-mix(in srgb, #ef4444 8%, transparent);
-		border: 1px solid color-mix(in srgb, #ef4444 25%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.form-success {
-		font-size: 12px; color: #22c55e; padding: 8px 10px;
-		background: color-mix(in srgb, #22c55e 8%, transparent);
-		border: 1px solid color-mix(in srgb, #22c55e 25%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.warn-msg {
-		font-size: 12px; color: #f59e0b; padding: 8px 10px;
-		background: color-mix(in srgb, #f59e0b 8%, transparent);
-		border: 1px solid color-mix(in srgb, #f59e0b 25%, transparent);
-		border-radius: var(--radius-sm); line-height: 1.6;
-	}
 	.mono-inline {
 		font-family: var(--font-mono); font-size: 11px;
 		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
 	}
-	.empty-state {
-		font-size: 13px; color: var(--text-dim); text-align: center; padding: 24px;
-		display: flex; flex-direction: column; gap: 8px; line-height: 1.7;
-	}
-	.empty-sub { font-size: 11px; display: block; }
-
-	/* ── Spinners ── */
-	.spinner-sm {
-		width: 16px; height: 16px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-	.spinner-xs {
-		display: inline-block; width: 12px; height: 12px;
-		border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
-		border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-	.spinner-xs-inline {
-		display: inline-block; width: 10px; height: 10px;
-		border: 1.5px solid var(--border); border-top-color: var(--accent);
-		border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-
-	/* ── Delete modal ── */
-	.modal-backdrop {
-		position: absolute; inset: 0; background: rgba(0,0,0,0.55);
-		display: flex; align-items: center; justify-content: center; z-index: 30; padding: 16px;
-	}
-	.modal-card {
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius-md); width: 100%; max-width: 400px;
-		box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-	}
-	.modal-header {
-		display: flex; align-items: center; gap: 8px;
-		padding: 13px 16px; border-bottom: 1px solid var(--border);
-		font-size: 13px; font-weight: 700; color: var(--text-primary);
-	}
-	.modal-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-	.modal-footer {
-		display: flex; justify-content: flex-end; gap: 8px;
-		padding: 12px 16px; border-top: 1px solid var(--border);
-	}
-	.modal-warning { font-size: 12px; color: var(--text-primary); line-height: 1.5; margin: 0; }
-	.modal-confirm-field { display: flex; flex-direction: column; gap: 5px; }
-	.modal-confirm-label { font-size: 11px; color: var(--text-muted); }
-	.modal-confirm-code {
-		font-family: var(--font-mono); font-size: 11px;
-		background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px;
-		border: 1px solid var(--border);
-	}
-	.modal-confirm-input {
-		padding: 7px 9px; font-size: 12px; font-family: var(--font-mono);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-elevated); color: var(--text-primary); outline: none;
-	}
-	.modal-confirm-input:focus { border-color: #ef4444; }
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

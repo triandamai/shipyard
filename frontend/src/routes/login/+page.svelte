@@ -5,6 +5,7 @@
 	import { authStore } from '$lib/stores/auth.store';
 	import { setAuthCookies } from '$lib/auth/cookies';
 	import { Anchor } from '@lucide/svelte';
+	import { Button, FormField, TextField, InlineAlert, Spinner } from '$lib/components/ui';
 
 	let email = $state('');
 	let password = $state('');
@@ -78,56 +79,50 @@
 			</div>
 
 			{#if sessionNotice}
-				<div class="notice-banner" role="status">
-					{sessionNotice}
+				<div role="status">
+					<InlineAlert tone="warning">{sessionNotice}</InlineAlert>
 				</div>
 			{/if}
 
 			{#if error}
-				<div class="error-banner" role="alert">
-					{error}
+				<div role="alert">
+					<InlineAlert tone="error">{error}</InlineAlert>
 				</div>
 			{/if}
 
 			<form onsubmit={handleSubmit} class="form-body">
-				<div class="field">
-					<label class="field-label" for="email">Email address</label>
-					<input
+				<FormField label="Email address" for="email">
+					<TextField
 						id="email"
 						type="email"
-						class="input"
 						placeholder="you@company.com"
 						bind:value={email}
 						required
 						autocomplete="email"
 					/>
-				</div>
+				</FormField>
 
-				<div class="field">
-					<label class="field-label" for="password">Password</label>
-					<input
+				<FormField label="Password" for="password">
+					<TextField
 						id="password"
 						type="password"
-						class="input"
 						placeholder="••••••••"
 						bind:value={password}
 						required
 						autocomplete="current-password"
 					/>
-				</div>
+				</FormField>
 
-				<button
-					type="submit"
-					class="btn btn-primary submit-btn"
-					disabled={loading}
-				>
-					{#if loading}
-						<span class="spinner"></span>
-						Signing in…
-					{:else}
-						Sign in
-					{/if}
-				</button>
+				<div class="submit-wrap">
+					<Button type="submit" disabled={loading}>
+						{#if loading}
+							<Spinner size={14} tone="current" />
+							Signing in…
+						{:else}
+							Sign in
+						{/if}
+					</Button>
+				</div>
 			</form>
 
 			<p class="register-link">
@@ -155,9 +150,12 @@
 		justify-content: space-between;
 		width: 420px;
 		flex-shrink: 0;
-		background: var(--sidebar-bg);
+		/* Brand panel is always dark (white title), independent of theme */
+		--brand-text: #5E7A96;
+		--brand-text-strong: #9DB8D0;
+		background: #0F1827;
 		padding: 48px 48px 36px;
-		border-right: 1px solid var(--sidebar-border);
+		border-right: 1px solid rgba(255, 255, 255, 0.07);
 	}
 
 	@media (min-width: 900px) {
@@ -194,7 +192,7 @@
 	.brand-tagline {
 		font-size: 15px;
 		line-height: 1.6;
-		color: var(--sidebar-text-hover);
+		color: var(--brand-text-strong);
 		margin: 0;
 		max-width: 300px;
 	}
@@ -210,7 +208,7 @@
 
 	.brand-features li {
 		font-size: 13px;
-		color: var(--sidebar-text);
+		color: var(--brand-text);
 		padding-left: 18px;
 		position: relative;
 	}
@@ -229,7 +227,7 @@
 
 	.brand-footer {
 		font-size: 12px;
-		color: var(--sidebar-text);
+		color: var(--brand-text);
 		margin: 0;
 		opacity: 0.5;
 	}
@@ -270,48 +268,18 @@
 		color: var(--text-muted);
 	}
 
-	.notice-banner {
-		padding: 10px 14px;
-		background: color-mix(in srgb, var(--accent-yellow, #f59e0b) 12%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-yellow, #f59e0b) 35%, transparent);
-		border-radius: var(--radius-md);
-		color: var(--accent-yellow, #92400e);
-		font-size: 13px;
-	}
-
-	.error-banner {
-		padding: 10px 14px;
-		background: var(--accent-red-muted);
-		border: 1px solid rgba(220, 38, 38, 0.25);
-		border-radius: var(--radius-md);
-		color: var(--accent-red);
-		font-size: 13px;
-	}
-
 	.form-body {
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
 	}
 
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.field-label {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--text-secondary);
-	}
-
-	.submit-btn {
-		width: 100%;
-		justify-content: center;
-		padding: 10px 16px;
-		font-size: 14px;
+	.submit-wrap {
 		margin-top: 4px;
+	}
+
+	.submit-wrap :global(.ui-btn) {
+		width: 100%;
 	}
 
 	.register-link {
@@ -343,20 +311,5 @@
 	.admin-link a:hover {
 		color: var(--text-muted, #6b7280);
 		text-decoration: underline;
-	}
-
-	/* Spinner */
-	.spinner {
-		width: 14px;
-		height: 14px;
-		border: 2px solid rgba(255, 255, 255, 0.30);
-		border-top-color: white;
-		border-radius: 50%;
-		display: inline-block;
-		animation: spin 0.65s linear infinite;
-	}
-
-	@keyframes spin {
-		to { transform: rotate(360deg); }
 	}
 </style>

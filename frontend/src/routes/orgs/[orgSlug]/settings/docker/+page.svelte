@@ -7,8 +7,19 @@
 	import { page } from '$app/state';
 	import {
 		Box, Layers, HardDrive, Network, RefreshCw,
-		Search, ChevronDown, ChevronRight, Trash2, Image
+		ChevronDown, ChevronRight, Trash2, Image
 	} from '@lucide/svelte';
+	import Tabs, { type TabItem } from '$lib/components/ui/Tabs.svelte';
+	import DataTable from '$lib/components/ui/DataTable.svelte';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+	import SearchInput from '$lib/components/ui/SearchInput.svelte';
+	import EmptyState from '$lib/components/ui/EmptyState.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import type { DotStatus } from '$lib/utils/status';
 
 	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
@@ -184,10 +195,13 @@
 
 	function toggle(id: string) { expanded = expanded === id ? null : id; }
 
-	const stateColor: Record<string, string> = {
-		running: '#16a34a', exited: '#9ca3af', created: '#2563eb',
-		paused: '#d97706', dead: '#ef4444', restarting: '#f97316',
+	// Page-local mapping that keeps each container state's old dot colour family
+	// (toDotStatus has no created/paused/dead/restarting).
+	const stateDot: Record<string, DotStatus> = {
+		running: 'running', exited: 'stopped', created: 'deploying',
+		paused: 'warning', dead: 'failed', restarting: 'pending',
 	};
+	function dotFor(state: string): DotStatus { return stateDot[state] ?? 'stopped'; }
 
 	function ago(unixSecs: number): string {
 		const diff = Math.floor(Date.now() / 1000) - unixSecs;
@@ -236,6 +250,16 @@
 		(activeTab === 'images'     && loadingI)
 	);
 
+	const tabItems = $derived<TabItem[]>([
+		{ id: 'containers', label: 'Containers', icon: Box,       badge: containers.length ? String(containers.length) : undefined },
+		{ id: 'services',   label: 'Services',   icon: Layers,    badge: services.length   ? String(services.length)   : undefined },
+		{ id: 'volumes',    label: 'Volumes',    icon: HardDrive, badge: volumes.length    ? String(volumes.length)    : undefined },
+		{ id: 'networks',   label: 'Networks',   icon: Network,   badge: networks.length   ? String(networks.length)   : undefined },
+		{ id: 'images',     label: 'Images',     icon: Image,     badge: images.length     ? String(images.length)     : undefined },
+	]);
+
+	const expCol = { key: 'exp', label: '', width: '28px' };
+
 	onMount(() => { if (canDockerAny) loadContainers(); });
 </script>
 
@@ -246,159 +270,104 @@
 	onBack={() => history.back()}
 />
 
+{#snippet labelChips(labels: Record<string, string>)}
+	<div class="label-chips">
+		{#each Object.entries(labels) as [k, v]}
+			<span class="lchip"><b>{k}</b>={v}</span>
+		{/each}
+	</div>
+{/snippet}
+
+{#snippet pruneBar(label: string, busy: boolean, onclick: () => void)}
+	<Button variant="danger-outline" size="sm" onclick={onclick} disabled={busy}>
+		<Trash2 size={14} />
+		{busy ? 'Pruning…' : label}
+	</Button>
+{/snippet}
+
 {#if canDockerAny}
 <div class="docker-page">
 
 	<div class="toolbar">
-		<div class="tabs">
-			<button class="tab" class:active={activeTab==='containers'} onclick={() => switchTab('containers')}>
-				<Box size={13} /> Containers
-				{#if containers.length}<span class="badge">{containers.length}</span>{/if}
-			</button>
-			<button class="tab" class:active={activeTab==='services'} onclick={() => switchTab('services')}>
-				<Layers size={13} /> Services
-				{#if services.length}<span class="badge">{services.length}</span>{/if}
-			</button>
-			<button class="tab" class:active={activeTab==='volumes'} onclick={() => switchTab('volumes')}>
-				<HardDrive size={13} /> Volumes
-				{#if volumes.length}<span class="badge">{volumes.length}</span>{/if}
-			</button>
-			<button class="tab" class:active={activeTab==='networks'} onclick={() => switchTab('networks')}>
-				<Network size={13} /> Networks
-				{#if networks.length}<span class="badge">{networks.length}</span>{/if}
-			</button>
-			<button class="tab" class:active={activeTab==='images'} onclick={() => switchTab('images')}>
-				<Image size={13} /> Images
-				{#if images.length}<span class="badge">{images.length}</span>{/if}
-			</button>
-		</div>
+		<Tabs
+			tabs={tabItems}
+			value={activeTab}
+			onChange={(id) => switchTab(id as Tab)}
+			ariaLabel="Docker resources"
+		/>
 		<div class="toolbar-right">
 			{#if activeTab === 'containers'}
-				{#if pruneConfirm}
-					<span class="prune-confirm-text">Remove all stopped containers?</span>
-				{/if}
-				<button
-					class="prune-btn"
-					class:danger={pruneConfirm}
-					onclick={pruneContainers}
-					disabled={pruning}
-				>
-					<Trash2 size={14} />
-					{pruning ? 'Pruning…' : pruneConfirm ? 'Confirm' : 'Prune stopped'}
-				</button>
-				{#if pruneConfirm}
-					<button class="cancel-btn" onclick={() => pruneConfirm = false}>Cancel</button>
-				{/if}
+				{@render pruneBar('Prune stopped', pruning, pruneContainers)}
 			{/if}
 			{#if activeTab === 'volumes'}
-				{#if pruneVolumesConfirm}
-					<span class="prune-confirm-text">Remove all unused volumes?</span>
-				{/if}
-				<button
-					class="prune-btn"
-					class:danger={pruneVolumesConfirm}
-					onclick={pruneVolumes}
-					disabled={pruningVolumes}
-				>
-					<Trash2 size={14} />
-					{pruningVolumes ? 'Pruning…' : pruneVolumesConfirm ? 'Confirm' : 'Prune unused'}
-				</button>
-				{#if pruneVolumesConfirm}
-					<button class="cancel-btn" onclick={() => pruneVolumesConfirm = false}>Cancel</button>
-				{/if}
+				{@render pruneBar('Prune unused', pruningVolumes, pruneVolumes)}
 			{/if}
 			{#if activeTab === 'images'}
-				{#if pruneImagesConfirm}
-					<span class="prune-confirm-text">Remove all unused images?</span>
-				{/if}
-				<button
-					class="prune-btn"
-					class:danger={pruneImagesConfirm}
-					onclick={pruneImages}
-					disabled={pruningImages}
-				>
-					<Trash2 size={14} />
-					{pruningImages ? 'Pruning…' : pruneImagesConfirm ? 'Confirm' : 'Prune unused'}
-				</button>
-				{#if pruneImagesConfirm}
-					<button class="cancel-btn" onclick={() => pruneImagesConfirm = false}>Cancel</button>
-				{/if}
+				{@render pruneBar('Prune unused', pruningImages, pruneImages)}
 			{/if}
-			<button class="refresh-btn" onclick={refresh} disabled={isLoading}>
-				<RefreshCw size={14} class={isLoading ? 'spin' : ''} /> Refresh
-			</button>
+			<Button variant="secondary" size="sm" onclick={refresh} disabled={isLoading}>
+				{#if isLoading}<Spinner size={14} tone="current" />{:else}<RefreshCw size={14} />{/if} Refresh
+			</Button>
 		</div>
 	</div>
 
-	{#if pruneResult}
-		<div class="prune-toast">{pruneResult}</div>
-	{/if}
-	{#if pruneImagesResult}
-		<div class="prune-toast">{pruneImagesResult}</div>
-	{/if}
-	{#if pruneVolumesResult}
-		<div class="prune-toast">{pruneVolumesResult}</div>
-	{/if}
+	{#each [pruneResult, pruneImagesResult, pruneVolumesResult] as msg}
+		{#if msg}
+			<div role="status"><InlineAlert tone={msg.startsWith('Removed') ? 'success' : 'error'}>{msg}</InlineAlert></div>
+		{/if}
+	{/each}
 
-	<div class="search-bar">
-		<Search size={13} />
-		<input class="search-input" placeholder="Filter…" bind:value={search} />
-	</div>
+	<SearchInput bind:value={search} placeholder="Filter…" />
 
 	<!-- ── Containers ── -->
 	{#if activeTab === 'containers'}
 		{#if loadingC}
-			<div class="empty"><div class="spinner"></div>Loading containers…</div>
+			<div class="empty"><Spinner size={18} />Loading containers…</div>
 		{:else if filteredContainers.length === 0}
-			<div class="empty"><Box size={28} />No containers</div>
+			<EmptyState message="No containers">{#snippet icon()}<Box size={28} />{/snippet}</EmptyState>
 		{:else}
-			<div class="card">
-				<table class="tbl">
-					<thead><tr>
-						<th style="width:28px"></th>
-						<th>Name</th><th>Image</th><th>State</th>
-						<th>Status</th><th>Ports</th><th>Created</th>
-					</tr></thead>
-					<tbody>
-						{#each filteredContainers as c (c.id)}
-							{@const isExp = expanded === c.id}
-							{@const name = c.names[0] ?? c.id.slice(0,12)}
-							<tr class="row" class:exp={isExp} onclick={() => toggle(c.id)}>
-								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
-								<td class="mono bold">{name}</td>
-								<td class="mono dim">{shortImg(c.image)}</td>
-								<td>
-									<span class="state-dot" style="background:{stateColor[c.state]??'#9ca3af'}"></span>
-									{c.state}
+			<div class="desktop-table">
+				<DataTable
+					items={filteredContainers}
+					rowKey={(c: ContainerSummary) => c.id}
+					searchable={false}
+					columns={[
+						expCol,
+						{ key: 'name', label: 'Name' }, { key: 'image', label: 'Image' }, { key: 'state', label: 'State' },
+						{ key: 'status', label: 'Status' }, { key: 'ports', label: 'Ports' }, { key: 'created', label: 'Created' }
+					]}
+				>
+					{#snippet row(c: ContainerSummary)}
+						{@const isExp = expanded === c.id}
+						{@const name = c.names[0] ?? c.id.slice(0,12)}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<tr class="row" onclick={() => toggle(c.id)}>
+							<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+							<td class="mono bold">{name}</td>
+							<td class="mono dim">{shortImg(c.image)}</td>
+							<td class="state-cell"><StatusDot status={dotFor(c.state)} /> {c.state}</td>
+							<td class="dim">{c.status}</td>
+							<td class="mono dim">{c.ports.slice(0,2).join(', ')}{c.ports.length>2?` +${c.ports.length-2}`:''}</td>
+							<td class="dim ts">{ago(c.created)}</td>
+						</tr>
+						{#if isExp}
+							<tr class="detail-row">
+								<td colspan="7">
+									<div class="detail-box">
+										<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{c.id}</span></div>
+										<div class="detail-field"><span class="dk">Names</span><span class="dv">{c.names.join(', ')}</span></div>
+										<div class="detail-field"><span class="dk">Image</span><span class="dv mono">{c.image}</span></div>
+										<div class="detail-field"><span class="dk">Ports</span><span class="dv mono">{c.ports.join(', ') || '—'}</span></div>
+										{#if Object.keys(c.labels).length}
+											<div class="detail-field full"><span class="dk">Labels</span>{@render labelChips(c.labels)}</div>
+										{/if}
+									</div>
 								</td>
-								<td class="dim">{c.status}</td>
-								<td class="mono dim">{c.ports.slice(0,2).join(', ')}{c.ports.length>2?` +${c.ports.length-2}`:''}</td>
-								<td class="dim ts">{ago(c.created)}</td>
 							</tr>
-							{#if isExp}
-								<tr class="detail-row">
-									<td colspan="7">
-										<div class="detail-box">
-											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{c.id}</span></div>
-											<div class="detail-field"><span class="dk">Names</span><span class="dv">{c.names.join(', ')}</span></div>
-											<div class="detail-field"><span class="dk">Image</span><span class="dv mono">{c.image}</span></div>
-											<div class="detail-field"><span class="dk">Ports</span><span class="dv mono">{c.ports.join(', ') || '—'}</span></div>
-											{#if Object.keys(c.labels).length}
-												<div class="detail-field full"><span class="dk">Labels</span>
-													<div class="label-chips">
-														{#each Object.entries(c.labels) as [k,v]}
-															<span class="lchip"><b>{k}</b>={v}</span>
-														{/each}
-													</div>
-												</div>
-											{/if}
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+						{/if}
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
@@ -406,9 +375,9 @@
 					{@const isExp = expanded === c.id}
 					{@const name = c.names[0] ?? c.id.slice(0,12)}
 					<div class="m-card">
-						<button class="m-card-header" onclick={() => toggle(c.id)}>
+						<button type="button" class="m-card-header" onclick={() => toggle(c.id)}>
 							<div class="m-card-title-row">
-								<span class="state-dot" style="background:{stateColor[c.state]??'#9ca3af'}"></span>
+								<StatusDot status={dotFor(c.state)} />
 								<span class="m-card-title mono">{name}</span>
 							</div>
 							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
@@ -428,13 +397,7 @@
 								<div class="detail-field"><span class="dk">Image</span><span class="dv mono">{c.image}</span></div>
 								<div class="detail-field"><span class="dk">Ports</span><span class="dv mono">{c.ports.join(', ') || '—'}</span></div>
 								{#if Object.keys(c.labels).length}
-									<div class="detail-field"><span class="dk">Labels</span>
-										<div class="label-chips" style="margin-top:4px">
-											{#each Object.entries(c.labels) as [k,v]}
-												<span class="lchip"><b>{k}</b>={v}</span>
-											{/each}
-										</div>
-									</div>
+									<div class="detail-field"><span class="dk">Labels</span>{@render labelChips(c.labels)}</div>
 								{/if}
 							</div>
 						{/if}
@@ -447,56 +410,50 @@
 	<!-- ── Services ── -->
 	{#if activeTab === 'services'}
 		{#if loadingS}
-			<div class="empty"><div class="spinner"></div>Loading services…</div>
+			<div class="empty"><Spinner size={18} />Loading services…</div>
 		{:else if filteredServices.length === 0}
-			<div class="empty"><Layers size={28} />No swarm services</div>
+			<EmptyState message="No swarm services">{#snippet icon()}<Layers size={28} />{/snippet}</EmptyState>
 		{:else}
-			<div class="card">
-				<table class="tbl">
-					<thead><tr>
-						<th style="width:28px"></th>
-						<th>Name</th><th>Image</th><th>Mode</th>
-						<th>Replicas</th><th>Ports</th>
-					</tr></thead>
-					<tbody>
-						{#each filteredServices as s (s.id)}
-							{@const isExp = expanded === s.id}
-							{@const healthy = s.replicas_running >= s.replicas_desired && s.replicas_desired > 0}
-							<tr class="row" class:exp={isExp} onclick={() => toggle(s.id)}>
-								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
-								<td class="mono bold">{s.name}</td>
-								<td class="mono dim">{shortImg(s.image)}</td>
-								<td><span class="mode-chip">{s.mode}</span></td>
-								<td>
-									<span class="replica-badge" class:healthy class:degraded={!healthy}>
-										{s.replicas_running}/{s.replicas_desired}
-									</span>
+			<div class="desktop-table">
+				<DataTable
+					items={filteredServices}
+					rowKey={(s: ServiceSummary) => s.id}
+					searchable={false}
+					columns={[
+						expCol,
+						{ key: 'name', label: 'Name' }, { key: 'image', label: 'Image' }, { key: 'mode', label: 'Mode' },
+						{ key: 'replicas', label: 'Replicas' }, { key: 'ports', label: 'Ports' }
+					]}
+				>
+					{#snippet row(s: ServiceSummary)}
+						{@const isExp = expanded === s.id}
+						{@const healthy = s.replicas_running >= s.replicas_desired && s.replicas_desired > 0}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<tr class="row" onclick={() => toggle(s.id)}>
+							<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+							<td class="mono bold">{s.name}</td>
+							<td class="mono dim">{shortImg(s.image)}</td>
+							<td><Badge tone="neutral">{s.mode}</Badge></td>
+							<td><Badge tone={healthy ? 'green' : 'red'}>{s.replicas_running}/{s.replicas_desired}</Badge></td>
+							<td class="mono dim">{s.ports.join(', ') || '—'}</td>
+						</tr>
+						{#if isExp}
+							<tr class="detail-row">
+								<td colspan="6">
+									<div class="detail-box">
+										<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{s.id}</span></div>
+										<div class="detail-field"><span class="dk">Created</span><span class="dv">{s.created_at ?? '—'}</span></div>
+										<div class="detail-field"><span class="dk">Updated</span><span class="dv">{s.updated_at ?? '—'}</span></div>
+										{#if Object.keys(s.labels).length}
+											<div class="detail-field full"><span class="dk">Labels</span>{@render labelChips(s.labels)}</div>
+										{/if}
+									</div>
 								</td>
-								<td class="mono dim">{s.ports.join(', ') || '—'}</td>
 							</tr>
-							{#if isExp}
-								<tr class="detail-row">
-									<td colspan="6">
-										<div class="detail-box">
-											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{s.id}</span></div>
-											<div class="detail-field"><span class="dk">Created</span><span class="dv">{s.created_at ?? '—'}</span></div>
-											<div class="detail-field"><span class="dk">Updated</span><span class="dv">{s.updated_at ?? '—'}</span></div>
-											{#if Object.keys(s.labels).length}
-												<div class="detail-field full"><span class="dk">Labels</span>
-													<div class="label-chips">
-														{#each Object.entries(s.labels) as [k,v]}
-															<span class="lchip"><b>{k}</b>={v}</span>
-														{/each}
-													</div>
-												</div>
-											{/if}
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+						{/if}
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
@@ -504,16 +461,16 @@
 					{@const isExp = expanded === s.id}
 					{@const healthy = s.replicas_running >= s.replicas_desired && s.replicas_desired > 0}
 					<div class="m-card">
-						<button class="m-card-header" onclick={() => toggle(s.id)}>
+						<button type="button" class="m-card-header" onclick={() => toggle(s.id)}>
 							<div class="m-card-title-row">
 								<span class="m-card-title mono">{s.name}</span>
-								<span class="replica-badge" class:healthy class:degraded={!healthy}>{s.replicas_running}/{s.replicas_desired}</span>
+								<Badge tone={healthy ? 'green' : 'red'}>{s.replicas_running}/{s.replicas_desired}</Badge>
 							</div>
 							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
 						</button>
 						<div class="m-rows">
 							<div class="m-row"><span class="m-label">Image</span><span class="mono dim">{shortImg(s.image)}</span></div>
-							<div class="m-row"><span class="m-label">Mode</span><span class="mode-chip">{s.mode}</span></div>
+							<div class="m-row"><span class="m-label">Mode</span><Badge tone="neutral">{s.mode}</Badge></div>
 							{#if s.ports.length}
 								<div class="m-row"><span class="m-label">Ports</span><span class="mono dim">{s.ports.join(', ')}</span></div>
 							{/if}
@@ -524,13 +481,7 @@
 								<div class="detail-field"><span class="dk">Created</span><span class="dv">{s.created_at ?? '—'}</span></div>
 								<div class="detail-field"><span class="dk">Updated</span><span class="dv">{s.updated_at ?? '—'}</span></div>
 								{#if Object.keys(s.labels).length}
-									<div class="detail-field"><span class="dk">Labels</span>
-										<div class="label-chips" style="margin-top:4px">
-											{#each Object.entries(s.labels) as [k,v]}
-												<span class="lchip"><b>{k}</b>={v}</span>
-											{/each}
-										</div>
-									</div>
+									<div class="detail-field"><span class="dk">Labels</span>{@render labelChips(s.labels)}</div>
 								{/if}
 							</div>
 						{/if}
@@ -543,60 +494,59 @@
 	<!-- ── Volumes ── -->
 	{#if activeTab === 'volumes'}
 		{#if loadingV}
-			<div class="empty"><div class="spinner"></div>Loading volumes…</div>
+			<div class="empty"><Spinner size={18} />Loading volumes…</div>
 		{:else if filteredVolumes.length === 0}
-			<div class="empty"><HardDrive size={28} />No volumes</div>
+			<EmptyState message="No volumes">{#snippet icon()}<HardDrive size={28} />{/snippet}</EmptyState>
 		{:else}
-			<div class="card">
-				<table class="tbl">
-					<thead><tr>
-						<th style="width:28px"></th>
-						<th>Name</th><th>Driver</th><th>Scope</th><th>Mountpoint</th>
-					</tr></thead>
-					<tbody>
-						{#each filteredVolumes as v (v.name)}
-							{@const isExp = expanded === v.name}
-							<tr class="row" class:exp={isExp} onclick={() => toggle(v.name)}>
-								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
-								<td class="mono bold">{v.name}</td>
-								<td><span class="mode-chip">{v.driver}</span></td>
-								<td class="dim">{v.scope}</td>
-								<td class="mono dim truncate">{v.mountpoint}</td>
+			<div class="desktop-table">
+				<DataTable
+					items={filteredVolumes}
+					rowKey={(v: VolumeSummary) => v.name}
+					searchable={false}
+					columns={[
+						expCol,
+						{ key: 'name', label: 'Name' }, { key: 'driver', label: 'Driver' }, { key: 'scope', label: 'Scope' },
+						{ key: 'mountpoint', label: 'Mountpoint' }
+					]}
+				>
+					{#snippet row(v: VolumeSummary)}
+						{@const isExp = expanded === v.name}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<tr class="row" onclick={() => toggle(v.name)}>
+							<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+							<td class="mono bold">{v.name}</td>
+							<td><Badge tone="neutral">{v.driver}</Badge></td>
+							<td class="dim">{v.scope}</td>
+							<td class="mono dim truncate">{v.mountpoint}</td>
+						</tr>
+						{#if isExp}
+							<tr class="detail-row">
+								<td colspan="5">
+									<div class="detail-box">
+										<div class="detail-field"><span class="dk">Mountpoint</span><span class="dv mono">{v.mountpoint}</span></div>
+										{#if v.created_at}<div class="detail-field"><span class="dk">Created</span><span class="dv">{v.created_at}</span></div>{/if}
+										{#if Object.keys(v.labels).length}
+											<div class="detail-field full"><span class="dk">Labels</span>{@render labelChips(v.labels)}</div>
+										{/if}
+									</div>
+								</td>
 							</tr>
-							{#if isExp}
-								<tr class="detail-row">
-									<td colspan="5">
-										<div class="detail-box">
-											<div class="detail-field"><span class="dk">Mountpoint</span><span class="dv mono">{v.mountpoint}</span></div>
-											{#if v.created_at}<div class="detail-field"><span class="dk">Created</span><span class="dv">{v.created_at}</span></div>{/if}
-											{#if Object.keys(v.labels).length}
-												<div class="detail-field full"><span class="dk">Labels</span>
-													<div class="label-chips">
-														{#each Object.entries(v.labels) as [k,lv]}
-															<span class="lchip"><b>{k}</b>={lv}</span>
-														{/each}
-													</div>
-												</div>
-											{/if}
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+						{/if}
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
 				{#each filteredVolumes as v (v.name)}
 					{@const isExp = expanded === v.name}
 					<div class="m-card">
-						<button class="m-card-header" onclick={() => toggle(v.name)}>
+						<button type="button" class="m-card-header" onclick={() => toggle(v.name)}>
 							<span class="m-card-title mono">{v.name}</span>
 							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
 						</button>
 						<div class="m-rows">
-							<div class="m-row"><span class="m-label">Driver</span><span class="mode-chip">{v.driver}</span></div>
+							<div class="m-row"><span class="m-label">Driver</span><Badge tone="neutral">{v.driver}</Badge></div>
 							<div class="m-row"><span class="m-label">Scope</span><span class="dim">{v.scope}</span></div>
 							<div class="m-row"><span class="m-label">Mountpoint</span><span class="mono dim truncate">{v.mountpoint}</span></div>
 						</div>
@@ -605,13 +555,7 @@
 								<div class="detail-field"><span class="dk">Mountpoint</span><span class="dv mono">{v.mountpoint}</span></div>
 								{#if v.created_at}<div class="detail-field"><span class="dk">Created</span><span class="dv">{v.created_at}</span></div>{/if}
 								{#if Object.keys(v.labels).length}
-									<div class="detail-field"><span class="dk">Labels</span>
-										<div class="label-chips" style="margin-top:4px">
-											{#each Object.entries(v.labels) as [k,lv]}
-												<span class="lchip"><b>{k}</b>={lv}</span>
-											{/each}
-										</div>
-									</div>
+									<div class="detail-field"><span class="dk">Labels</span>{@render labelChips(v.labels)}</div>
 								{/if}
 							</div>
 						{/if}
@@ -624,72 +568,72 @@
 	<!-- ── Networks ── -->
 	{#if activeTab === 'networks'}
 		{#if loadingN}
-			<div class="empty"><div class="spinner"></div>Loading networks…</div>
+			<div class="empty"><Spinner size={18} />Loading networks…</div>
 		{:else if filteredNetworks.length === 0}
-			<div class="empty"><Network size={28} />No networks</div>
+			<EmptyState message="No networks">{#snippet icon()}<Network size={28} />{/snippet}</EmptyState>
 		{:else}
-			<div class="card">
-				<table class="tbl">
-					<thead><tr>
-						<th style="width:28px"></th>
-						<th>Name</th><th>Driver</th><th>Scope</th>
-						<th>Subnet</th><th>Containers</th><th>Flags</th>
-					</tr></thead>
-					<tbody>
-						{#each filteredNetworks as n (n.id)}
-							{@const isExp = expanded === n.id}
-							<tr class="row" class:exp={isExp} onclick={() => toggle(n.id)}>
-								<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
-								<td class="mono bold">{n.name}</td>
-								<td><span class="mode-chip">{n.driver}</span></td>
-								<td class="dim">{n.scope}</td>
-								<td class="mono dim">{n.ipam_subnet ?? '—'}</td>
-								<td class="dim">{n.containers}</td>
-								<td>
-									{#if n.internal}<span class="flag-chip">internal</span>{/if}
-									{#if n.attachable}<span class="flag-chip">attachable</span>{/if}
+			<div class="desktop-table">
+				<DataTable
+					items={filteredNetworks}
+					rowKey={(n: NetworkSummary) => n.id}
+					searchable={false}
+					columns={[
+						expCol,
+						{ key: 'name', label: 'Name' }, { key: 'driver', label: 'Driver' }, { key: 'scope', label: 'Scope' },
+						{ key: 'subnet', label: 'Subnet' }, { key: 'containers', label: 'Containers' }, { key: 'flags', label: 'Flags' }
+					]}
+				>
+					{#snippet row(n: NetworkSummary)}
+						{@const isExp = expanded === n.id}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<tr class="row" onclick={() => toggle(n.id)}>
+							<td class="exp-cell">{#if isExp}<ChevronDown size={12}/>{:else}<ChevronRight size={12}/>{/if}</td>
+							<td class="mono bold">{n.name}</td>
+							<td><Badge tone="neutral">{n.driver}</Badge></td>
+							<td class="dim">{n.scope}</td>
+							<td class="mono dim">{n.ipam_subnet ?? '—'}</td>
+							<td class="dim">{n.containers}</td>
+							<td>
+								<span class="flags">
+									{#if n.internal}<Badge tone="blue">internal</Badge>{/if}
+									{#if n.attachable}<Badge tone="blue">attachable</Badge>{/if}
+								</span>
+							</td>
+						</tr>
+						{#if isExp}
+							<tr class="detail-row">
+								<td colspan="7">
+									<div class="detail-box">
+										<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{n.id}</span></div>
+										<div class="detail-field"><span class="dk">Subnet</span><span class="dv mono">{n.ipam_subnet ?? '—'}</span></div>
+										{#if Object.keys(n.labels).length}
+											<div class="detail-field full"><span class="dk">Labels</span>{@render labelChips(n.labels)}</div>
+										{/if}
+									</div>
 								</td>
 							</tr>
-							{#if isExp}
-								<tr class="detail-row">
-									<td colspan="7">
-										<div class="detail-box">
-											<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{n.id}</span></div>
-											<div class="detail-field"><span class="dk">Subnet</span><span class="dv mono">{n.ipam_subnet ?? '—'}</span></div>
-											{#if Object.keys(n.labels).length}
-												<div class="detail-field full"><span class="dk">Labels</span>
-													<div class="label-chips">
-														{#each Object.entries(n.labels) as [k,v]}
-															<span class="lchip"><b>{k}</b>={v}</span>
-														{/each}
-													</div>
-												</div>
-											{/if}
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+						{/if}
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
 				{#each filteredNetworks as n (n.id)}
 					{@const isExp = expanded === n.id}
 					<div class="m-card">
-						<button class="m-card-header" onclick={() => toggle(n.id)}>
+						<button type="button" class="m-card-header" onclick={() => toggle(n.id)}>
 							<div class="m-card-title-row">
 								<span class="m-card-title mono">{n.name}</span>
 								<div class="m-flags">
-									{#if n.internal}<span class="flag-chip">internal</span>{/if}
-									{#if n.attachable}<span class="flag-chip">attachable</span>{/if}
+									{#if n.internal}<Badge tone="blue">internal</Badge>{/if}
+									{#if n.attachable}<Badge tone="blue">attachable</Badge>{/if}
 								</div>
 							</div>
 							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
 						</button>
 						<div class="m-rows">
-							<div class="m-row"><span class="m-label">Driver</span><span class="mode-chip">{n.driver}</span></div>
+							<div class="m-row"><span class="m-label">Driver</span><Badge tone="neutral">{n.driver}</Badge></div>
 							<div class="m-row"><span class="m-label">Scope</span><span class="dim">{n.scope}</span></div>
 							<div class="m-row"><span class="m-label">Subnet</span><span class="mono dim">{n.ipam_subnet ?? '—'}</span></div>
 							<div class="m-row"><span class="m-label">Containers</span><span class="dim">{n.containers}</span></div>
@@ -699,13 +643,7 @@
 								<div class="detail-field"><span class="dk">ID</span><span class="dv mono">{n.id}</span></div>
 								<div class="detail-field"><span class="dk">Subnet</span><span class="dv mono">{n.ipam_subnet ?? '—'}</span></div>
 								{#if Object.keys(n.labels).length}
-									<div class="detail-field"><span class="dk">Labels</span>
-										<div class="label-chips" style="margin-top:4px">
-											{#each Object.entries(n.labels) as [k,v]}
-												<span class="lchip"><b>{k}</b>={v}</span>
-											{/each}
-										</div>
-									</div>
+									<div class="detail-field"><span class="dk">Labels</span>{@render labelChips(n.labels)}</div>
 								{/if}
 							</div>
 						{/if}
@@ -718,43 +656,23 @@
 	<!-- ── Images ── -->
 	{#if activeTab === 'images'}
 		{#if loadingI}
-			<div class="empty"><div class="spinner"></div>Loading images…</div>
+			<div class="empty"><Spinner size={18} />Loading images…</div>
 		{:else if filteredImages.length === 0}
-			<div class="empty"><Image size={28} />No images</div>
+			<EmptyState message="No images">{#snippet icon()}<Image size={28} />{/snippet}</EmptyState>
 		{:else}
-			<div class="card">
-				<table class="tbl">
-					<thead><tr>
-						<th>Tags</th><th>ID</th><th>Size</th><th>Created</th>
-					</tr></thead>
-					<tbody>
-						{#each filteredImages as img (img.id)}
-							<tr class="row no-expand">
-								<td>
-									{#if img.tags.length}
-										<div class="tag-list">
-											{#each img.tags as t}
-												<span class="img-tag">{t}</span>
-											{/each}
-										</div>
-									{:else}
-										<span class="dim">&#x3c;none&#x3e;</span>
-									{/if}
-								</td>
-								<td class="mono dim">{img.id.replace('sha256:', '').slice(0, 12)}</td>
-								<td class="dim">{fmtBytes(img.size)}</td>
-								<td class="dim ts">{ago(img.created)}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-
-			<div class="mobile-cards">
-				{#each filteredImages as img (img.id)}
-					<div class="m-card">
-						<div class="m-card-header" style="cursor:default">
-							<div class="m-card-title-row" style="flex-direction:column;align-items:flex-start;gap:4px">
+			<div class="desktop-table">
+				<DataTable
+					items={filteredImages}
+					rowKey={(img: ImageSummary) => img.id}
+					searchable={false}
+					columns={[
+						{ key: 'tags', label: 'Tags' }, { key: 'id', label: 'ID' },
+						{ key: 'size', label: 'Size' }, { key: 'created', label: 'Created' }
+					]}
+				>
+					{#snippet row(img: ImageSummary)}
+						<tr>
+							<td>
 								{#if img.tags.length}
 									<div class="tag-list">
 										{#each img.tags as t}
@@ -762,7 +680,30 @@
 										{/each}
 									</div>
 								{:else}
-									<span class="dim" style="font-size:12px">&lt;none&gt;</span>
+									<span class="dim">&#x3c;none&#x3e;</span>
+								{/if}
+							</td>
+							<td class="mono dim">{img.id.replace('sha256:', '').slice(0, 12)}</td>
+							<td class="dim">{fmtBytes(img.size)}</td>
+							<td class="dim ts">{ago(img.created)}</td>
+						</tr>
+					{/snippet}
+				</DataTable>
+			</div>
+
+			<div class="mobile-cards">
+				{#each filteredImages as img (img.id)}
+					<div class="m-card">
+						<div class="m-card-header static">
+							<div class="m-card-title-row tags-col">
+								{#if img.tags.length}
+									<div class="tag-list">
+										{#each img.tags as t}
+											<span class="img-tag">{t}</span>
+										{/each}
+									</div>
+								{:else}
+									<span class="dim none-label">&lt;none&gt;</span>
 								{/if}
 							</div>
 						</div>
@@ -778,143 +719,56 @@
 	{/if}
 
 </div>
+
+<ConfirmDialog
+	bind:open={() => pruneConfirm, (v) => { pruneConfirm = v; }}
+	title="Prune stopped containers"
+	message="Remove all stopped containers?"
+	confirmLabel="Confirm"
+	onConfirm={pruneContainers}
+/>
+<ConfirmDialog
+	bind:open={() => pruneVolumesConfirm, (v) => { pruneVolumesConfirm = v; }}
+	title="Prune unused volumes"
+	message="Remove all unused volumes?"
+	confirmLabel="Confirm"
+	onConfirm={pruneVolumes}
+/>
+<ConfirmDialog
+	bind:open={() => pruneImagesConfirm, (v) => { pruneImagesConfirm = v; }}
+	title="Prune unused images"
+	message="Remove all unused images?"
+	confirmLabel="Confirm"
+	onConfirm={pruneImages}
+/>
 {/if}
 
 <style>
 	.docker-page { display: flex; flex-direction: column; gap: 14px; }
 
 	.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-	.toolbar-right { display: flex; align-items: center; gap: 8px; }
-	.tabs { display: flex; gap: 4px; }
-	.tab {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px; font-size: 12px; font-weight: 500;
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-muted);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.tab:hover { color: var(--text-primary); border-color: var(--border-hover); }
-	.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-	.tab.active .badge { background: rgba(255,255,255,0.25); }
-	.badge {
-		background: var(--bg-muted); color: var(--text-muted);
-		border-radius: 10px; padding: 1px 6px; font-size: 11px; font-weight: 600;
-	}
-	.refresh-btn {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px; font-size: 12px; font-weight: 500;
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-secondary);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.refresh-btn:disabled { opacity: 0.5; cursor: default; }
-
-	.prune-btn {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px; font-size: 12px; font-weight: 500;
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-secondary);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.prune-btn:hover:not(:disabled) { border-color: #ef4444; color: #ef4444; }
-	.prune-btn.danger { background: #fef2f2; border-color: #ef4444; color: #ef4444; font-weight: 600; }
-	.prune-btn:disabled { opacity: 0.5; cursor: default; }
-
-	.cancel-btn {
-		padding: 6px 10px; font-size: 12px; font-weight: 500;
-		background: transparent; border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-muted); cursor: pointer;
-	}
-	.cancel-btn:hover { border-color: var(--border-hover); color: var(--text-primary); }
-
-	.prune-confirm-text { font-size: 12px; color: #ef4444; font-weight: 500; white-space: nowrap; }
-
-	.prune-toast {
-		padding: 10px 14px;
-		background: #f0fdf4; border: 1px solid #bbf7d0;
-		border-radius: var(--radius); color: #15803d;
-		font-size: 13px; font-weight: 500;
-	}
-
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
-
-	.search-bar {
-		display: flex; align-items: center; gap: 8px;
-		padding: 8px 12px;
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-muted);
-	}
-	.search-input {
-		flex: 1; border: none; outline: none; background: transparent;
-		font-size: 13px; color: var(--text-primary); font-family: var(--font-sans);
-	}
-	.search-input::placeholder { color: var(--text-muted); }
+	.toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 	.empty {
 		display: flex; flex-direction: column; align-items: center; justify-content: center;
 		gap: 10px; padding: 60px; color: var(--text-muted); font-size: 13px;
 	}
-	.spinner {
-		width: 18px; height: 18px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%;
-		animation: spin 0.8s linear infinite;
-	}
 
-	.card {
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius-lg); overflow: hidden;
-	}
-
-	.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-	.tbl thead th {
-		padding: 9px 12px; text-align: left;
-		font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
-		color: var(--text-muted); background: var(--bg-muted);
-		border-bottom: 1px solid var(--border);
-	}
-	.row td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-	.row:last-child td { border-bottom: none; }
-	.row:hover td { background: var(--bg-muted); cursor: pointer; }
-	.row.exp td { background: var(--bg-muted); }
-
+	.row { cursor: pointer; }
 	.exp-cell { color: var(--text-muted); width: 28px; }
-	.mono { font-family: var(--font-mono, monospace); font-size: 12px; }
+	.mono { font-family: var(--font-mono); font-size: 12px; }
 	.bold { font-weight: 600; color: var(--text-primary); }
 	.dim  { color: var(--text-secondary); }
 	.ts   { white-space: nowrap; }
 	.truncate { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-	.state-dot {
-		display: inline-block; width: 7px; height: 7px;
-		border-radius: 50%; margin-right: 6px; vertical-align: middle;
-	}
-
-	.mode-chip {
-		display: inline-block; padding: 2px 7px;
-		background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-secondary);
-	}
-
-	.replica-badge {
-		display: inline-block; padding: 2px 8px;
-		border-radius: 4px; font-size: 12px; font-weight: 600;
-	}
-	.replica-badge.healthy  { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
-	.replica-badge.degraded { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
-
-	.flag-chip {
-		display: inline-block; margin-right: 4px; padding: 1px 6px;
-		background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe;
-		border-radius: 4px; font-size: 10px; font-weight: 600;
-	}
+	.state-cell { white-space: nowrap; }
+	.state-cell :global(.ui-dot) { margin-right: 6px; vertical-align: middle; }
+	.flags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 
 	.detail-row td { padding: 0; background: var(--bg-base); }
 	.detail-box {
 		display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 		gap: 8px; padding: 12px 14px;
-		border-bottom: 1px solid var(--border);
 	}
 	.detail-field { display: flex; flex-direction: column; gap: 2px; }
 	.detail-field.full { grid-column: 1 / -1; }
@@ -924,18 +778,16 @@
 	.label-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 	.lchip {
 		display: inline-block; padding: 2px 7px;
-		background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 4px; font-size: 11px; color: var(--text-secondary);
+		background: var(--bg-elevated); border: 1px solid var(--border);
+		border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary);
 		max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	}
-
-	.row.no-expand:hover td { cursor: default; }
 
 	.tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
 	.img-tag {
 		display: inline-block; padding: 2px 7px;
-		background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 4px; font-size: 11px; font-family: var(--font-mono, monospace);
+		background: var(--bg-elevated); border: 1px solid var(--border);
+		border-radius: var(--radius-sm); font-size: 11px; font-family: var(--font-mono);
 		color: var(--text-secondary); max-width: 280px;
 		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	}
@@ -953,10 +805,14 @@
 		display: flex; align-items: center; justify-content: space-between;
 		padding: 12px 14px; gap: 10px;
 		width: 100%; background: none; border: none; cursor: pointer; text-align: left;
+		font-family: var(--font-sans); color: var(--text-primary);
 	}
+	.m-card-header.static { cursor: default; }
 	.m-card-title-row {
 		display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
 	}
+	.m-card-title-row.tags-col { flex-direction: column; align-items: flex-start; gap: 4px; }
+	.none-label { font-size: 12px; }
 	.m-card-title {
 		font-size: 13px; font-weight: 600; color: var(--text-primary);
 		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
@@ -983,12 +839,9 @@
 	}
 
 	@media (max-width: 639px) {
-		.card { display: none; }
+		.desktop-table { display: none; }
 		.mobile-cards { display: flex; }
 
 		.toolbar { gap: 8px; }
-		.tabs { flex-wrap: wrap; }
-		.toolbar-right { flex-wrap: wrap; }
-		.prune-confirm-text { display: none; }
 	}
 </style>

@@ -18,6 +18,18 @@
   import { api } from "$lib/api/client";
   import { orgStore } from "$lib/stores/org.store";
   import { can, perm } from "$lib/auth/permissions";
+  import {
+    Badge,
+    DataTable,
+    Button,
+    Card,
+    InlineAlert,
+    ProgressBar,
+    SectionLabel,
+    Spinner,
+    StatCard,
+    StatusDot,
+  } from "$lib/components/ui";
   import PermissionDeniedDialog from "$lib/components/PermissionDeniedDialog.svelte";
   import type { SwarmNode, SwarmJoinTokens } from "$lib/api/types";
 
@@ -113,9 +125,19 @@
   }
 
   function stateColor(s: "running" | "stopped" | "unknown"): string {
-    if (s === "running") return "#16a34a";
-    if (s === "stopped") return "#ef4444";
-    return "#f97316";
+    if (s === "running") return "var(--accent-green)";
+    if (s === "stopped") return "var(--accent-red)";
+    return "var(--accent-yellow)";
+  }
+
+  // Keeps the old three-colour state semantics (running=green, stopped=red,
+  // unknown=orange→warning). toDotStatus would turn "stopped" grey.
+  function coreDot(
+    s: "running" | "stopped" | "unknown",
+  ): "running" | "failed" | "warning" {
+    if (s === "running") return "running";
+    if (s === "stopped") return "failed";
+    return "warning";
   }
 
   function fmtMemMb(mb: number): string {
@@ -226,9 +248,16 @@
   }
 
   function gaugeColor(pct: number): string {
-    if (pct >= 90) return "#ef4444";
-    if (pct >= 70) return "#f97316";
+    if (pct >= 90) return "var(--accent-red)";
+    if (pct >= 70) return "var(--accent-yellow)";
     return "var(--accent)";
+  }
+
+  // Same thresholds as gaugeColor, as ProgressBar / StatCard tone names.
+  function gaugeTone(pct: number): "red" | "yellow" | "blue" {
+    if (pct >= 90) return "red";
+    if (pct >= 70) return "yellow";
+    return "blue";
   }
 
   // Deduplicate disk entries: multiple bind-mounted paths can share the same
@@ -306,16 +335,19 @@
     es = null;
   });
 
-  function nodeStatusColor(status: string): string {
-    if (status === "ready") return "#16a34a";
-    if (status === "down") return "#ef4444";
-    return "#f97316";
+  // Page-local mapping preserving the old colours: ready=green, down=red,
+  // anything else=orange (toDotStatus would turn "down" grey).
+  function nodeDot(status: string): "running" | "failed" | "warning" {
+    if (status === "ready") return "running";
+    if (status === "down") return "failed";
+    return "warning";
   }
 
-  function availColor(avail: string): string {
-    if (avail === "active") return "#16a34a";
-    if (avail === "drain") return "#ef4444";
-    return "#f97316";
+  // Old availability colours: active=green, drain=red, else=orange.
+  function availTone(avail: string): "green" | "red" | "yellow" {
+    if (avail === "active") return "green";
+    if (avail === "drain") return "red";
+    return "yellow";
   }
 </script>
 
@@ -333,78 +365,67 @@
         <Activity size={15} />
         <span class="toolbar-title">Infrastructure</span>
         {#if info}
-          <span class="uptime-chip">Up {formatUptime(info.uptime_secs)}</span>
+          <Badge tone="neutral">Up {formatUptime(info.uptime_secs)}</Badge>
         {/if}
-        <span class="live-badge" class:live={connected}>
-          <Radio size={11} />
-          {connected ? "Live" : "Reconnecting…"}
+        <span class={connected ? "live-wrap live" : "live-wrap"}>
+          <Badge tone={connected ? "green" : "neutral"}>
+            <Radio size={11} />&nbsp;{connected ? "Live" : "Reconnecting…"}
+          </Badge>
         </span>
       </div>
-      <button class="refresh-btn" onclick={openStream}>
+      <Button variant="secondary" size="sm" onclick={openStream}>
         <RefreshCw size={14} />
         Reconnect
-      </button>
+      </Button>
     </div>
 
     {#if error}
-      <div class="error-banner">{error}</div>
+      <div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
     {/if}
 
     {#if !info}
-      <div class="empty-state">
-        <div class="spinner"></div>
-         Waiting for first metrics frame…
+      <div class="waiting">
+        <Spinner size={18} />
+        Waiting for first metrics frame…
       </div>
     {:else}
       <!-- Top stat cards -->
       <div class="stat-grid">
         <!-- CPU -->
-        <div class="stat-card">
-          <div class="stat-header">
-            <Cpu size={15} />
-            <span class="stat-label">CPU Usage</span>
-          </div>
-          <div
-            class="stat-value"
-            style="color: {gaugeColor(info.cpu_usage_pct)}"
+        <div class="metric-card">
+          <StatCard
+            tone={gaugeTone(info.cpu_usage_pct)}
+            value="{info.cpu_usage_pct.toFixed(1)}%"
+            label="CPU Usage"
           >
-            {info.cpu_usage_pct.toFixed(1)}%
-          </div>
-          <div class="gauge-track">
-            <div
-              class="gauge-fill"
-              style="width: {Math.min(
-                info.cpu_usage_pct,
-                100,
-              )}%; background: {gaugeColor(info.cpu_usage_pct)}"
-            ></div>
+            {#snippet icon()}<Cpu size={16} />{/snippet}
+          </StatCard>
+          <div class="metric-foot">
+            <ProgressBar
+              value={info.cpu_usage_pct}
+              tone={gaugeTone(info.cpu_usage_pct)}
+            />
           </div>
         </div>
 
         <!-- Memory -->
-        <div class="stat-card">
-          <div class="stat-header">
-            <MemoryStick size={15} />
-            <span class="stat-label">Memory</span>
-          </div>
-          <div
-            class="stat-value"
-            style="color: {gaugeColor(info.memory_used_pct)}"
+        <div class="metric-card">
+          <StatCard
+            tone={gaugeTone(info.memory_used_pct)}
+            value="{info.memory_used_pct.toFixed(1)}%"
+            label="Memory"
           >
-            {info.memory_used_pct.toFixed(1)}%
-          </div>
-          <div class="gauge-track">
-            <div
-              class="gauge-fill"
-              style="width: {Math.min(
-                info.memory_used_pct,
-                100,
-              )}%; background: {gaugeColor(info.memory_used_pct)}"
-            ></div>
-          </div>
-          <div class="stat-sub">
-            {info.memory_used_mb.toLocaleString()} MB / {info.memory_total_mb.toLocaleString()}
-            MB
+            {#snippet icon()}<MemoryStick size={16} />{/snippet}
+          </StatCard>
+          <div class="metric-foot">
+            <ProgressBar
+              value={info.memory_used_pct}
+              tone={gaugeTone(info.memory_used_pct)}
+            />
+            <span class="metric-sub">
+              {info.memory_used_mb.toLocaleString()} MB / {info.memory_total_mb.toLocaleString()}
+              MB
+            </span>
           </div>
         </div>
 
@@ -414,368 +435,375 @@
             info.swap_total_mb > 0
               ? (info.swap_used_mb / info.swap_total_mb) * 100
               : 0}
-          <div class="stat-card">
-            <div class="stat-header">
-              <MemoryStick size={15} />
-              <span class="stat-label">Swap</span>
-            </div>
-            <div class="stat-value" style="color: {gaugeColor(swapPct)}">
-              {swapPct.toFixed(1)}%
-            </div>
-            <div class="gauge-track">
-              <div
-                class="gauge-fill"
-                style="width: {Math.min(
-                  swapPct,
-                  100,
-                )}%; background: {gaugeColor(swapPct)}"
-              ></div>
-            </div>
-            <div class="stat-sub">
-              {info.swap_used_mb.toLocaleString()} MB / {info.swap_total_mb.toLocaleString()}
-              MB
+          <div class="metric-card">
+            <StatCard
+              tone={gaugeTone(swapPct)}
+              value="{swapPct.toFixed(1)}%"
+              label="Swap"
+            >
+              {#snippet icon()}<MemoryStick size={16} />{/snippet}
+            </StatCard>
+            <div class="metric-foot">
+              <ProgressBar value={swapPct} tone={gaugeTone(swapPct)} />
+              <span class="metric-sub">
+                {info.swap_used_mb.toLocaleString()} MB / {info.swap_total_mb.toLocaleString()}
+                MB
+              </span>
             </div>
           </div>
         {/if}
       </div>
 
       <!-- Core Services -->
-      <div class="section">
-        <div class="section-head">
+      <div class="block">
+        <div class="sec-head">
           <Box size={14} />
-          <span>Core Services</span>
+          <SectionLabel>Core Services</SectionLabel>
           {#if coreLastRefresh}
             <span class="section-hint"
               >Updated {coreLastRefresh.toLocaleTimeString()}</span
             >
           {/if}
-          <button
-            class="refresh-inline"
-            onclick={loadCoreServices}
-            disabled={coreLoading}
-            title="Refresh"
-          >
-            <RefreshCw size={11} />
-          </button>
-        </div>
-
-        {#if coreError}
-          <div class="core-error"><AlertCircle size={13} />{coreError}</div>
-        {/if}
-
-        <div class="core-grid">
-          {#each CORE_SERVICES as svc}
-            {@const container = findContainer(svc.key)}
-            {@const state = serviceState(container)}
-            {@const stats = coreStats[svc.key]}
-            <div
-              class="core-card"
-              class:running={state === "running"}
-              class:stopped={state === "stopped"}
+          <div class="sec-action" class:sec-action-auto={!coreLastRefresh}>
+            <Button
+              variant="secondary"
+              size="icon"
+              onclick={loadCoreServices}
+              disabled={coreLoading}
+              title="Refresh"
+              aria-label="Refresh core services"
             >
-              <div class="core-card-header">
-                <span
-                  class="core-status-dot"
-                  style="background:{stateColor(state)}"
-                ></span>
-                <span class="core-label">{svc.label}</span>
-                <span class="core-state-badge" style="color:{stateColor(state)}"
-                  >{state}</span
-                >
-              </div>
-              <div class="core-desc">{svc.desc}</div>
-              {#if container}
-                <div class="core-image">{container.image}</div>
-              {:else if !coreLoading}
-                <div class="core-status-text muted">Container not found</div>
-              {/if}
-              {#if stats}
-                <div class="core-metrics">
-                  <!-- CPU -->
-                  <div class="core-metric-row">
-                    <span class="core-metric-label">CPU</span>
-                    <div class="core-gauge-track">
-                      <div
-                        class="core-gauge-fill"
-                        style="width:{Math.min(
-                          stats.cpu_pct,
-                          100,
-                        )}%;background:{gaugeColor(stats.cpu_pct)}"
-                      ></div>
-                    </div>
-                    <span
-                      class="core-metric-val"
-                      style="color:{gaugeColor(stats.cpu_pct)}"
-                      >{stats.cpu_pct.toFixed(1)}%</span
-                    >
-                  </div>
-                  <!-- Memory -->
-                  <div class="core-metric-row">
-                    <span class="core-metric-label">MEM</span>
-                    <div class="core-gauge-track">
-                      <div
-                        class="core-gauge-fill"
-                        style="width:{Math.min(
-                          stats.mem_pct,
-                          100,
-                        )}%;background:{gaugeColor(stats.mem_pct)}"
-                      ></div>
-                    </div>
-                    <span
-                      class="core-metric-val"
-                      style="color:{gaugeColor(stats.mem_pct)}"
-                      >{fmtMemMb(stats.mem_used_mb)}</span
-                    >
-                  </div>
-                  <!-- Disk I/O -->
-                  <div class="core-io-row">
-                    <span class="core-metric-label">I/O</span>
-                    <span class="core-io-val">
-                      <span class="io-read"
-                        >↑ {formatBytes(stats.blkio_read_bytes)}</span
-                      >
-                      <span class="io-write"
-                        >↓ {formatBytes(stats.blkio_write_bytes)}</span
-                      >
-                    </span>
-                  </div>
-                </div>
-              {:else if state === "running" && !coreLoading}
-                <div class="core-status-text muted">Stats unavailable</div>
-              {/if}
-            </div>
-          {/each}
+              <RefreshCw size={13} />
+            </Button>
+          </div>
         </div>
+
+        <Card padding="0">
+          {#if coreError}
+            <div class="core-error"><AlertCircle size={13} />{coreError}</div>
+          {/if}
+
+          <div class="core-grid">
+            {#each CORE_SERVICES as svc}
+              {@const container = findContainer(svc.key)}
+              {@const state = serviceState(container)}
+              {@const stats = coreStats[svc.key]}
+              <div
+                class={state === "running"
+                  ? "core-card running"
+                  : state === "stopped"
+                    ? "core-card stopped"
+                    : "core-card"}
+              >
+                <div class="core-card-header">
+                  <StatusDot status={coreDot(state)} />
+                  <span class="core-label">{svc.label}</span>
+                  <span
+                    class="core-state-badge"
+                    style="color:{stateColor(state)}">{state}</span
+                  >
+                </div>
+                <div class="core-desc">{svc.desc}</div>
+                {#if container}
+                  <div class="core-image">{container.image}</div>
+                {:else if !coreLoading}
+                  <div class="core-status-text muted">Container not found</div>
+                {/if}
+                {#if stats}
+                  <div class="core-metrics">
+                    <!-- CPU -->
+                    <div class="core-metric-row">
+                      <span class="core-metric-label">CPU</span>
+                      <div class="core-gauge">
+                        <ProgressBar
+                          value={stats.cpu_pct}
+                          tone={gaugeTone(stats.cpu_pct)}
+                        />
+                      </div>
+                      <span
+                        class="core-metric-val"
+                        style="color:{gaugeColor(stats.cpu_pct)}"
+                        >{stats.cpu_pct.toFixed(1)}%</span
+                      >
+                    </div>
+                    <!-- Memory -->
+                    <div class="core-metric-row">
+                      <span class="core-metric-label">MEM</span>
+                      <div class="core-gauge">
+                        <ProgressBar
+                          value={stats.mem_pct}
+                          tone={gaugeTone(stats.mem_pct)}
+                        />
+                      </div>
+                      <span
+                        class="core-metric-val"
+                        style="color:{gaugeColor(stats.mem_pct)}"
+                        >{fmtMemMb(stats.mem_used_mb)}</span
+                      >
+                    </div>
+                    <!-- Disk I/O -->
+                    <div class="core-io-row">
+                      <span class="core-metric-label">I/O</span>
+                      <span class="core-io-val">
+                        <span class="io-read"
+                          >↑ {formatBytes(stats.blkio_read_bytes)}</span
+                        >
+                        <span class="io-write"
+                          >↓ {formatBytes(stats.blkio_write_bytes)}</span
+                        >
+                      </span>
+                    </div>
+                  </div>
+                {:else if state === "running" && !coreLoading}
+                  <div class="core-status-text muted">Stats unavailable</div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </Card>
       </div>
 
       <!-- Disk section -->
-      <div class="section">
-        <div class="section-head">
+      <div class="block">
+        <div class="sec-head">
           <HardDrive size={14} />
-          <span>Disk</span>
+          <SectionLabel>Disk</SectionLabel>
         </div>
-        <div class="disk-list">
-          {#each deduplicateDisks(info.disks) as disk}
-            <div class="disk-row">
-              <div class="disk-meta">
-                <span class="disk-mount mono">{disk.mount}</span>
-                <span class="disk-size"
-                  >{disk.used_gb.toFixed(1)} GB / {disk.total_gb.toFixed(1)} GB</span
-                >
-              </div>
-              <div class="disk-gauge-wrap">
-                <div class="gauge-track disk-track">
-                  <div
-                    class="gauge-fill"
-                    style="width: {Math.min(
-                      disk.used_pct,
-                      100,
-                    )}%; background: {gaugeColor(disk.used_pct)}"
-                  ></div>
+        <Card padding="0">
+          <div class="disk-list">
+            {#each deduplicateDisks(info.disks) as disk}
+              <div class="disk-row">
+                <div class="disk-meta">
+                  <span class="disk-mount mono">{disk.mount}</span>
+                  <span class="disk-size"
+                    >{disk.used_gb.toFixed(1)} GB / {disk.total_gb.toFixed(1)} GB</span
+                  >
                 </div>
-                <span
-                  class="disk-pct"
-                  style="color: {gaugeColor(disk.used_pct)}"
-                  >{disk.used_pct.toFixed(1)}%</span
-                >
+                <div class="disk-gauge-wrap">
+                  <div class="disk-track">
+                    <ProgressBar
+                      value={disk.used_pct}
+                      tone={gaugeTone(disk.used_pct)}
+                    />
+                  </div>
+                  <span
+                    class="disk-pct"
+                    style="color: {gaugeColor(disk.used_pct)}"
+                    >{disk.used_pct.toFixed(1)}%</span
+                  >
+                </div>
               </div>
-            </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        </Card>
       </div>
 
       <!-- Network section -->
-      <div class="section">
-        <div class="section-head">
+      <div class="block">
+        <div class="sec-head">
           <Network size={14} />
-          <span>Network</span>
+          <SectionLabel>Network</SectionLabel>
           <span class="section-hint">cumulative since boot</span>
         </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Interface</th>
-                <th>Received</th>
-                <th>Transmitted</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each visibleNets(info.networks) as net}
+        <Card padding="0">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
                 <tr>
-                  <td class="mono iface">{net.iface}</td>
-                  <td class="rx">{formatBytes(net.rx_bytes)}</td>
-                  <td class="tx">{formatBytes(net.tx_bytes)}</td>
+                  <th>Interface</th>
+                  <th>Received</th>
+                  <th>Transmitted</th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {#each visibleNets(info.networks) as net}
+                  <tr>
+                    <td class="mono iface">{net.iface}</td>
+                    <td class="rx">{formatBytes(net.rx_bytes)}</td>
+                    <td class="tx">{formatBytes(net.tx_bytes)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
     {/if}
 
     <!-- Swarm Nodes (always rendered, not gated by metrics stream) -->
-    <div class="section">
-      <div class="section-head">
+    <div class="block">
+      <div class="sec-head">
         <Server size={14} />
-        <span>Swarm Nodes</span>
-        <button
-          class="refresh-inline"
-          onclick={loadNodes}
-          disabled={nodesLoading}
-          title="Refresh"
-        >
-          <RefreshCw size={11} />
-        </button>
+        <SectionLabel>Swarm Nodes</SectionLabel>
+        <div class="sec-action sec-action-auto">
+          <Button
+            variant="secondary"
+            size="icon"
+            onclick={loadNodes}
+            disabled={nodesLoading}
+            title="Refresh"
+            aria-label="Refresh swarm nodes"
+          >
+            <RefreshCw size={13} />
+          </Button>
+        </div>
       </div>
 
       {#if nodesLoading}
         <div class="nodes-placeholder">
-          <div class="spinner"></div>
-           Loading nodes…
+          <Spinner size={18} />
+          Loading nodes…
         </div>
       {:else if nodesError}
-        <div class="nodes-placeholder error">{nodesError}</div>
+        <div role="alert"><InlineAlert tone="error">{nodesError}</InlineAlert></div>
       {:else if nodes.length === 0}
         <div class="nodes-placeholder">
           Not running in swarm mode, or no nodes visible.
         </div>
       {:else}
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Hostname</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Availability</th>
-                <th>Address</th>
-                <th>Engine</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each nodes as node}
-                <tr>
-                  <td class="mono">{node.hostname}</td>
-                  <td>
-                    <span class="role-badge role-{node.role}">{node.role}</span>
-                  </td>
-                  <td>
-                    <span
-                      class="node-status"
-                      style="color: {nodeStatusColor(node.status)}"
-                    >
-                      ● {node.status}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      class="node-status"
-                      style="color: {availColor(node.availability)}"
-                    >
-                      {node.availability}
-                    </span>
-                  </td>
-                  <td class="mono muted">{node.addr ?? "—"}</td>
-                  <td class="mono muted">{node.engine_version ?? "—"}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          items={nodes}
+          rowKey={(n) => n.hostname}
+          searchable={false}
+          columns={[
+            { key: "hostname", label: "Hostname" },
+            { key: "role", label: "Role" },
+            { key: "status", label: "Status" },
+            { key: "availability", label: "Availability" },
+            { key: "addr", label: "Address" },
+            { key: "engine_version", label: "Engine" },
+          ]}
+        >
+          {#snippet row(node)}
+            <tr>
+              <td class="mono">{node.hostname}</td>
+              <td>
+                <Badge tone={node.role === "manager" ? "blue" : "neutral"}
+                  >{node.role}</Badge
+                >
+              </td>
+              <td>
+                <span class="node-status">
+                  <StatusDot status={nodeDot(node.status)} />
+                  {node.status}
+                </span>
+              </td>
+              <td>
+                <Badge tone={availTone(node.availability)}
+                  >{node.availability}</Badge
+                >
+              </td>
+              <td class="mono muted">{node.addr ?? "—"}</td>
+              <td class="mono muted">{node.engine_version ?? "—"}</td>
+            </tr>
+          {/snippet}
+        </DataTable>
       {/if}
     </div>
+
     <!-- Swarm Join Tokens -->
-    <div class="section">
-      <div class="section-head">
+    <div class="block">
+      <div class="sec-head">
         <Link size={14} />
-        <span>Join Tokens</span>
-        <span class="section-hint"
-          >Run on a new VPS to add it to this swarm</span
-        >
-        <button
-          class="refresh-inline"
-          onclick={loadJoinTokens}
-          disabled={joinTokensLoading}
-          title="Refresh"
-        >
-          <RefreshCw size={11} />
-        </button>
-      </div>
-
-      <!-- Guided setup banner -->
-      <div class="setup-banner">
-        <div class="setup-banner-text">
-          <span class="setup-banner-title">New to this?</span>
-          Run the guided worker setup script on your new VPS — it installs Docker,
-          configures registry credentials, and joins the swarm in one go.
-        </div>
-        <div class="setup-banner-cmd-wrap">
-          <code class="setup-banner-cmd"
-            >curl -fsSL {typeof window !== "undefined"
-              ? window.location.origin
-              : ""}/worker-setup.sh | sudo bash</code
+        <SectionLabel>Join Tokens</SectionLabel>
+        <span class="section-hint">Run on a new VPS to add it to this swarm</span>
+        <div class="sec-action">
+          <Button
+            variant="secondary"
+            size="icon"
+            onclick={loadJoinTokens}
+            disabled={joinTokensLoading}
+            title="Refresh"
+            aria-label="Refresh join tokens"
           >
-          <button
-            class="token-copy-btn"
-            onclick={async () => {
-              await navigator.clipboard.writeText(
-                `curl -fsSL ${window.location.origin}/worker-setup.sh | sudo bash`,
-              );
-              copiedToken = "worker";
-              setTimeout(() => (copiedToken = null), 2000);
-            }}
-            title="Copy setup command"
-          >
-            {#if copiedToken === "worker"}
-              <Check size={13} />
-            {:else}
-              <Copy size={13} />
-            {/if}
-          </button>
+            <RefreshCw size={13} />
+          </Button>
         </div>
       </div>
 
-      {#if joinTokensLoading}
-        <div class="nodes-placeholder">
-          <div class="spinner"></div>
-           Loading…
+      <Card padding="0">
+        <!-- Guided setup banner -->
+        <div class="setup-banner">
+          <div class="setup-banner-text">
+            <span class="setup-banner-title">New to this?</span>
+            Run the guided worker setup script on your new VPS — it installs Docker,
+            configures registry credentials, and joins the swarm in one go.
+          </div>
+          <div class="setup-banner-cmd-wrap">
+            <code class="setup-banner-cmd"
+              >curl -fsSL {typeof window !== "undefined"
+                ? window.location.origin
+                : ""}/worker-setup.sh | sudo bash</code
+            >
+            <Button
+              variant="secondary"
+              size="icon"
+              onclick={async () => {
+                await navigator.clipboard.writeText(
+                  `curl -fsSL ${window.location.origin}/worker-setup.sh | sudo bash`,
+                );
+                copiedToken = "worker";
+                setTimeout(() => (copiedToken = null), 2000);
+              }}
+              title="Copy setup command"
+              aria-label="Copy setup command"
+            >
+              {#if copiedToken === "worker"}
+                <Check size={13} />
+              {:else}
+                <Copy size={13} />
+              {/if}
+            </Button>
+          </div>
         </div>
-      {:else if joinTokensError}
-        <div class="nodes-placeholder error">{joinTokensError}</div>
-      {:else if joinTokens}
-        <div class="token-list">
-          {#each [["worker", joinTokens.worker], ["manager", joinTokens.manager]] as [role, token]}
-            <div class="token-row">
-              <div class="token-meta">
-                <span class="role-badge role-{role}">{role}</span>
-                <span class="token-hint">
-                  {role === "worker"
-                    ? "Runs workloads — no scheduling control"
-                    : "Full cluster control — use sparingly"}
-                </span>
+
+        {#if joinTokensLoading}
+          <div class="nodes-placeholder">
+            <Spinner size={18} />
+            Loading…
+          </div>
+        {:else if joinTokensError}
+          <div class="nodes-placeholder">
+            <div role="alert"><InlineAlert tone="error">{joinTokensError}</InlineAlert></div>
+          </div>
+        {:else if joinTokens}
+          <div class="token-list">
+            {#each [["worker", joinTokens.worker], ["manager", joinTokens.manager]] as [role, token]}
+              <div class="token-row">
+                <div class="token-meta">
+                  <Badge tone={role === "manager" ? "blue" : "neutral"}
+                    >{role}</Badge
+                  >
+                  <span class="token-hint">
+                    {role === "worker"
+                      ? "Runs workloads — no scheduling control"
+                      : "Full cluster control — use sparingly"}
+                  </span>
+                </div>
+                <div class="token-cmd-wrap">
+                  <code class="token-cmd"
+                    >docker swarm join --token {token} {joinTokens.addr}</code
+                  >
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onclick={() =>
+                      copyToken(role === "manager" ? "manager" : "worker")}
+                    title="Copy command"
+                    aria-label="Copy {role} join command"
+                  >
+                    {#if copiedToken === role}
+                      <Check size={13} />
+                    {:else}
+                      <Copy size={13} />
+                    {/if}
+                  </Button>
+                </div>
               </div>
-              <div class="token-cmd-wrap">
-                <code class="token-cmd"
-                  >docker swarm join --token {token} {joinTokens.addr}</code
-                >
-                <button
-                  class="token-copy-btn"
-                  onclick={() =>
-                    copyToken(role === "manager" ? "manager" : "worker")}
-                  title="Copy command"
-                >
-                  {#if copiedToken === role}
-                    <Check size={13} />
-                  {:else}
-                    <Copy size={13} />
-                  {/if}
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
+            {/each}
+          </div>
+        {/if}
+      </Card>
     </div>
   </div>
 {/if}
@@ -803,37 +831,9 @@
     font-weight: 600;
     color: var(--text-primary);
   }
-  .uptime-chip {
-    padding: 2px 8px;
-    background: var(--bg-muted);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  .live-badge {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 500;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    background: var(--bg-muted);
-    transition: all 0.3s ease;
-  }
-  .live-badge.live {
-    color: #16a34a;
-    background: rgba(22, 163, 74, 0.08);
-    border-color: rgba(22, 163, 74, 0.3);
-  }
-  .live-badge.live :global(svg) {
+  .live-wrap.live :global(svg) {
     animation: pulse 2s ease-in-out infinite;
   }
-
   @keyframes pulse {
     0%,
     100% {
@@ -844,41 +844,7 @@
     }
   }
 
-  .refresh-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .refresh-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .error-banner {
-    padding: 10px 14px;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: var(--radius);
-    color: #dc2626;
-    font-size: 13px;
-  }
-
-  .empty-state {
+  .waiting {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -887,96 +853,64 @@
     color: var(--text-muted);
     font-size: 13px;
   }
-  .spinner {
-    width: 18px;
-    height: 18px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
 
-  /* Stat cards */
+  /* Stat cards: StatCard with a ProgressBar footer */
   .stat-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     gap: 16px;
   }
-  .stat-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 18px 20px;
+  .metric-card {
     display: flex;
     flex-direction: column;
-    gap: 8px;
   }
-  .stat-header {
+  .metric-card :global(.ui-stat-card) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+  }
+  .metric-foot {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-bottom-left-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-lg);
+    padding: 9px 14px 11px;
     display: flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 500;
+    flex-direction: column;
+    gap: 6px;
   }
-  .stat-label {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .stat-value {
-    font-size: 32px;
-    font-weight: 700;
-    line-height: 1;
-    letter-spacing: -0.02em;
-    color: var(--text-primary);
-  }
-  .stat-sub {
+  .metric-sub {
     font-size: 11px;
     color: var(--text-muted);
   }
 
-  /* Gauge */
-  .gauge-track {
-    height: 6px;
-    background: var(--bg-muted);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .gauge-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.4s ease;
-  }
-
-  /* Section */
-  .section {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-  }
-  .section-head {
+  /* Part 1 section header: icon + SectionLabel + hint */
+  .sec-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 12px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+    color: var(--text-muted);
+  }
+  .sec-head :global(.ui-section-label) {
+    margin-bottom: 0;
+    white-space: nowrap;
+  }
+  .sec-action {
+    margin-left: 0;
+  }
+  .sec-action-auto {
+    margin-left: auto;
   }
   .section-hint {
     font-size: 11px;
     font-weight: 400;
     color: var(--text-muted);
-    text-transform: none;
-    letter-spacing: 0;
     margin-left: auto;
+  }
+  .section-hint + .sec-action {
+    margin-left: 0;
   }
 
   /* Disk */
@@ -1041,7 +975,7 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
   }
   .data-table tbody tr td {
@@ -1053,7 +987,7 @@
     border-bottom: none;
   }
   .data-table tbody tr:hover td {
-    background: var(--bg-muted);
+    background: var(--bg-hover);
   }
 
   .mono {
@@ -1067,10 +1001,10 @@
     color: var(--text-secondary);
   }
   .rx {
-    color: #16a34a;
+    color: var(--accent-green);
   }
   .tx {
-    color: #2563eb;
+    color: var(--accent);
   }
 
   /* Swarm nodes */
@@ -1082,52 +1016,14 @@
     align-items: center;
     gap: 8px;
   }
-  .nodes-placeholder.error {
-    color: #dc2626;
-  }
-
-  .refresh-inline {
-    display: flex;
-    align-items: center;
-    margin-left: auto;
-    padding: 3px 6px;
-    font-size: 11px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .refresh-inline:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  .refresh-inline:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .role-badge {
-    display: inline-block;
-    padding: 2px 7px;
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 10px;
-    text-transform: capitalize;
-  }
-  .role-manager {
-    background: rgba(99, 102, 241, 0.1);
-    color: #6366f1;
-  }
-  .role-worker {
-    background: var(--bg-muted);
-    color: var(--text-secondary);
-  }
 
   .node-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
     font-weight: 500;
+    color: var(--text-secondary);
     text-transform: capitalize;
   }
 
@@ -1137,7 +1033,7 @@
     flex-direction: column;
     gap: 8px;
     padding: 12px 16px;
-    background: rgba(99, 102, 241, 0.05);
+    background: var(--accent-muted);
     border-bottom: 1px solid var(--border);
   }
   .setup-banner-text {
@@ -1156,7 +1052,7 @@
     gap: 10px;
     background: var(--bg-base);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 7px 12px;
   }
   .setup-banner-cmd {
@@ -1196,9 +1092,9 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 8px 12px;
   }
   .token-cmd {
@@ -1209,25 +1105,6 @@
     word-break: break-all;
     user-select: all;
   }
-  .token-copy-btn {
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .token-copy-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
   /* Core services */
   .core-error {
     display: flex;
@@ -1235,7 +1112,7 @@
     gap: 7px;
     padding: 10px 16px;
     font-size: 12px;
-    color: #ef4444;
+    color: var(--accent-red);
     border-bottom: 1px solid var(--border);
   }
   .core-grid {
@@ -1253,24 +1130,18 @@
     transition: background var(--transition-fast);
   }
   .core-card:hover {
-    background: var(--bg-muted);
+    background: var(--bg-hover);
   }
   .core-card.running {
-    border-left: 3px solid #16a34a;
+    border-left: 3px solid var(--accent-green);
   }
   .core-card.stopped {
-    border-left: 3px solid #ef4444;
+    border-left: 3px solid var(--accent-red);
   }
   .core-card-header {
     display: flex;
     align-items: center;
     gap: 7px;
-  }
-  .core-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
   }
   .core-label {
     font-size: 13px;
@@ -1334,17 +1205,9 @@
     width: 24px;
     flex-shrink: 0;
   }
-  .core-gauge-track {
+  .core-gauge {
     flex: 1;
-    height: 4px;
-    background: var(--bg-muted);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .core-gauge-fill {
-    height: 100%;
-    border-radius: 2px;
-    transition: width 0.4s ease;
+    min-width: 0;
   }
   .core-metric-val {
     font-size: 10px;
@@ -1362,9 +1225,9 @@
     flex-wrap: wrap;
   }
   .io-read {
-    color: #16a34a;
+    color: var(--accent-green);
   }
   .io-write {
-    color: #2563eb;
+    color: var(--accent);
   }
 </style>

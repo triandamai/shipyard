@@ -5,10 +5,17 @@
 	import { can, perm } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
 	import {
-		UserPlus, Shield, Trash2, Crown, Eye, ChevronDown,
-		Loader2, AlertCircle, Check, X, Clock, SlidersHorizontal,
+		UserPlus, Shield, Trash2, Crown, Eye,
+		X, Clock, SlidersHorizontal,
 		Link, CheckCheck, Folder
 	} from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import Avatar from '$lib/components/ui/Avatar.svelte';
+	import Select from '$lib/components/ui/Select.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import DataTable from '$lib/components/ui/DataTable.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
 	import { formatDistanceToNow, isPast } from 'date-fns';
 	import type { OrgMember, MemberRole, Invitation, Project } from '$lib/api/types';
 	import SlidePanel from '$lib/components/SlidePanel.svelte';
@@ -75,12 +82,12 @@
 		return ROLES.find(r => r.value === role)?.label ?? role;
 	}
 
-	function roleColor(role: string) {
+	function roleTone(role: string): 'yellow' | 'blue' | 'green' | 'neutral' {
 		switch (role) {
-			case 'owner':  return 'role-owner';
-			case 'admin':  return 'role-admin';
-			case 'member': return 'role-member';
-			default:       return 'role-viewer';
+			case 'owner':  return 'yellow';
+			case 'admin':  return 'blue';
+			case 'member': return 'green';
+			default:       return 'neutral';
 		}
 	}
 
@@ -279,9 +286,9 @@
 
 	<!-- ── Role info note ─────────────────────────────────────────── -->
 	{#if membershipLoaded && myRole}
-		<div class="role-info-note role-info-note--{myRole}">
+		<div class="role-info-note">
 			<span class="role-info-label">Your role:</span>
-			<span class="role-info-badge role-badge {roleColor(myRole)}">{roleLabel(myRole)}</span>
+			<span class="role-info-badge"><Badge tone={roleTone(myRole)}>{roleLabel(myRole)}</Badge></span>
 			<span class="role-info-desc">
 				{#if myRole === 'owner'}
 					Full access — manage all members, roles, and invitations.
@@ -303,10 +310,10 @@
 			<p class="invite-bar-desc">Manage who has access to this organization.</p>
 		</div>
 		{#if canInvite}
-			<button class="btn-invite-open" onclick={() => (showInvitePanel = true)}>
+			<Button onclick={() => (showInvitePanel = true)}>
 				<UserPlus size={14} />
 				Invite Member
-			</button>
+			</Button>
 		{/if}
 	</div>
 
@@ -325,7 +332,7 @@
 
 			{#if loadingInvites}
 				<div class="list-empty">
-					<div class="spinner"></div>
+					<Spinner size={14} />
 					<span>Loading…</span>
 				</div>
 			{:else if invitations.length === 0}
@@ -335,46 +342,49 @@
 					{#each invitations as inv (inv.id)}
 						{@const assignmentCount = Array.isArray(inv.project_assignments) ? inv.project_assignments.length : 0}
 						<li class="invite-item">
-							<div class="invite-avatar">{inv.email[0]?.toUpperCase()}</div>
+							<Avatar initials={inv.email[0] ?? '?'} tone="blue" size={30} />
 							<div class="invite-info">
 								<span class="invite-email-text">{inv.email}</span>
 								<div class="invite-meta">
-									<span class="role-badge {roleColor(inv.role)}">{roleLabel(inv.role)}</span>
+									<Badge tone={roleTone(inv.role)}>{roleLabel(inv.role)}</Badge>
 									{#if inv.permissions.length > 0}
-										<span class="perm-pill">{inv.permissions.length} perm{inv.permissions.length === 1 ? '' : 's'}</span>
+										<Badge tone="blue">{inv.permissions.length} perm{inv.permissions.length === 1 ? '' : 's'}</Badge>
 									{/if}
 									{#if assignmentCount > 0}
-										<span class="perm-pill project-pill">
-											<Folder size={9} />{assignmentCount} project{assignmentCount === 1 ? '' : 's'}
-										</span>
+										<Badge tone="green">
+											<span class="pill-icon"><Folder size={9} />{assignmentCount} project{assignmentCount === 1 ? '' : 's'}</span>
+										</Badge>
 									{/if}
 									<span class="invite-expiry">{expiresLabel(inv.expires_at)}</span>
 								</div>
 							</div>
-							<button
-								class="copy-link-btn"
-								class:copied={copiedInviteId === inv.id}
+							<Button
+								variant="ghost"
+								size="icon"
 								onclick={() => copyInviteLink(inv)}
 								title="Copy invitation link"
+								aria-label="Copy invitation link"
 							>
 								{#if copiedInviteId === inv.id}
 									<CheckCheck size={13} />
 								{:else}
 									<Link size={13} />
 								{/if}
-							</button>
-							<button
-								class="cancel-invite-btn"
+							</Button>
+							<Button
+								variant="danger-outline"
+								size="icon"
 								disabled={cancellingInvite === inv.id}
 								onclick={() => cancelInvite(inv)}
 								title="Cancel invitation"
+								aria-label="Cancel invitation"
 							>
 								{#if cancellingInvite === inv.id}
-									<Loader2 size={13} class="spin" />
+									<Spinner size={13} tone="current" />
 								{:else}
 									<X size={13} />
 								{/if}
-							</button>
+							</Button>
 						</li>
 					{/each}
 				</ul>
@@ -426,104 +436,111 @@
 
 		{#if loadingMembers}
 			<div class="list-empty">
-				<div class="spinner"></div>
+				<Spinner size={14} />
 				<span>Loading members…</span>
 			</div>
 		{:else if membersError}
-			<div class="error-banner" style="margin: 12px 20px 16px;">
-				<AlertCircle size={14} />{membersError}
-				<button class="btn btn-ghost btn-sm" onclick={() => loadMembers()}>Retry</button>
+			<div class="members-error" role="alert">
+				<InlineAlert tone="error">{membersError}</InlineAlert>
+				<Button variant="ghost" size="sm" onclick={() => loadMembers()}>Retry</Button>
 			</div>
 		{:else}
-			<ul class="member-list">
-				{#each members as member (member.id)}
+			<DataTable
+				items={members}
+				rowKey={(m) => m.id}
+				columns={[
+					{ key: 'member', label: 'Member' },
+					{ key: 'role', label: 'Role' },
+					{ key: 'actions', label: '', width: '90px' }
+				]}
+				searchable={false}
+				emptyMessage="No members."
+			>
+				{#snippet row(member)}
 					{@const isSelf     = member.user_id === currentUserId}
 					{@const isChanging = changingRoleFor === member.user_id}
 					{@const isRemoving = removingMember  === member.user_id}
 					{@const isPanelOpen = panelMember?.user_id === member.user_id}
-
-					<li class="member-item" class:member-self={isSelf}>
-						<!-- Main row -->
-						<div class="member-row">
-							<div class="member-avatar">{member.email[0]?.toUpperCase() ?? '?'}</div>
-
-							<div class="member-info">
-								<div class="member-email-row">
-									<span class="member-email">{member.email}</span>
-									{#if isSelf}<span class="self-badge">You</span>{/if}
-								</div>
-								<div class="member-sub">
-									<span class="member-since">Joined {formatTime(member.created_at)}</span>
-									{#if member.permissions.length > 0}
-										<span class="perm-pill">{member.permissions.length} permission{member.permissions.length === 1 ? '' : 's'}</span>
-									{:else}
-										<span class="perm-pill perm-none">No custom permissions</span>
-									{/if}
+					<tr class={isSelf ? 'member-self' : ''}>
+						<td>
+							<div class="member-cell">
+								<Avatar initials={member.email[0] ?? '?'} tone="blue" size={34} />
+								<div class="member-info">
+									<div class="member-email-row">
+										<span class="member-email">{member.email}</span>
+										{#if isSelf}<Badge tone="blue">You</Badge>{/if}
+									</div>
+									<div class="member-sub">
+										<span class="member-since">Joined {formatTime(member.created_at)}</span>
+										{#if member.permissions.length > 0}
+											<Badge tone="blue">{member.permissions.length} permission{member.permissions.length === 1 ? '' : 's'}</Badge>
+										{:else}
+											<Badge tone="neutral">No custom permissions</Badge>
+										{/if}
+									</div>
 								</div>
 							</div>
-
-							<!-- Role badge / selector -->
-							<div class="member-role-wrap">
-								{#if canChangeRole(member)}
-									<div class="role-select-wrap">
-										{#if isChanging}<Loader2 size={12} class="spin role-loading" />{/if}
-										<select
-											class="role-select-inline {roleColor(member.role)}"
-											value={member.role}
-											disabled={isChanging}
-											onchange={(e) => handleRoleChange(member, (e.target as HTMLSelectElement).value as MemberRole)}
-										>
-											{#each assignableRoles() as r}
-												<option value={r}>{roleLabel(r)}</option>
-											{/each}
-										</select>
-										<ChevronDown size={11} class="role-chevron" />
-									</div>
-								{:else}
-									<span class="role-badge {roleColor(member.role)}">
+						</td>
+						<td class="role-cell">
+							{#if canChangeRole(member)}
+								<div class="role-select">
+									<Select
+										value={member.role}
+										disabled={isChanging}
+										aria-label="Role for {member.email}"
+										onchange={(e) => handleRoleChange(member, (e.target as HTMLSelectElement).value as MemberRole)}
+										options={assignableRoles().map((r) => ({ value: r, label: roleLabel(r) }))}
+									/>
+									{#if isChanging}<Spinner size={12} />{/if}
+								</div>
+							{:else}
+								<Badge tone={roleTone(member.role)}>
+									<span class="pill-icon">
 										{#if member.role === 'owner'}<Crown size={10} />{/if}
 										{#if member.role === 'viewer'}<Eye size={10} />{/if}
 										{roleLabel(member.role)}
 									</span>
-								{/if}
-							</div>
-
-							<!-- Action buttons -->
+								</Badge>
+							{/if}
+						</td>
+						<td>
 							<div class="member-actions">
 								{#if canManage && !isSelf}
-									<button
-										class="action-btn"
-										class:active={isPanelOpen}
+									<Button
+										variant={isPanelOpen ? 'secondary' : 'ghost'}
+										size="icon"
 										onclick={() => isPanelOpen ? closeMemberPanel() : openMemberPanel(member)}
 										title="Manage permissions & project access"
+										aria-label="Manage permissions & project access"
 									>
 										<SlidersHorizontal size={13} />
-									</button>
+									</Button>
 								{/if}
 								{#if canRemove(member)}
-									<button
-										class="action-btn danger"
+									<Button
+										variant="danger-outline"
+										size="icon"
 										disabled={isRemoving}
 										onclick={() => handleRemove(member)}
 										title="Remove member"
+										aria-label="Remove member"
 									>
-										{#if isRemoving}<Loader2 size={13} class="spin" />{:else}<Trash2 size={13} />{/if}
-									</button>
+										{#if isRemoving}<Spinner size={13} tone="current" />{:else}<Trash2 size={13} />{/if}
+									</Button>
 								{/if}
 							</div>
-						</div>
-					</li>
-				{/each}
-			</ul>
+						</td>
+					</tr>
+				{/snippet}
+			</DataTable>
 		{/if}
 	</section>
 </div>
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-
 	.members-page { display: flex; flex-direction: column; gap: 20px; }
+
+	.pill-icon { display: inline-flex; align-items: center; gap: 4px; }
 
 	/* ── Role info note ── */
 	.role-info-note {
@@ -537,12 +554,8 @@
 		font-size: 12px;
 		flex-wrap: wrap;
 	}
-	.role-info-label {
-		font-weight: 600;
-		color: var(--text-muted);
-		flex-shrink: 0;
-	}
-	.role-info-badge { flex-shrink: 0; }
+	.role-info-label { font-weight: 600; color: var(--text-muted); flex-shrink: 0; }
+	.role-info-badge { flex-shrink: 0; display: inline-flex; }
 	.role-info-desc { color: var(--text-muted); flex: 1; min-width: 180px; }
 
 	/* ── Invite bar ── */
@@ -554,23 +567,6 @@
 	}
 	.invite-bar-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
 	.invite-bar-desc  { font-size: 13px; color: var(--text-muted); margin: 0; }
-	.btn-invite-open {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		padding: 8px 16px;
-		background: var(--accent);
-		color: #fff;
-		border: none;
-		border-radius: 7px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		white-space: nowrap;
-		flex-shrink: 0;
-		transition: opacity .15s;
-	}
-	.btn-invite-open:hover { opacity: .88; }
 
 	/* ── Shared section chrome ── */
 	.settings-section {
@@ -579,20 +575,17 @@
 		border-radius: var(--radius-lg);
 		overflow: hidden;
 	}
-
 	.section-header {
 		display: flex; gap: 14px; padding: 18px 20px;
 		border-bottom: 1px solid var(--border);
 		background: var(--bg-elevated);
 	}
-
 	.section-icon {
 		width: 32px; height: 32px; border-radius: var(--radius-md);
-		background: rgba(37,99,235,0.1); color: var(--accent);
+		background: var(--accent-muted); color: var(--accent);
 		display: flex; align-items: center; justify-content: center;
 		flex-shrink: 0; margin-top: 1px;
 	}
-
 	.section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
 	.section-desc  { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 
@@ -601,19 +594,8 @@
 		padding: 20px; color: var(--text-muted); font-size: 13px;
 	}
 	.list-empty.muted { color: var(--text-dim); font-size: 12px; font-style: italic; }
-	.spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
-	.error-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: var(--radius-md); color: #EF4444; font-size: 13px; }
-
-	/* ── Field inputs ── */
-	.field-input {
-		background: var(--bg-base); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans);
-		padding: 8px 10px; outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.field-input:focus { border-color: var(--accent); }
-
+	.members-error { display: flex; align-items: center; gap: 8px; margin: 12px 20px 16px; }
+	.members-error :global(.ui-alert) { flex: 1; }
 
 	/* ── Pending invitations ── */
 	.invite-list { list-style: none; margin: 0; padding: 0; }
@@ -622,117 +604,31 @@
 		padding: 11px 20px; border-bottom: 1px solid var(--border);
 	}
 	.invite-item:last-child { border-bottom: none; }
-
-	.invite-avatar {
-		width: 30px; height: 30px; border-radius: 50%;
-		background: var(--bg-elevated); border: 1.5px dashed var(--border);
-		color: var(--text-dim); font-size: 12px; font-weight: 600;
-		display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-	}
-
 	.invite-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.invite-email-text { font-size: 13px; font-weight: 500; color: var(--text-primary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.invite-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 	.invite-expiry { font-size: 11px; color: var(--text-dim); }
 
-	.project-pill { display: flex; align-items: center; gap: 4px; background: rgba(16,185,129,0.1); color: #10B981; border-color: rgba(16,185,129,0.25); }
-
-	.copy-link-btn, .cancel-invite-btn {
-		width: 26px; height: 26px; background: transparent; border: none; cursor: pointer;
-		color: var(--text-dim); display: flex; align-items: center; justify-content: center;
-		border-radius: var(--radius-sm);
-		transition: color var(--transition-fast), background var(--transition-fast);
-		flex-shrink: 0;
-	}
-	.copy-link-btn:hover { color: var(--accent); background: rgba(37,99,235,0.08); }
-	.copy-link-btn.copied { color: #22C55E; }
-	.cancel-invite-btn:hover { color: #EF4444; background: rgba(239,68,68,0.08); }
-	.cancel-invite-btn:disabled { opacity: 0.4; cursor: default; }
-
-	/* ── Member list ── */
-	.member-list { list-style: none; margin: 0; padding: 0; }
-	.member-item { border-bottom: 1px solid var(--border); }
-	.member-item:last-child { border-bottom: none; }
-	.member-item.member-self .member-row { background: color-mix(in srgb, var(--accent) 3%, transparent); }
-
-	.member-row {
-		display: flex; align-items: center; gap: 12px; padding: 12px 20px;
-		transition: background var(--transition-fast);
-	}
-	.member-row:hover { background: var(--bg-elevated); }
-
-	.member-avatar {
-		width: 34px; height: 34px; border-radius: 50%;
-		background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #7C3AED));
-		color: white; font-size: 13px; font-weight: 700;
-		display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-	}
-
-	.member-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+	/* ── Member table ── */
+	.member-cell { display: flex; align-items: center; gap: 12px; }
+	.member-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.member-email-row { display: flex; align-items: center; gap: 7px; }
 	.member-email { font-size: 13px; font-weight: 500; color: var(--text-primary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.self-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: rgba(37,99,235,0.1); color: var(--accent); border: 1px solid rgba(37,99,235,0.2); flex-shrink: 0; }
 	.member-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 	.member-since { font-size: 11px; color: var(--text-dim); }
+	:global(tr.member-self) { background: color-mix(in srgb, var(--accent) 3%, transparent); }
 
-	/* Permission count pill */
-	.perm-pill {
-		font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
-		background: rgba(99,102,241,0.1); color: #6366F1;
-		border: 1px solid rgba(99,102,241,0.2);
-	}
-	.perm-pill.perm-none { background: var(--bg-elevated); color: var(--text-dim); border-color: var(--border); font-weight: 400; }
-
-	/* Role badge */
-	.role-badge {
-		display: inline-flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 600; padding: 3px 9px;
-		border-radius: 999px; flex-shrink: 0;
-	}
-	.role-owner  { background: rgba(245,158,11,0.12); color: #D97706; border: 1px solid rgba(245,158,11,0.3); }
-	.role-admin  { background: rgba(99,102,241,0.12); color: #6366F1; border: 1px solid rgba(99,102,241,0.3); }
-	.role-member { background: rgba(16,185,129,0.12); color: #10B981; border: 1px solid rgba(16,185,129,0.25); }
-	.role-viewer { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border); }
-
-	/* Inline role selector */
-	.member-role-wrap { display: flex; align-items: center; flex-shrink: 0; }
-	.role-select-wrap { position: relative; display: flex; align-items: center; }
-	.role-select-inline {
-		appearance: none; -webkit-appearance: none;
-		font-size: 11px; font-weight: 600; padding: 3px 26px 3px 9px;
-		border-radius: 999px; border: 1px solid; cursor: pointer; outline: none;
-		background: transparent; font-family: var(--font-sans);
-		transition: opacity var(--transition-fast);
-	}
-	.role-select-inline:disabled { opacity: 0.6; cursor: default; }
-	:global(.role-chevron) { position: absolute; right: 8px; pointer-events: none; color: currentColor; opacity: 0.7; }
-	:global(.role-loading) { position: absolute; left: -20px; color: var(--text-muted); }
-
-	/* Member action buttons */
-	.member-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-	.action-btn {
-		width: 28px; height: 28px; background: transparent; border: 1px solid transparent;
-		cursor: pointer; color: var(--text-dim);
-		display: flex; align-items: center; justify-content: center;
-		border-radius: var(--radius-sm);
-		transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
-	}
-	.action-btn:hover { color: var(--text-primary); background: var(--bg-elevated); border-color: var(--border); }
-	.action-btn.active { color: var(--accent); background: rgba(37,99,235,0.08); border-color: rgba(37,99,235,0.2); }
-	.action-btn.danger:hover { color: #EF4444; background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
-	.action-btn:disabled { opacity: 0.4; cursor: default; }
-
-	/* ── Permission groups (used by MemberManagePanel via shared classes) ── */
-	.perm-editor-groups { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; }
+	.role-select { display: flex; align-items: center; gap: 6px; width: 130px; }
+	.member-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 
 	@media (max-width: 639px) {
 		.members-page { gap: 16px; }
 		.section-header { padding: 14px 16px; }
 		.invite-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
-		.btn-invite-open { align-self: flex-start; }
-		.member-row { padding: 10px 16px; gap: 10px; }
-		.member-email { font-size: 12px; }
-		.member-role-wrap { display: none; }
+		.member-email { font-size: 12px; max-width: 140px; }
+		.member-sub { max-width: 200px; }
+		.role-cell { display: none; }
+		.settings-section :global(.ui-data-table-el thead th:nth-child(2)) { display: none; }
 		.invite-item { padding: 10px 16px; }
 	}
 </style>

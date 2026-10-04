@@ -7,6 +7,7 @@
 	import PortMappingPanel from './PortMappingPanel.svelte';
 	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
 	import type { VolumeMount } from '$lib/components/VolumeMountList.svelte';
+	import { Button, FormField, TextField, Select, InlineAlert, Spinner } from '$lib/components/ui';
 	import { Network as NetworkIcon, ChevronRight, X, Plug } from '@lucide/svelte';
 
 	interface Props {
@@ -140,62 +141,59 @@
 
 <div class="panel-wrap">
 	<form class="form" onsubmit={handleSubmit}>
-		<div class="form-group">
-			<label class="form-label" for="db-name">Name</label>
-			<input id="db-name" class="form-input" type="text" bind:value={name}
+		<FormField label="Name" for="db-name">
+			<TextField id="db-name" type="text" bind:value={name}
 				oninput={() => (slug = deriveSlug(name))} placeholder="my-database" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="db-slug">Slug</label>
-			<input id="db-slug" class="form-input font-mono" type="text" bind:value={slug}
-				placeholder="my-database" required />
-		</div>
+		</FormField>
+		<FormField label="Slug" for="db-slug">
+			<div class="mono-field">
+				<TextField id="db-slug" type="text" bind:value={slug} placeholder="my-database" required />
+			</div>
+		</FormField>
 
-		<div class="form-group">
-			<label class="form-label" for="db-engine">Engine</label>
-			<select id="db-engine" class="form-select" bind:value={engine} onchange={onEngineChange}>
-				<option value="postgres">PostgreSQL</option>
-				<option value="mysql">MySQL</option>
-				<option value="redis">Redis</option>
-				<option value="mongodb">MongoDB</option>
-			</select>
-		</div>
+		<FormField label="Engine" for="db-engine">
+			<Select id="db-engine" bind:value={engine}
+				onchange={(e) => { engine = e.currentTarget.value; onEngineChange(); }}
+				options={[
+					{ value: 'postgres', label: 'PostgreSQL' },
+					{ value: 'mysql', label: 'MySQL' },
+					{ value: 'redis', label: 'Redis' },
+					{ value: 'mongodb', label: 'MongoDB' },
+				]} />
+		</FormField>
 
-		<div class="form-group">
-			<label class="form-label" for="db-image">Docker Image</label>
-			<input id="db-image" class="form-input font-mono" type="text" bind:value={image}
-				placeholder="postgres:16" />
-			<span class="form-hint">Override to pin a specific version</span>
-		</div>
+		<FormField label="Docker Image" for="db-image" hint="Override to pin a specific version">
+			<div class="mono-field">
+				<TextField id="db-image" type="text" bind:value={image} placeholder="postgres:16" />
+			</div>
+		</FormField>
 
 		{#if engine !== 'redis'}
-			<div class="form-group">
-				<label class="form-label" for="db-dbname">Database Name</label>
-				<input id="db-dbname" class="form-input" type="text" bind:value={dbName} placeholder="mydb" />
+			<FormField label="Database Name" for="db-dbname">
+				<TextField id="db-dbname" type="text" bind:value={dbName} placeholder="mydb" />
 				<span class="form-hint">Env: <code class="mono">{DB_DEFAULTS[engine]?.dbKey}</code></span>
-			</div>
+			</FormField>
 		{/if}
 
 		{#if DB_DEFAULTS[engine]?.userKey}
-			<div class="form-group">
-				<label class="form-label" for="db-user">Username</label>
-				<input id="db-user" class="form-input" type="text" bind:value={dbUser} placeholder="admin" />
+			<FormField label="Username" for="db-user">
+				<TextField id="db-user" type="text" bind:value={dbUser} placeholder="admin" />
 				<span class="form-hint">Env: <code class="mono">{DB_DEFAULTS[engine]?.userKey}</code></span>
-			</div>
+			</FormField>
 		{/if}
 
-		<div class="form-group">
-			<label class="form-label" for="db-pass">Password</label>
+		<FormField label="Password" for="db-pass">
 			<div class="pass-row">
-				<input id="db-pass" class="form-input font-mono" type="text" bind:value={dbPassword} />
-				<button type="button" class="regen-btn" onclick={() => (dbPassword = generatePassword())} title="Regenerate">↺</button>
+				<div class="mono-field pass-input">
+					<TextField id="db-pass" type="text" bind:value={dbPassword} />
+				</div>
+				<Button variant="secondary" size="icon" title="Regenerate" aria-label="Regenerate password" onclick={() => (dbPassword = generatePassword())}>↺</Button>
 			</div>
 			<span class="form-hint">Env: <code class="mono">{DB_DEFAULTS[engine]?.passKey}</code> (stored as secret)</span>
-		</div>
+		</FormField>
 
 		<!-- Port Mapping -->
-		<div class="form-group">
-			<label class="form-label">Port Mapping</label>
+		<FormField label="Port Mapping">
 			<button type="button" class="picker-btn" onclick={openPortMapping}>
 				<Plug size={13} class="picker-icon" />
 				<span class="picker-placeholder">
@@ -208,16 +206,15 @@
 					{#each ports as p, i (i)}
 						<span class="chip chip-port">
 							<span class="font-mono">{p}</span>
-							<button type="button" class="chip-remove" onclick={() => removePort(i)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove port {p}" onclick={() => removePort(i)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Networks -->
-		<div class="form-group">
-			<label class="form-label">Networks</label>
+		<FormField label="Networks">
 			<button type="button" class="picker-btn" onclick={openNetworkPicker}>
 				<NetworkIcon size={13} class="picker-icon" />
 				<span class="picker-placeholder">Select networks…</span>
@@ -228,67 +225,45 @@
 					{#each selectedNetworks as net (net.id)}
 						<span class="chip chip-blue">
 							{net.name}
-							<button type="button" class="chip-remove" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove network {net.name}" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Volume Mounts -->
-		<div class="form-group">
-			<label class="form-label">Volume Mounts</label>
-			<span class="form-hint" style="margin-bottom:4px">Bind named volumes or host paths into the container</span>
+		<FormField label="Volume Mounts">
+			<span class="form-hint">Bind named volumes or host paths into the container</span>
 			<VolumeMountList {projectId} bind:mounts={volumeMounts} />
-		</div>
+		</FormField>
 
 		{#if submitError}
-			<div class="error-msg">{submitError}</div>
+			<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 		{/if}
 
-		<button class="btn btn-primary submit-btn" type="submit" disabled={isSubmitting}>
-			{#if isSubmitting}<div class="btn-spinner"></div> Creating…
+		<Button type="submit" disabled={isSubmitting}>
+			{#if isSubmitting}<Spinner size={12} tone="current" /> Creating…
 			{:else}Add Database{/if}
-		</button>
+		</Button>
 	</form>
 </div>
 
 <style>
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.form { display: flex; flex-direction: column; gap: 14px; }
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
 
-	.form-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-
-	.form-input, .form-select {
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans); padding: 8px 10px;
-		outline: none; transition: border-color var(--transition-fast);
-	}
-	.form-input:focus, .form-select:focus { border-color: var(--accent); }
 	.font-mono { font-family: var(--font-mono); }
-	.form-hint { font-size: 11px; color: var(--text-dim); }
+	.mono-field :global(input) { font-family: var(--font-mono); }
+	.form-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 
 	.mono {
 		font-family: var(--font-mono); font-size: 10px;
 		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
 	}
 
-	.pass-row { display: flex; gap: 6px; }
-	.pass-row .form-input { flex: 1; }
-
-	.regen-btn {
-		width: 34px; height: 34px; background: var(--bg-elevated);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; color: var(--text-muted); font-size: 16px;
-		display: flex; align-items: center; justify-content: center;
-		flex-shrink: 0; transition: all var(--transition-fast);
-	}
-	.regen-btn:hover { border-color: var(--accent); color: var(--accent); }
+	.pass-row { display: flex; gap: 6px; align-items: center; }
+	.pass-input { flex: 1; min-width: 0; }
 
 	.picker-btn {
 		display: flex; align-items: center; gap: 7px;
@@ -298,6 +273,7 @@
 		transition: border-color var(--transition-fast);
 	}
 	.picker-btn:hover { border-color: var(--accent); }
+	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	:global(.picker-icon)   { color: var(--text-dim); flex-shrink: 0; }
 	.picker-placeholder { flex: 1; color: var(--text-dim); font-size: 13px; }
 	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; }
@@ -312,10 +288,6 @@
 		background: var(--accent-blue-muted); color: var(--accent-blue);
 		border: 1px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
 	}
-	.chip-yellow {
-		background: var(--accent-yellow-muted); color: var(--accent-yellow);
-		border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-	}
 	.chip-port {
 		background: var(--bg-elevated); color: var(--text-secondary);
 		border: 1px solid var(--border);
@@ -325,20 +297,4 @@
 		color: inherit; opacity: 0.6; display: flex; align-items: center; border-radius: 50%;
 	}
 	.chip-remove:hover { opacity: 1; }
-
-	.error-msg {
-		font-size: 12px; color: var(--accent-red); padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.submit-btn { margin-top: 4px; display: flex; align-items: center; gap: 6px; justify-content: center; }
-
-	.btn-spinner {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

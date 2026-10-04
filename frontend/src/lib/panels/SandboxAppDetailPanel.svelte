@@ -7,6 +7,13 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, permProject } from '$lib/auth/permissions';
 	import type { SandboxInstance, Service } from '$lib/api/types';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import FormField from '$lib/components/ui/FormField.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import KeyValueList from '$lib/components/ui/KeyValueList.svelte';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
+	import TextField from '$lib/components/ui/TextField.svelte';
 
 	interface Props {
 		serviceId: string;
@@ -91,64 +98,75 @@
 	{:else if error}
 		<p class="error">{error}</p>
 	{:else if instance}
-		<div class="status-row">
-			<span class="status-dot" class:running={instance.status === 'running'}></span>
-			<span class="status-text">{instance.status}</span>
-		</div>
-
-		{#if instance.preview_url}
-			<a class="preview-link" href={instance.preview_url} target="_blank" rel="noopener noreferrer">
-				{instance.preview_url} <ExternalLink size={12} />
-			</a>
-		{/if}
+		<KeyValueList
+			keyWidth="70px"
+			items={[
+				{ key: 'Status', value: instance.status },
+				...(instance.preview_url ? [{ key: 'Preview', value: instance.preview_url, mono: true }] : [])
+			]}
+		>
+			{#snippet value(item)}
+				{#if item.key === 'Status'}
+					<span class="status-row">
+						<!-- Old dot colored only "running"; every other status was neutral grey. -->
+						<StatusDot status={instance!.status === 'running' ? 'running' : 'stopped'} />
+						<span class="status-text">{item.value}</span>
+					</span>
+				{:else}
+					<a class="preview-link" href={instance!.preview_url} target="_blank" rel="noopener noreferrer">
+						<span class="preview-text">{item.value}</span> <ExternalLink size={12} />
+					</a>
+				{/if}
+			{/snippet}
+		</KeyValueList>
 
 		<div class="actions">
 			{#if instance.status === 'running'}
-				<button class="btn btn-secondary btn-sm" onclick={stop} disabled={isStopping}>
+				<Button variant="secondary" size="sm" onclick={stop} disabled={isStopping}>
 					<Square size={13} /> Stop
-				</button>
+				</Button>
 			{:else}
-				<button class="btn btn-primary btn-sm" onclick={start} disabled={isStarting}>
+				<Button size="sm" onclick={start} disabled={isStarting}>
 					<Play size={13} /> Start
-				</button>
+				</Button>
 			{/if}
-			<button class="btn btn-secondary btn-sm" onclick={openEditor}>
+			<Button variant="secondary" size="sm" onclick={openEditor}>
 				<Code2 size={13} /> Open Editor
-			</button>
+			</Button>
 		</div>
 
 		{#if canDeleteApp && service}
-			<section class="danger-zone">
-				<div class="danger-header">
-					<AlertTriangle size={14} />
-					<h3 class="danger-title">Danger Zone</h3>
+			<div class="danger-wrap">
+			<Card tone="danger">
+				<div class="danger-zone">
+					<div class="danger-header">
+						<AlertTriangle size={14} />
+						<h3 class="danger-title">Danger Zone</h3>
+					</div>
+					<p class="danger-desc">
+						Deleting this app removes its container, its dedicated volume, and its preview domain
+						(including its DNS record, if one was synced). <strong>This cannot be undone.</strong>
+					</p>
+					<FormField label={`Type ${service.slug} to confirm`} for="confirm-sandbox-slug">
+						<TextField
+							id="confirm-sandbox-slug"
+							type="text"
+							placeholder={service.slug}
+							bind:value={confirmSlug}
+							autocomplete="off"
+							spellcheck={false}
+						/>
+					</FormField>
+					{#if deleteError}
+						<div role="alert"><InlineAlert tone="error">{deleteError}</InlineAlert></div>
+					{/if}
+					<Button variant="danger" disabled={!canDelete || isDeleting} onclick={deleteApp}>
+						<Trash2 size={13} />
+						{isDeleting ? 'Deleting…' : 'Delete App'}
+					</Button>
 				</div>
-				<p class="danger-desc">
-					Deleting this app removes its container, its dedicated volume, and its preview domain
-					(including its DNS record, if one was synced). <strong>This cannot be undone.</strong>
-				</p>
-				<div class="danger-confirm">
-					<label class="danger-label" for="confirm-sandbox-slug">
-						Type <strong>{service.slug}</strong> to confirm
-					</label>
-					<input
-						id="confirm-sandbox-slug"
-						class="danger-input"
-						type="text"
-						placeholder={service.slug}
-						bind:value={confirmSlug}
-						autocomplete="off"
-						spellcheck="false"
-					/>
-				</div>
-				{#if deleteError}
-					<div class="delete-error">{deleteError}</div>
-				{/if}
-				<button class="btn-delete" type="button" disabled={!canDelete || isDeleting} onclick={deleteApp}>
-					<Trash2 size={13} />
-					{isDeleting ? 'Deleting…' : 'Delete App'}
-				</button>
-			</section>
+			</Card>
+			</div>
 		{/if}
 	{/if}
 </div>
@@ -160,136 +178,24 @@
 		gap: 12px;
 		padding: 16px;
 	}
-	.status-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--text-dim);
-	}
-	.status-dot.running {
-		background: var(--status-running, #22c55e);
-	}
-	.status-text {
-		font-size: 12px;
-		text-transform: capitalize;
-		color: var(--text-secondary);
-	}
+	.status-row { display: flex; align-items: center; gap: 6px; }
+	.status-text { text-transform: capitalize; }
 	.preview-link {
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		font-size: 12px;
+		min-width: 0;
 		color: var(--accent);
-		font-family: var(--font-mono);
 	}
-	.actions {
-		display: flex;
-		gap: 8px;
-	}
-	.muted {
-		color: var(--text-dim);
-		font-size: 12px;
-	}
-	.error {
-		color: var(--accent-red);
-		font-size: 12px;
-	}
+	.preview-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+	.muted { color: var(--text-dim); font-size: 12px; }
+	.error { color: var(--accent-red); font-size: 12px; }
 
 	/* Danger Zone */
-	.danger-zone {
-		background: color-mix(in srgb, var(--accent-red, #EF4444) 4%, var(--bg-elevated));
-		border: 1px solid color-mix(in srgb, var(--accent-red, #EF4444) 25%, transparent);
-		border-radius: var(--radius-md);
-		padding: 16px;
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 8px;
-	}
-
-	.danger-header {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		color: var(--accent-red, #EF4444);
-	}
-
-	.danger-title {
-		font-size: 13px;
-		font-weight: 700;
-		color: var(--accent-red, #EF4444);
-		margin: 0;
-	}
-
-	.danger-desc {
-		font-size: 12px;
-		color: var(--text-muted);
-		margin: 0;
-		line-height: 1.5;
-	}
-
-	.danger-confirm {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-	}
-
-	.danger-label {
-		font-size: 11px;
-		color: var(--text-dim);
-	}
-	.danger-label strong {
-		color: var(--text-secondary);
-		font-family: var(--font-mono);
-	}
-
-	.danger-input {
-		background: var(--bg-base);
-		border: 1px solid color-mix(in srgb, var(--accent-red, #EF4444) 30%, transparent);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary);
-		font-size: 13px;
-		font-family: var(--font-mono);
-		padding: 7px 10px;
-		outline: none;
-	}
-	.danger-input:focus {
-		border-color: var(--accent-red, #EF4444);
-	}
-
-	.delete-error {
-		font-size: 12px;
-		color: var(--accent-red);
-		padding: 7px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.btn-delete {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		font-size: 12px;
-		font-weight: 600;
-		color: white;
-		background: var(--accent-red, #EF4444);
-		border: none;
-		border-radius: var(--radius-sm);
-		padding: 8px 12px;
-		cursor: pointer;
-		transition: opacity var(--transition-fast);
-	}
-	.btn-delete:hover:not(:disabled) {
-		opacity: 0.85;
-	}
-	.btn-delete:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
+	.danger-wrap { margin-top: 8px; }
+	.danger-zone { display: flex; flex-direction: column; gap: 12px; }
+	.danger-header { display: flex; align-items: center; gap: 7px; color: var(--accent-red); }
+	.danger-title { font-size: 13px; font-weight: 700; color: var(--accent-red); margin: 0; }
+	.danger-desc { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 </style>

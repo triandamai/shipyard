@@ -5,8 +5,9 @@
 	import {
 		Trash2, Eye, EyeOff, Plus, AlertTriangle, CheckCircle2,
 		Server, Network, ChevronRight, Star, ExternalLink, Code2, LayoutList,
-		Info, CircleAlert, CircleCheck
+		Info
 	} from '@lucide/svelte';
+	import { Button, Badge, Card, ListRow, Tabs, FormField, TextField, InlineAlert, Spinner, EmptyState, SectionLabel } from '$lib/components/ui';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import ServiceDetailPanel from '$lib/panels/ServiceDetailPanel.svelte';
 
@@ -214,62 +215,69 @@ networks:
 	{#if result}
 		<!-- ── Result view ──────────────────────────────────────────────── -->
 		<div class="result-view">
-			<div class="result-hero">
-				<div class="result-icon success"><CheckCircle2 size={22} /></div>
-				<div>
-					<p class="result-title">Import complete</p>
-					<p class="result-sub">
-						{result.services_created} service{result.services_created === 1 ? '' : 's'} ·
-						{result.networks_created} network{result.networks_created === 1 ? '' : 's'} created
-					</p>
-				</div>
-			</div>
+			<Card padding="4px 14px">
+				<ListRow
+					iconTone="green"
+					title="Import complete"
+					meta="{result.services_created} service{result.services_created === 1 ? '' : 's'} · {result.networks_created} network{result.networks_created === 1 ? '' : 's'} created"
+				>
+					{#snippet icon()}<CheckCircle2 size={16} />{/snippet}
+				</ListRow>
+			</Card>
 
 			{#if result.warnings.length > 0}
 				<section class="result-section">
-					<div class="section-label"><AlertTriangle size={12} /> Warnings</div>
-					<ul class="warning-list">
+					<SectionLabel><AlertTriangle size={12} /> Warnings</SectionLabel>
+					<ul class="plain-list">
 						{#each result.warnings as w}
-							<li class="warning-item">{w}</li>
+							<li><InlineAlert tone="warning">{w}</InlineAlert></li>
 						{/each}
 					</ul>
 				</section>
 			{/if}
 
 			<section class="result-section">
-				<div class="section-label"><Server size={12} /> Services created</div>
-				<ul class="service-result-list">
+				<SectionLabel><Server size={12} /> Services created</SectionLabel>
+				<ul class="plain-list">
 					<!-- Root service first -->
 					{#if result.rootService}
 						{@const svc = result.rootService}
-						<li class="service-result-item">
-							<div class="svc-result-info">
-								<span class="svc-result-name">{svc.name}</span>
-								<span class="root-badge"><Star size={9} /> Root</span>
-								<span class="svc-result-image">{svc.type}</span>
-							</div>
-							<button class="btn btn-ghost btn-sm view-btn" onclick={() => openService(svc)}>
-								<ExternalLink size={12} /> View
-							</button>
+						<li>
+							<Card padding="8px 12px">
+								<div class="service-result-item">
+									<div class="svc-result-info">
+										<span class="svc-result-name">{svc.name}</span>
+										<Badge tone="blue"><Star size={9} /> Root</Badge>
+										<span class="svc-result-image">{svc.type}</span>
+									</div>
+									<Button variant="ghost" size="sm" onclick={() => openService(svc)}>
+										<ExternalLink size={12} /> View
+									</Button>
+								</div>
+							</Card>
 						</li>
 					{/if}
 					<!-- Child services -->
 					{#each result.services as svc (svc.id)}
-						<li class="service-result-item service-result-child">
-							<div class="svc-result-info">
-								<span class="child-indent">↳</span>
-								<span class="svc-result-name">{svc.name}</span>
-								<span class="svc-result-image">{svc.image}</span>
-							</div>
-							<button class="btn btn-ghost btn-sm view-btn" onclick={() => openService(svc)}>
-								<ExternalLink size={12} /> View
-							</button>
+						<li class="service-result-child">
+							<Card padding="8px 12px">
+								<div class="service-result-item">
+									<div class="svc-result-info">
+										<span class="child-indent">↳</span>
+										<span class="svc-result-name">{svc.name}</span>
+										<span class="svc-result-image">{svc.image}</span>
+									</div>
+									<Button variant="ghost" size="sm" onclick={() => openService(svc)}>
+										<ExternalLink size={12} /> View
+									</Button>
+								</div>
+							</Card>
 						</li>
 					{/each}
 				</ul>
 			</section>
 
-			<button class="btn btn-primary done-btn" onclick={done}>Done</button>
+			<div class="done-row"><Button onclick={done}>Done</Button></div>
 		</div>
 
 	{:else}
@@ -278,62 +286,48 @@ networks:
 
 			<!-- Root stack identity -->
 			<div class="form-section">
-				<div class="section-label">Stack Identity</div>
+				<SectionLabel>Stack Identity</SectionLabel>
 				<p class="section-hint">A parent service is created with this name — the compose services become its children.</p>
 				<div class="identity-row">
 					<div class="field-group">
-						<label class="field-label" for="root-name">Stack name</label>
-						<input
-							id="root-name"
-							class="field-input"
-							type="text"
-							placeholder="My Stack"
-							value={rootName}
-							oninput={onRootNameInput}
-							required
-						/>
+						<FormField label="Stack name" for="root-name">
+							<TextField
+								id="root-name"
+								type="text"
+								placeholder="My Stack"
+								value={rootName}
+								oninput={onRootNameInput}
+								required
+							/>
+						</FormField>
 					</div>
-					<div class="field-group">
-						<label class="field-label" for="root-slug">Slug</label>
-						<input
-							id="root-slug"
-							class="field-input font-mono"
-							type="text"
-							placeholder="my-stack"
-							value={rootSlug}
-							oninput={onRootSlugInput}
-							pattern="[a-z0-9-]+"
-							title="Lowercase letters, numbers, and hyphens only"
-							required
-						/>
+					<div class="field-group mono-field">
+						<FormField label="Slug" for="root-slug">
+							<TextField
+								id="root-slug"
+								type="text"
+								placeholder="my-stack"
+								value={rootSlug}
+								oninput={onRootSlugInput}
+								pattern="[a-z0-9-]+"
+								title="Lowercase letters, numbers, and hyphens only"
+								required
+							/>
+						</FormField>
 					</div>
 				</div>
 			</div>
 
 			<!-- Compose editor + preview tabs -->
 			<div class="editor-block">
-				<!-- Tab bar -->
-				<div class="editor-tabbar">
-					<button
-						type="button"
-						class="editor-tab"
-						class:active={activeEditorTab === 'editor'}
-						onclick={() => (activeEditorTab = 'editor')}
-					>
-						<Code2 size={12} /> Editor
-					</button>
-					<button
-						type="button"
-						class="editor-tab"
-						class:active={activeEditorTab === 'preview'}
-						onclick={() => (activeEditorTab = 'preview')}
-					>
-						<LayoutList size={12} /> Preview
-						{#if parsedServices.length > 0}
-							<span class="tab-count">{parsedServices.length + parsedNetworks.length}</span>
-						{/if}
-					</button>
-				</div>
+				<Tabs
+					bind:value={activeEditorTab}
+					ariaLabel="Compose view"
+					tabs={[
+						{ id: 'editor', label: 'Editor', icon: Code2 },
+						{ id: 'preview', label: 'Preview', icon: LayoutList, badge: parsedServices.length > 0 ? String(parsedServices.length + parsedNetworks.length) : undefined },
+					]}
+				/>
 
 				<!-- Tab content -->
 				<div class="editor-tab-body">
@@ -347,11 +341,9 @@ networks:
 						<!-- Preview pane -->
 						<div class="preview-pane">
 							{#if parsedServices.length === 0 && parsedNetworks.length === 0}
-								<div class="preview-empty">
-									<LayoutList size={28} />
-									<p>No services detected yet.</p>
-									<span>Switch to the Editor tab and paste your compose file.</span>
-								</div>
+								<EmptyState message="No services detected yet." sub="Switch to the Editor tab and paste your compose file.">
+									{#snippet icon()}<LayoutList size={28} />{/snippet}
+								</EmptyState>
 							{:else}
 								{#if parsedServices.length > 0}
 									<div class="preview-group">
@@ -378,9 +370,9 @@ networks:
 													<div class="preview-item-icon"><Network size={12} /></div>
 													<span class="preview-name">{net.name}</span>
 													{#if net.external}
-														<span class="ext-chip">external · skipped</span>
+														<Badge tone="neutral">external · skipped</Badge>
 													{:else}
-														<span class="driver-chip driver-chip-{info.compat}">{net.driver || 'bridge'}</span>
+														<Badge tone={info.compat === 'ok' ? 'green' : 'yellow'}>{net.driver || 'bridge'}</Badge>
 														<span class="net-note">{info.note}</span>
 													{/if}
 												</li>
@@ -393,19 +385,19 @@ networks:
 										<summary class="net-guide-summary"><Info size={11} /> Network driver guide</summary>
 										<div class="net-guide-body">
 											<div class="net-guide-row">
-												<span class="driver-chip driver-chip-ok">overlay</span>
+												<Badge tone="green">overlay</Badge>
 												<span>Multi-host. Containers on any Swarm node can reach each other. Shipyard adds <code>attachable: true</code> automatically so compose stacks can join.</span>
 											</div>
 											<div class="net-guide-row">
-												<span class="driver-chip driver-chip-warn">bridge</span>
+												<Badge tone="yellow">bridge</Badge>
 												<span>Single-node only. Default for standalone compose. Works fine when all containers are on one machine; won't span Swarm nodes.</span>
 											</div>
 											<div class="net-guide-row">
-												<span class="driver-chip driver-chip-warn">host</span>
+												<Badge tone="yellow">host</Badge>
 												<span>Container shares the host's network stack. No port mapping needed, but host port conflicts become runtime errors.</span>
 											</div>
 											<div class="net-guide-row">
-												<span class="driver-chip driver-chip-warn">none</span>
+												<Badge tone="yellow">none</Badge>
 												<span>No network at all. Container is fully isolated — useful for batch jobs that need no connectivity.</span>
 											</div>
 										</div>
@@ -420,10 +412,10 @@ networks:
 			<!-- Global env overrides -->
 			<div class="form-section">
 				<div class="section-label-row">
-					<span class="section-label">Environment Overrides</span>
-					<button type="button" class="add-btn" onclick={addEnv}>
+					<SectionLabel>Environment Overrides</SectionLabel>
+					<Button variant="secondary" size="sm" onclick={addEnv}>
 						<Plus size={11} /> Add
-					</button>
+					</Button>
 				</div>
 				<p class="section-hint" style="margin-bottom: 8px">
 					Extra env vars injected into <strong>all</strong> created services, in addition to those in the compose file.
@@ -433,32 +425,36 @@ networks:
 					<div class="env-list">
 						{#each globalEnvs as env, i (i)}
 							<div class="env-row">
-								<input
-									class="env-input font-mono env-key"
-									type="text"
-									placeholder="KEY"
-									value={env.key}
-									oninput={(e) => updateEnv(i, 'key', (e.target as HTMLInputElement).value)}
-								/>
-								<input
-									class="env-input font-mono env-val"
-									type={env.is_secret ? 'password' : 'text'}
-									placeholder="value"
-									value={env.value}
-									oninput={(e) => updateEnv(i, 'value', (e.target as HTMLInputElement).value)}
-								/>
-								<button
-									type="button"
-									class="env-icon-btn"
-									class:secret-active={env.is_secret}
+								<div class="mono-field env-key">
+									<TextField
+										type="text"
+										placeholder="KEY"
+										aria-label="Variable name"
+										value={env.key}
+										oninput={(e) => updateEnv(i, 'key', (e.target as HTMLInputElement).value)}
+									/>
+								</div>
+								<div class="mono-field env-val">
+									<TextField
+										type={env.is_secret ? 'password' : 'text'}
+										placeholder="value"
+										aria-label="Variable value"
+										value={env.value}
+										oninput={(e) => updateEnv(i, 'value', (e.target as HTMLInputElement).value)}
+									/>
+								</div>
+								<Button
+									variant={env.is_secret ? 'primary' : 'secondary'}
+									size="icon"
 									title={env.is_secret ? 'Secret — click to reveal' : 'Plain — click to hide'}
+									aria-label={env.is_secret ? 'Secret — click to reveal' : 'Plain — click to hide'}
 									onclick={() => updateEnv(i, 'is_secret', !env.is_secret)}
 								>
 									{#if env.is_secret}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
-								</button>
-								<button type="button" class="env-icon-btn del" onclick={() => removeEnv(i)}>
+								</Button>
+								<Button variant="danger-outline" size="icon" aria-label="Remove variable" onclick={() => removeEnv(i)}>
 									<Trash2 size={12} />
-								</button>
+								</Button>
 							</div>
 						{/each}
 					</div>
@@ -468,35 +464,33 @@ networks:
 			</div>
 
 			{#if hasCompatIssue}
-				<div class="compat-banner">
-					<CircleAlert size={14} />
-					<div>
-						<strong>Network compatibility warning</strong>
-						<ul class="compat-list">
-							{#each netCompatWarnings as w}
-								<li><code>{w.name}</code> ({w.driver || 'bridge'}) — {w.info.note}</li>
-							{/each}
-						</ul>
-						<p class="compat-note">Shipyard will attempt deployment, but non-overlay networks may fail in Swarm mode. Consider switching to <strong>overlay</strong>.</p>
+				<InlineAlert tone="warning">
+					<div class="compat-banner">
+						<AlertTriangle size={14} />
+						<div>
+							<strong>Network compatibility warning</strong>
+							<ul class="compat-list">
+								{#each netCompatWarnings as w}
+									<li><code>{w.name}</code> ({w.driver || 'bridge'}) — {w.info.note}</li>
+								{/each}
+							</ul>
+							<p class="compat-note">Shipyard will attempt deployment, but non-overlay networks may fail in Swarm mode. Consider switching to <strong>overlay</strong>.</p>
+						</div>
 					</div>
-				</div>
+				</InlineAlert>
 			{/if}
 
 			{#if submitError}
-				<div class="error-msg"><AlertTriangle size={13} />{submitError}</div>
+				<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 			{/if}
 
-			<button
-				class="btn btn-primary submit-btn"
-				type="submit"
-				disabled={submitting || !composeYaml.trim() || !rootName.trim() || !rootSlug.trim()}
-			>
+			<Button type="submit" disabled={submitting || !composeYaml.trim() || !rootName.trim() || !rootSlug.trim()}>
 				{#if submitting}
-					<div class="btn-spinner"></div> Importing…
+					<Spinner size={12} tone="current" /> Importing…
 				{:else}
 					<ChevronRight size={14} /> Import Compose
 				{/if}
-			</button>
+			</Button>
 		</form>
 	{/if}
 </div>
@@ -517,12 +511,15 @@ networks:
 		flex: 1;
 	}
 
+	.mono-field :global(input) { font-family: var(--font-mono); }
+
 	/* ── Sections ── */
 	.form-section {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
 	}
+	.form-section :global(.ui-section-label) { margin-bottom: 0; }
 
 	.section-label-row {
 		display: flex;
@@ -531,17 +528,10 @@ networks:
 		gap: 8px;
 	}
 
-	.section-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-
 	.section-hint {
 		font-size: 11px;
 		color: var(--text-dim);
+		margin: 0;
 	}
 
 	/* ── Stack identity inputs ── */
@@ -551,32 +541,9 @@ networks:
 	}
 
 	.field-group {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
 		flex: 1;
 		min-width: 0;
 	}
-
-	.field-label {
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--text-muted);
-	}
-
-	.field-input {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary);
-		font-size: 13px;
-		padding: 7px 10px;
-		outline: none;
-		width: 100%;
-		transition: border-color var(--transition-fast);
-	}
-
-	.field-input:focus { border-color: var(--accent); }
 
 	/* ── Editor block (tabs + content) ── */
 	.editor-block {
@@ -587,43 +554,9 @@ networks:
 		overflow: hidden;
 	}
 
-	.editor-tabbar {
-		display: flex;
-		gap: 0;
+	.editor-block :global(.ui-tabs) {
 		background: var(--bg-elevated);
-		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
-	}
-
-	.editor-tab {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		padding: 8px 14px;
-		font-size: 12px;
-		font-weight: 500;
-		font-family: var(--font-sans);
-		background: transparent;
-		border: none;
-		border-bottom: 2px solid transparent;
-		color: var(--text-dim);
-		cursor: pointer;
-		margin-bottom: -1px;
-		transition: color var(--transition-fast), border-color var(--transition-fast);
-		white-space: nowrap;
-	}
-
-	.editor-tab:hover { color: var(--text-primary); }
-	.editor-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-	.tab-count {
-		font-size: 10px;
-		font-weight: 700;
-		padding: 1px 5px;
-		border-radius: 99px;
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent);
-		border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 	}
 
 	.editor-tab-body {
@@ -650,21 +583,6 @@ networks:
 		gap: 14px;
 		background: var(--bg-base);
 	}
-
-	.preview-empty {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 8px;
-		color: var(--text-dim);
-		text-align: center;
-		padding: 32px;
-	}
-
-	.preview-empty p { font-size: 14px; font-weight: 600; color: var(--text-muted); margin: 4px 0 0; }
-	.preview-empty span { font-size: 12px; }
 
 	.preview-group { display: flex; flex-direction: column; gap: 6px; }
 
@@ -713,69 +631,20 @@ networks:
 		white-space: nowrap;
 	}
 
-	.ext-chip {
-		font-size: 9px;
-		font-weight: 600;
-		padding: 1px 6px;
-		border-radius: 99px;
-		background: var(--bg-surface);
+	.net-note {
+		font-size: 10px;
 		color: var(--text-dim);
-		border: 1px solid var(--border);
+		flex: 1;
+		line-height: 1.4;
 	}
 
 	/* ── Env ── */
-	.add-btn {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		font-size: 11px;
-		font-weight: 500;
-		padding: 3px 8px;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		border: 1px solid var(--border);
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.add-btn:hover { border-color: var(--accent); color: var(--accent); }
-
 	.env-list { display: flex; flex-direction: column; gap: 6px; }
 
 	.env-row { display: flex; align-items: center; gap: 5px; }
 
-	.env-input {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary);
-		font-size: 12px;
-		padding: 6px 8px;
-		outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.env-input:focus { border-color: var(--accent); }
 	.env-key { width: 120px; flex-shrink: 0; }
 	.env-val { flex: 1; min-width: 0; }
-	.font-mono { font-family: var(--font-mono); }
-
-	.env-icon-btn {
-		width: 28px;
-		height: 28px;
-		flex-shrink: 0;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all var(--transition-fast);
-	}
-	.env-icon-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
-	.env-icon-btn.secret-active { border-color: var(--accent); color: var(--accent); }
-	.env-icon-btn.del:hover { border-color: var(--accent-red); color: var(--accent-red); }
 
 	.env-empty {
 		font-size: 11px;
@@ -786,38 +655,6 @@ networks:
 		text-align: center;
 	}
 
-	/* ── Submit ── */
-	.submit-btn {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		justify-content: center;
-		margin-top: 4px;
-	}
-
-	.btn-spinner {
-		width: 12px;
-		height: 12px;
-		border: 2px solid rgba(255, 255, 255, 0.3);
-		border-top-color: white;
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
-
-	.error-msg {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		color: var(--accent-red);
-		padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
 	/* ── Result view ── */
 	.result-view {
 		display: flex;
@@ -826,54 +663,10 @@ networks:
 		flex: 1;
 	}
 
-	.result-hero {
-		display: flex;
-		align-items: flex-start;
-		gap: 12px;
-		padding: 14px;
-		background: color-mix(in srgb, var(--accent-green, #22C55E) 6%, var(--bg-elevated));
-		border: 1px solid color-mix(in srgb, var(--accent-green, #22C55E) 25%, transparent);
-		border-radius: var(--radius-md);
-	}
+	.result-section { display: flex; flex-direction: column; }
+	.result-section :global(.ui-section-label) { display: flex; align-items: center; gap: 5px; margin-bottom: 8px; }
 
-	.result-icon {
-		width: 36px;
-		height: 36px;
-		border-radius: var(--radius-md);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-	}
-	.result-icon.success { background: color-mix(in srgb, #22C55E 15%, transparent); color: #22C55E; }
-
-	.result-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin: 0 0 3px; }
-	.result-sub   { font-size: 12px; color: var(--text-muted); margin: 0; }
-
-	.result-section { display: flex; flex-direction: column; gap: 8px; }
-
-	.warning-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.warning-item {
-		display: flex;
-		align-items: flex-start;
-		gap: 6px;
-		font-size: 11px;
-		color: var(--text-muted);
-		padding: 6px 10px;
-		background: color-mix(in srgb, #F59E0B 8%, transparent);
-		border: 1px solid color-mix(in srgb, #F59E0B 25%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.service-result-list {
+	.plain-list {
 		list-style: none;
 		margin: 0;
 		padding: 0;
@@ -887,16 +680,9 @@ networks:
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
-		padding: 8px 12px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
 	}
 
-	.service-result-child {
-		margin-left: 16px;
-		border-color: color-mix(in srgb, var(--border) 60%, transparent);
-	}
+	.service-result-child { margin-left: 16px; }
 
 	.child-indent {
 		font-size: 12px;
@@ -928,64 +714,8 @@ networks:
 		white-space: nowrap;
 	}
 
-	.root-badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-		font-size: 9px;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		padding: 1px 6px;
-		border-radius: 99px;
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent);
-		border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-		flex-shrink: 0;
-	}
-
-	.view-btn {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		flex-shrink: 0;
-	}
-
-	.done-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		margin-top: auto;
-		padding-top: 4px;
-	}
-
-	/* ── Network driver badges ── */
-	.driver-chip {
-		font-size: 9px;
-		font-weight: 700;
-		padding: 1px 6px;
-		border-radius: 99px;
-		border: 1px solid transparent;
-		flex-shrink: 0;
-		font-family: var(--font-mono);
-	}
-	.driver-chip-ok {
-		background: color-mix(in srgb, #22C55E 12%, transparent);
-		color: #16A34A;
-		border-color: color-mix(in srgb, #22C55E 30%, transparent);
-	}
-	.driver-chip-warn {
-		background: color-mix(in srgb, #F59E0B 12%, transparent);
-		color: #B45309;
-		border-color: color-mix(in srgb, #F59E0B 30%, transparent);
-	}
-
-	.net-note {
-		font-size: 10px;
-		color: var(--text-dim);
-		flex: 1;
-		line-height: 1.4;
-	}
+	.done-row { margin-top: auto; padding-top: 4px; display: flex; flex-direction: column; }
+	.done-row :global(.ui-btn) { width: 100%; }
 
 	/* ── Network driver guide (collapsible) ── */
 	.net-guide {
@@ -1035,11 +765,6 @@ networks:
 		display: flex;
 		align-items: flex-start;
 		gap: 10px;
-		padding: 10px 12px;
-		background: color-mix(in srgb, #F59E0B 8%, transparent);
-		border: 1px solid color-mix(in srgb, #F59E0B 30%, transparent);
-		border-radius: var(--radius-sm);
-		color: #92400E;
 	}
 	.compat-banner :global(svg) { flex-shrink: 0; margin-top: 1px; }
 	.compat-banner strong { font-size: 12px; font-weight: 700; display: block; margin-bottom: 4px; }
@@ -1054,7 +779,7 @@ networks:
 	.compat-list code {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		background: color-mix(in srgb, #F59E0B 15%, transparent);
+		background: color-mix(in srgb, var(--accent-yellow) 15%, transparent);
 		padding: 0 3px;
 		border-radius: 3px;
 	}

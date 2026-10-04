@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
+	import { FormField, TextField, Select, Button, InlineAlert, Spinner } from '$lib/components/ui';
 
 	interface Props {
 		projectId: string;
@@ -33,70 +34,38 @@
 
 <div class="panel-wrap">
 	<form class="form" onsubmit={handleSubmit}>
-		<div class="form-group">
-			<label class="form-label" for="net-name">Network Name</label>
-			<input id="net-name" class="form-input" type="text" bind:value={name}
-				placeholder="my-network" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="net-driver">Driver</label>
-			<select id="net-driver" class="form-select" bind:value={driver}>
-				<option value="overlay">overlay (Swarm)</option>
-				<option value="bridge">bridge (local)</option>
-			</select>
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="net-subnet">Subnet (optional)</label>
-			<input id="net-subnet" class="form-input font-mono" type="text" bind:value={subnet}
-				placeholder="10.0.0.0/24" />
-		</div>
+		<FormField label="Network Name" for="net-name">
+			<TextField id="net-name" type="text" bind:value={name} placeholder="my-network" required />
+		</FormField>
+		<FormField label="Driver" for="net-driver">
+			<Select id="net-driver" bind:value={driver} options={[
+				{ value: 'overlay', label: 'overlay (Swarm)' },
+				{ value: 'bridge', label: 'bridge (local)' },
+			]} />
+		</FormField>
+		<FormField label="Subnet (optional)" for="net-subnet">
+			<div class="mono-field"><TextField id="net-subnet" type="text" bind:value={subnet} placeholder="10.0.0.0/24" /></div>
+		</FormField>
 
 		{#if submitError}
-			<div class="error-msg">{submitError}</div>
+			<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 		{/if}
 
-		<button class="btn btn-primary submit-btn" type="submit" disabled={isSubmitting}>
-			{#if isSubmitting}
-				<div class="btn-spinner"></div> Creating…
-			{:else}
-				Add Network
-			{/if}
-		</button>
+		<div class="submit-row">
+			<Button variant="primary" type="submit" disabled={isSubmitting}>
+				{#if isSubmitting}
+					<Spinner size={12} tone="current" /> Creating…
+				{:else}
+					Add Network
+				{/if}
+			</Button>
+		</div>
 	</form>
 </div>
 
 <style>
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.form { display: flex; flex-direction: column; gap: 14px; }
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
-
-	.form-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-
-	.form-input, .form-select {
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans); padding: 8px 10px;
-		outline: none; transition: border-color var(--transition-fast);
-	}
-	.form-input:focus, .form-select:focus { border-color: var(--accent); }
-	.font-mono { font-family: var(--font-mono); }
-
-	.error-msg {
-		font-size: 12px; color: var(--accent-red); padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.submit-btn { margin-top: 4px; display: flex; align-items: center; gap: 6px; justify-content: center; }
-
-	.btn-spinner {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.submit-row { margin-top: 4px; }
+	.mono-field :global(input) { font-family: var(--font-mono); }
 </style>

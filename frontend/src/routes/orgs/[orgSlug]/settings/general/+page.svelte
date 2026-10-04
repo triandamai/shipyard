@@ -5,9 +5,18 @@
 	import { can, perm } from '$lib/auth/permissions';
 	import { page } from '$app/stores';
 	import {
-		Globe, Save, Check, AlertCircle, Loader2,
+		Globe, Save, Check, AlertCircle, Star,
 		RefreshCw, Terminal, Zap, PackageOpen
 	} from '@lucide/svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Badge from '$lib/components/ui/Badge.svelte';
+	import FormField from '$lib/components/ui/FormField.svelte';
+	import TextField from '$lib/components/ui/TextField.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import IconBadge from '$lib/components/ui/IconBadge.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import Skeleton from '$lib/components/ui/Skeleton.svelte';
 	interface PlatformSettings {
 		main_domain?: string;
 		traefik_network?: string;
@@ -180,23 +189,22 @@
 
 {#if loading}
 	<div class="loading">
-		<div class="spinner"></div>
+		<Spinner size={18} />
 		<span>Loading settings…</span>
 	</div>
 {:else}
 	<!-- Plan & Infrastructure -->
-	<section class="settings-section plan-section">
+	<div class="plan-section">
+	<Card padding="0">
 		<div class="section-header">
-			<div class="section-icon plan-icon">
-				<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
-			</div>
+			<IconBadge tone="yellow"><Star size={16} /></IconBadge>
 			<div>
 				<h2 class="section-title">Plan &amp; Architecture</h2>
 				<p class="section-desc">Your current subscription plan and allocated compute resources.</p>
 			</div>
 			{#if billing}
-				<span class="plan-tier-badge" class:tier-free={billing.tier === 'free'} class:tier-pro={billing.tier === 'pro'} class:tier-max={billing.tier === 'max'}>
-					{billing.tier.toUpperCase()}
+				<span class="plan-tier-badge">
+					<Badge tone={billing.tier === 'pro' ? 'blue' : billing.tier === 'max' ? 'yellow' : 'neutral'}>{billing.tier.toUpperCase()}</Badge>
 				</span>
 			{/if}
 		</div>
@@ -236,58 +244,58 @@
 							<div class="infra-node-row">
 								<span class="infra-node-name">{n.name}</span>
 								<span class="infra-node-provider">{n.provider}</span>
-								<span class="infra-node-status" class:ns-ok={n.status === 'active'} class:ns-err={n.status !== 'active'}>{n.status}</span>
+								<Badge tone={n.status === 'active' ? 'green' : 'red'}>{n.status}</Badge>
 							</div>
 						{/each}
 					</div>
 				{/if}
 			{:else}
 				<div class="plan-loading">
-					{#each [0,1,2,3] as _}<div class="sk" style="height:60px;border-radius:var(--radius-sm);flex:1;min-width:90px"></div>{/each}
+					{#each [0,1,2,3] as _}<div class="plan-sk"><Skeleton variant="text" height="60px" /></div>{/each}
 				</div>
 			{/if}
 		</div>
-	</section>
+	</Card>
+	</div>
 
 	<form class="settings-form" onsubmit={save}>
 
 		<!-- Main Domain -->
-		<section class="settings-section">
+		<Card padding="0">
 			<div class="section-header">
-				<div class="section-icon"><Globe size={16} /></div>
+				<IconBadge tone="blue"><Globe size={16} /></IconBadge>
 				<div>
 					<h2 class="section-title">Main Domain</h2>
 					<p class="section-desc">Base domain for all deployed services (e.g. <code>example.com</code>). Services get subdomains like <code>my-service.example.com</code>.</p>
 				</div>
 			</div>
 			<div class="fields">
-				<div class="field">
-					<label class="field-label" for="main-domain">Base Domain</label>
-					<input id="main-domain" class="field-input" type="text" bind:value={settings.main_domain} placeholder="example.com" />
-					<span class="field-hint">Leave blank to use manual domain assignments per service.</span>
-				</div>
+				<FormField label="Base Domain" for="main-domain" hint="Leave blank to use manual domain assignments per service.">
+					<TextField id="main-domain" type="text" bind:value={() => settings.main_domain ?? '', (v) => (settings.main_domain = v)} placeholder="example.com" />
+				</FormField>
 			</div>
-		</section>
+		</Card>
 
-{#if saveError}
-			<div class="error-banner"><AlertCircle size={14} />{saveError}</div>
+		{#if saveError}
+			<div role="alert"><InlineAlert tone="error">{saveError}</InlineAlert></div>
 		{/if}
 
 		<div class="save-bar">
-			<button class="btn btn-primary save-btn" type="submit" disabled={saving}>
-				{#if saving}<div class="btn-spinner"></div>Saving…
+			<Button type="submit" disabled={saving}>
+				{#if saving}<Spinner size={12} tone="current" />Saving…
 				{:else if saved}<Check size={14} />Saved
 				{:else}<Save size={14} />Save Settings
 				{/if}
-			</button>
+			</Button>
 		</div>
 	</form>
 
 	<!-- Platform Update (admin only — hidden from tenant view) -->
 	{#if false && canUpdate}
-	<section class="settings-section update-section">
+	<div class="update-section">
+	<Card padding="0">
 		<div class="section-header">
-			<div class="section-icon update-icon"><PackageOpen size={16} /></div>
+			<IconBadge tone="blue"><PackageOpen size={16} /></IconBadge>
 			<div>
 				<h2 class="section-title">Platform Update</h2>
 				<p class="section-desc">
@@ -312,40 +320,40 @@
 				</div>
 				{#if v.update_available && v.remote_sha}
 					{@const remoteSha = v.remote_sha}
-					<span class="version-badge update-avail">Update available → <code>{remoteSha}</code></span>
+					<Badge tone="yellow">Update available → <code>{remoteSha}</code></Badge>
 				{:else}
-					<span class="version-badge up-to-date">Up to date</span>
+					<Badge tone="green">Up to date</Badge>
 				{/if}
-				<button class="refresh-version-btn" disabled={checkingUpdate} onclick={checkForUpdates}>
-					{#if checkingUpdate}<Loader2 size={11} class="spin" />Checking…{:else}<RefreshCw size={11} />Check{/if}
-				</button>
+				<span class="version-check-btn">
+					<Button variant="secondary" size="sm" disabled={checkingUpdate} onclick={checkForUpdates}>
+						{#if checkingUpdate}<Spinner size={11} tone="current" />Checking…{:else}<RefreshCw size={11} />Check{/if}
+					</Button>
+				</span>
 			{/if}
 		</div>
 
 		<div class="update-body">
 			<div class="update-actions">
-				<button
-					class="btn btn-update"
-					disabled={updateStatus === 'running'}
-					onclick={startUpdate}
-				>
+				<Button disabled={updateStatus === 'running'} onclick={startUpdate}>
 					{#if updateStatus === 'running'}
-						<Loader2 size={14} class="spin-icon" />Running update…
+						<Spinner size={14} tone="current" />Running update…
 					{:else}
 						<RefreshCw size={14} />Pull &amp; Restart
 					{/if}
-				</button>
+				</Button>
 
 				{#if updateStatus === 'done'}
-					<span class="update-badge done"><Check size={11} />Done</span>
+					<Badge tone="green"><Check size={11} />Done</Badge>
 				{:else if updateStatus === 'error'}
-					<span class="update-badge error"><AlertCircle size={11} />Failed</span>
+					<Badge tone="red"><AlertCircle size={11} />Failed</Badge>
 				{:else if updateStatus === 'disconnected'}
-					<span class="update-badge restarting"><Zap size={11} />Restarting…</span>
+					<Badge tone="yellow"><Zap size={11} />Restarting…</Badge>
 				{/if}
 
 				{#if updateLog.length > 0 && updateStatus !== 'running'}
-					<button class="clear-log-btn" onclick={clearUpdateLog}>Clear</button>
+					<span class="clear-log-btn">
+						<Button variant="ghost" size="sm" onclick={clearUpdateLog}>Clear</Button>
+					</span>
 				{/if}
 			</div>
 
@@ -367,85 +375,46 @@
 			{/if}
 
 			{#if updateStatus === 'disconnected'}
-				<div class="update-reconnect-hint">
-					Services are restarting. Reload this page in a few seconds to confirm the update completed.
-					<button class="btn btn-sm btn-secondary" onclick={() => window.location.reload()}>
-						<RefreshCw size={12} />Reload now
-					</button>
-				</div>
+				<InlineAlert tone="warning">
+					<span class="update-reconnect-hint">
+						Services are restarting. Reload this page in a few seconds to confirm the update completed.
+						<Button variant="secondary" size="sm" onclick={() => window.location.reload()}>
+							<RefreshCw size={12} />Reload now
+						</Button>
+					</span>
+				</InlineAlert>
 			{/if}
 		</div>
-	</section>
+	</Card>
+	</div>
 	{/if}
 {/if}
 
 <style>
 	.loading { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; padding: 40px 0; }
-	.spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
 
 	.settings-form { display: flex; flex-direction: column; gap: 20px; }
 
-	.settings-section {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		overflow: hidden;
-	}
-
 	.section-header {
 		display: flex;
+		align-items: center;
 		gap: 14px;
 		padding: 18px 20px;
 		border-bottom: 1px solid var(--border);
 		background: var(--bg-elevated);
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 	}
-
-	.section-icon {
-		width: 32px; height: 32px;
-		border-radius: var(--radius-md);
-		background: rgba(37, 99, 235, 0.1);
-		color: var(--accent);
-		display: flex; align-items: center; justify-content: center;
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-
 	.section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 3px; }
 	.section-desc { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
 
 	.fields { display: flex; flex-direction: column; gap: 16px; padding: 18px 20px; }
-	.fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 18px 20px; }
-	.field { display: flex; flex-direction: column; gap: 5px; }
-	.field-label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
-
-	.field-input {
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-primary);
-		font-size: 13px;
-		font-family: var(--font-sans);
-		padding: 8px 10px;
-		outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.field-input.font-mono { font-family: var(--font-mono); }
-	.field-input:focus { border-color: var(--accent); }
-	.field-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
-	.field-hint code { font-family: var(--font-mono); background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
 
 	code { font-family: var(--font-mono); background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 
-	.error-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: var(--radius-md); color: #EF4444; font-size: 13px; }
-
 	.save-bar { display: flex; justify-content: flex-end; padding: 4px 0 8px; }
-	.save-btn { display: flex; align-items: center; gap: 6px; min-width: 140px; justify-content: center; }
-	.btn-spinner { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; }
 
 	/* ── Platform Update ── */
 	.update-section { margin-top: 8px; }
-	.update-icon { background: rgba(139, 92, 246, 0.12); color: #8B5CF6; }
 
 	.version-info-bar {
 		display: flex;
@@ -470,32 +439,7 @@
 	}
 	.version-date { font-size: 11px; color: var(--text-dim); }
 	.version-loading { font-size: 12px; color: var(--text-dim); }
-	.version-badge {
-		font-size: 11px;
-		font-weight: 600;
-		padding: 2px 9px;
-		border-radius: 99px;
-	}
-	.version-badge code { font-family: var(--font-mono); font-size: 11px; }
-	.version-badge.update-avail { background: rgba(245,158,11,0.12); color: #D97706; border: 1px solid rgba(245,158,11,0.3); }
-	.version-badge.up-to-date   { background: rgba(16,185,129,0.10); color: #10B981; border: 1px solid rgba(16,185,129,0.25); }
-	.refresh-version-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		margin-left: auto;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-muted);
-		font-size: 11px;
-		font-family: var(--font-sans);
-		padding: 3px 9px;
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.refresh-version-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.refresh-version-btn:disabled { opacity: 0.5; cursor: default; }
+	.version-check-btn { margin-left: auto; }
 
 	.update-body {
 		display: flex;
@@ -510,53 +454,7 @@
 		gap: 10px;
 		flex-wrap: wrap;
 	}
-
-	.btn-update {
-		display: inline-flex;
-		align-items: center;
-		gap: 7px;
-		padding: 8px 16px;
-		background: #8B5CF6;
-		color: white;
-		border: none;
-		border-radius: var(--radius-sm);
-		font-size: 13px;
-		font-weight: 500;
-		font-family: var(--font-sans);
-		cursor: pointer;
-		transition: opacity var(--transition-fast), background var(--transition-fast);
-	}
-	.btn-update:hover:not(:disabled) { background: #7C3AED; }
-	.btn-update:disabled { opacity: 0.55; cursor: default; }
-
-	:global(.spin-icon) { animation: spin 0.8s linear infinite; }
-
-	.update-badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 3px 10px;
-		border-radius: 99px;
-		font-size: 11px;
-		font-weight: 600;
-	}
-	.update-badge.done       { background: rgba(16,185,129,0.12); color: #10B981; border: 1px solid rgba(16,185,129,0.3); }
-	.update-badge.error      { background: rgba(239,68,68,0.10);  color: #EF4444; border: 1px solid rgba(239,68,68,0.3); }
-	.update-badge.restarting { background: rgba(245,158,11,0.12); color: #F59E0B; border: 1px solid rgba(245,158,11,0.3); }
-
-	.clear-log-btn {
-		margin-left: auto;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-muted);
-		font-size: 11px;
-		padding: 3px 10px;
-		cursor: pointer;
-		font-family: var(--font-sans);
-		transition: all var(--transition-fast);
-	}
-	.clear-log-btn:hover { border-color: var(--accent); color: var(--accent); }
+	.clear-log-btn { margin-left: auto; }
 
 	.update-log {
 		background: #0d1117;
@@ -601,24 +499,13 @@
 		display: flex;
 		align-items: center;
 		gap: 12px;
-		padding: 10px 14px;
-		background: rgba(245,158,11,0.08);
-		border: 1px solid rgba(245,158,11,0.25);
-		border-radius: var(--radius-md);
-		color: #D97706;
-		font-size: 12px;
 		flex-wrap: wrap;
 	}
 
-	.plan-section { margin-bottom:20px; }
-	.plan-icon { background:rgba(245,158,11,0.12); color:#F59E0B; }
-	.plan-tier-badge { margin-left:auto; font-size:10px; font-weight:800; letter-spacing:.08em; padding:3px 10px; border-radius:999px; }
-	.tier-free { background:rgba(100,116,139,0.15); color:#64748B; border:1px solid rgba(100,116,139,0.3); }
-	.tier-pro  { background:rgba(37,99,235,0.12);   color:#2563EB; border:1px solid rgba(37,99,235,0.3); }
-	.tier-max  { background:rgba(139,92,246,0.12);  color:#7C3AED; border:1px solid rgba(139,92,246,0.3); }
-	.plan-loading { display:flex; gap:10px; }
-	.sk { background:var(--border); border-radius:4px; animation:sk 1.3s ease-in-out infinite; }
-	@keyframes sk { 0%,100%{opacity:.5} 50%{opacity:1} }
+	.plan-section { margin-bottom: 20px; }
+	.plan-tier-badge { margin-left: auto; }
+	.plan-loading { display: flex; gap: 10px; }
+	.plan-sk { flex: 1; min-width: 90px; }
 
 	.infra-chips { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
 	.infra-chip { display:flex; flex-direction:column; gap:2px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; min-width:100px; }
@@ -631,16 +518,12 @@
 	.infra-node-row:last-child { border-bottom:none; }
 	.infra-node-name { font-weight:500; color:var(--text-primary); flex:1; }
 	.infra-node-provider { font-size:11px; color:var(--text-dim); }
-	.infra-node-status { font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
-	.infra-node-status.ns-ok  { background:rgba(16,185,129,0.1); color:#10B981; }
-	.infra-node-status.ns-err { background:rgba(239,68,68,0.1); color:#EF4444; }
 
 	/* ── Responsive ── */
 	@media (max-width: 639px) {
 		.settings-form { gap: 16px; }
 		.section-header { padding: 14px 16px; }
 		.fields { padding: 14px 16px; }
-		.fields-grid { grid-template-columns: 1fr; padding: 14px 16px; }
 		.save-bar { padding: 0 0 4px; }
 	}
 </style>

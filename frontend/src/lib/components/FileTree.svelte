@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { File, Folder, FolderOpen, Plus } from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
 	import type { SandboxFileEntry } from '$lib/api/types';
 
 	interface Props {
@@ -115,9 +116,9 @@
 <div class="file-tree">
 	<div class="file-tree-header">
 		<span class="file-tree-title">Files</span>
-		<button class="new-file-btn" onclick={startCreateFile} title="New file" aria-label="New file">
+		<Button variant="ghost" size="icon" onclick={startCreateFile} title="New file" aria-label="New file">
 			<Plus size={13} />
-		</button>
+		</Button>
 	</div>
 	{#if creatingFile}
 		<div class="new-file-row">
@@ -156,7 +157,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 6px 8px;
+		padding: 2px 8px;
 		flex-shrink: 0;
 	}
 	.file-tree-title {
@@ -165,23 +166,6 @@
 		color: var(--text-dim);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
-	}
-	.new-file-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 20px;
-		height: 20px;
-		border: none;
-		background: transparent;
-		color: var(--text-dim);
-		border-radius: var(--radius-sm, 4px);
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-	.new-file-btn:hover {
-		background: var(--bg-hover);
-		color: var(--text-primary);
 	}
 	.new-file-row {
 		display: flex;

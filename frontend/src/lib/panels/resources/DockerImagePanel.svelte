@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Trash2, Network, ChevronRight, X, Plug, Package } from '@lucide/svelte';
+	import { Trash2, Network, ChevronRight, X, Plug, Package, Eye, EyeOff } from '@lucide/svelte';
+	import { Button, FormField, TextField, Checkbox, InlineAlert, Spinner, Tabs, SectionLabel } from '$lib/components/ui';
 	import ArtifactoryPickerPanel from './ArtifactoryPickerPanel.svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
@@ -69,7 +70,8 @@
 		});
 	}
 	let ports = $state<string[]>([]);
-	let replicas = $state(1);
+	// Bound to a number TextField: may be a string or a number at runtime, '' when cleared.
+	let replicas = $state<string | number>(1);
 	let envs = $state<Array<{ key: string; value: string; is_secret: boolean }>>([]);
 
 	// Network selection
@@ -129,7 +131,7 @@
 				image,
 				icon: 'docker',
 				...(ports.length > 0 ? { ports } : {}),
-				replicas: Math.max(1, replicas),
+				replicas: Math.max(1, Number(replicas) || 0),
 			});
 
 			if (res.error) { submitError = res.error.message; return; }
@@ -184,41 +186,41 @@
 
 <div class="panel-wrap">
 	<form class="form" onsubmit={handleSubmit}>
-		<div class="form-group">
-			<label class="form-label" for="di-name">Name</label>
-			<input id="di-name" class="form-input" type="text" bind:value={name}
+		<FormField label="Name" for="di-name">
+			<TextField id="di-name" type="text" bind:value={name}
 				oninput={() => (slug = deriveSlug(name))} placeholder="my-service" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="di-slug">Slug</label>
-			<input id="di-slug" class="form-input font-mono" type="text" bind:value={slug}
-				placeholder="my-service" required />
-		</div>
-		<div class="form-group">
-			<label class="form-label" for="di-image">Docker Image</label>
-			<input id="di-image" class="form-input font-mono" type="text" bind:value={image}
-				placeholder="nginx:latest" required />
-		</div>
+		</FormField>
+		<FormField label="Slug" for="di-slug">
+			<div class="mono-field">
+				<TextField id="di-slug" type="text" bind:value={slug} placeholder="my-service" required />
+			</div>
+		</FormField>
+		<FormField label="Docker Image" for="di-image">
+			<div class="mono-field">
+				<TextField id="di-image" type="text" bind:value={image} placeholder="nginx:latest" required />
+			</div>
+		</FormField>
 
-		<div class="section-title">Registry</div>
+		<SectionLabel>Registry</SectionLabel>
 
-		<div class="reg-source-tabs">
-			<button type="button" class="reg-tab" class:active={registrySource === 'external'}
-				onclick={() => { registrySource = 'external'; selectedArtifact = null; }}>
-				External / Docker Hub
-			</button>
-			<button type="button" class="reg-tab" class:active={registrySource === 'shipyard'}
-				onclick={() => { registrySource = 'shipyard'; }}>
-				<Package size={12} /> Shipyard Artifactory
-			</button>
-		</div>
+		<Tabs
+			ariaLabel="Registry source"
+			tabs={[
+				{ id: 'external', label: 'External / Docker Hub' },
+				{ id: 'shipyard', label: 'Shipyard Artifactory', icon: Package },
+			]}
+			value={registrySource}
+			onChange={(id) => {
+				if (id === 'external') { registrySource = 'external'; selectedArtifact = null; }
+				else { registrySource = 'shipyard'; }
+			}}
+		/>
 
 		{#if registrySource === 'shipyard'}
-			<div class="form-group">
-				<label class="form-label">Select Image</label>
+			<FormField label="Select Image">
 				<button type="button" class="picker-btn" onclick={openShipyardPicker}>
 					{#if selectedArtifact}
-						<Package size={13} style="color:#3b82f6;flex-shrink:0" />
+						<Package size={13} class="picker-icon" />
 						<span class="picker-value font-mono">{selectedArtifact.namespace_slug}/{selectedArtifact.repo}:{selectedArtifact.tag}</span>
 					{:else}
 						<span class="picker-placeholder">Browse Shipyard registry…</span>
@@ -228,44 +230,42 @@
 				{#if registryHostname}
 					<span class="field-hint">Registry: {registryHostname}</span>
 				{/if}
-			</div>
+			</FormField>
 
-			<label class="checkbox-row">
-				<input type="checkbox" bind:checked={autoDeployOnPush} />
-				<span class="checkbox-text">
-					Auto-deploy on push
-					<span class="checkbox-hint">
-						Redeploy this service automatically when a new
-						{#if selectedArtifact}<code class="font-mono">:{selectedArtifact.tag}</code>{:else}image{/if}
-						is pushed to the registry.
-					</span>
+			<div class="auto-deploy">
+				<Checkbox bind:checked={autoDeployOnPush} label="Auto-deploy on push" />
+				<span class="checkbox-hint">
+					Redeploy this service automatically when a new
+					{#if selectedArtifact}<code class="font-mono">:{selectedArtifact.tag}</code>{:else}image{/if}
+					is pushed to the registry.
 				</span>
-			</label>
-		{:else}
-			<div class="form-group">
-				<label class="form-label" for="di-reg">Registry URL <span class="optional">(optional)</span></label>
-				<input id="di-reg" class="form-input font-mono" type="text" bind:value={registryUrl}
-					placeholder="registry-1.docker.io" />
 			</div>
-			<div class="form-row">
-				<div class="form-group" style="flex:1">
-					<label class="form-label" for="di-user">Username</label>
-					<input id="di-user" class="form-input" type="text" bind:value={registryUser}
-						placeholder="myuser" autocomplete="off" />
+		{:else}
+			<FormField label="Registry URL (optional)" for="di-reg">
+				<div class="mono-field">
+					<TextField id="di-reg" type="text" bind:value={registryUrl} placeholder="registry-1.docker.io" />
 				</div>
-				<div class="form-group" style="flex:1">
-					<label class="form-label" for="di-pass">Password / Token</label>
-					<input id="di-pass" class="form-input font-mono" type="password" bind:value={registryPass}
-						placeholder="••••••••" autocomplete="new-password" />
+			</FormField>
+			<div class="form-row">
+				<div class="form-col">
+					<FormField label="Username" for="di-user">
+						<TextField id="di-user" type="text" bind:value={registryUser} placeholder="myuser" autocomplete="off" />
+					</FormField>
+				</div>
+				<div class="form-col">
+					<FormField label="Password / Token" for="di-pass">
+						<div class="mono-field">
+							<TextField id="di-pass" type="password" bind:value={registryPass} placeholder="••••••••" autocomplete="new-password" />
+						</div>
+					</FormField>
 				</div>
 			</div>
 		{/if}
 
-		<div class="section-title">Deployment</div>
+		<SectionLabel>Deployment</SectionLabel>
 
 		<!-- Port Mapping -->
-		<div class="form-group">
-			<label class="form-label">Port Mapping</label>
+		<FormField label="Port Mapping">
 			<button type="button" class="picker-btn" onclick={openPortMapping}>
 				<Plug size={13} class="picker-icon" />
 				<span class="picker-placeholder">
@@ -278,21 +278,19 @@
 					{#each ports as p, i (i)}
 						<span class="chip chip-port">
 							<span class="font-mono">{p}</span>
-							<button type="button" class="chip-remove" onclick={() => removePort(i)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove port {p}" onclick={() => removePort(i)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
-		<div class="form-group" style="width:100%">
-			<label class="form-label" for="di-replicas">Replicas</label>
-			<input id="di-replicas" class="form-input" type="number" min="1" max="20" bind:value={replicas} />
-		</div>
+		<FormField label="Replicas" for="di-replicas">
+			<TextField id="di-replicas" type="number" min="1" max="20" bind:value={replicas as string} />
+		</FormField>
 
 		<!-- Networks -->
-		<div class="form-group">
-			<label class="form-label">Networks</label>
+		<FormField label="Networks">
 			<button type="button" class="picker-btn" onclick={openNetworkPicker}>
 				<Network size={13} class="picker-icon" />
 				<span class="picker-placeholder">Select networks…</span>
@@ -303,124 +301,92 @@
 					{#each selectedNetworks as net (net.id)}
 						<span class="chip chip-blue">
 							{net.name}
-							<button type="button" class="chip-remove" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
+							<button type="button" class="chip-remove" aria-label="Remove network {net.name}" onclick={() => removeNetwork(net.id)}><X size={10} /></button>
 						</span>
 					{/each}
 				</div>
 			{/if}
-		</div>
+		</FormField>
 
 		<!-- Volume Mounts -->
-		<div class="form-group">
-			<label class="form-label">Volume Mounts</label>
-			<span class="form-hint" style="margin-bottom:4px">Bind named volumes or host paths into the container</span>
+		<FormField label="Volume Mounts">
+			<span class="form-hint">Bind named volumes or host paths into the container</span>
 			<VolumeMountList {projectId} bind:mounts={volumeMounts} />
-		</div>
+		</FormField>
 
-		<div class="section-title">
-			Environment Variables
-			<button type="button" class="add-env-btn" onclick={addEnv}>+ Add</button>
+		<div class="section-head">
+			<SectionLabel>Environment Variables</SectionLabel>
+			<Button variant="secondary" size="sm" onclick={addEnv}>+ Add</Button>
 		</div>
 
 		{#if envs.length > 0}
 			<div class="env-list">
 				{#each envs as env, i (i)}
 					<div class="env-row">
-						<input class="form-input font-mono env-key" type="text" placeholder="KEY"
-							value={env.key} oninput={(ev) => updateEnv(i, 'key', (ev.target as HTMLInputElement).value)} />
-						<input class="form-input font-mono env-val"
-							type={env.is_secret ? 'password' : 'text'} placeholder="value"
-							value={env.value} oninput={(ev) => updateEnv(i, 'value', (ev.target as HTMLInputElement).value)} />
-						<button type="button" class="env-secret-btn" class:active={env.is_secret}
+						<div class="mono-field env-key">
+							<TextField type="text" placeholder="KEY" aria-label="Variable name"
+								value={env.key} oninput={(ev) => updateEnv(i, 'key', (ev.target as HTMLInputElement).value)} />
+						</div>
+						<div class="mono-field env-val">
+							<TextField type={env.is_secret ? 'password' : 'text'} placeholder="value" aria-label="Variable value"
+								value={env.value} oninput={(ev) => updateEnv(i, 'value', (ev.target as HTMLInputElement).value)} />
+						</div>
+						<Button
+							variant={env.is_secret ? 'primary' : 'secondary'}
+							size="icon"
 							title={env.is_secret ? 'Secret' : 'Plain'}
-							onclick={() => updateEnv(i, 'is_secret', !env.is_secret)}>
-							{env.is_secret ? '🔒' : '👁'}
-						</button>
-						<button type="button" class="env-del-btn" onclick={() => removeEnv(i)}>
+							aria-label={env.is_secret ? 'Secret — click to make plain' : 'Plain — click to make secret'}
+							onclick={() => updateEnv(i, 'is_secret', !env.is_secret)}
+						>
+							{#if env.is_secret}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
+						</Button>
+						<Button variant="danger-outline" size="icon" aria-label="Remove variable" onclick={() => removeEnv(i)}>
 							<Trash2 size={12} />
-						</button>
+						</Button>
 					</div>
 				{/each}
 			</div>
 		{/if}
 
 		{#if submitError}
-			<div class="error-msg">{submitError}</div>
+			<div role="alert"><InlineAlert tone="error">{submitError}</InlineAlert></div>
 		{/if}
 
-		<button class="btn btn-primary submit-btn" type="submit" disabled={isSubmitting}>
-			{#if isSubmitting}<div class="btn-spinner"></div> Creating…
+		<Button type="submit" disabled={isSubmitting}>
+			{#if isSubmitting}<Spinner size={12} tone="current" /> Creating…
 			{:else}Add Docker Service{/if}
-		</button>
+		</Button>
 	</form>
 </div>
 
 <style>
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.form { display: flex; flex-direction: column; gap: 14px; }
-	.form-group { display: flex; flex-direction: column; gap: 4px; }
 
-	.form-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-
-	.form-input {
-		background: var(--bg-elevated); border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-primary);
-		font-size: 13px; font-family: var(--font-sans); padding: 8px 10px;
-		outline: none; transition: border-color var(--transition-fast);
-	}
-	.form-input:focus { border-color: var(--accent); }
 	.font-mono { font-family: var(--font-mono); }
-	.form-hint { font-size: 11px; color: var(--text-dim); }
+	.mono-field :global(input) { font-family: var(--font-mono); }
+	.form-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+	.field-hint { font-size: 10px; color: var(--text-dim); }
 	.form-row { display: flex; gap: 10px; }
+	.form-col { flex: 1; min-width: 0; }
 
-	.section-title {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-		border-bottom: 1px solid var(--border); padding-bottom: 4px;
-		margin-top: 4px; display: flex; align-items: center; justify-content: space-between;
-	}
+	.section-head { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+	.section-head :global(.ui-section-label) { margin-bottom: 0; }
 
-	/* Registry source tabs */
-	.reg-source-tabs {
-		display: flex; gap: 6px; flex-wrap: wrap;
-	}
-	.reg-tab {
-		display: inline-flex; align-items: center; gap: 5px;
-		padding: 6px 12px; font-size: 12px; font-weight: 500;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-elevated); color: var(--text-dim);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.reg-tab:hover { border-color: var(--accent); color: var(--text-primary); }
-	.reg-tab.active {
-		border-color: var(--accent);
-		background: color-mix(in srgb, var(--accent) 8%, transparent);
-		color: var(--accent);
-	}
-	.optional { font-weight: 400; text-transform: none; letter-spacing: 0; }
-	.field-hint { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
 	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-	/* Auto-deploy checkbox */
-	.checkbox-row {
-		display: flex; align-items: flex-start; gap: 8px;
+	.auto-deploy {
+		display: flex; flex-direction: column; gap: 4px;
 		padding: 8px 10px; background: var(--bg-elevated);
 		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer;
 	}
-	.checkbox-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
-	.checkbox-text { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-primary); }
-	.checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+	.checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; padding-left: 24px; }
 	.checkbox-hint code {
 		font-family: var(--font-mono); font-size: 10px;
 		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
 		border: 1px solid var(--border);
 	}
 
-	/* Picker button */
 	.picker-btn {
 		display: flex; align-items: center; gap: 7px;
 		padding: 8px 10px; background: var(--bg-elevated); border: 1px solid var(--border);
@@ -429,13 +395,12 @@
 		transition: border-color var(--transition-fast);
 	}
 	.picker-btn:hover { border-color: var(--accent); }
+	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	:global(.picker-icon) { color: var(--text-dim); flex-shrink: 0; }
 	.picker-placeholder { flex: 1; color: var(--text-dim); font-size: 13px; }
 	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; }
 
-	/* Chips */
 	.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
-
 	.chip {
 		display: inline-flex; align-items: center; gap: 4px;
 		padding: 2px 8px 2px 10px; border-radius: 99px;
@@ -445,64 +410,19 @@
 		background: var(--accent-blue-muted); color: var(--accent-blue);
 		border: 1px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
 	}
-	.chip-yellow {
-		background: var(--accent-yellow-muted); color: var(--accent-yellow);
-		border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-	}
 	.chip-port {
 		background: var(--bg-elevated); color: var(--text-secondary);
 		border: 1px solid var(--border);
 	}
-
 	.chip-remove {
 		background: none; border: none; cursor: pointer; padding: 1px;
-		color: inherit; opacity: 0.6; display: flex; align-items: center;
-		border-radius: 50%;
+		color: inherit; opacity: 0.6; display: flex; align-items: center; border-radius: 50%;
 	}
 	.chip-remove:hover { opacity: 1; }
-
-	/* Env list */
-	.add-env-btn {
-		background: transparent; border: 1px solid var(--border);
-		border-radius: var(--radius-sm); color: var(--text-muted);
-		font-size: 11px; cursor: pointer; padding: 2px 8px;
-		transition: all var(--transition-fast);
-	}
-	.add-env-btn:hover { border-color: var(--accent); color: var(--accent); }
+	.chip-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
 
 	.env-list { display: flex; flex-direction: column; gap: 6px; }
 	.env-row { display: flex; gap: 4px; align-items: center; }
-	.env-key { width: 120px; flex-shrink: 0; font-size: 12px; padding: 6px 8px; }
-	.env-val  { flex: 1; font-size: 12px; padding: 6px 8px; }
-
-	.env-secret-btn {
-		width: 28px; height: 28px; flex-shrink: 0; background: var(--bg-elevated);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center;
-	}
-	.env-secret-btn.active { border-color: var(--accent-yellow, #F59E0B); }
-
-	.env-del-btn {
-		width: 28px; height: 28px; flex-shrink: 0; background: transparent;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer; color: var(--text-dim); display: flex; align-items: center; justify-content: center;
-		transition: all var(--transition-fast);
-	}
-	.env-del-btn:hover { border-color: var(--accent-red); color: var(--accent-red); }
-
-	.error-msg {
-		font-size: 12px; color: var(--accent-red); padding: 8px 10px;
-		background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-
-	.submit-btn { margin-top: 4px; display: flex; align-items: center; gap: 6px; justify-content: center; }
-
-	.btn-spinner {
-		width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
+	.env-key { width: 120px; flex-shrink: 0; }
+	.env-val { flex: 1; min-width: 0; }
 </style>

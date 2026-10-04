@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import { api } from '$lib/api/client';
+	import { Spinner, EmptyState } from '$lib/components/ui';
 	import type { Template, Service } from '$lib/api/types';
 	import DockerImagePanel from './DockerImagePanel.svelte';
 	import DatabasePanel from './DatabasePanel.svelte';
@@ -57,10 +58,10 @@
 <div class="panel-wrap">
 	{#if loading}
 		<div class="loading-row">
-			<div class="spinner"></div> Loading templates…
+			<Spinner size={14} /> Loading templates…
 		</div>
 	{:else if templates.length === 0}
-		<p class="empty">No templates available.</p>
+		<EmptyState message="No templates available." />
 	{:else}
 		<p class="hint">Select a template to pre-fill service settings.</p>
 		<div class="template-list">
@@ -79,15 +80,8 @@
 	.panel-wrap { padding: 16px; height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
 
 	.hint { font-size: 13px; color: var(--text-muted); margin: 0; }
-	.empty { font-size: 13px; color: var(--text-dim); margin: 0; }
 
 	.loading-row { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
-
-	.spinner {
-		width: 14px; height: 14px; border: 2px solid var(--border);
-		border-top-color: var(--accent); border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
 
 	.template-list { display: flex; flex-direction: column; gap: 4px; }
 
@@ -111,6 +105,4 @@
 		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
 		margin-top: 2px; display: inline-block; width: fit-content;
 	}
-
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>

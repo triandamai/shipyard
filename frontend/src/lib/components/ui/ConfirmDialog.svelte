@@ -1,7 +1,12 @@
+<script lang="ts" module>
+	let confirmCounter = 0;
+</script>
+
 <script lang="ts">
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import TextField from './TextField.svelte';
+	import InlineAlert from './InlineAlert.svelte';
 
 	interface Props {
 		open: boolean;
@@ -10,7 +15,8 @@
 		confirmLabel?: string;
 		danger?: boolean;
 		confirmText?: string;
-		onConfirm: () => void | Promise<void>;
+		error?: string;
+		onConfirm: () => void | boolean | Promise<void | boolean>;
 	}
 
 	let {
@@ -20,19 +26,33 @@
 		confirmLabel = 'Delete',
 		danger = true,
 		confirmText,
+		error,
 		onConfirm
 	}: Props = $props();
+
+	const inputId = `ui-confirm-type-input-${++confirmCounter}`;
 
 	let typedConfirm = $state('');
 	let confirming = $state(false);
 
-	let canConfirm = $derived(!confirmText || typedConfirm === confirmText);
+	// confirmText === undefined is the only "no typing" mode; a defined but empty
+	// value (e.g. a slug still loading) must never be confirmable.
+	let canConfirm = $derived(
+		confirmText === undefined || (confirmText !== '' && typedConfirm === confirmText)
+	);
+
+	// A reopened dialog must never start armed from text typed before an Escape/scrim close.
+	$effect(() => {
+		if (open) typedConfirm = '';
+	});
 
 	async function handleConfirm() {
 		if (!canConfirm || confirming) return;
 		confirming = true;
 		try {
-			await onConfirm();
+			const result = await onConfirm();
+			// Returning false means the action failed: stay open, keep the typed text.
+			if (result === false) return;
 			typedConfirm = '';
 			open = false;
 		} finally {
@@ -46,18 +66,21 @@
 	}
 </script>
 
-<Modal bind:open {title}>
+<Modal bind:open {title} dismissible={!confirming}>
 	<p class="ui-confirm-message">{message}</p>
-	{#if confirmText}
+	{#if confirmText !== undefined}
 		<div class="ui-confirm-type-field">
-			<label class="ui-confirm-type-label" for="ui-confirm-type-input">
+			<label class="ui-confirm-type-label" for={inputId}>
 				Type <code class="ui-confirm-code">{confirmText}</code> to confirm
 			</label>
-			<TextField id="ui-confirm-type-input" bind:value={typedConfirm} />
+			<TextField id={inputId} bind:value={typedConfirm} />
 		</div>
 	{/if}
+	{#if error}
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
+	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={handleCancel}>Cancel</Button>
+		<Button variant="ghost" disabled={confirming} onclick={handleCancel}>Cancel</Button>
 		<Button variant={danger ? 'danger' : 'primary'} disabled={!canConfirm || confirming} onclick={handleConfirm}>
 			{confirming ? 'Working…' : confirmLabel}
 		</Button>
