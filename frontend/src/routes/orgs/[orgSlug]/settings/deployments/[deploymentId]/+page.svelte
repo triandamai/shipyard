@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
-	import { ChevronLeft, Loader2, AlertCircle } from '@lucide/svelte';
+	import { ChevronLeft } from '@lucide/svelte';
+	import Button from '$lib/components/ui/Button.svelte';
+	import Card from '$lib/components/ui/Card.svelte';
+	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
+	import Spinner from '$lib/components/ui/Spinner.svelte';
 	import api from '$lib/api/client';
 	import type { Deployment } from '$lib/api/types';
 	import DeploymentLogsPanel from '$lib/panels/DeploymentLogsPanel.svelte';
@@ -62,30 +65,29 @@
 {#if canDeploymentsRead}
 <div class="page">
 	<div class="page-header">
-		<button class="back-btn" onclick={() => goto(`/orgs/${orgSlug}/settings/deployments`)}>
+		<Button variant="ghost" size="sm" href="/orgs/{orgSlug}/settings/deployments">
 			<ChevronLeft size={16} />
 			Back to Deployments
-		</button>
+		</Button>
 	</div>
 
 	{#if loading}
 		<div class="state-container">
-			<Loader2 size={24} class="spin text-muted" />
+			<Spinner size={24} />
 			<span class="text-muted">Loading deployment details…</span>
 		</div>
 	{:else if error}
-		<div class="state-container error">
-			<AlertCircle size={24} />
-			<span>{error}</span>
-		</div>
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{:else if deployment}
 		<div class="panel-container">
-			<DeploymentLogsPanel
-				orgId={orgId}
-				projectId={deployment.project_id || ''}
-				serviceId={deployment.service_id}
-				deployment={deployment}
-			/>
+			<Card padding="0">
+				<DeploymentLogsPanel
+					orgId={orgId}
+					projectId={deployment.project_id || ''}
+					serviceId={deployment.service_id}
+					deployment={deployment}
+				/>
+			</Card>
 		</div>
 	{/if}
 </div>
@@ -105,26 +107,6 @@
 		flex-shrink: 0;
 	}
 
-	.back-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		background: none;
-		border: none;
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--text-muted);
-		cursor: pointer;
-		padding: 4px 8px;
-		border-radius: 4px;
-		margin-left: -8px;
-		transition: color 0.12s, background 0.12s;
-	}
-	.back-btn:hover {
-		color: var(--text-primary);
-		background: var(--bg-muted);
-	}
-
 	.state-container {
 		display: flex;
 		flex-direction: column;
@@ -135,30 +117,21 @@
 		padding: 48px;
 		font-size: 14px;
 	}
-	.state-container.error {
-		color: #ef4444;
-	}
 
 	.panel-container {
 		display: flex;
 		flex-direction: column;
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		background: var(--bg-surface);
-		overflow: hidden;
 		flex: 1;
+		min-height: 0;
+	}
+	.panel-container :global(.ui-card) {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		overflow: hidden;
 	}
 
 	.text-muted {
 		color: var(--text-muted);
-	}
-
-	:global(.spin) {
-		animation: spin 1s linear infinite;
-	}
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
 	}
 </style>
