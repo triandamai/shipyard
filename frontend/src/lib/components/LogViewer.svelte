@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Copy, Download, Filter, ChevronDown } from '@lucide/svelte';
+	import { Copy, ArrowDown } from '@lucide/svelte';
+	import { Button, Select } from '$lib/components/ui';
 	import type { LogLevel } from '$lib/api/types';
 
 	interface LogLine {
@@ -108,11 +109,13 @@
 	<div class="log-toolbar">
 		<div class="toolbar-left">
 			<!-- Level filter -->
-			<div class="filter-group">
+			<div class="filter-group" role="group" aria-label="Filter by level">
 				{#each LEVELS as level}
 					<button
+						type="button"
 						class="filter-btn lvl-btn-{level}"
 						class:active={levelFilter === level}
+						aria-pressed={levelFilter === level}
 						onclick={() => { levelFilter = level; }}
 					>
 						{level === 'all' ? 'All' : level.toUpperCase()}
@@ -122,32 +125,30 @@
 
 			<!-- Tail / lines selector -->
 			<div class="tail-group">
-				<span class="tail-label">Lines</span>
-				{#each TAIL_OPTIONS as n}
-					<button
-						class="filter-btn"
-						class:active={tailLimit === n}
-						onclick={() => { tailLimit = n; }}
-					>
-						{n === 0 ? 'All' : n}
-					</button>
-				{/each}
+				<label class="tail-label" for="log-tail">Lines</label>
+				<div class="tail-select">
+					<Select
+						id="log-tail"
+						bind:value={() => String(tailLimit), (v) => { tailLimit = Number(v) as TailOption; }}
+						options={TAIL_OPTIONS.map((n) => ({ value: String(n), label: n === 0 ? 'All' : String(n) }))}
+					/>
+				</div>
 			</div>
 		</div>
 
 		<div class="toolbar-right">
 			<span class="log-count">{filteredLogs.length} lines</span>
-			<button
-				class="action-btn"
-				class:follow-active={isFollowing}
+			<Button
+				variant={isFollowing ? 'primary' : 'secondary'}
+				size="sm"
 				onclick={toggleFollow}
 				title={isFollowing ? 'Unfollow' : 'Follow tail'}
 			>
 				{isFollowing ? 'Following' : 'Follow'}
-			</button>
-			<button class="action-btn icon-btn" onclick={copyLogs} title="Copy logs">
+			</Button>
+			<Button variant="secondary" size="icon" onclick={copyLogs} title="Copy logs" aria-label="Copy logs">
 				<Copy size={13} />
-			</button>
+			</Button>
 		</div>
 	</div>
 
@@ -170,9 +171,12 @@
 	</div>
 
 	{#if userScrolledUp && filteredLogs.length > 0}
-		<button class="scroll-to-bottom" onclick={() => { isFollowing = true; userScrolledUp = false; scrollToBottom(); }}>
-			↓ Jump to latest
-		</button>
+		<div class="scroll-to-bottom">
+			<Button variant="secondary" size="sm" onclick={() => { isFollowing = true; userScrolledUp = false; scrollToBottom(); }}>
+				<ArrowDown size={12} />
+				Jump to latest
+			</Button>
+		</div>
 	{/if}
 </div>
 
@@ -181,8 +185,8 @@
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		background: #0B1120;
-		border: 1px solid rgba(0,0,0,0.18);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
 		overflow: hidden;
 		position: relative;
@@ -195,9 +199,9 @@
 		align-items: center;
 		justify-content: space-between;
 		padding: 6px 10px;
-		border-bottom: 1px solid rgba(0,0,0,0.25);
+		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
-		background: #0F172A;
+		background: var(--bg-elevated);
 		gap: 12px;
 		flex-wrap: wrap;
 	}
@@ -206,11 +210,14 @@
 	.toolbar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 	.filter-group, .tail-group { display: flex; align-items: center; gap: 2px; }
+	.tail-group { gap: 6px; }
+	.tail-select { width: 84px; }
+	.tail-select :global(.ui-select) { height: 28px; font-size: 12px; }
 
 	.tail-label {
-		font-size: 10px; font-weight: 600; color: #4B5563;
+		font-size: 10px; font-weight: 600; color: var(--text-dim);
 		text-transform: uppercase; letter-spacing: 0.06em;
-		margin-right: 4px; font-family: var(--font-sans);
+		margin-right: 2px; font-family: var(--font-sans);
 	}
 
 	.filter-btn {
@@ -219,37 +226,23 @@
 		font-family: var(--font-mono);
 		background: transparent;
 		border: 1px solid transparent;
-		border-radius: 3px;
-		color: #4B5563;
+		border-radius: var(--radius-sm);
+		color: var(--text-muted);
 		cursor: pointer;
-		transition: all 0.12s;
+		transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 		letter-spacing: 0.04em;
 	}
-	.filter-btn:hover { color: #9CA3AF; background: rgba(255,255,255,0.05); }
-	.filter-btn.active { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); color: #E5E7EB; }
+	.filter-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+	.filter-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+	.filter-btn.active { background: var(--bg-hover); border-color: var(--border-hover); color: var(--text-primary); }
 
-	/* Active level filter colours */
-	.filter-btn.lvl-btn-debug.active  { background: rgba(107,114,128,0.15); border-color: rgba(107,114,128,0.4); color: #9CA3AF; }
-	.filter-btn.lvl-btn-info.active   { background: rgba(59,130,246,0.15);  border-color: rgba(59,130,246,0.4);  color: #60A5FA; }
-	.filter-btn.lvl-btn-warn.active   { background: rgba(245,158,11,0.15);  border-color: rgba(245,158,11,0.4);  color: #FBBF24; }
-	.filter-btn.lvl-btn-error.active  { background: rgba(239,68,68,0.15);   border-color: rgba(239,68,68,0.4);   color: #F87171; }
+	/* Active level filter colours (class built from `lvl-btn-{level}`) */
+	.filter-btn.lvl-btn-debug.active  { background: var(--bg-hover); border-color: var(--border-hover); color: var(--text-muted); }
+	.filter-btn.lvl-btn-info.active   { background: var(--accent-muted); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+	.filter-btn.lvl-btn-warn.active   { background: var(--accent-yellow-muted); border-color: color-mix(in srgb, var(--accent-yellow) 40%, transparent); color: var(--accent-yellow); }
+	.filter-btn.lvl-btn-error.active  { background: var(--accent-red-muted); border-color: color-mix(in srgb, var(--accent-red) 40%, transparent); color: var(--accent-red); }
 
-	.log-count { font-size: 10px; color: #374151; font-family: var(--font-sans); }
-
-	.action-btn {
-		padding: 3px 8px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		background: rgba(255,255,255,0.04);
-		border: 1px solid rgba(255,255,255,0.08);
-		border-radius: var(--radius-sm);
-		color: #6B7280;
-		cursor: pointer;
-		transition: all 0.12s;
-		display: flex; align-items: center; gap: 4px;
-	}
-	.action-btn:hover { color: #D1D5DB; border-color: rgba(255,255,255,0.2); }
-	.action-btn.follow-active { background: rgba(34,197,94,0.12); border-color: rgba(34,197,94,0.35); color: #4ADE80; }
-	.icon-btn { padding: 4px 6px; }
+	.log-count { font-size: 10px; color: var(--text-dim); font-family: var(--font-sans); }
 
 	/* ── Log rows ── */
 	.log-scroller {
@@ -267,23 +260,23 @@
 		font-size: 11.5px;
 		border-left: 2px solid transparent;
 	}
-	.log-row:hover { background: rgba(255,255,255,0.03); }
+	.log-row:hover { background: var(--bg-hover); }
 
-	/* Row level tints */
-	.row-error { background: rgba(239,68,68,0.05);  border-left-color: #7F1D1D; }
-	.row-error:hover { background: rgba(239,68,68,0.08); }
-	.row-warn  { background: rgba(245,158,11,0.04); border-left-color: #78350F; }
-	.row-warn:hover  { background: rgba(245,158,11,0.08); }
+	/* Row level tints (class from levelRowClass) */
+	.row-error { background: var(--accent-red-muted);    border-left-color: var(--accent-red); }
+	.row-error:hover { background: color-mix(in srgb, var(--accent-red) 14%, transparent); }
+	.row-warn  { background: var(--accent-yellow-muted); border-left-color: var(--accent-yellow); }
+	.row-warn:hover  { background: color-mix(in srgb, var(--accent-yellow) 14%, transparent); }
 	.row-debug { opacity: 0.65; }
 
 	.log-ts {
-		color: #374151;
+		color: var(--text-dim);
 		flex-shrink: 0;
 		min-width: 68px;
 		font-size: 10.5px;
 	}
 
-	/* Level badge */
+	/* Level badge (class from levelBadgeClass) */
 	.log-lvl {
 		flex-shrink: 0;
 		font-size: 9.5px;
@@ -291,30 +284,30 @@
 		width: 36px;
 		text-align: center;
 		padding: 0px 4px;
-		border-radius: 3px;
+		border-radius: var(--radius-sm);
 		letter-spacing: 0.04em;
 		border: 1px solid transparent;
 	}
-	.lvl-debug { background: rgba(107,114,128,0.12); color: #6B7280;  border-color: rgba(107,114,128,0.25); }
-	.lvl-info  { background: rgba(59,130,246,0.12);  color: #60A5FA;  border-color: rgba(59,130,246,0.25); }
-	.lvl-warn  { background: rgba(245,158,11,0.15);  color: #FBBF24;  border-color: rgba(245,158,11,0.3); }
-	.lvl-error { background: rgba(239,68,68,0.15);   color: #F87171;  border-color: rgba(239,68,68,0.3); }
+	.lvl-debug { background: var(--bg-hover);            color: var(--text-muted);    border-color: var(--border); }
+	.lvl-info  { background: var(--accent-muted);        color: var(--accent);        border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+	.lvl-warn  { background: var(--accent-yellow-muted); color: var(--accent-yellow); border-color: color-mix(in srgb, var(--accent-yellow) 30%, transparent); }
+	.lvl-error { background: var(--accent-red-muted);    color: var(--accent-red);    border-color: color-mix(in srgb, var(--accent-red) 30%, transparent); }
 
-	/* Message */
+	/* Message (class from levelMsgClass) */
 	.log-msg {
 		flex: 1;
 		white-space: pre-wrap;
 		word-break: break-all;
 	}
-	.msg-debug { color: #4B5563; }
-	.msg-info  { color: #9CA3AF; }
-	.msg-warn  { color: #FBBF24; }
-	.msg-error { color: #FCA5A5; }
+	.msg-debug { color: var(--text-dim); }
+	.msg-info  { color: var(--text-secondary); }
+	.msg-warn  { color: var(--accent-yellow); }
+	.msg-error { color: var(--accent-red); }
 
 	.log-empty {
 		padding: 24px;
 		text-align: center;
-		color: #374151;
+		color: var(--text-muted);
 		font-size: 12px;
 	}
 
@@ -323,15 +316,7 @@
 		bottom: 12px;
 		left: 50%;
 		transform: translateX(-50%);
-		padding: 5px 14px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		background: #1E293B;
-		border: 1px solid rgba(255,255,255,0.18);
-		border-radius: 100px;
-		color: #9CA3AF;
-		cursor: pointer;
-		transition: all 0.15s;
-		box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+		box-shadow: var(--shadow-md);
+		border-radius: var(--radius-md);
 	}
-	.scroll-to-bottom:hover { background: var(--accent); border-color: var(--accent); color: white; }
 </style>
