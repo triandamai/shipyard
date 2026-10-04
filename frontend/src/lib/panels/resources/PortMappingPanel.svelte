@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Plus, Trash2, Check } from '@lucide/svelte';
 	import { uiStore } from '$lib/stores/ui.store';
+	import { TextField, Select, Button, InlineAlert } from '$lib/components/ui';
 
 	interface Props {
 		initialPorts?: string[];
@@ -81,10 +82,10 @@
 
 	<div class="pm-table">
 		<div class="pm-thead">
-			<span class="col-container">Container port</span>
-			<span class="col-host">Host port <span class="optional">(optional)</span></span>
-			<span class="col-proto">Protocol</span>
-			<span class="col-del"></span>
+			<span>Container port</span>
+			<span>Host port <span class="optional">(optional)</span></span>
+			<span>Protocol</span>
+			<span></span>
 		</div>
 
 		{#if entries.length === 0}
@@ -92,191 +93,90 @@
 		{:else}
 			{#each entries as entry (entry.id)}
 				<div class="pm-row">
-					<input
-						class="pm-input col-container"
-						type="text"
-						placeholder="3000"
-						value={entry.containerPort}
-						oninput={(e) => update(entry.id, 'containerPort', (e.target as HTMLInputElement).value)}
-						spellcheck="false"
-					/>
-					<input
-						class="pm-input col-host"
-						type="text"
-						placeholder="leave blank = not exposed"
-						value={entry.hostPort}
-						oninput={(e) => update(entry.id, 'hostPort', (e.target as HTMLInputElement).value)}
-						spellcheck="false"
-					/>
-					<select
-						class="pm-select col-proto"
+					<div class="pm-mono">
+						<TextField
+							type="text"
+							placeholder="3000"
+							aria-label="Container port"
+							value={entry.containerPort}
+							oninput={(e) => update(entry.id, 'containerPort', (e.target as HTMLInputElement).value)}
+							spellcheck="false"
+						/>
+					</div>
+					<div class="pm-mono">
+						<TextField
+							type="text"
+							placeholder="blank = not exposed"
+							aria-label="Host port"
+							value={entry.hostPort}
+							oninput={(e) => update(entry.id, 'hostPort', (e.target as HTMLInputElement).value)}
+							spellcheck="false"
+						/>
+					</div>
+					<Select
+						aria-label="Protocol"
 						value={entry.protocol}
 						onchange={(e) => update(entry.id, 'protocol', (e.target as HTMLSelectElement).value)}
-					>
-						<option value="tcp">TCP</option>
-						<option value="udp">UDP</option>
-					</select>
-					<button class="pm-del col-del" type="button" onclick={() => removeEntry(entry.id)} title="Remove">
-						<Trash2 size={12} />
-					</button>
+						options={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }]}
+					/>
+					<Button variant="ghost" size="icon" title="Remove" aria-label="Remove port" onclick={() => removeEntry(entry.id)}>
+						<Trash2 size={13} />
+					</Button>
 				</div>
 			{/each}
 		{/if}
 	</div>
 
-	<button class="btn btn-secondary btn-sm add-btn" type="button" onclick={addEntry}>
-		<Plus size={13} />
-		Add Port
-	</button>
+	<div class="add-row">
+		<Button variant="secondary" size="sm" onclick={addEntry}>
+			<Plus size={13} />
+			Add Port
+		</Button>
+	</div>
 
 	{#if validationError}
-		<div class="pm-error">{validationError}</div>
+		<div role="alert"><InlineAlert tone="error">{validationError}</InlineAlert></div>
 	{/if}
 
 	<div class="pm-footer">
-		<button class="btn btn-primary" type="button" onclick={save}>
+		<Button variant="primary" onclick={save}>
 			<Check size={14} />
 			Save Port Mapping
-		</button>
+		</Button>
 	</div>
 </div>
 
 <style>
-	.pm-wrap {
-		padding: 14px;
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		height: 100%;
-	}
+	.pm-wrap { padding: 14px; display: flex; flex-direction: column; gap: 14px; height: 100%; }
 
 	.pm-hint {
-		font-size: 12px;
-		color: var(--text-muted);
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 8px 10px;
-		line-height: 1.5;
+		font-size: 12px; color: var(--text-muted); background: var(--bg-elevated);
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+		padding: 8px 10px; line-height: 1.5;
 	}
 
 	.pm-table {
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		overflow: hidden;
+		display: flex; flex-direction: column;
+		border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
 	}
-
+	.pm-thead, .pm-row {
+		display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 76px 36px;
+		gap: 8px; align-items: center; padding: 6px 10px;
+	}
 	.pm-thead {
-		display: grid;
-		grid-template-columns: 1fr 1fr 72px 28px;
-		gap: 0;
-		padding: 6px 10px;
-		background: var(--bg-elevated);
-		border-bottom: 1px solid var(--border);
-		font-size: 10px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+		font-size: 10px; font-weight: 600; color: var(--text-dim);
+		text-transform: uppercase; letter-spacing: 0.06em;
 	}
-
-	.pm-empty {
-		padding: 20px;
-		text-align: center;
-		font-size: 12px;
-		color: var(--text-dim);
-	}
-
-	.pm-row {
-		display: grid;
-		grid-template-columns: 1fr 1fr 72px 28px;
-		gap: 0;
-		border-bottom: 1px solid var(--border);
-		align-items: center;
-	}
+	.pm-row { border-bottom: 1px solid var(--border); }
 	.pm-row:last-child { border-bottom: none; }
+	.pm-mono :global(input) { font-family: var(--font-mono); font-size: 12px; }
+	.pm-empty { padding: 20px; text-align: center; font-size: 12px; color: var(--text-dim); }
 
-	.pm-input {
-		background: transparent;
-		border: none;
-		border-right: 1px solid var(--border);
-		color: var(--text-primary);
-		font-family: var(--font-mono);
-		font-size: 12px;
-		padding: 8px 10px;
-		outline: none;
-		width: 100%;
-		box-sizing: border-box;
-		transition: background var(--transition-fast);
-	}
-	.pm-input:focus { background: var(--bg-elevated); }
+	.optional { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 9px; opacity: 0.7; }
 
-	.pm-select {
-		background: transparent;
-		border: none;
-		border-right: 1px solid var(--border);
-		color: var(--text-secondary);
-		font-size: 11px;
-		font-family: var(--font-sans);
-		padding: 8px 6px;
-		outline: none;
-		cursor: pointer;
-		width: 100%;
-		box-sizing: border-box;
-	}
-	.pm-select:focus { background: var(--bg-elevated); }
+	.add-row { align-self: flex-start; }
 
-	.pm-del {
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		color: var(--text-dim);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 8px 6px;
-		transition: color var(--transition-fast);
-	}
-	.pm-del:hover { color: #EF4444; }
-
-	.optional {
-		font-weight: 400;
-		text-transform: none;
-		letter-spacing: 0;
-		font-size: 9px;
-		opacity: 0.7;
-	}
-
-	.add-btn {
-		align-self: flex-start;
-		display: flex;
-		align-items: center;
-		gap: 5px;
-	}
-
-	.pm-error {
-		font-size: 12px;
-		color: #EF4444;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-		padding: 7px 10px;
-	}
-
-	.pm-footer {
-		margin-top: auto;
-		padding-top: 4px;
-		border-top: 1px solid var(--border);
-	}
-
-	.pm-footer .btn {
-		width: 100%;
-		justify-content: center;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
+	.pm-footer { margin-top: auto; padding-top: 4px; border-top: 1px solid var(--border); }
+	.pm-footer :global(.ui-btn) { width: 100%; justify-content: center; }
 </style>
