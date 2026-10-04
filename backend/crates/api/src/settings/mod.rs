@@ -722,6 +722,63 @@ fn edge_runtime_image() -> Option<String> {
     resolve_image_key(&content, "EDGE_RUNTIME_IMAGE").map(|(img, tag)| format!("{img}:{tag}"))
 }
 
+/// Before restarting the platform, make every running project service's
+/// image-declared data paths (e.g. Postgres' `/var/lib/postgresql/data`)
+/// persistent, so project data survives if the update causes Swarm to replace
+/// their containers. The update only restarts Shipyard's own compose stack,
+/// but a container replaced without a persistent volume starts empty.
+///
+/// Returns progress lines, or an error naming the services that could not be
+/// secured — the update must not proceed in that case.
+async fn secure_project_data(state: &AppState) -> Result<Vec<String>, String> {
+    // Swarm-backed service types only; compose, static, edge and sandbox
+    // services don't run as `<prefix>-<id>` Swarm services.
+    let service_ids: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, name FROM services
+         WHERE type::text IN ('git', 'docker', 'manual', 'database')
+           AND service_parent_id IS NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| format!("Could not list project services: {e}"))?;
+
+    let engine = shipyard_engine::DeploymentEngine::new(
+        std::sync::Arc::clone(&state.docker),
+        state.db.clone(),
+        std::sync::Arc::clone(&state.mqtt),
+        state.config.docker.label_prefix.clone(),
+        state.config.traefik.network.clone(),
+        state.config.auth.secret_key.clone(),
+        state.config.docker.port_proxy,
+        state.config.data_dir.clone(),
+        state.config.static_server.retention_versions,
+    );
+
+    let mut lines = Vec::new();
+    let mut failed = Vec::new();
+    for (id, name) in service_ids {
+        match engine.secure_service_storage(id).await {
+            Ok(0) => {}
+            Ok(n) => lines.push(format!(
+                "[shipyard] ✓ {name}: attached {n} persistent volume(s) to keep its data"
+            )),
+            Err(e) => {
+                tracing::error!(service_id = %id, "secure_service_storage failed: {e}");
+                failed.push(format!("{name} ({e})"));
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        return Err(format!(
+            "Update aborted: could not make data persistent for: {}. \
+             Add a volume for these services' data paths, then retry.",
+            failed.join(", ")
+        ));
+    }
+    Ok(lines)
+}
+
 /// Core update logic shared by the streaming and one-shot handlers.
 /// Pulls all platform images via the Docker API (no docker CLI required),
 /// then spawns a detached `docker:cli` container to run `docker compose up -d`.
@@ -765,6 +822,23 @@ async fn run_platform_update(
                 ))).await;
                 return false;
             }
+        }
+    }
+
+    if tx.send(Ok(Event::default().data(
+        "[shipyard] Checking project services for unpersisted data…"
+    ))).await.is_err() {
+        return false;
+    }
+    match secure_project_data(state).await {
+        Ok(lines) => {
+            for line in lines {
+                if tx.send(Ok(Event::default().data(line))).await.is_err() { return false; }
+            }
+        }
+        Err(e) => {
+            let _ = tx.send(Ok(Event::default().event("error").data(e))).await;
+            return false;
         }
     }
 
@@ -855,6 +929,12 @@ async fn trigger_update(
             }
         }
     }
+
+    output.extend(
+        secure_project_data(&state)
+            .await
+            .map_err(|e| ApiAppError(AppError::Internal(e)))?,
+    );
 
     output.push("[shipyard] Spawning detached updater to restart services…".to_string());
 

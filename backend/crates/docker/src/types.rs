@@ -17,6 +17,10 @@ pub struct ServiceSpec {
     pub networks: Vec<String>,
     pub ports: Vec<PortSpec>,
     pub resources: Option<ResourceSpec>,
+    /// Swarm placement constraints (e.g. `node.id==abc123`). Used to keep a
+    /// service holding local volume data on the node where that data lives.
+    #[serde(default)]
+    pub constraints: Vec<String>,
 }
 
 /// Specification for creating a single plain (non-Swarm) container — used for
@@ -59,6 +63,15 @@ pub enum MountType {
     Volume,
     Bind,
     Tmpfs,
+}
+
+/// A volume mounted into a running container, as reported by container inspect.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerVolumeMount {
+    /// Docker volume name (a 64-char hex id for anonymous volumes).
+    pub name: String,
+    /// Path inside the container.
+    pub destination: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
