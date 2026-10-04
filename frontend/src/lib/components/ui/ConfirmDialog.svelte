@@ -35,7 +35,11 @@
 	let typedConfirm = $state('');
 	let confirming = $state(false);
 
-	let canConfirm = $derived(!confirmText || typedConfirm === confirmText);
+	// confirmText === undefined is the only "no typing" mode; a defined but empty
+	// value (e.g. a slug still loading) must never be confirmable.
+	let canConfirm = $derived(
+		confirmText === undefined || (confirmText !== '' && typedConfirm === confirmText)
+	);
 
 	async function handleConfirm() {
 		if (!canConfirm || confirming) return;
@@ -59,7 +63,7 @@
 
 <Modal bind:open {title} dismissible={!confirming}>
 	<p class="ui-confirm-message">{message}</p>
-	{#if confirmText}
+	{#if confirmText !== undefined}
 		<div class="ui-confirm-type-field">
 			<label class="ui-confirm-type-label" for={inputId}>
 				Type <code class="ui-confirm-code">{confirmText}</code> to confirm
