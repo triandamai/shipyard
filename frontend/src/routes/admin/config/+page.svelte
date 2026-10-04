@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { Eye, EyeOff } from '@lucide/svelte';
 	import { PageHeader, Card, Badge, Textarea, Toggle, Button, InlineAlert, EmptyState, Skeleton } from '$lib/components/ui';
 
 	let config = $state<Record<string, unknown>>({});
@@ -10,6 +11,16 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let saveErrors = $state<Record<string, string>>({});
+
+	// Every config value is treated as a secret: masked (and kept out of the
+	// DOM) until explicitly revealed per key.
+	let revealed = $state(new Set<string>());
+	function toggleReveal(key: string) {
+		const next = new Set(revealed);
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
+		revealed = next;
+	}
 
 	let maintMode = $state(false);
 	let savingMaint = $state(false);
@@ -143,21 +154,38 @@
 				<Card padding="14px">
 					<div class="cfg-head">
 						<code class="cfg-key">{key}</code>
-						<Badge tone={typeTone[t] ?? 'neutral'}>{t}</Badge>
+						<div class="cfg-head-right">
+							<Badge tone={typeTone[t] ?? 'neutral'}>{t}</Badge>
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={revealed.has(key) ? `Hide ${key}` : `Reveal ${key}`}
+								onclick={() => toggleReveal(key)}
+							>
+								{#if revealed.has(key)}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+							</Button>
+						</div>
 					</div>
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<div class="cfg-editor" onkeydown={(e) => onEditorKeydown(e, key)}>
-						<Textarea bind:value={edits[key]} rows={rowsFor(key)} />
-					</div>
-					{#if saveErrors[key]}
-						<InlineAlert tone="error">{saveErrors[key]}</InlineAlert>
+					{#if revealed.has(key)}
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div class="cfg-editor" onkeydown={(e) => onEditorKeydown(e, key)}>
+							<Textarea bind:value={edits[key]} rows={rowsFor(key)} />
+						</div>
+						{#if saveErrors[key]}
+							<InlineAlert tone="error">{saveErrors[key]}</InlineAlert>
+						{/if}
+						<div class="cfg-foot">
+							<span class="cfg-hint">⌘+Enter</span>
+							<Button variant="secondary" onclick={() => save(key)} disabled={saving === key}>
+								{#if saved === key}Saved{:else if saving === key}Saving…{:else}Save{/if}
+							</Button>
+						</div>
+					{:else}
+						<button type="button" class="cfg-masked" onclick={() => toggleReveal(key)}>
+							<span class="cfg-masked-dots" aria-hidden="true">••••••••••••</span>
+							<span class="cfg-masked-hint">Hidden — click to reveal and edit</span>
+						</button>
 					{/if}
-					<div class="cfg-foot">
-						<span class="cfg-hint">⌘+Enter</span>
-						<Button variant="secondary" onclick={() => save(key)} disabled={saving === key}>
-							{#if saved === key}Saved{:else if saving === key}Saving…{:else}Save{/if}
-						</Button>
-					</div>
 				</Card>
 			{/each}
 		</div>
@@ -178,7 +206,27 @@
 	.cfg-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 	.cfg-key { font-size: 12.5px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); word-break: break-all; }
 
+	.cfg-head-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
 	.cfg-editor :global(textarea) { font-family: var(--font-mono); }
+
+	.cfg-masked {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		width: 100%;
+		padding: 9px 12px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		text-align: left;
+		transition: border-color var(--transition-fast);
+	}
+	.cfg-masked:hover { border-color: var(--border-hover); }
+	.cfg-masked-dots { font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.12em; color: var(--text-muted); }
+	.cfg-masked-hint { font-size: 11px; color: var(--text-dim); }
 
 	.cfg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 	.cfg-hint { font-size: 10.5px; color: var(--text-dim); font-family: var(--font-mono); }
