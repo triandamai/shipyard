@@ -4,7 +4,8 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
-	import { Radio, RefreshCw, Users, BookOpen, Rss, Search, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Radio, RefreshCw, Users, BookOpen, Rss, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Button, Badge, Tabs, DataTable, EmptyState, Spinner, SearchInput } from '$lib/components/ui';
 
 	let orgId            = $derived($orgStore.activeOrg?.id ?? '');
 	let myRole           = $derived($orgStore.myMembership?.role ?? null);
@@ -28,6 +29,14 @@
 	let topicSearch  = $state('');
 
 	let expandedClient = $state<string | null>(null);
+
+	let tabItems = $derived([
+		{ id: 'clients', label: 'Clients', icon: Users, badge: clients.length > 0 ? String(clients.length) : undefined },
+		{ id: 'subscriptions', label: 'Subscriptions', icon: Rss, badge: subscriptions.length > 0 ? String(subscriptions.length) : undefined },
+		{ id: 'topics', label: 'Topics', icon: BookOpen, badge: topics.length > 0 ? String(topics.length) : undefined }
+	]);
+
+	const qosTone = (q: number) => (q === 1 ? 'yellow' : q === 2 ? 'blue' : 'green') as 'green' | 'yellow' | 'blue';
 
 	async function loadClients() {
 		loadingClients = true;
@@ -110,83 +119,73 @@
 {#if canViewMqtt}
 <div class="mqtt-page">
 	<div class="page-toolbar">
-		<div class="inner-tabs">
-			<button class="inner-tab" class:active={activeTab === 'clients'} onclick={() => switchTab('clients')}>
-				<Users size={13} /> Clients
-				{#if clients.length > 0}<span class="badge">{clients.length}</span>{/if}
-			</button>
-			<button class="inner-tab" class:active={activeTab === 'subscriptions'} onclick={() => switchTab('subscriptions')}>
-				<Rss size={13} /> Subscriptions
-				{#if subscriptions.length > 0}<span class="badge">{subscriptions.length}</span>{/if}
-			</button>
-			<button class="inner-tab" class:active={activeTab === 'topics'} onclick={() => switchTab('topics')}>
-				<BookOpen size={13} /> Topics
-				{#if topics.length > 0}<span class="badge">{topics.length}</span>{/if}
-			</button>
-		</div>
-		<button class="refresh-btn" onclick={refresh}>
+		<Tabs tabs={tabItems} value={activeTab} onChange={(id) => switchTab(id as Tab)} />
+		<Button variant="secondary" onclick={refresh}>
 			<RefreshCw size={14} />
 			Refresh
-		</button>
+		</Button>
 	</div>
 
 	<!-- Clients -->
 	{#if activeTab === 'clients'}
-		<div class="search-bar">
-			<Search size={13} class="search-icon" />
-			<input class="search-input" placeholder="Filter by client ID, username, IP…" bind:value={clientSearch} />
-		</div>
+		<div class="search-bar"><SearchInput bind:value={clientSearch} placeholder="Filter by client ID, username, IP…" /></div>
 
 		{#if loadingClients}
-			<div class="empty-state"><div class="spinner"></div> Loading clients…</div>
+			<div class="loading"><Spinner size={20} /> Loading clients…</div>
 		{:else if filteredClients.length === 0}
-			<div class="empty-state"><Radio size={28} class="empty-icon" /> No connected clients</div>
+			<EmptyState message="No connected clients">
+				{#snippet icon()}<Radio size={28} />{/snippet}
+			</EmptyState>
 		{:else}
 			<div class="table-wrap">
-				<table class="data-table">
-					<thead>
-						<tr>
-							<th></th>
-							<th>Client ID</th>
-							<th>Username</th>
-							<th>Address</th>
-							<th>Protocol</th>
-							<th>Connected at</th>
-							<th>Keep-alive</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each filteredClients as c (c.client_id ?? c.clientid)}
-							{@const id = c.client_id ?? c.clientid ?? '—'}
-							{@const expanded = expandedClient === id}
-							<tr class="data-row" class:expanded onclick={() => expandedClient = expanded ? null : id}>
-								<td class="expand-cell">
+				<DataTable
+					items={filteredClients}
+					rowKey={(c) => c.client_id ?? c.clientid}
+					searchable={false}
+					emptyMessage="No connected clients"
+					columns={[
+						{ key: 'expand', label: '', width: '32px' },
+						{ key: 'client_id', label: 'Client ID' },
+						{ key: 'username', label: 'Username' },
+						{ key: 'addr', label: 'Address' },
+						{ key: 'protocol', label: 'Protocol' },
+						{ key: 'connected', label: 'Connected at' },
+						{ key: 'keepalive', label: 'Keep-alive' }
+					]}
+				>
+					{#snippet row(c)}
+						{@const id = c.client_id ?? c.clientid ?? '—'}
+						{@const expanded = expandedClient === id}
+						<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+						<tr class="data-row" onclick={() => expandedClient = expanded ? null : id}>
+							<td class="expand-cell">
+								<button class="expand-btn" aria-expanded={expanded} aria-label={expanded ? 'Collapse client' : 'Expand client'}>
 									{#if expanded}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
+								</button>
+							</td>
+							<td class="mono client-id">{id}</td>
+							<td>{c.username ?? '—'}</td>
+							<td class="mono">{c.remote_addr ?? c.ipaddress ?? '—'}</td>
+							<td><Badge tone="neutral">MQTT {c.protocol ?? c.mqtt_ver ?? ''}</Badge></td>
+							<td class="ts">{connectedAt(c.connected_at ?? c.created_at)}</td>
+							<td>{c.keepalive ?? c.keep_alive ?? '—'}s</td>
+						</tr>
+						{#if expanded}
+							<tr class="detail-row">
+								<td colspan="7">
+									<div class="detail-grid">
+										{#each Object.entries(c) as [k, v]}
+											<div class="detail-kv">
+												<span class="detail-k">{k}</span>
+												<span class="detail-v mono">{JSON.stringify(v)}</span>
+											</div>
+										{/each}
+									</div>
 								</td>
-								<td class="mono client-id">{id}</td>
-								<td>{c.username ?? '—'}</td>
-								<td class="mono">{c.remote_addr ?? c.ipaddress ?? '—'}</td>
-								<td><span class="proto-chip">MQTT {c.protocol ?? c.mqtt_ver ?? ''}</span></td>
-								<td class="ts">{connectedAt(c.connected_at ?? c.created_at)}</td>
-								<td>{c.keepalive ?? c.keep_alive ?? '—'}s</td>
 							</tr>
-							{#if expanded}
-								<tr class="detail-row">
-									<td colspan="7">
-										<div class="detail-grid">
-											{#each Object.entries(c) as [k, v]}
-												<div class="detail-kv">
-													<span class="detail-k">{k}</span>
-													<span class="detail-v mono">{JSON.stringify(v)}</span>
-												</div>
-											{/each}
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+						{/if}
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
@@ -194,14 +193,14 @@
 					{@const id = c.client_id ?? c.clientid ?? '—'}
 					{@const isExp = expandedClient === id}
 					<div class="m-card">
-						<button class="m-card-header" onclick={() => expandedClient = isExp ? null : id}>
+						<button class="m-card-header" aria-expanded={isExp} onclick={() => expandedClient = isExp ? null : id}>
 							<span class="m-card-title mono">{id}</span>
 							<span class="m-chevron">{#if isExp}<ChevronDown size={14}/>{:else}<ChevronRight size={14}/>{/if}</span>
 						</button>
 						<div class="m-rows">
 							<div class="m-row"><span class="m-label">Username</span><span>{c.username ?? '—'}</span></div>
 							<div class="m-row"><span class="m-label">Address</span><span class="mono">{c.remote_addr ?? c.ipaddress ?? '—'}</span></div>
-							<div class="m-row"><span class="m-label">Protocol</span><span class="proto-chip">MQTT {c.protocol ?? c.mqtt_ver ?? ''}</span></div>
+							<div class="m-row"><span class="m-label">Protocol</span><Badge tone="neutral">MQTT {c.protocol ?? c.mqtt_ver ?? ''}</Badge></div>
 							<div class="m-row"><span class="m-label">Connected</span><span class="ts">{connectedAt(c.connected_at ?? c.created_at)}</span></div>
 							<div class="m-row"><span class="m-label">Keep-alive</span><span>{c.keepalive ?? c.keep_alive ?? '—'}s</span></div>
 						</div>
@@ -223,39 +222,39 @@
 
 	<!-- Subscriptions -->
 	{#if activeTab === 'subscriptions'}
-		<div class="search-bar">
-			<Search size={13} class="search-icon" />
-			<input class="search-input" placeholder="Filter by topic or client ID…" bind:value={subSearch} />
-		</div>
+		<div class="search-bar"><SearchInput bind:value={subSearch} placeholder="Filter by topic or client ID…" /></div>
 
 		{#if loadingSubscriptions}
-			<div class="empty-state"><div class="spinner"></div> Loading subscriptions…</div>
+			<div class="loading"><Spinner size={20} /> Loading subscriptions…</div>
 		{:else if filteredSubs.length === 0}
-			<div class="empty-state"><Rss size={28} class="empty-icon" /> No active subscriptions</div>
+			<EmptyState message="No active subscriptions">
+				{#snippet icon()}<Rss size={28} />{/snippet}
+			</EmptyState>
 		{:else}
 			<div class="table-wrap">
-				<table class="data-table">
-					<thead>
-						<tr>
-							<th>Topic</th>
-							<th>Client ID</th>
-							<th>QoS</th>
-							<th>No-local</th>
-							<th>Retain-as-published</th>
+				<DataTable
+					items={filteredSubs}
+					rowKey={(s) => `${s.topic}\u0000${s.client_id ?? s.clientid}\u0000${filteredSubs.indexOf(s)}`}
+					searchable={false}
+					emptyMessage="No active subscriptions"
+					columns={[
+						{ key: 'topic', label: 'Topic' },
+						{ key: 'client_id', label: 'Client ID' },
+						{ key: 'qos', label: 'QoS' },
+						{ key: 'no_local', label: 'No-local' },
+						{ key: 'rap', label: 'Retain-as-published' }
+					]}
+				>
+					{#snippet row(s)}
+						<tr class="data-row">
+							<td class="mono topic-cell">{s.topic ?? '—'}</td>
+							<td class="mono">{s.client_id ?? s.clientid ?? '—'}</td>
+							<td><Badge tone={qosTone(s.qos ?? 0)}>QoS {s.qos ?? 0}</Badge></td>
+							<td>{s.no_local ? 'yes' : 'no'}</td>
+							<td>{s.retain_as_published ? 'yes' : 'no'}</td>
 						</tr>
-					</thead>
-					<tbody>
-						{#each filteredSubs as s}
-							<tr class="data-row">
-								<td class="mono topic-cell">{s.topic ?? '—'}</td>
-								<td class="mono">{s.client_id ?? s.clientid ?? '—'}</td>
-								<td><span class="qos-chip qos-{s.qos ?? 0}">QoS {s.qos ?? 0}</span></td>
-								<td>{s.no_local ? 'yes' : 'no'}</td>
-								<td>{s.retain_as_published ? 'yes' : 'no'}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
@@ -263,7 +262,7 @@
 					<div class="m-card">
 						<div class="m-card-header m-card-header--static">
 							<span class="m-card-title mono">{s.topic ?? '—'}</span>
-							<span class="qos-chip qos-{s.qos ?? 0}">QoS {s.qos ?? 0}</span>
+							<Badge tone={qosTone(s.qos ?? 0)}>QoS {s.qos ?? 0}</Badge>
 						</div>
 						<div class="m-rows">
 							<div class="m-row"><span class="m-label">Client ID</span><span class="mono">{s.client_id ?? s.clientid ?? '—'}</span></div>
@@ -278,33 +277,33 @@
 
 	<!-- Topics -->
 	{#if activeTab === 'topics'}
-		<div class="search-bar">
-			<Search size={13} class="search-icon" />
-			<input class="search-input" placeholder="Filter topics…" bind:value={topicSearch} />
-		</div>
+		<div class="search-bar"><SearchInput bind:value={topicSearch} placeholder="Filter topics…" /></div>
 
 		{#if loadingTopics}
-			<div class="empty-state"><div class="spinner"></div> Loading topics…</div>
+			<div class="loading"><Spinner size={20} /> Loading topics…</div>
 		{:else if filteredTopics.length === 0}
-			<div class="empty-state"><BookOpen size={28} class="empty-icon" /> No topics</div>
+			<EmptyState message="No topics">
+				{#snippet icon()}<BookOpen size={28} />{/snippet}
+			</EmptyState>
 		{:else}
 			<div class="table-wrap">
-				<table class="data-table">
-					<thead>
-						<tr>
-							<th>Topic</th>
-							<th>Subscribers</th>
+				<DataTable
+					items={filteredTopics}
+					rowKey={(t) => `${t.topic ?? t.name}\u0000${filteredTopics.indexOf(t)}`}
+					searchable={false}
+					emptyMessage="No topics"
+					columns={[
+						{ key: 'topic', label: 'Topic' },
+						{ key: 'subs', label: 'Subscribers' }
+					]}
+				>
+					{#snippet row(t)}
+						<tr class="data-row">
+							<td class="mono topic-cell">{t.topic ?? t.name ?? '—'}</td>
+							<td>{t.subscribers_count ?? t.subs_count ?? '—'}</td>
 						</tr>
-					</thead>
-					<tbody>
-						{#each filteredTopics as t}
-							<tr class="data-row">
-								<td class="mono topic-cell">{t.topic ?? t.name ?? '—'}</td>
-								<td>{t.subscribers_count ?? t.subs_count ?? '—'}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+					{/snippet}
+				</DataTable>
 			</div>
 
 			<div class="mobile-cards">
@@ -312,7 +311,7 @@
 					<div class="m-card">
 						<div class="m-card-header m-card-header--static">
 							<span class="m-card-title mono">{t.topic ?? t.name ?? '—'}</span>
-							<span class="m-badge">{t.subscribers_count ?? t.subs_count ?? '—'} sub{(t.subscribers_count ?? t.subs_count ?? 0) === 1 ? '' : 's'}</span>
+							<Badge tone="neutral">{t.subscribers_count ?? t.subs_count ?? '—'} sub{(t.subscribers_count ?? t.subs_count ?? 0) === 1 ? '' : 's'}</Badge>
 						</div>
 					</div>
 				{/each}
@@ -329,101 +328,25 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		flex-wrap: wrap;
 		gap: 12px;
 	}
 
-	.inner-tabs { display: flex; gap: 4px; }
-	.inner-tab {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px;
-		font-size: 12px; font-weight: 500;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.inner-tab:hover { color: var(--text-primary); border-color: var(--border-hover); }
-	.inner-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+	.search-bar { max-width: 360px; }
 
-	.badge {
-		background: rgba(255,255,255,0.25);
-		border-radius: 10px;
-		padding: 1px 6px;
-		font-size: 11px;
-		font-weight: 600;
-	}
-	.inner-tab:not(.active) .badge { background: var(--bg-muted); color: var(--text-muted); }
-
-	.refresh-btn {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px;
-		font-size: 12px; font-weight: 500;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		color: var(--text-secondary);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-	.search-bar {
-		display: flex; align-items: center; gap: 8px;
-		padding: 8px 12px;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-	}
-	.search-input {
-		flex: 1; border: none; outline: none;
-		background: transparent;
-		font-size: 13px; color: var(--text-primary);
-		font-family: var(--font-sans);
-	}
-	.search-input::placeholder { color: var(--text-muted); }
-
-	.empty-state {
-		display: flex; flex-direction: column; align-items: center; justify-content: center;
+	.loading {
+		display: flex; align-items: center; justify-content: center;
 		gap: 10px; padding: 60px 0;
 		color: var(--text-muted); font-size: 13px;
 	}
 
-	.spinner {
-		width: 20px; height: 20px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
-	}
-	@keyframes spin { to { transform: rotate(360deg); } }
-
-	.table-wrap {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		overflow: hidden;
-	}
-
-	.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-	.data-table thead th {
-		padding: 10px 14px;
-		text-align: left;
-		font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-		text-transform: uppercase;
+	.expand-cell { width: 32px; }
+	.expand-btn {
+		display: inline-flex; align-items: center;
+		background: none; border: none; padding: 0; cursor: pointer;
 		color: var(--text-muted);
-		background: var(--bg-muted);
-		border-bottom: 1px solid var(--border);
 	}
-	.data-table thead th:first-child { width: 32px; }
-	.data-row td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-primary); vertical-align: middle; }
-	.data-row:last-child td { border-bottom: none; }
-	.data-row:hover td { background: var(--bg-muted); }
-	.data-row.expanded td { background: var(--bg-muted); }
-
-	.expand-cell { cursor: pointer; color: var(--text-muted); width: 32px; }
-
+	.data-row { cursor: default; }
 	.detail-row td { padding: 0; background: var(--bg-base); }
 	.detail-grid {
 		display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -434,24 +357,10 @@
 	.detail-k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 	.detail-v { font-size: 12px; color: var(--text-primary); word-break: break-all; }
 
-	.mono { font-family: var(--font-mono, 'JetBrains Mono', monospace); font-size: 12px; }
+	.mono { font-family: var(--font-mono); font-size: 12px; }
 	.client-id { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.topic-cell { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.ts { white-space: nowrap; color: var(--text-secondary); font-size: 12px; }
-
-	.proto-chip {
-		display: inline-block; padding: 2px 7px;
-		background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-secondary);
-	}
-
-	.qos-chip {
-		display: inline-block; padding: 2px 7px;
-		border-radius: 4px; font-size: 11px; font-weight: 600;
-	}
-	.qos-0 { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
-	.qos-1 { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
-	.qos-2 { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
 
 	/* ── Mobile cards ── */
 	.mobile-cards { display: none; flex-direction: column; gap: 8px; }
@@ -473,11 +382,6 @@
 		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 	}
 	.m-chevron { flex-shrink: 0; color: var(--text-muted); }
-	.m-badge {
-		flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--text-muted);
-		background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 10px; padding: 1px 8px;
-	}
 	.m-rows { border-top: 1px solid var(--border); }
 	.m-row {
 		display: flex; align-items: center; justify-content: space-between;
