@@ -213,7 +213,7 @@
 <style>
 	.p { max-width: 680px; margin: 0 auto; padding: 40px 36px; display: flex; flex-direction: column; gap: 16px; }
 	.hdr { margin-bottom: 4px; }
-	.ttl { font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
+	.ttl { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
 	.sub { font-size: 12.5px; color: var(--text-muted); margin: 0; }
 
 	.card-hdr {

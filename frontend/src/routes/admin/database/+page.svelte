@@ -442,7 +442,7 @@
 <style>
 	.db-page { max-width: 1100px; margin: 0 auto; padding: 40px 36px; }
 	.db-hdr { margin-bottom: 16px; }
-	.db-ttl { font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
+	.db-ttl { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
 	.db-sub { font-size: 12.5px; color: var(--text-muted); margin: 0; }
 
 	/* Tab-bar pattern — copied verbatim from the design-system memory's
