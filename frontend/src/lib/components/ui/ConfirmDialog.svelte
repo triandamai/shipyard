@@ -57,7 +57,7 @@
 	}
 </script>
 
-<Modal bind:open {title}>
+<Modal bind:open {title} dismissible={!confirming}>
 	<p class="ui-confirm-message">{message}</p>
 	{#if confirmText}
 		<div class="ui-confirm-type-field">
@@ -71,7 +71,7 @@
 		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{/if}
 	{#snippet footer()}
-		<Button variant="ghost" onclick={handleCancel}>Cancel</Button>
+		<Button variant="ghost" disabled={confirming} onclick={handleCancel}>Cancel</Button>
 		<Button variant={danger ? 'danger' : 'primary'} disabled={!canConfirm || confirming} onclick={handleConfirm}>
 			{confirming ? 'Working…' : confirmLabel}
 		</Button>
