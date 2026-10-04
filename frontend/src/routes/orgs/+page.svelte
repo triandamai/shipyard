@@ -6,6 +6,8 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { get } from 'svelte/store';
 	import type { Organization, Plan } from '$lib/api/types';
+	import { Plus, Folder, Building2, Check, ArrowRight, ArrowLeft } from '@lucide/svelte';
+	import { PageHeader, Card, Avatar, Button, Modal, FormField, TextField, InlineAlert, EmptyState, Spinner } from '$lib/components/ui';
 
 	let orgs = $state<Organization[]>([]);
 	let loading = $state(true);
@@ -144,16 +146,10 @@
 		orgStore.setActiveOrg(org);
 		goto(`/orgs/${org.slug}/projects`);
 	}
-	function orgGradientStyle(name: string): string {
-		const gradients = [
-			'linear-gradient(135deg, #818cf8, #4f46e5)', // Indigo
-			'linear-gradient(135deg, #3b82f6, #1d4ed8)', // Blue
-			'linear-gradient(135deg, #10b981, #047857)', // Emerald
-			'linear-gradient(135deg, #f59e0b, #b45309)', // Amber
-			'linear-gradient(135deg, #f43f5e, #be123c)', // Rose
-		];
+	const AVATAR_TONES = ['blue', 'green', 'red', 'yellow', 'purple'] as const;
+	function orgAvatarTone(name: string): (typeof AVATAR_TONES)[number] {
 		const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-		return gradients[hash % gradients.length];
+		return AVATAR_TONES[hash % AVATAR_TONES.length];
 	}
 
 	function formatDate(dateStr?: string): string {
@@ -169,43 +165,43 @@
 <div class="orgs-container">
 	<div class="orgs-inner">
 
-		<!-- Header -->
-		<div class="orgs-header">
-			<div>
-				<h1 class="orgs-title">Your Organizations</h1>
-				<p class="orgs-subtitle">Select an organization to manage your services and infrastructure.</p>
-			</div>
-			<button class="btn-new-org" onclick={openModal}>
-				<svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
-				New Organization
-			</button>
-		</div>
+		<PageHeader
+			title="Your Organizations"
+			subtitle="Select an organization to manage your services and infrastructure."
+		>
+			{#snippet actions()}
+				<Button onclick={openModal}>
+					<Plus size={16} />
+					New Organization
+				</Button>
+			{/snippet}
+		</PageHeader>
 
 		<!-- Loading -->
 		{#if loading}
 			<div class="orgs-loading-wrap">
-				<span class="orgs-spinner"></span>
+				<Spinner size={20} />
 				Loading organizations…
 			</div>
 
 		<!-- Error -->
 		{:else if fetchError}
-			<div class="orgs-error-banner">
-				<span>{fetchError}</span>
-				<button class="btn btn-ghost btn-sm" onclick={loadOrgs}>Retry</button>
+			<div role="alert">
+				<InlineAlert tone="error">
+					<div class="orgs-error-row">
+						<span>{fetchError}</span>
+						<Button variant="ghost" size="sm" onclick={loadOrgs}>Retry</Button>
+					</div>
+				</InlineAlert>
 			</div>
 
 		<!-- Empty state -->
 		{:else if orgs.length === 0}
-			<div class="orgs-empty-state">
-				<div class="orgs-empty-icon">🏢</div>
-				<div>
-					<p class="orgs-empty-title">No organizations yet</p>
-					<p class="orgs-empty-sub">Create your first organization to get started</p>
-				</div>
-				<button class="btn-new-org" onclick={openModal}>
-					Create Organization
-				</button>
+			<div class="orgs-empty">
+				<EmptyState message="No organizations yet" sub="Create your first organization to get started">
+					{#snippet icon()}<Building2 size={28} />{/snippet}
+				</EmptyState>
+				<Button onclick={openModal}>Create Organization</Button>
 			</div>
 
 		<!-- Org grid -->
@@ -213,20 +209,22 @@
 			<div class="orgs-grid">
 				{#each orgs as org (org.id)}
 					<button class="org-card" onclick={() => goToOrg(org)}>
-						<div class="org-avatar" style="background: {orgGradientStyle(org.name)}">
-							{org.name[0]?.toUpperCase() ?? '?'}
-						</div>
-						<div class="org-details">
-							<div class="org-name">{org.name}</div>
-							<div class="org-slug">{org.slug}</div>
-						</div>
-						<div class="org-footer">
-							<span class="org-meta-item">
-								<svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1-1v3H2a1 1 0 000 2h3v3H2a1 1 0 000 2h3v3a1 1 0 002 0v-3h3v3a1 1 0 002 0v-3h3a1 1 0 100-2h-3V7h3a1 1 0 100-2h-3V2a1 1 0 10-2 0v3H7V2a1 1 0 00-1-1zm3 8V7H7v3h2z" clip-rule="evenodd"/></svg>
-								Projects
-							</span>
-							<span class="org-date">Created {formatDate(org.created_at)}</span>
-						</div>
+						<Card padding="20px">
+							<div class="org-card-body">
+								<Avatar initials={org.name.slice(0, 1) || '?'} tone={orgAvatarTone(org.name)} size={40} />
+								<div class="org-details">
+									<div class="org-name">{org.name}</div>
+									<div class="org-slug">{org.slug}</div>
+								</div>
+								<div class="org-footer">
+									<span class="org-meta-item">
+										<Folder size={12} />
+										Projects
+									</span>
+									<span class="org-date">Created {formatDate(org.created_at)}</span>
+								</div>
+							</div>
+						</Card>
 					</button>
 				{/each}
 			</div>
@@ -236,192 +234,144 @@
 </div>
 
 <!-- New Org Modal -->
-{#if showModal}
-	<!-- Backdrop -->
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-	<div
-		class="modal-backdrop"
-		onclick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
-		onkeydown={(e) => { if (e.key === 'Escape') closeModal(); }}
-		role="dialog"
-		aria-modal="true"
-		aria-label="Create organization"
-		tabindex="-1"
-	>
-		<div class="modal" style="max-width: {modalStep === 2 ? '640px' : '420px'}">
-			<!-- Header -->
-			<div class="modal-header">
-				<div>
-					<h2 class="modal-title">New Organization</h2>
-					<div class="step-indicator">
-						<span class="step" class:active={modalStep === 1} class:done={modalStep > 1}>1 Details</span>
-						<span class="step-sep">→</span>
-						<span class="step" class:active={modalStep === 2}>2 Plan</span>
-					</div>
-				</div>
-				<!-- svelte-ignore a11y_consider_explicit_label -->
-				<button class="modal-close" onclick={closeModal}>✕</button>
-			</div>
-
-			{#if createError}
-				<div class="err-banner">{createError}</div>
-			{/if}
-
-			<!-- Step 1: Name + Slug -->
-			{#if modalStep === 1}
-				<div class="modal-body">
-					<div class="field">
-						<label class="lbl" for="org-name">Name</label>
-						<input id="org-name" type="text" class="inp" placeholder="My Organization" bind:value={newOrgName} />
-					</div>
-					<div class="field">
-						<label class="lbl" for="org-slug">Slug</label>
-						<input id="org-slug" type="text" class="inp" placeholder="my-organization" bind:value={newOrgSlug} pattern="[a-z0-9-]+" />
-						<span class="hint">Lowercase letters, numbers, and hyphens only</span>
-					</div>
-				</div>
-				<div class="modal-foot">
-					<button class="btn-cancel" onclick={closeModal}>Cancel</button>
-					<button class="btn-confirm" onclick={goToStep2} disabled={!newOrgName.trim() || !newOrgSlug.trim()}>
-						Next →
-					</button>
-				</div>
-
-			<!-- Step 2: Plan selection -->
-			{:else}
-				<div class="modal-body">
-					{#if plansLoading}
-						<div class="plans-loading">Loading plans…</div>
-					{:else}
-						<div class="plans-grid">
-							{#each plans as plan (plan.id)}
-								<!-- svelte-ignore a11y_click_events_have_key_events -->
-								<!-- svelte-ignore a11y_no_static_element_interactions -->
-								<div
-									class="plan-card"
-									class:selected={selectedPlanId === plan.id}
-									onclick={() => (selectedPlanId = plan.id)}
-								>
-									<div class="plan-top">
-										<span class="plan-name">{plan.name.charAt(0).toUpperCase() + plan.name.slice(1)}</span>
-										<span class="plan-price">
-											{#if plan.price_monthly === 0}
-												Free
-											{:else}
-												${plan.price_monthly}<span class="plan-period">/mo</span>
-											{/if}
-										</span>
-									</div>
-									<ul class="plan-features">
-										<li>{plan.cpu_cores} CPU · {fmtMem(plan.memory_mb)} RAM</li>
-										<li>{formatLimit(plan.max_members)} members</li>
-										<li>{formatLimit(plan.max_projects)} projects</li>
-										<li>{formatLimit(plan.max_replicas)} replicas</li>
-										<li>{formatLimit(plan.max_git_providers)} git providers</li>
-									</ul>
-									{#if selectedPlanId === plan.id}
-										<div class="plan-check">✓</div>
-									{/if}
-								</div>
-							{/each}
-						</div>
-						{#if selectedPlanId && plans.find(p => p.id === selectedPlanId && p.price_monthly > 0)}
-							<p class="paid-note">You'll be redirected to checkout after the organization is created.</p>
-						{/if}
-					{/if}
-				</div>
-				<div class="modal-foot">
-					<button class="btn-cancel" onclick={() => (modalStep = 1)}>← Back</button>
-					<button class="btn-confirm" onclick={handleCreateOrg} disabled={creating || !selectedPlanId}>
-						{#if creating}Creating…{:else}Create Organization{/if}
-					</button>
-				</div>
-			{/if}
-		</div>
+<Modal bind:open={showModal} title="New Organization">
+	<div class="step-indicator">
+		<span class="step" class:active={modalStep === 1} class:done={modalStep > 1}>1 Details</span>
+		<ArrowRight size={10} class="step-sep" />
+		<span class="step" class:active={modalStep === 2}>2 Plan</span>
 	</div>
-{/if}
+
+	{#if createError}
+		<div role="alert"><InlineAlert tone="error">{createError}</InlineAlert></div>
+	{/if}
+
+	{#if modalStep === 1}
+		<FormField label="Name" for="org-name">
+			<TextField id="org-name" type="text" placeholder="My Organization" bind:value={newOrgName} />
+		</FormField>
+		<FormField label="Slug" for="org-slug" hint="Lowercase letters, numbers, and hyphens only">
+			<TextField id="org-slug" type="text" placeholder="my-organization" bind:value={newOrgSlug} pattern="[a-z0-9-]+" />
+		</FormField>
+	{:else}
+		{#if plansLoading}
+			<div class="plans-loading"><Spinner size={16} /> Loading plans…</div>
+		{:else}
+			<div class="plans-grid">
+				{#each plans as plan (plan.id)}
+					<button
+						type="button"
+						class="plan-card"
+						class:selected={selectedPlanId === plan.id}
+						onclick={() => (selectedPlanId = plan.id)}
+					>
+						<div class="plan-top">
+							<span class="plan-name">{plan.name.charAt(0).toUpperCase() + plan.name.slice(1)}</span>
+							<span class="plan-price">
+								{#if plan.price_monthly === 0}
+									Free
+								{:else}
+									${plan.price_monthly}<span class="plan-period">/mo</span>
+								{/if}
+							</span>
+						</div>
+						<ul class="plan-features">
+							<li>{plan.cpu_cores} CPU · {fmtMem(plan.memory_mb)} RAM</li>
+							<li>{formatLimit(plan.max_members)} members</li>
+							<li>{formatLimit(plan.max_projects)} projects</li>
+							<li>{formatLimit(plan.max_replicas)} replicas</li>
+							<li>{formatLimit(plan.max_git_providers)} git providers</li>
+						</ul>
+						{#if selectedPlanId === plan.id}
+							<div class="plan-check"><Check size={11} strokeWidth={3} /></div>
+						{/if}
+					</button>
+				{/each}
+			</div>
+			{#if selectedPlanId && plans.find(p => p.id === selectedPlanId && p.price_monthly > 0)}
+				<p class="paid-note">You'll be redirected to checkout after the organization is created.</p>
+			{/if}
+		{/if}
+	{/if}
+
+	{#snippet footer()}
+		{#if modalStep === 1}
+			<Button variant="secondary" onclick={closeModal}>Cancel</Button>
+			<Button onclick={goToStep2} disabled={!newOrgName.trim() || !newOrgSlug.trim()}>
+				Next <ArrowRight size={14} />
+			</Button>
+		{:else}
+			<Button variant="secondary" onclick={() => (modalStep = 1)}><ArrowLeft size={14} /> Back</Button>
+			<Button onclick={handleCreateOrg} disabled={creating || !selectedPlanId}>
+				{#if creating}
+					<Spinner size={14} tone="current" /> Creating…
+				{:else}
+					Create Organization
+				{/if}
+			</Button>
+		{/if}
+	{/snippet}
+</Modal>
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
+	/* ── Modal content ── */
+	.step-indicator { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+	.step { color: var(--text-muted); font-weight: 500; }
+	.step.active { color: var(--accent); font-weight: 700; }
+	.step.done { color: var(--text-secondary); }
+	.step-indicator :global(.step-sep) { color: var(--text-dim); }
 
-	.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:24px; }
-	.modal { background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-xl); width:100%; box-shadow:var(--shadow-lg); display:flex; flex-direction:column; }
-	.modal-header { display:flex; align-items:flex-start; justify-content:space-between; padding:22px 24px 0; }
-	.modal-title { font-size:16px; font-weight:600; margin-bottom:6px; }
-	.modal-close { background:none; border:none; color:var(--text-muted); font-size:14px; cursor:pointer; padding:4px; border-radius:4px; line-height:1; }
-	.modal-close:hover { color:var(--text-primary); background:var(--bg-surface); }
-	.modal-body { padding:20px 24px; display:flex; flex-direction:column; gap:16px; }
-	.modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 24px; border-top:1px solid var(--border); }
+	.plans-loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 32px; color: var(--text-muted); font-size: 13px; }
+	.plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+	.plan-card {
+		position: relative; text-align: left; font-family: inherit;
+		padding: 16px; border: 2px solid var(--border); border-radius: var(--radius-lg);
+		cursor: pointer; transition: border-color var(--transition-fast), background var(--transition-fast);
+		background: var(--bg-elevated);
+	}
+	.plan-card:hover { border-color: var(--accent); }
+	.plan-card.selected { border-color: var(--accent); background: var(--accent-muted); }
+	.plan-top { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+	.plan-name { font-size: 13px; font-weight: 700; color: var(--text-primary); text-transform: capitalize; }
+	.plan-price { font-size: 18px; font-weight: 700; color: var(--accent); }
+	.plan-period { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+	.plan-features { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+	.plan-features li { font-size: 11.5px; color: var(--text-secondary); }
+	.plan-features li::before { content: '· '; color: var(--text-dim); }
+	.plan-check {
+		position: absolute; top: 10px; right: 10px; width: 18px; height: 18px; border-radius: 50%;
+		background: var(--accent); color: #fff;
+		display: flex; align-items: center; justify-content: center;
+	}
+	.paid-note { font-size: 12px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; margin: 4px 0 0; }
 
-	.step-indicator { display:flex; align-items:center; gap:8px; font-size:11.5px; }
-	.step { color:var(--text-muted); font-weight:500; }
-	.step.active { color:var(--accent); font-weight:700; }
-	.step.done { color:var(--text-secondary); }
-	.step-sep { color:var(--text-dim); font-size:10px; }
+	/* ── Orgs list ── */
+	.orgs-container { min-height: 100vh; background: var(--bg-base); padding: 40px 32px; }
+	.orgs-inner { max-width: 960px; margin: 0 auto; }
 
-	.field { display:flex; flex-direction:column; gap:5px; }
-	.lbl { font-size:12px; font-weight:600; color:var(--text-secondary); }
-	.inp { height:34px; padding:0 10px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); font-size:13px; color:var(--text-primary); outline:none; width:100%; box-sizing:border-box; }
-	.inp:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-muted); }
-	.hint { font-size:11px; color:var(--text-dim); }
+	.orgs-loading-wrap { display: flex; align-items: center; justify-content: center; padding: 80px 0; gap: 12px; color: var(--text-muted); font-size: 14px; }
+	.orgs-error-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+	.orgs-empty { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 40px 0; }
 
-	.err-banner { margin:12px 24px 0; padding:10px 14px; background:var(--accent-red-muted); border:1px solid var(--accent-red); border-radius:var(--radius-md); color:var(--accent-red); font-size:13px; }
-
-	.plans-loading { text-align:center; padding:32px; color:var(--text-muted); font-size:13px; }
-	.plans-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:12px; }
-	.plan-card { position:relative; padding:16px; border:2px solid var(--border); border-radius:var(--radius-lg); cursor:pointer; transition:border-color .15s, background .15s; background:var(--bg-surface); }
-	.plan-card:hover { border-color:var(--accent); }
-	.plan-card.selected { border-color:var(--accent); background:var(--accent-muted); }
-	.plan-top { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
-	.plan-name { font-size:13px; font-weight:700; color:var(--text-primary); text-transform:capitalize; }
-	.plan-price { font-size:18px; font-weight:700; color:var(--accent); }
-	.plan-period { font-size:11px; font-weight:400; color:var(--text-muted); }
-	.plan-features { list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:4px; }
-	.plan-features li { font-size:11.5px; color:var(--text-secondary); }
-	.plan-features li::before { content:'· '; color:var(--text-dim); }
-	.plan-check { position:absolute; top:10px; right:10px; width:18px; height:18px; border-radius:50%; background:var(--accent); color:#000; font-size:10px; font-weight:800; display:flex; align-items:center; justify-content:center; }
-	.paid-note { font-size:12px; color:var(--text-muted); background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:10px 12px; margin-top:4px; }
-
-	.btn-cancel { padding:6px 14px; border-radius:var(--radius-md); font-size:13px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg-surface); color:var(--text-secondary); }
-	.btn-cancel:hover { background:var(--bg-elevated); }
-	.btn-confirm { padding:6px 16px; border-radius:var(--radius-md); font-size:13px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; }
-	.btn-confirm:hover:not(:disabled) { opacity:.88; }
-	.btn-confirm:disabled { opacity:.45; cursor:not-allowed; }
-
-	/* Orgs list custom styles */
-	.orgs-container { min-height:100vh; background:var(--bg-base); padding:40px 32px; }
-	.orgs-inner { max-width:960px; margin:0 auto; }
-	.orgs-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:32px; gap:16px; flex-wrap:wrap; }
-	.orgs-title { font-size:22px; font-weight:700; color:var(--text-primary); margin:0 0 4px; letter-spacing:-0.02em; }
-	.orgs-subtitle { color:var(--text-muted); font-size:13.5px; margin:0; }
-	.btn-new-org { display:inline-flex; align-items:center; gap:6px; height:34px; padding:0 14px; font-size:12.5px; font-weight:600; cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:#000; border-radius:var(--radius-md); transition:opacity .15s; font-family:var(--font); }
-	.btn-new-org:hover { opacity:.88; }
-
-	.orgs-loading-wrap { display:flex; align-items:center; justify-content:center; padding:80px 0; gap:12px; color:var(--text-muted); font-size:14px; }
-	.orgs-spinner { width:20px; height:20px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:spin 0.7s linear infinite; }
-
-	.orgs-error-banner { padding:16px 20px; background:var(--accent-red-muted); border:1px solid var(--accent-red); border-radius:var(--radius-md); color:var(--accent-red); font-size:13px; display:flex; align-items:center; justify-content:space-between; }
-
-	.orgs-empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:80px 0; gap:16px; text-align:center; }
-	.orgs-empty-icon { width:56px; height:56px; border-radius:var(--radius-lg); background:var(--bg-elevated); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:24px; }
-	.orgs-empty-title { color:var(--text-primary); font-weight:500; margin-bottom:4px; }
-	.orgs-empty-sub { color:var(--text-muted); font-size:13px; }
-
-	.orgs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:18px; }
-	.org-card { text-align:left; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; cursor:pointer; display:flex; flex-direction:column; gap:14px; transition:transform 0.2s, border-color 0.2s, box-shadow 0.2s; box-shadow:var(--shadow-sm); width:100%; border-sizing:border-box; }
-	.org-card:hover { transform:translateY(-2px); border-color:var(--accent); box-shadow:0 6px 20px rgba(124, 106, 247, 0.06); }
-	.org-avatar { width:40px; height:40px; border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; font-size:18px; font-weight:700; color:#fff; box-shadow:var(--shadow-sm); }
-	.org-details { display:flex; flex-direction:column; gap:2px; }
-	.org-name { font-size:14px; font-weight:600; color:var(--text-primary); }
-	.org-slug { font-size:12px; color:var(--text-muted); font-family:var(--font-mono); }
-	.org-footer { display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid var(--border); font-size:11px; color:var(--text-muted); width:100%; }
-	.org-meta-item { display:inline-flex; align-items:center; gap:4px; font-weight:500; }
-	.org-date { font-size:11px; }
+	.orgs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
+	.org-card {
+		display: block; width: 100%; padding: 0; border: none; background: none;
+		text-align: left; font-family: inherit; cursor: pointer;
+		border-radius: var(--radius-lg);
+		transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+	}
+	.org-card :global(.ui-card) { transition: border-color var(--transition-normal); box-shadow: var(--shadow-sm); }
+	.org-card:hover { transform: translateY(-2px); }
+	.org-card:hover :global(.ui-card) { border-color: var(--accent); }
+	.org-card-body { display: flex; flex-direction: column; gap: 14px; }
+	.org-details { display: flex; flex-direction: column; gap: 2px; }
+	.org-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+	.org-slug { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+	.org-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
+	.org-meta-item { display: inline-flex; align-items: center; gap: 4px; font-weight: 500; }
+	.org-date { font-size: 11px; }
 
 	@media (max-width: 640px) {
-		.orgs-container { padding:24px 16px; }
-		.orgs-header { flex-direction:column; align-items:flex-start; gap:12px; }
-		.btn-new-org { width:100%; justify-content:center; }
-		.orgs-grid { grid-template-columns:1fr; }
+		.orgs-container { padding: 24px 16px; }
+		.orgs-grid { grid-template-columns: 1fr; }
 	}
 </style>
