@@ -7,6 +7,10 @@
 		type?: 'button' | 'submit';
 		disabled?: boolean;
 		onclick?: (e: MouseEvent) => void;
+		href?: string;
+		target?: string;
+		rel?: string;
+		title?: string;
 		children: Snippet;
 		'aria-label'?: string;
 	}
@@ -17,20 +21,39 @@
 		type = 'button',
 		disabled = false,
 		onclick,
+		href,
+		target,
+		rel,
+		title,
 		children,
 		'aria-label': ariaLabel
 	}: Props = $props();
 </script>
 
-<button
-	{type}
-	{disabled}
-	class="ui-btn ui-btn--{variant} ui-btn--{size}"
-	{onclick}
-	aria-label={ariaLabel}
->
-	{@render children()}
-</button>
+{#if href}
+	<a
+		{href}
+		{target}
+		{rel}
+		{title}
+		{onclick}
+		class="ui-btn ui-btn--{variant} ui-btn--{size}"
+		aria-label={ariaLabel}
+	>
+		{@render children()}
+	</a>
+{:else}
+	<button
+		{type}
+		{disabled}
+		{title}
+		class="ui-btn ui-btn--{variant} ui-btn--{size}"
+		{onclick}
+		aria-label={ariaLabel}
+	>
+		{@render children()}
+	</button>
+{/if}
 
 <style>
 	.ui-btn {
@@ -46,6 +69,7 @@
 		transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
 		white-space: nowrap;
 		position: relative;
+		text-decoration: none;
 	}
 	.ui-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 

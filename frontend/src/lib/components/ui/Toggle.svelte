@@ -3,9 +3,10 @@
 		checked: boolean;
 		disabled?: boolean;
 		label?: string;
+		onchange?: (checked: boolean) => void;
 	}
 
-	let { checked = $bindable(), disabled = false, label }: Props = $props();
+	let { checked = $bindable(), disabled = false, label, onchange }: Props = $props();
 </script>
 
 <button
@@ -16,7 +17,7 @@
 	{disabled}
 	class="ui-toggle"
 	class:ui-toggle--on={checked}
-	onclick={() => (checked = !checked)}
+	onclick={() => { checked = !checked; onchange?.(checked); }}
 >
 	<span class="ui-toggle-thumb"></span>
 </button>

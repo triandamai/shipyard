@@ -2,13 +2,15 @@
 	interface Props {
 		checked: boolean;
 		label?: string;
+		disabled?: boolean;
+		onchange?: (checked: boolean) => void;
 	}
 
-	let { checked = $bindable(), label }: Props = $props();
+	let { checked = $bindable(), label, disabled = false, onchange }: Props = $props();
 </script>
 
 <label class="ui-checkbox">
-	<input type="checkbox" bind:checked />
+	<input type="checkbox" bind:checked {disabled} onchange={() => onchange?.(checked)} />
 	<span class="ui-checkbox-box"></span>
 	{#if label}<span class="ui-checkbox-label">{label}</span>{/if}
 </label>
@@ -22,6 +24,7 @@
 		font-size: 13px;
 		color: var(--text-secondary);
 	}
+	.ui-checkbox:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
 	.ui-checkbox input {
 		position: absolute;
 		opacity: 0;
