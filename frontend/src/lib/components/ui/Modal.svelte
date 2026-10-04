@@ -10,9 +10,11 @@
 		title: string;
 		children: Snippet;
 		footer?: Snippet;
+		/** When false, Escape and scrim clicks do not close the dialog. */
+		dismissible?: boolean;
 	}
 
-	let { open = $bindable(), title, children, footer }: Props = $props();
+	let { open = $bindable(), title, children, footer, dismissible = true }: Props = $props();
 
 	const titleId = `ui-modal-title-${++modalCounter}`;
 	const FOCUSABLE =
@@ -28,7 +30,7 @@
 	function onKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
 			e.stopPropagation();
-			close();
+			if (dismissible) close();
 			return;
 		}
 		if (e.key !== 'Tab' || !dialogEl) return;
@@ -59,7 +61,7 @@
 </script>
 
 {#if open}
-	<div class="ui-modal-scrim" role="presentation" onclick={close}>
+	<div class="ui-modal-scrim" role="presentation" onclick={() => { if (dismissible) close(); }}>
 		<div
 			class="ui-modal"
 			role="dialog"

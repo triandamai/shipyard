@@ -185,6 +185,7 @@
 	<Modal
 		bind:open={() => createdKey !== null, (v) => { if (!v) createdKey = null; }}
 		title="API Key Created"
+		dismissible={false}
 	>
 		{#if createdKey}
 			<div class="reveal-body">
