@@ -20,6 +20,7 @@
   import { can, perm } from "$lib/auth/permissions";
   import {
     Badge,
+    DataTable,
     Button,
     Card,
     InlineAlert,
@@ -334,16 +335,19 @@
     es = null;
   });
 
-  function nodeStatusColor(status: string): string {
-    if (status === "ready") return "#16a34a";
-    if (status === "down") return "#ef4444";
-    return "#f97316";
+  // Page-local mapping preserving the old colours: ready=green, down=red,
+  // anything else=orange (toDotStatus would turn "down" grey).
+  function nodeDot(status: string): "running" | "failed" | "warning" {
+    if (status === "ready") return "running";
+    if (status === "down") return "failed";
+    return "warning";
   }
 
-  function availColor(avail: string): string {
-    if (avail === "active") return "#16a34a";
-    if (avail === "drain") return "#ef4444";
-    return "#f97316";
+  // Old availability colours: active=green, drain=red, else=orange.
+  function availTone(avail: string): "green" | "red" | "yellow" {
+    if (avail === "active") return "green";
+    if (avail === "drain") return "red";
+    return "yellow";
   }
 </script>
 
@@ -627,167 +631,179 @@
     {/if}
 
     <!-- Swarm Nodes (always rendered, not gated by metrics stream) -->
-    <div class="section">
-      <div class="section-head">
+    <div class="block">
+      <div class="sec-head">
         <Server size={14} />
-        <span>Swarm Nodes</span>
-        <button
-          class="refresh-inline"
-          onclick={loadNodes}
-          disabled={nodesLoading}
-          title="Refresh"
-        >
-          <RefreshCw size={11} />
-        </button>
+        <SectionLabel>Swarm Nodes</SectionLabel>
+        <div class="sec-action sec-action-auto">
+          <Button
+            variant="secondary"
+            size="icon"
+            onclick={loadNodes}
+            disabled={nodesLoading}
+            title="Refresh"
+            aria-label="Refresh swarm nodes"
+          >
+            <RefreshCw size={13} />
+          </Button>
+        </div>
       </div>
 
       {#if nodesLoading}
         <div class="nodes-placeholder">
-          <div class="spinner"></div>
-           Loading nodes…
+          <Spinner size={18} />
+          Loading nodes…
         </div>
       {:else if nodesError}
-        <div class="nodes-placeholder error">{nodesError}</div>
+        <div role="alert"><InlineAlert tone="error">{nodesError}</InlineAlert></div>
       {:else if nodes.length === 0}
         <div class="nodes-placeholder">
           Not running in swarm mode, or no nodes visible.
         </div>
       {:else}
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Hostname</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Availability</th>
-                <th>Address</th>
-                <th>Engine</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each nodes as node}
-                <tr>
-                  <td class="mono">{node.hostname}</td>
-                  <td>
-                    <span class="role-badge role-{node.role}">{node.role}</span>
-                  </td>
-                  <td>
-                    <span
-                      class="node-status"
-                      style="color: {nodeStatusColor(node.status)}"
-                    >
-                      ● {node.status}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      class="node-status"
-                      style="color: {availColor(node.availability)}"
-                    >
-                      {node.availability}
-                    </span>
-                  </td>
-                  <td class="mono muted">{node.addr ?? "—"}</td>
-                  <td class="mono muted">{node.engine_version ?? "—"}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          items={nodes}
+          rowKey={(n) => n.hostname}
+          searchable={false}
+          columns={[
+            { key: "hostname", label: "Hostname" },
+            { key: "role", label: "Role" },
+            { key: "status", label: "Status" },
+            { key: "availability", label: "Availability" },
+            { key: "addr", label: "Address" },
+            { key: "engine_version", label: "Engine" },
+          ]}
+        >
+          {#snippet row(node)}
+            <tr>
+              <td class="mono">{node.hostname}</td>
+              <td>
+                <Badge tone={node.role === "manager" ? "blue" : "neutral"}
+                  >{node.role}</Badge
+                >
+              </td>
+              <td>
+                <span class="node-status">
+                  <StatusDot status={nodeDot(node.status)} />
+                  {node.status}
+                </span>
+              </td>
+              <td>
+                <Badge tone={availTone(node.availability)}
+                  >{node.availability}</Badge
+                >
+              </td>
+              <td class="mono muted">{node.addr ?? "—"}</td>
+              <td class="mono muted">{node.engine_version ?? "—"}</td>
+            </tr>
+          {/snippet}
+        </DataTable>
       {/if}
     </div>
+
     <!-- Swarm Join Tokens -->
-    <div class="section">
-      <div class="section-head">
+    <div class="block">
+      <div class="sec-head">
         <Link size={14} />
-        <span>Join Tokens</span>
-        <span class="section-hint"
-          >Run on a new VPS to add it to this swarm</span
-        >
-        <button
-          class="refresh-inline"
-          onclick={loadJoinTokens}
-          disabled={joinTokensLoading}
-          title="Refresh"
-        >
-          <RefreshCw size={11} />
-        </button>
-      </div>
-
-      <!-- Guided setup banner -->
-      <div class="setup-banner">
-        <div class="setup-banner-text">
-          <span class="setup-banner-title">New to this?</span>
-          Run the guided worker setup script on your new VPS — it installs Docker,
-          configures registry credentials, and joins the swarm in one go.
-        </div>
-        <div class="setup-banner-cmd-wrap">
-          <code class="setup-banner-cmd"
-            >curl -fsSL {typeof window !== "undefined"
-              ? window.location.origin
-              : ""}/worker-setup.sh | sudo bash</code
+        <SectionLabel>Join Tokens</SectionLabel>
+        <span class="section-hint">Run on a new VPS to add it to this swarm</span>
+        <div class="sec-action">
+          <Button
+            variant="secondary"
+            size="icon"
+            onclick={loadJoinTokens}
+            disabled={joinTokensLoading}
+            title="Refresh"
+            aria-label="Refresh join tokens"
           >
-          <button
-            class="token-copy-btn"
-            onclick={async () => {
-              await navigator.clipboard.writeText(
-                `curl -fsSL ${window.location.origin}/worker-setup.sh | sudo bash`,
-              );
-              copiedToken = "worker";
-              setTimeout(() => (copiedToken = null), 2000);
-            }}
-            title="Copy setup command"
-          >
-            {#if copiedToken === "worker"}
-              <Check size={13} />
-            {:else}
-              <Copy size={13} />
-            {/if}
-          </button>
+            <RefreshCw size={13} />
+          </Button>
         </div>
       </div>
 
-      {#if joinTokensLoading}
-        <div class="nodes-placeholder">
-          <div class="spinner"></div>
-           Loading…
+      <Card padding="0">
+        <!-- Guided setup banner -->
+        <div class="setup-banner">
+          <div class="setup-banner-text">
+            <span class="setup-banner-title">New to this?</span>
+            Run the guided worker setup script on your new VPS — it installs Docker,
+            configures registry credentials, and joins the swarm in one go.
+          </div>
+          <div class="setup-banner-cmd-wrap">
+            <code class="setup-banner-cmd"
+              >curl -fsSL {typeof window !== "undefined"
+                ? window.location.origin
+                : ""}/worker-setup.sh | sudo bash</code
+            >
+            <Button
+              variant="secondary"
+              size="icon"
+              onclick={async () => {
+                await navigator.clipboard.writeText(
+                  `curl -fsSL ${window.location.origin}/worker-setup.sh | sudo bash`,
+                );
+                copiedToken = "worker";
+                setTimeout(() => (copiedToken = null), 2000);
+              }}
+              title="Copy setup command"
+              aria-label="Copy setup command"
+            >
+              {#if copiedToken === "worker"}
+                <Check size={13} />
+              {:else}
+                <Copy size={13} />
+              {/if}
+            </Button>
+          </div>
         </div>
-      {:else if joinTokensError}
-        <div class="nodes-placeholder error">{joinTokensError}</div>
-      {:else if joinTokens}
-        <div class="token-list">
-          {#each [["worker", joinTokens.worker], ["manager", joinTokens.manager]] as [role, token]}
-            <div class="token-row">
-              <div class="token-meta">
-                <span class="role-badge role-{role}">{role}</span>
-                <span class="token-hint">
-                  {role === "worker"
-                    ? "Runs workloads — no scheduling control"
-                    : "Full cluster control — use sparingly"}
-                </span>
+
+        {#if joinTokensLoading}
+          <div class="nodes-placeholder">
+            <Spinner size={18} />
+            Loading…
+          </div>
+        {:else if joinTokensError}
+          <div class="nodes-placeholder">
+            <div role="alert"><InlineAlert tone="error">{joinTokensError}</InlineAlert></div>
+          </div>
+        {:else if joinTokens}
+          <div class="token-list">
+            {#each [["worker", joinTokens.worker], ["manager", joinTokens.manager]] as [role, token]}
+              <div class="token-row">
+                <div class="token-meta">
+                  <Badge tone={role === "manager" ? "blue" : "neutral"}
+                    >{role}</Badge
+                  >
+                  <span class="token-hint">
+                    {role === "worker"
+                      ? "Runs workloads — no scheduling control"
+                      : "Full cluster control — use sparingly"}
+                  </span>
+                </div>
+                <div class="token-cmd-wrap">
+                  <code class="token-cmd"
+                    >docker swarm join --token {token} {joinTokens.addr}</code
+                  >
+                  <Button
+                    variant="secondary"
+                    size="icon"
+                    onclick={() =>
+                      copyToken(role === "manager" ? "manager" : "worker")}
+                    title="Copy command"
+                    aria-label="Copy {role} join command"
+                  >
+                    {#if copiedToken === role}
+                      <Check size={13} />
+                    {:else}
+                      <Copy size={13} />
+                    {/if}
+                  </Button>
+                </div>
               </div>
-              <div class="token-cmd-wrap">
-                <code class="token-cmd"
-                  >docker swarm join --token {token} {joinTokens.addr}</code
-                >
-                <button
-                  class="token-copy-btn"
-                  onclick={() =>
-                    copyToken(role === "manager" ? "manager" : "worker")}
-                  title="Copy command"
-                >
-                  {#if copiedToken === role}
-                    <Check size={13} />
-                  {:else}
-                    <Copy size={13} />
-                  {/if}
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
+            {/each}
+          </div>
+        {/if}
+      </Card>
     </div>
   </div>
 {/if}
@@ -879,6 +895,7 @@
   }
   .sec-head :global(.ui-section-label) {
     margin-bottom: 0;
+    white-space: nowrap;
   }
   .sec-action {
     margin-left: 0;
@@ -990,44 +1007,6 @@
     color: var(--accent);
   }
 
-  /* Legacy rules still used by Swarm Nodes / Join Tokens (removed in part 2) */
-  .section {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-  }
-  .section-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-elevated);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .section-head .section-hint {
-    text-transform: none;
-    letter-spacing: 0;
-  }
-  .spinner {
-    width: 18px;
-    height: 18px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
   /* Swarm nodes */
   .nodes-placeholder {
     padding: 20px 16px;
@@ -1037,52 +1016,14 @@
     align-items: center;
     gap: 8px;
   }
-  .nodes-placeholder.error {
-    color: #dc2626;
-  }
-
-  .refresh-inline {
-    display: flex;
-    align-items: center;
-    margin-left: auto;
-    padding: 3px 6px;
-    font-size: 11px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .refresh-inline:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  .refresh-inline:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .role-badge {
-    display: inline-block;
-    padding: 2px 7px;
-    font-size: 11px;
-    font-weight: 600;
-    border-radius: 10px;
-    text-transform: capitalize;
-  }
-  .role-manager {
-    background: rgba(99, 102, 241, 0.1);
-    color: #6366f1;
-  }
-  .role-worker {
-    background: var(--bg-muted);
-    color: var(--text-secondary);
-  }
 
   .node-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
     font-weight: 500;
+    color: var(--text-secondary);
     text-transform: capitalize;
   }
 
@@ -1092,7 +1033,7 @@
     flex-direction: column;
     gap: 8px;
     padding: 12px 16px;
-    background: rgba(99, 102, 241, 0.05);
+    background: var(--accent-muted);
     border-bottom: 1px solid var(--border);
   }
   .setup-banner-text {
@@ -1111,7 +1052,7 @@
     gap: 10px;
     background: var(--bg-base);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 7px 12px;
   }
   .setup-banner-cmd {
@@ -1151,9 +1092,9 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    background: var(--bg-muted);
+    background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 8px 12px;
   }
   .token-cmd {
@@ -1164,25 +1105,6 @@
     word-break: break-all;
     user-select: all;
   }
-  .token-copy-btn {
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .token-copy-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
   /* Core services */
   .core-error {
     display: flex;
