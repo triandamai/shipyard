@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { CheckCircle, Copy, RefreshCw } from '@lucide/svelte';
+	import { CheckCircle, Copy, RefreshCw, GitBranch, Tag } from '@lucide/svelte';
+	import { Card, FormField, TextField, Select, Toggle, Button, InlineAlert, Spinner, Tabs, KeyValueList } from '$lib/components/ui';
 	import type { GitProvider } from '$lib/api/types';
 
 	interface WebhookStatus { ok: boolean; message: string }
@@ -112,397 +113,228 @@
 <div class="git-config-section">
 
 	<!-- ── Provider card ──────────────────────────────────────────────────────── -->
-	<div class="git-card">
-		<div class="git-card-title">Linked Git Account</div>
-		<p class="git-card-desc">Select the Git provider account used to clone and authenticate this repository.</p>
+	<Card padding="14px 16px">
+		<div class="git-card">
+			<div class="git-card-title">Linked Git Account</div>
+			<p class="git-card-desc">Select the Git provider account used to clone and authenticate this repository.</p>
 
-		<div class="git-field">
-			<label class="git-label" for="gss-provider">Git Account</label>
-			{#if loadingProviders}
-				<div class="git-select placeholder">Loading accounts…</div>
-			{:else}
-				<select id="gss-provider" class="git-select" bind:value={providerId}>
-					<option value="">{providerDefaultLabel}</option>
-					{#each providers as p (p.id)}
-						<option value={p.id}>{p.name} ({p.provider_type.toUpperCase()})</option>
-					{/each}
-				</select>
+			<FormField label="Git Account" for="gss-provider">
+				{#if loadingProviders}
+					<Select id="gss-provider" value="" disabled options={[{ value: '', label: 'Loading accounts…' }]} />
+				{:else}
+					<Select
+						id="gss-provider"
+						bind:value={providerId}
+						options={[
+							{ value: '', label: providerDefaultLabel },
+							...providers.map((p) => ({ value: p.id, label: `${p.name} (${p.provider_type.toUpperCase()})` })),
+						]}
+					/>
+				{/if}
+			</FormField>
+
+			{#if providerError}   <div role="alert"><InlineAlert tone="error">{providerError}</InlineAlert></div> {/if}
+			{#if providerSuccess} <div role="status"><InlineAlert tone="success">{providerSuccess}</InlineAlert></div> {/if}
+			{#if providerWebhookStatus}
+				<div role="status">
+					<InlineAlert tone={providerWebhookStatus.ok ? 'success' : 'error'}>{providerWebhookStatus.message}</InlineAlert>
+				</div>
+			{/if}
+
+			{#if onSaveProvider}
+				<div class="git-save-row">
+					<Button variant="primary" size="sm" onclick={onSaveProvider} disabled={providerSaving}>
+						{#if providerSaving}<Spinner size={12} tone="current" /> Saving…{:else}Link Account{/if}
+					</Button>
+				</div>
 			{/if}
 		</div>
-
-		{#if providerError}   <p class="git-error">{providerError}</p>   {/if}
-		{#if providerSuccess} <p class="git-ok">{providerSuccess}</p>     {/if}
-		{#if providerWebhookStatus}
-			<div class="webhook-status {providerWebhookStatus.ok ? 'success' : 'error'}">
-				{providerWebhookStatus.message}
-			</div>
-		{/if}
-
-		{#if onSaveProvider}
-			<div class="git-save-row">
-				<button class="btn btn-primary btn-sm" onclick={onSaveProvider} disabled={providerSaving}>
-					{#if providerSaving}<span class="spinner-xs"></span> Saving…{:else}Link Account{/if}
-				</button>
-			</div>
-		{/if}
-	</div>
+	</Card>
 
 	<!-- ── Deploy-strategy card ────────────────────────────────────────────────── -->
-	<div class="git-card">
-		{#if showAutoDeployToggle}
-			<div class="git-card-header">
-				<div class="git-card-title">Auto-deploy</div>
-				<label class="toggle-switch">
-					<input type="checkbox" bind:checked={autoDeploy} />
-					<span class="toggle-track"></span>
-				</label>
-			</div>
-			<p class="git-card-desc">
-				Automatically trigger a deployment when Shipyard receives a webhook push event.
-			</p>
-		{:else}
-			<div class="git-card-title">Deployment Strategy</div>
-			<p class="git-card-desc">Configure which Git events trigger automatic deployments.</p>
-		{/if}
+	<Card padding="14px 16px">
+		<div class="git-card">
+			{#if showAutoDeployToggle}
+				<div class="git-card-header">
+					<div class="git-card-title">Auto-deploy</div>
+					<Toggle bind:checked={autoDeploy} label="Auto-deploy" />
+				</div>
+				<p class="git-card-desc">
+					Automatically trigger a deployment when Shipyard receives a webhook push event.
+				</p>
+			{:else}
+				<div class="git-card-title">Deployment Strategy</div>
+				<p class="git-card-desc">Configure which Git events trigger automatic deployments.</p>
+			{/if}
 
-		<div class="git-field">
-			<label class="git-label" for="gss-strategy">Strategy</label>
-			<select id="gss-strategy" class="git-select" bind:value={strategy} disabled={deployDisabled}>
-				<option value="push">Deploy on Branch Push</option>
-				<option value="tag">Deploy on Tag Push</option>
-				<option value="pull_request">Deploy on PR / MR Merge</option>
-			</select>
+			<FormField label="Strategy" for="gss-strategy">
+				<Select
+					id="gss-strategy"
+					bind:value={strategy}
+					disabled={deployDisabled}
+					options={[
+						{ value: 'push', label: 'Deploy on Branch Push' },
+						{ value: 'tag', label: 'Deploy on Tag Push' },
+						{ value: 'pull_request', label: 'Deploy on PR / MR Merge' },
+					]}
+				/>
+			</FormField>
+
+			{#if strategy === 'push'}
+				<FormField label="Branch to watch" for="gss-branch" hint="Only pushes to this branch trigger a deployment.">
+					<div class="mono-field">
+						<TextField id="gss-branch" type="text" bind:value={branch} placeholder="main"
+							disabled={deployDisabled} spellcheck="false" autocomplete="off">
+							{#snippet icon()}<GitBranch size={13} />{/snippet}
+						</TextField>
+					</div>
+				</FormField>
+			{/if}
+
+			{#if strategy === 'tag'}
+				<FormField label="Tag pattern" for="gss-tag" hint="Deploy when a tag matching this glob is pushed (e.g. v*).">
+					<div class="mono-field">
+						<TextField id="gss-tag" type="text" bind:value={tagPattern} placeholder="v*"
+							disabled={deployDisabled} spellcheck="false" autocomplete="off">
+							{#snippet icon()}<Tag size={13} />{/snippet}
+						</TextField>
+					</div>
+				</FormField>
+			{/if}
+
+			{#if strategy === 'pull_request'}
+				<FormField label="Target branch (PR merge)" for="gss-pr-branch" hint="Deploy when a pull request is merged into this branch.">
+					<div class="mono-field">
+						<TextField id="gss-pr-branch" type="text"
+							value={effectivePrBranch}
+							oninput={(e) => setPrBranch((e.target as HTMLInputElement).value)}
+							placeholder="main"
+							disabled={deployDisabled} spellcheck="false" autocomplete="off">
+							{#snippet icon()}<GitBranch size={13} />{/snippet}
+						</TextField>
+					</div>
+				</FormField>
+			{/if}
+
+			{#if saveError}   <div role="alert"><InlineAlert tone="error">{saveError}</InlineAlert></div> {/if}
+			{#if saveSuccess} <div role="status"><InlineAlert tone="success">{saveSuccess}</InlineAlert></div> {/if}
+
+			<div class="git-save-row">
+				<Button variant="primary" size="sm" onclick={onSave} disabled={saving}>
+					{#if saving}<Spinner size={12} tone="current" /> Saving…
+					{:else if saveOk}Saved
+					{:else}Save{/if}
+				</Button>
+			</div>
+
+			{#if strategyWebhookStatus}
+				<div role="status">
+					<InlineAlert tone={strategyWebhookStatus.ok ? 'success' : 'error'}>{strategyWebhookStatus.message}</InlineAlert>
+				</div>
+			{/if}
 		</div>
-
-		{#if strategy === 'push'}
-			<div class="git-field">
-				<label class="git-label" for="gss-branch">Branch to watch</label>
-				<div class="git-branch-row">
-					<span class="git-branch-icon">⎇</span>
-					<input id="gss-branch" class="git-branch-input" type="text"
-						bind:value={branch} placeholder="main"
-						disabled={deployDisabled} spellcheck="false" autocomplete="off" />
-				</div>
-				<p class="git-hint">Only pushes to this branch trigger a deployment.</p>
-			</div>
-		{/if}
-
-		{#if strategy === 'tag'}
-			<div class="git-field">
-				<label class="git-label" for="gss-tag">Tag pattern</label>
-				<div class="git-branch-row">
-					<span class="git-branch-icon">🏷</span>
-					<input id="gss-tag" class="git-branch-input" type="text"
-						bind:value={tagPattern} placeholder="v*"
-						disabled={deployDisabled} spellcheck="false" autocomplete="off" />
-				</div>
-				<p class="git-hint">Deploy when a tag matching this glob is pushed (e.g. <code>v*</code>).</p>
-			</div>
-		{/if}
-
-		{#if strategy === 'pull_request'}
-			<div class="git-field">
-				<label class="git-label" for="gss-pr-branch">Target branch (PR merge)</label>
-				<div class="git-branch-row">
-					<span class="git-branch-icon">⎇</span>
-					<input id="gss-pr-branch" class="git-branch-input" type="text"
-						value={effectivePrBranch}
-						oninput={(e) => setPrBranch((e.target as HTMLInputElement).value)}
-						placeholder="main"
-						disabled={deployDisabled} spellcheck="false" autocomplete="off" />
-				</div>
-				<p class="git-hint">Deploy when a pull request is merged into this branch.</p>
-			</div>
-		{/if}
-
-		{#if saveError}   <p class="git-error">{saveError}</p>   {/if}
-		{#if saveSuccess} <p class="git-ok">{saveSuccess}</p>     {/if}
-
-		<div class="git-save-row">
-			<button class="btn btn-primary btn-sm" onclick={onSave} disabled={saving}>
-				{#if saving}<span class="spinner-xs"></span> Saving…
-				{:else if saveOk}Saved
-				{:else}Save{/if}
-			</button>
-		</div>
-
-		{#if strategyWebhookStatus}
-			<div class="webhook-status {strategyWebhookStatus.ok ? 'success' : 'error'}" style="margin-top:4px">
-				{strategyWebhookStatus.message}
-			</div>
-		{/if}
-	</div>
+	</Card>
 
 	<!-- ── Webhook card ────────────────────────────────────────────────────────── -->
 	{#if webhookUrl !== undefined || webhookLoading}
-		<div class="git-card">
-			<div class="git-card-header">
-				<div class="git-card-title">Webhook URL</div>
-				{#if showProviderTabs}
-					<div class="webhook-provider-tabs">
-						{#each (['github', 'gitlab', 'gitea'] as const) as p}
-							<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
-								{p.charAt(0).toUpperCase() + p.slice(1)}
-							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
-			<p class="git-card-desc">
-				Register this URL as a webhook in your repository with the <strong>push</strong> event.
-				The token in the URL authenticates the request — no secret header needed.
-			</p>
-
-			{#if webhookLoading}
-				<div class="webhook-loading"><div class="spinner-xs-inline"></div> Loading…</div>
-			{:else}
-				<div class="webhook-url-row">
-					<input class="webhook-url-input" readonly value={webhookUrl ?? ''} />
-					{#if onCopyWebhook}
-						<button class="webhook-copy-btn" onclick={onCopyWebhook}
-							disabled={!webhookUrl || isRotatingWebhook}>
-							{#if webhookCopied}
-								<CheckCircle size={13} /> Copied
-							{:else}
-								<Copy size={13} /> Copy
-							{/if}
-						</button>
+		<Card padding="14px 16px">
+			<div class="git-card">
+				<div class="git-card-header">
+					<div class="git-card-title">Webhook URL</div>
+					{#if showProviderTabs}
+						<Tabs
+							ariaLabel="Webhook provider"
+							tabs={[{ id: 'github', label: 'Github' }, { id: 'gitlab', label: 'Gitlab' }, { id: 'gitea', label: 'Gitea' }]}
+							bind:value={webhookProvider}
+						/>
 					{/if}
 				</div>
+				<p class="git-card-desc">
+					Register this URL as a webhook in your repository with the <strong>push</strong> event.
+					The token in the URL authenticates the request — no secret header needed.
+				</p>
 
-				{#if onRotateWebhook}
-					<div class="webhook-actions">
-						{#if webhookRotateConfirm}
-							<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
-							<button class="webhook-rotate-btn danger" onclick={onRotateWebhook} disabled={isRotatingWebhook}>
-								{#if isRotatingWebhook}<div class="spinner-xs-inline"></div> Rotating…{:else}Yes, rotate{/if}
-							</button>
-							<button class="webhook-rotate-btn" onclick={() => webhookRotateConfirm = false}>Cancel</button>
-						{:else}
-							<button class="webhook-rotate-btn" onclick={() => webhookRotateConfirm = true}>
-								<RefreshCw size={11} /> Rotate URL
-							</button>
+				{#if webhookLoading}
+					<div class="webhook-loading"><Spinner size={10} /> Loading…</div>
+				{:else}
+					<div class="webhook-url-row">
+						<div class="webhook-url mono-field">
+							<TextField type="text" readonly aria-label="Webhook URL" value={webhookUrl ?? ''} />
+						</div>
+						{#if onCopyWebhook}
+							<Button variant="secondary" size="sm" onclick={onCopyWebhook}
+								disabled={!webhookUrl || isRotatingWebhook}>
+								{#if webhookCopied}
+									<CheckCircle size={13} /> Copied
+								{:else}
+									<Copy size={13} /> Copy
+								{/if}
+							</Button>
 						{/if}
 					</div>
-				{/if}
 
-				{#if autoWebhookInfo}
-					<div class="webhook-status info">{autoWebhookInfo}</div>
+					{#if onRotateWebhook}
+						<div class="webhook-actions">
+							{#if webhookRotateConfirm}
+								<span class="webhook-rotate-confirm-text">Rotating invalidates the current URL. Continue?</span>
+								<Button variant="danger" size="sm" onclick={onRotateWebhook} disabled={isRotatingWebhook}>
+									{#if isRotatingWebhook}<Spinner size={10} tone="current" /> Rotating…{:else}Yes, rotate{/if}
+								</Button>
+								<Button variant="secondary" size="sm" onclick={() => webhookRotateConfirm = false}>Cancel</Button>
+							{:else}
+								<Button variant="secondary" size="sm" onclick={() => webhookRotateConfirm = true}>
+									<RefreshCw size={11} /> Rotate URL
+								</Button>
+							{/if}
+						</div>
+					{/if}
+
+					{#if autoWebhookInfo}
+						<div role="status"><InlineAlert tone="info">{autoWebhookInfo}</InlineAlert></div>
+					{/if}
 				{/if}
-			{/if}
-		</div>
+			</div>
+		</Card>
 	{/if}
 
 	<!-- ── Repo card (read-only) ──────────────────────────────────────────────── -->
 	{#if repoUrl}
-		<div class="git-card">
-			<div class="git-card-title">Repository</div>
-			<div class="git-repo-info">
-				<span class="git-repo-label">URL</span>
-				{#if repoIsLink}
-					<a class="git-repo-url" href={repoUrl} target="_blank" rel="noreferrer">{repoUrl}</a>
-				{:else}
-					<code class="git-repo-val mono">{repoUrl}</code>
-				{/if}
+		<Card padding="14px 16px">
+			<div class="git-card">
+				<div class="git-card-title">Repository</div>
+				<KeyValueList keyWidth="48px" items={[{ key: 'URL', value: repoUrl, mono: !repoIsLink }]}>
+					{#snippet value()}
+						{#if repoIsLink}
+							<a class="git-repo-url" href={repoUrl} target="_blank" rel="noreferrer">{repoUrl}</a>
+						{:else}
+							<code class="git-repo-val">{repoUrl}</code>
+						{/if}
+					{/snippet}
+				</KeyValueList>
 			</div>
-		</div>
+		</Card>
 	{/if}
 
 </div>
 
 <style>
-	/* ── Layout ── */
 	.git-config-section { display: flex; flex-direction: column; gap: 12px; }
-
-	.git-card {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 14px 16px;
-		display: flex; flex-direction: column; gap: 10px;
-	}
-
-	.git-card-header {
-		display: flex; align-items: center; justify-content: space-between;
-	}
-
-	.git-card-title {
-		font-size: 13px; font-weight: 700; color: var(--text-primary);
-	}
-
-	.git-card-desc {
-		font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0;
-	}
-
-	/* ── Form elements ── */
-	.git-field { display: flex; flex-direction: column; gap: 5px; }
-
-	.git-label {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
-	}
-
-	.git-select {
-		width: 100%; padding: 7px 10px;
-		border-radius: var(--radius-sm); border: 1px solid var(--border);
-		background: var(--bg-surface); color: var(--text-primary);
-		font-size: 12px; outline: none; cursor: pointer;
-		transition: border-color var(--transition-fast);
-	}
-	.git-select:focus  { border-color: var(--accent); }
-	.git-select:disabled { opacity: 0.5; cursor: not-allowed; }
-	.git-select.placeholder { opacity: 0.6; pointer-events: none; cursor: default; }
-
-	.git-branch-row {
-		display: flex; align-items: center;
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		background: var(--bg-surface); overflow: hidden;
-		transition: border-color var(--transition-fast);
-	}
-	.git-branch-row:focus-within { border-color: var(--accent); }
-
-	.git-branch-icon {
-		padding: 0 8px; font-size: 13px; color: var(--text-dim);
-		background: var(--bg-elevated); border-right: 1px solid var(--border);
-		display: flex; align-items: center; height: 32px; flex-shrink: 0;
-	}
-
-	.git-branch-input {
-		flex: 1; padding: 6px 10px; border: none; outline: none;
-		background: transparent; color: var(--text-primary);
-		font-size: 12px; font-family: var(--font-mono);
-	}
-	.git-branch-input:disabled { opacity: 0.5; }
-
-	.git-hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; }
-	.git-hint code {
-		font-family: var(--font-mono); font-size: 10px;
-		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
-		border: 1px solid var(--border);
-	}
-
+	.git-card { display: flex; flex-direction: column; gap: 10px; }
+	.git-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+	.git-card-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+	.git-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0; }
 	.git-save-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
-	.git-error { font-size: 11px; color: #ef4444; margin: 0; }
-	.git-ok    { font-size: 11px; color: #22c55e;  margin: 0; }
 
-	/* ── Toggle ── */
-	.toggle-switch { display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
-	.toggle-switch input { display: none; }
-	.toggle-track {
-		width: 32px; height: 18px; border-radius: 9px;
-		background: var(--border); position: relative;
-		transition: background var(--transition-fast);
-	}
-	.toggle-track::after {
-		content: ''; position: absolute; top: 2px; left: 2px;
-		width: 14px; height: 14px; border-radius: 50%;
-		background: white; transition: transform var(--transition-fast);
-		box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-	}
-	.toggle-switch input:checked + .toggle-track { background: var(--accent); }
-	.toggle-switch input:checked + .toggle-track::after { transform: translateX(14px); }
-
-	/* ── Webhook ── */
-	.webhook-provider-tabs {
-		display: flex; gap: 2px;
-	}
-	.webhook-provider-tabs button {
-		font-size: 11px; font-weight: 500;
-		padding: 3px 8px; border-radius: 4px;
-		border: 1px solid transparent;
-		background: none; color: var(--text-muted); cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.webhook-provider-tabs button:hover { color: var(--text-primary); }
-	.webhook-provider-tabs button.active {
-		background: var(--bg-surface); border-color: var(--border);
-		color: var(--text-primary); font-weight: 600;
-	}
+	.mono-field :global(input) { font-family: var(--font-mono); font-size: 12px; }
 
 	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
-	.webhook-url-input {
-		flex: 1; font-family: var(--font-mono); font-size: 11px;
-		color: var(--text-muted); background: var(--bg-base);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		padding: 6px 8px; outline: none; min-width: 0;
-		overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-	}
-	.webhook-copy-btn {
-		display: flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		padding: 5px 10px; border-radius: var(--radius-sm);
-		border: 1px solid var(--border); background: var(--bg-elevated);
-		color: var(--text-muted); cursor: pointer; white-space: nowrap; flex-shrink: 0;
-		transition: all var(--transition-fast);
-	}
-	.webhook-copy-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.webhook-copy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+	.webhook-url { flex: 1; min-width: 0; }
+	.webhook-url :global(input) { font-size: 11px; text-overflow: ellipsis; }
+	.webhook-loading { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+	.webhook-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+	.webhook-rotate-confirm-text { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
 
-	.webhook-loading {
-		display: flex; align-items: center; gap: 6px;
-		font-size: 12px; color: var(--text-muted);
-	}
-
-	.webhook-actions {
-		display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-	}
-	.webhook-rotate-btn {
-		display: inline-flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		padding: 4px 9px; border-radius: 5px;
-		border: 1px solid var(--border); background: var(--bg-elevated);
-		color: var(--text-muted); cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.webhook-rotate-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-hover); }
-	.webhook-rotate-btn.danger:hover:not(:disabled) { color: #ef4444; border-color: #ef4444; background: rgba(239,68,68,0.08); }
-	.webhook-rotate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-	.webhook-rotate-confirm-text {
-		font-size: 11px; color: var(--text-muted); flex-shrink: 0;
-	}
-
-	.webhook-status {
-		font-size: 11px; font-weight: 500;
-		padding: 5px 8px; border-radius: 5px;
-		border: 1px solid;
-	}
-	.webhook-status.success { color: #22c55e; background: rgba(34,197,94,0.08);  border-color: rgba(34,197,94,0.2); }
-	.webhook-status.error   { color: #ef4444; background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.2); }
-	.webhook-status.info    { color: var(--text-muted); background: var(--bg-base); border-color: var(--border); }
-
-	/* ── Repo ── */
-	.git-repo-info {
-		display: flex; align-items: center; gap: 10px; font-size: 12px;
-	}
-	.git-repo-label { color: var(--text-muted); width: 36px; flex-shrink: 0; font-size: 11px; }
-	.git-repo-val   { color: var(--text-primary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-	.git-repo-url   { color: var(--accent); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+	.git-repo-val { font-family: var(--font-mono); color: var(--text-primary); font-size: 11px; overflow-wrap: anywhere; }
+	.git-repo-url { color: var(--accent); font-size: 12px; overflow-wrap: anywhere; }
 	.git-repo-url:hover { text-decoration: underline; }
-	.mono { font-family: var(--font-mono); }
-
-	/* ── Buttons ── */
-	.btn {
-		display: inline-flex; align-items: center; gap: 6px;
-		font-size: 12px; font-weight: 600; font-family: var(--font-sans);
-		border-radius: var(--radius-sm); cursor: pointer;
-		transition: all var(--transition-fast); border: none;
-		padding: 7px 14px;
-	}
-	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-	.btn-primary { background: var(--accent); color: white; }
-	.btn-primary:hover:not(:disabled) { opacity: 0.88; }
-	.btn-sm { padding: 5px 10px; font-size: 11px; }
-
-	/* ── Spinners ── */
-	.spinner-xs {
-		display: inline-block; width: 12px; height: 12px;
-		border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
-		border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-	.spinner-xs-inline {
-		display: inline-block; width: 10px; height: 10px;
-		border: 1.5px solid var(--border); border-top-color: var(--accent);
-		border-radius: 50%; animation: spin 0.7s linear infinite;
-	}
-	@keyframes spin { to { transform: rotate(360deg); } }
 </style>
