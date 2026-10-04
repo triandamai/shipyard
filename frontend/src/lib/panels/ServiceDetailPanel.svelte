@@ -17,7 +17,8 @@
 	import { formatDistanceToNow } from 'date-fns';
 	import {
 		Button, Card, Badge, StatusDot, Tabs, KeyValueList, ListRow,
-		Spinner, EmptyState, InlineAlert, ConfirmDialog
+		Spinner, EmptyState, InlineAlert, ConfirmDialog,
+		ActivityList, FormField, TextField, Checkbox
 	} from '$lib/components/ui';
 	import type { KeyValueItem } from '$lib/components/ui';
 	import { toDotStatus } from '$lib/utils/status';
@@ -99,7 +100,6 @@
 	let isRestarting = $state(false);
 	let isRollingBack = $state<string | null>(null); // deployment id being rolled back
 	let serviceError = $state<string | null>(null);
-
 
 	// ── Domains ──────────────────────────────────────────────────────
 	let domains = $state<Domain[]>([]);
@@ -1757,451 +1757,440 @@
 
 			<!-- ── Volumes ── -->
 			{:else if activeTab === 'volumes'}
-				<div class="volumes-section">
+				<div class="tab-stack">
 					{#if volumeError}
-						<div class="domain-error">{volumeError}</div>
+						<div role="alert"><InlineAlert tone="error">{volumeError}</InlineAlert></div>
 					{/if}
 
 					{#if isLoadingVolumes}
-						<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
 					{:else if volumes.length === 0}
-						<div class="domain-empty">
-							<HardDrive size={28} style="color:var(--text-dim);margin-bottom:8px" />
-							<span>No volumes attached.</span>
-						</div>
+						<EmptyState message="No volumes attached.">
+							{#snippet icon()}<HardDrive size={28} />{/snippet}
+						</EmptyState>
 					{:else}
-						<ul class="domain-list">
+						<ActivityList>
 							{#each volumes as v (v.id)}
-								<li class="domain-item">
-									<div class="domain-item-top">
-										<HardDrive size={13} style="flex-shrink:0;color:var(--text-dim);margin-top:1px" />
-										<div class="domain-info">
-											<span class="domain-hostname">{v.name}</span>
-											<div class="domain-badges">
-												<span class="badge badge-dim font-mono">{v.mount_path}</span>
-												{#if v.size_mb != null}
-													<span class="badge badge-blue">{fmtVolumeSize(v.size_mb)}</span>
-												{/if}
-											</div>
-										</div>
-									</div>
-								</li>
+								<ListRow title={v.name} meta={v.mount_path}>
+									{#snippet icon()}<HardDrive size={14} />{/snippet}
+									{#snippet trailing()}
+										{#if v.size_mb != null}
+											<Badge tone="blue">{fmtVolumeSize(v.size_mb)}</Badge>
+										{/if}
+									{/snippet}
+								</ListRow>
 							{/each}
-						</ul>
+						</ActivityList>
 					{/if}
 				</div>
 
 			<!-- ── Domains ── -->
 			{:else if activeTab === 'domains'}
-				<div class="domains-section">
+				<div class="tab-stack">
 					<!-- Header bar -->
 					<div class="domain-header-bar">
 						<span class="domain-header-title">Custom Domains</span>
-						<button class="btn btn-primary btn-sm" onclick={openAddDomainPanel}>
+						<Button variant="primary" size="sm" onclick={openAddDomainPanel}>
 							<Plus size={12} />
 							Add Domain
-						</button>
+						</Button>
 					</div>
 
 					{#if domainError}
-						<div class="domain-error">{domainError}</div>
+						<div role="alert"><InlineAlert tone="error">{domainError}</InlineAlert></div>
 					{/if}
 
 					{#if isLoadingDomains}
-						<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
 					{:else if domains.length === 0}
-						<div class="domain-empty">
-							<Globe size={28} style="color:var(--text-dim);margin-bottom:8px" />
-							<span>No domains configured.</span>
-							<button class="btn btn-secondary btn-sm" onclick={openAddDomainPanel}>
+						<EmptyState message="No domains configured.">
+							{#snippet icon()}<Globe size={28} />{/snippet}
+						</EmptyState>
+						<div class="domain-empty-action">
+							<Button variant="secondary" size="sm" onclick={openAddDomainPanel}>
 								<Plus size={12} /> Add your first domain
-							</button>
+							</Button>
 						</div>
 					{:else}
-						<ul class="domain-list">
+						<ActivityList>
 							{#each domains as d (d.id)}
 								{@const dnsState = dnsCheckState[d.id] ?? 'idle'}
 								{@const addrs = dnsCheckAddresses[d.id] ?? []}
-								<li class="domain-item">
-									<div class="domain-item-top">
-										<Globe size={13} style="flex-shrink:0;color:var(--text-dim);margin-top:1px" />
-										<div class="domain-info">
-											<span class="domain-hostname">{d.hostname}</span>
-											<div class="domain-badges">
-												{#if d.tls_enabled}
-													<span class="badge badge-green"><Shield size={9} /> {d.cert_provider}</span>
-												{:else}
-													<span class="badge badge-dim"><ShieldOff size={9} /> HTTP</span>
-												{/if}
-												{#if d.port}
-													<span class="badge badge-blue">:{d.port}</span>
-												{/if}
-												{#if d.cloudflare_record_id}
-													<span class="badge badge-cf" title="DNS record managed by Cloudflare">Cloudflare</span>
-												{/if}
+								<div class="domain-item">
+									<ListRow title={d.hostname}>
+										{#snippet icon()}<Globe size={14} />{/snippet}
+										{#snippet trailing()}
+											<div class="domain-actions">
+												<!-- DNS validate button -->
+												<Button
+													variant="secondary"
+													size="sm"
+													onclick={() => validateDns(d.id)}
+													disabled={dnsState === 'checking'}
+													title="Validate DNS"
+												>
+													{#if dnsState === 'checking'}
+														<Spinner size={12} tone="current" />
+														Checking…
+													{:else if dnsState === 'ok'}
+														<CheckCircle2 size={12} />
+														DNS OK
+													{:else if dnsState === 'fail'}
+														<AlertCircle size={12} />
+														No DNS
+													{:else}
+														<Globe size={12} />
+														Check DNS
+													{/if}
+												</Button>
+												<Button variant="ghost" size="icon" onclick={() => removeDomain(d.id)} title="Remove domain" aria-label="Remove domain">
+													<X size={13} />
+												</Button>
 											</div>
-										</div>
-										<div class="domain-actions">
-											<!-- DNS validate button -->
-											<button
-												class="dns-check-btn"
-												class:dns-ok={dnsState === 'ok'}
-												class:dns-fail={dnsState === 'fail'}
-												class:dns-checking={dnsState === 'checking'}
-												onclick={() => validateDns(d.id)}
-												disabled={dnsState === 'checking'}
-												title="Validate DNS"
-											>
-												{#if dnsState === 'checking'}
-													<Loader2 size={12} class="spin-icon" />
-													Checking…
-												{:else if dnsState === 'ok'}
-													<CheckCircle2 size={12} />
-													DNS OK
-												{:else if dnsState === 'fail'}
-													<AlertCircle size={12} />
-													No DNS
-												{:else}
-													<Globe size={12} />
-													Check DNS
-												{/if}
-											</button>
-											<button class="icon-btn" onclick={() => removeDomain(d.id)} title="Remove domain">
-												<X size={13} />
-											</button>
-										</div>
+										{/snippet}
+									</ListRow>
+									<div class="domain-badges">
+										{#if d.tls_enabled}
+											<Badge tone="green"><Shield size={9} />&nbsp;{d.cert_provider}</Badge>
+										{:else}
+											<Badge tone="neutral"><ShieldOff size={9} />&nbsp;HTTP</Badge>
+										{/if}
+										{#if d.port}
+											<Badge tone="blue">:{d.port}</Badge>
+										{/if}
+										{#if d.cloudflare_record_id}
+											<span title="DNS record managed by Cloudflare"><Badge tone="yellow">Cloudflare</Badge></span>
+										{/if}
 									</div>
 									{#if dnsState === 'ok' && addrs.length > 0}
-										<div class="dns-result dns-result-ok">
-											Resolves to: {addrs.join(', ')}
+										<div class="domain-dns" role="status">
+											<InlineAlert tone="success">Resolves to: {addrs.join(', ')}</InlineAlert>
 										</div>
 									{:else if dnsState === 'fail'}
-										<div class="dns-result dns-result-fail">
-											DNS lookup failed — domain does not resolve.
+										<div class="domain-dns" role="status">
+											<InlineAlert tone="error">DNS lookup failed — domain does not resolve.</InlineAlert>
 										</div>
 									{/if}
-								</li>
+								</div>
 							{/each}
-						</ul>
+						</ActivityList>
 					{/if}
 				</div>
 			<!-- ── Settings ── -->
 			{:else if activeTab === 'settings'}
 				<div class="settings-section">
-					<div class="settings-hint">
+					<InlineAlert tone="info">
 						Changes saved here take effect on the next <strong>Redeploy</strong>.
-					</div>
+					</InlineAlert>
 
 					<!-- Docker Image & Registry -->
-					<div class="settings-group">
-						<div class="settings-group-header">
-							<Box size={13} />
-							<span class="settings-group-title">Docker Image</span>
-							<span class="settings-group-desc">Image to pull for the next deployment.</span>
-						</div>
-						{#if service.type === 'database'}
-							<div class="settings-field">
-								<label class="settings-label">Presets</label>
-								<div class="preset-btns">
-									{#each ['postgres:16', 'mysql:8', 'redis:7-alpine', 'mongo:7', 'mariadb:11'] as preset}
-										<button
-											class="preset-btn"
-											class:active={editImage === preset}
-											onclick={() => editImage = preset}
-										>{preset}</button>
-									{/each}
-								</div>
-							</div>
-						{:else if service.type === 'static'}
-							<div class="settings-field">
-								<label class="settings-label">Presets</label>
-								<div class="preset-btns">
-									{#each ['nginx:alpine', 'nginx:stable-alpine', 'httpd:alpine'] as preset}
-										<button
-											class="preset-btn"
-											class:active={editImage === preset}
-											onclick={() => editImage = preset}
-										>{preset}</button>
-									{/each}
-								</div>
-							</div>
-						{/if}
-						<div class="settings-field">
-							<label class="settings-label" for="edit-image">Image</label>
-							<input
-								id="edit-image"
-								class="settings-input font-mono"
-								type="text"
-								placeholder={service.type === 'database' ? 'postgres:16' : service.type === 'static' ? 'nginx:alpine' : 'nginx:latest'}
-								bind:value={editImage}
-								spellcheck="false"
-							/>
-						</div>
-						<div class="settings-group-header" style="margin-top:10px">
-							<span class="settings-group-title">Registry Credentials</span>
-							<span class="settings-group-desc">Leave blank to keep existing values.</span>
-						</div>
-						{#if isLoadingSettingsEnvs}
-							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
-						{:else}
-							<div class="settings-field">
-								<label class="settings-label" for="edit-reg-url">Registry URL</label>
-								<input
-									id="edit-reg-url"
-									class="settings-input font-mono"
-									type="text"
-									placeholder="registry-1.docker.io"
-									bind:value={editRegistryUrl}
-									spellcheck="false"
-								/>
-							</div>
-							<div class="settings-row">
-								<div class="settings-field" style="flex:1">
-									<label class="settings-label" for="edit-reg-user">Username</label>
-									<input
-										id="edit-reg-user"
-										class="settings-input"
-										type="text"
-										placeholder="myuser"
-										bind:value={editRegistryUser}
-										autocomplete="off"
-									/>
-								</div>
-								<div class="settings-field" style="flex:1">
-									<label class="settings-label" for="edit-reg-pass">
-										Password / Token
-										{#if registryPassIsSet}<span class="already-set-badge">set</span>{/if}
-									</label>
-									<input
-										id="edit-reg-pass"
-										class="settings-input font-mono"
-										type="password"
-										placeholder={registryPassIsSet ? '(unchanged)' : '••••••••'}
-										bind:value={editRegistryPass}
-										autocomplete="new-password"
-									/>
-								</div>
-							</div>
-						{/if}
-					</div>
-
-					<!-- Artifact Source (Shipyard registry binding) -->
-					{#if isLoadingArtifactSource}
-						<div class="settings-group">
-							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
-						</div>
-					{:else if artifactSource}
+					<Card padding="14px">
 						<div class="settings-group">
 							<div class="settings-group-header">
 								<Box size={13} />
-								<span class="settings-group-title">Artifact Source</span>
-								<span class="settings-group-desc">Bound to an image in the Shipyard registry.</span>
+								<span class="settings-group-title">Docker Image</span>
+								<span class="settings-group-desc">Image to pull for the next deployment.</span>
 							</div>
-							<div class="settings-field">
-								<label class="settings-label">Image</label>
-								<div class="settings-static font-mono">{artifactSource.repo}:{artifactSource.tag}</div>
+							{#if service.type === 'database'}
+								<FormField label="Presets">
+									<div class="preset-btns">
+										{#each ['postgres:16', 'mysql:8', 'redis:7-alpine', 'mongo:7', 'mariadb:11'] as preset}
+											<Button
+												variant={editImage === preset ? 'primary' : 'secondary'}
+												size="sm"
+												onclick={() => editImage = preset}
+											>{preset}</Button>
+										{/each}
+									</div>
+								</FormField>
+							{:else if service.type === 'static'}
+								<FormField label="Presets">
+									<div class="preset-btns">
+										{#each ['nginx:alpine', 'nginx:stable-alpine', 'httpd:alpine'] as preset}
+											<Button
+												variant={editImage === preset ? 'primary' : 'secondary'}
+												size="sm"
+												onclick={() => editImage = preset}
+											>{preset}</Button>
+										{/each}
+									</div>
+								</FormField>
+							{/if}
+							<FormField label="Image" for="edit-image">
+								<TextField
+									id="edit-image"
+									type="text"
+									placeholder={service.type === 'database' ? 'postgres:16' : service.type === 'static' ? 'nginx:alpine' : 'nginx:latest'}
+									bind:value={editImage}
+									spellcheck="false"
+								/>
+							</FormField>
+							<div class="settings-group-header settings-group-header-sub">
+								<span class="settings-group-title">Registry Credentials</span>
+								<span class="settings-group-desc">Leave blank to keep existing values.</span>
 							</div>
-							<label class="settings-checkbox">
-								<input type="checkbox" bind:checked={editAutoDeployOnPush} />
-								<span class="settings-checkbox-text">
-									Auto-deploy on push
-									<span class="settings-checkbox-hint">
-										Redeploy automatically when a new
-										<code>:{artifactSource.tag}</code>
-										image is pushed to the registry.
-									</span>
-								</span>
-							</label>
+							{#if isLoadingSettingsEnvs}
+								<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
+							{:else}
+								<FormField label="Registry URL" for="edit-reg-url">
+									<TextField
+										id="edit-reg-url"
+										type="text"
+										placeholder="registry-1.docker.io"
+										bind:value={editRegistryUrl}
+										spellcheck="false"
+									/>
+								</FormField>
+								<div class="settings-row">
+									<FormField label="Username" for="edit-reg-user">
+										<TextField
+											id="edit-reg-user"
+											type="text"
+											placeholder="myuser"
+											bind:value={editRegistryUser}
+											autocomplete="off"
+										/>
+									</FormField>
+									<FormField label={registryPassIsSet ? 'Password / Token (set)' : 'Password / Token'} for="edit-reg-pass">
+										<TextField
+											id="edit-reg-pass"
+											type="password"
+											placeholder={registryPassIsSet ? '(unchanged)' : '••••••••'}
+											bind:value={editRegistryPass}
+											autocomplete="new-password"
+										/>
+									</FormField>
+								</div>
+							{/if}
 						</div>
+					</Card>
+
+					<!-- Artifact Source (Shipyard registry binding) -->
+					{#if isLoadingArtifactSource}
+						<Card padding="14px">
+							<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
+						</Card>
+					{:else if artifactSource}
+						<Card padding="14px">
+							<div class="settings-group">
+								<div class="settings-group-header">
+									<Box size={13} />
+									<span class="settings-group-title">Artifact Source</span>
+									<span class="settings-group-desc">Bound to an image in the Shipyard registry.</span>
+								</div>
+								<FormField label="Image">
+									<div class="settings-static font-mono">{artifactSource.repo}:{artifactSource.tag}</div>
+								</FormField>
+								<Checkbox bind:checked={editAutoDeployOnPush} label="Auto-deploy on push" />
+								<span class="settings-checkbox-hint">
+									Redeploy automatically when a new
+									<code>:{artifactSource.tag}</code>
+									image is pushed to the registry.
+								</span>
+							</div>
+						</Card>
 					{/if}
 
 					<!-- Replicas -->
-					<div class="settings-group">
-						<div class="settings-group-header">
-							<span class="settings-group-title">Replicas</span>
-							<span class="settings-group-desc">Number of container instances to run.</span>
-						</div>
-						<div class="settings-field">
-							<label class="settings-label" for="edit-replicas">Instance count</label>
-							<div class="replica-stepper">
-								<button
-									class="stepper-btn"
-									type="button"
-									onclick={() => editReplicas = Math.max(0, editReplicas - 1)}
-									disabled={editReplicas <= 0}
-								>−</button>
-								<input
-									id="edit-replicas"
-									class="stepper-input"
-									type="number"
-									min="0"
-									max="20"
-									bind:value={editReplicas}
-								/>
-								<button
-									class="stepper-btn"
-									type="button"
-									onclick={() => editReplicas = Math.min(20, editReplicas + 1)}
-									disabled={editReplicas >= 20}
-								>+</button>
+					<Card padding="14px">
+						<div class="settings-group">
+							<div class="settings-group-header">
+								<span class="settings-group-title">Replicas</span>
+								<span class="settings-group-desc">Number of container instances to run.</span>
 							</div>
+							<FormField label="Instance count" for="edit-replicas">
+								<div class="replica-stepper">
+									<Button
+										variant="secondary"
+										size="icon"
+										aria-label="Decrease instance count"
+										onclick={() => editReplicas = Math.max(0, editReplicas - 1)}
+										disabled={editReplicas <= 0}
+									>−</Button>
+									<div class="stepper-input">
+										<TextField
+											id="edit-replicas"
+											type="number"
+											min="0"
+											max="20"
+											value={String(editReplicas)}
+											oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (!isNaN(v)) editReplicas = v; }}
+										/>
+									</div>
+									<Button
+										variant="secondary"
+										size="icon"
+										aria-label="Increase instance count"
+										onclick={() => editReplicas = Math.min(20, editReplicas + 1)}
+										disabled={editReplicas >= 20}
+									>+</Button>
+								</div>
+							</FormField>
 						</div>
-					</div>
+					</Card>
 
 					<!-- Resource limits -->
-					<div class="settings-group">
-						<div class="settings-group-header">
-							<span class="settings-group-title">Resource Limits</span>
-							<span class="settings-group-desc">Limit CPU and memory per container. Leave blank for no limit.</span>
-						</div>
-						<div class="settings-fields-row">
-							<div class="settings-field">
-								<label class="settings-label" for="edit-cpu">CPU limit (cores)</label>
-								<input
-									id="edit-cpu"
-									class="settings-input"
-									type="number"
-									min="0.1"
-									max="64"
-									step="0.1"
-									placeholder="e.g. 0.5"
-									value={editCpuLimit ?? ''}
-									oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); editCpuLimit = isNaN(v) ? null : v; }}
-								/>
+					<Card padding="14px">
+						<div class="settings-group">
+							<div class="settings-group-header">
+								<span class="settings-group-title">Resource Limits</span>
+								<span class="settings-group-desc">Limit CPU and memory per container. Leave blank for no limit.</span>
 							</div>
-							<div class="settings-field">
-								<label class="settings-label" for="edit-mem">Memory limit (MB)</label>
-								<input
-									id="edit-mem"
-									class="settings-input"
-									type="number"
-									min="32"
-									step="32"
-									placeholder="e.g. 512"
-									value={editMemLimit ?? ''}
-									oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); editMemLimit = isNaN(v) ? null : v; }}
-								/>
+							<div class="settings-fields-row">
+								<FormField label="CPU limit (cores)" for="edit-cpu">
+									<TextField
+										id="edit-cpu"
+										type="number"
+										min="0.1"
+										max="64"
+										step="0.1"
+										placeholder="e.g. 0.5"
+										value={String(editCpuLimit ?? '')}
+										oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); editCpuLimit = isNaN(v) ? null : v; }}
+									/>
+								</FormField>
+								<FormField label="Memory limit (MB)" for="edit-mem">
+									<TextField
+										id="edit-mem"
+										type="number"
+										min="32"
+										step="32"
+										placeholder="e.g. 512"
+										value={String(editMemLimit ?? '')}
+										oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); editMemLimit = isNaN(v) ? null : v; }}
+									/>
+								</FormField>
 							</div>
 						</div>
-					</div>
+					</Card>
 
 					<!-- Port mapping -->
-					<div class="settings-group">
-						<div class="settings-group-header">
-							<span class="settings-group-title">Port Mapping</span>
-							<span class="settings-group-desc">Ports exposed by this service. Format: <code>80</code> or <code>host:container</code>.</span>
-						</div>
-						<div class="port-editor">
-							{#each editPorts as port, i (i)}
-								<div class="port-row">
-									<input
-										class="port-input"
-										type="text"
-										placeholder="e.g. 3000 or 8080:80"
-										value={port}
-										oninput={(e) => updatePort(i, (e.target as HTMLInputElement).value)}
-										spellcheck="false"
-									/>
-									<button class="port-remove-btn" type="button" onclick={() => removePort(i)} title="Remove">
-										<X size={13} />
-									</button>
-								</div>
-							{/each}
-							<button class="btn btn-secondary btn-sm" type="button" onclick={addPort}>
-								<Plus size={12} />
-								Add Port
-							</button>
-						</div>
-					</div>
-
-					<!-- Volume Mounts -->
-					<div class="settings-group">
-						<div class="settings-group-header">
-							<HardDrive size={13} />
-							<span class="settings-group-title">Volume Mounts</span>
-							<span class="settings-group-desc">Bind named volumes or host paths into the container.</span>
-						</div>
-						{#if volumeAdvice && volumeAdvice.unmounted_volume_paths.length > 0}
-							<div class="settings-warn">
-								<AlertTriangle size={13} />
-								<div>
-									This image declares
-									{volumeAdvice.unmounted_volume_paths.length === 1 ? 'a volume' : 'volumes'}
-									with no named volume or bind mount:
-									<span class="settings-warn-paths">
-										{#each volumeAdvice.unmounted_volume_paths as p}<code>{p}</code>{/each}
-									</span>
-									Docker creates a fresh anonymous volume there on every redeploy —
-									<strong>data written to {volumeAdvice.unmounted_volume_paths.length === 1 ? 'it' : 'them'} will not persist</strong>.
-									Add a mount below with a matching path.
-								</div>
+					<Card padding="14px">
+						<div class="settings-group">
+							<div class="settings-group-header">
+								<span class="settings-group-title">Port Mapping</span>
+								<span class="settings-group-desc">Ports exposed by this service. Format: <code>80</code> or <code>host:container</code>.</span>
 							</div>
-						{/if}
-						{#if isLoadingSettingsEnvs}
-							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
-						{:else}
-							<VolumeMountList {projectId} bind:mounts={editVolumeMounts} />
-						{/if}
-					</div>
-
-					<!-- Networks -->
-					<div class="settings-group">
-						<div class="settings-group-header-row">
-							<div class="settings-group-header" style="flex:1;margin-bottom:0">
-								<Network size={13} />
-								<span class="settings-group-title">Networks</span>
-								<span class="settings-group-desc">Docker networks this service is connected to.</span>
-							</div>
-							<button class="btn btn-secondary btn-xs" type="button" onclick={openNetworkPickerForSettings}>
-								<Plus size={11} />Add
-							</button>
-						</div>
-						{#if isLoadingSettingsNetworks}
-							<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
-						{:else if editNetworks.length === 0}
-							<div class="settings-empty">No networks attached.</div>
-						{:else}
-							<div class="settings-network-list">
-								{#each editNetworks as net (net.id)}
-									<div class="settings-network-row">
-										<Network size={12} class="net-icon" />
-										<span class="net-name">{net.name}</span>
-										<span class="net-driver">{net.driver}</span>
-										<button class="net-remove-btn" type="button" onclick={() => removeSettingsNetwork(net.id)} title="Detach">
-											<X size={12} />
-										</button>
+							<div class="port-editor">
+								{#each editPorts as port, i (i)}
+									<div class="port-row">
+										<div class="port-input">
+											<TextField
+												type="text"
+												placeholder="e.g. 3000 or 8080:80"
+												value={port}
+												oninput={(e) => updatePort(i, (e.target as HTMLInputElement).value)}
+												spellcheck="false"
+												aria-label="Port mapping"
+											/>
+										</div>
+										<Button variant="ghost" size="icon" onclick={() => removePort(i)} title="Remove" aria-label="Remove port">
+											<X size={13} />
+										</Button>
 									</div>
 								{/each}
+								<div>
+									<Button variant="secondary" size="sm" onclick={addPort}>
+										<Plus size={12} />
+										Add Port
+									</Button>
+								</div>
 							</div>
-						{/if}
-					</div>
+						</div>
+					</Card>
+
+					<!-- Volume Mounts -->
+					<Card padding="14px">
+						<div class="settings-group">
+							<div class="settings-group-header">
+								<HardDrive size={13} />
+								<span class="settings-group-title">Volume Mounts</span>
+								<span class="settings-group-desc">Bind named volumes or host paths into the container.</span>
+							</div>
+							{#if volumeAdvice && volumeAdvice.unmounted_volume_paths.length > 0}
+								<InlineAlert tone="warning">
+									<div class="settings-warn">
+										<AlertTriangle size={13} />
+										<div>
+											This image declares
+											{volumeAdvice.unmounted_volume_paths.length === 1 ? 'a volume' : 'volumes'}
+											with no named volume or bind mount:
+											<span class="settings-warn-paths">
+												{#each volumeAdvice.unmounted_volume_paths as p}<code>{p}</code>{/each}
+											</span>
+											Docker creates a fresh anonymous volume there on every redeploy —
+											<strong>data written to {volumeAdvice.unmounted_volume_paths.length === 1 ? 'it' : 'them'} will not persist</strong>.
+											Add a mount below with a matching path.
+										</div>
+									</div>
+								</InlineAlert>
+							{/if}
+							{#if isLoadingSettingsEnvs}
+								<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
+							{:else}
+								<VolumeMountList {projectId} bind:mounts={editVolumeMounts} />
+							{/if}
+						</div>
+					</Card>
+
+					<!-- Networks -->
+					<Card padding="14px">
+						<div class="settings-group">
+							<div class="settings-group-header-row">
+								<div class="settings-group-header">
+									<Network size={13} />
+									<span class="settings-group-title">Networks</span>
+									<span class="settings-group-desc">Docker networks this service is connected to.</span>
+								</div>
+								<Button variant="secondary" size="sm" onclick={openNetworkPickerForSettings}>
+									<Plus size={11} />Add
+								</Button>
+							</div>
+							{#if isLoadingSettingsNetworks}
+								<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
+							{:else if editNetworks.length === 0}
+								<div class="settings-empty">No networks attached.</div>
+							{:else}
+								<div class="settings-network-list">
+									{#each editNetworks as net (net.id)}
+										<div class="settings-network-row">
+											<Network size={12} class="net-icon" />
+											<span class="net-name">{net.name}</span>
+											<span class="net-driver">{net.driver}</span>
+											<Button variant="ghost" size="icon" onclick={() => removeSettingsNetwork(net.id)} title="Detach" aria-label="Detach network">
+												<X size={12} />
+											</Button>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					</Card>
 
 					<!-- Save feedback -->
 					{#if settingsSaveError}
-						<div class="settings-error">{settingsSaveError}</div>
+						<div role="alert"><InlineAlert tone="error">{settingsSaveError}</InlineAlert></div>
 					{/if}
 					{#if settingsSaveSuccess}
-						<div class="settings-success">
-							<CheckCircle size={13} /> Saved — click Redeploy to apply changes.
+						<div role="status">
+							<InlineAlert tone="success">
+								<CheckCircle size={13} /> Saved — click Redeploy to apply changes.
+							</InlineAlert>
 						</div>
 					{/if}
 
 					<!-- Save button -->
 					<div class="settings-footer">
-						<button
-							class="btn btn-primary"
-							onclick={saveSettings}
-							disabled={isSavingSettings}
-						>
+						<Button variant="primary" onclick={saveSettings} disabled={isSavingSettings}>
 							{#if isSavingSettings}
-								<div class="btn-spinner"></div>Saving…
+								<Spinner size={12} tone="current" />Saving…
 							{:else}
 								<CheckCircle size={14} />Save Changes
 							{/if}
-						</button>
-						<button class="btn btn-secondary" onclick={() => initSettingsFromService()} disabled={isSavingSettings}>
+						</Button>
+						<Button variant="secondary" onclick={() => initSettingsFromService()} disabled={isSavingSettings}>
 							Reset
-						</button>
+						</Button>
 					</div>
 				</div>
 			{/if}
@@ -2209,19 +2198,19 @@
 
 		<!-- Footer actions -->
 		<div class="panel-footer">
-			<button class="btn btn-primary btn-sm" disabled={isDeploying || !canDeploy} onclick={triggerDeploy} title={canDeploy ? '' : 'Insufficient permissions'}>
+			<Button variant="primary" size="sm" disabled={isDeploying || !canDeploy} onclick={triggerDeploy} title={canDeploy ? '' : 'Insufficient permissions'}>
 				<Play size={13} />Deploy
-			</button>
-			<button class="btn btn-secondary btn-sm" disabled={isStopping || !canDeploy} onclick={triggerStop} title={canDeploy ? '' : 'Insufficient permissions'}>
+			</Button>
+			<Button variant="secondary" size="sm" disabled={isStopping || !canDeploy} onclick={triggerStop} title={canDeploy ? '' : 'Insufficient permissions'}>
 				{#if isStopping}
-					<Loader2 size={13} class="spin-icon" />Stopping…
+					<Spinner size={13} tone="current" />Stopping…
 				{:else}
 					<Square size={13} />Stop
 				{/if}
-			</button>
-			<button class="btn btn-secondary btn-sm" onclick={() => showEnvPanel = true}>
+			</Button>
+			<Button variant="secondary" size="sm" onclick={() => showEnvPanel = true}>
 				<Settings size={13} />Env
-			</button>
+			</Button>
 		</div>
 	{/if}
 </div>
@@ -2277,21 +2266,6 @@
 		font-size: 13px;
 		padding: 24px;
 	}
-
-	.spinner-sm {
-		width: 14px; height: 14px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
-	.btn-spinner {
-		width: 12px; height: 12px;
-		border: 2px solid rgba(255,255,255,0.3);
-		border-top-color: #fff;
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
 	@keyframes spin { to { transform: rotate(360deg); } }
 
 	/* ── Header ── */
@@ -2302,8 +2276,6 @@
 	.meta-sep { color: var(--text-dim); }
 	.header-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 10px; border-top: 1px solid var(--border); }
 	.tabs-wrap { flex-shrink: 0; padding: 0 8px; }
-
-	/* ── Tabs ── */
 
 	/* ── Tab content ── */
 	.tab-content {
@@ -2360,11 +2332,6 @@
 		margin-top: 6px;
 		line-height: 1.5;
 	}
-	.info-hint code {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-secondary);
-	}
 
 	/* ── Connection info card ─────────────────────────────────────── */
 	.conn-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
@@ -2386,9 +2353,6 @@
 		pointer-events: none;
 		transition: filter 0.2s;
 	}
-	/* legacy alias kept for any remaining usages */
-
-
 
 	.section-action {
 		display: flex;
@@ -2527,224 +2491,25 @@
 	.node-role-dot {
 		width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
 	}
-	.node-role-manager { background: var(--accent); }
-	.node-role-worker  { background: var(--accent-green); }
 
-	/* ── Volumes ── */
-	.volumes-section { display: flex; flex-direction: column; }
-
-	/* ── Domains ── */
-	.domains-section { display: flex; flex-direction: column; }
-
-	.domain-header-bar {
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 10px 14px;
-		border-bottom: 1px solid var(--border);
-		background: var(--bg-surface);
-	}
+	.tab-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+	.domain-header-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+	.domain-empty-action { display: flex; justify-content: center; margin-top: -12px; }
+	.domain-dns { padding: 0 0 10px 42px; }
 	.domain-header-title {
 		font-size: 12px; font-weight: 600; color: var(--text-dim);
 		text-transform: uppercase; letter-spacing: 0.06em;
 	}
-
-	.domain-error {
-		margin: 8px 12px 0;
-		font-size: 12px; color: #EF4444;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-		padding: 6px 10px;
-	}
-
-	.domain-empty {
-		display: flex; flex-direction: column; align-items: center; justify-content: center;
-		gap: 10px; padding: 40px 16px;
-		color: var(--text-muted); font-size: 13px;
-	}
-
-	.domain-list { list-style: none; margin: 0; padding: 0; }
 	.domain-item {
 		display: flex; flex-direction: column;
 		border-bottom: 1px solid var(--border);
 	}
 	.domain-item:last-child { border-bottom: none; }
-
-	.domain-item-top {
-		display: flex; align-items: flex-start; gap: 10px;
-		padding: 11px 14px;
-	}
-	.domain-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-	.domain-hostname {
-		font-family: var(--font-mono); font-size: 13px;
-		color: var(--text-primary); word-break: break-all;
-	}
-	.domain-badges { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-
-	.badge {
-		display: inline-flex; align-items: center; gap: 3px;
-		font-size: 10px; font-weight: 600; padding: 1px 6px;
-		border-radius: 999px; flex-shrink: 0;
-	}
-	.badge-green {
-		background: rgba(16,185,129,0.1); color: #10B981;
-		border: 1px solid rgba(16,185,129,0.25);
-	}
-	.badge-blue {
-		background: rgba(59,130,246,0.1); color: #3B82F6;
-		border: 1px solid rgba(59,130,246,0.25);
-		font-family: var(--font-mono);
-	}
-	.badge-dim {
-		background: var(--bg-elevated); color: var(--text-muted);
-		border: 1px solid var(--border);
-	}
-	.badge-cf {
-		background: rgba(37,99,235,0.1); color: var(--accent);
-		border: 1px solid rgba(37,99,235,0.25);
-	}
+	.domain-item :global(.ui-list-row) { border-bottom: none; padding-bottom: 6px; }
+	.domain-badges { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 0 0 10px 42px; }
 
 	.domain-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-
-	.dns-check-btn {
-		display: flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 600; font-family: var(--font-sans);
-		padding: 4px 9px; border-radius: var(--radius-sm); cursor: pointer;
-		border: 1px solid var(--border); background: var(--bg-elevated);
-		color: var(--text-muted); transition: all var(--transition-fast);
-	}
-	.dns-check-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.dns-check-btn:disabled { opacity: 0.6; cursor: default; }
-	.dns-check-btn.dns-ok    { border-color: rgba(16,185,129,0.4); color: #10B981; background: rgba(16,185,129,0.06); }
-	.dns-check-btn.dns-fail  { border-color: rgba(239,68,68,0.4);  color: #EF4444; background: rgba(239,68,68,0.06); }
-	.dns-check-btn.dns-checking { opacity: 0.7; }
 	:global(.spin-icon) { animation: spin 1s linear infinite; }
-
-	.dns-result {
-		margin: 0 14px 10px 37px;
-		font-size: 11px; font-family: var(--font-mono);
-		padding: 5px 9px; border-radius: var(--radius-sm);
-	}
-	.dns-result-ok   { background: rgba(16,185,129,0.08); color: #10B981; border: 1px solid rgba(16,185,129,0.2); }
-	.dns-result-fail { background: rgba(239,68,68,0.08);  color: #EF4444; border: 1px solid rgba(239,68,68,0.2); }
-
-	/* ── Container logs panel (portalled, 2/3 screen) ── */
-	:global(.clog-backdrop) {
-		position: fixed;
-		inset: 0;
-		background: rgba(0,0,0,0.45);
-		z-index: 800;
-		display: flex;
-		justify-content: flex-end;
-	}
-
-	:global(.clog-panel) {
-		position: fixed;
-		right: 0;
-		top: 0;
-		bottom: 0;
-		width: 67vw;
-		min-width: 480px;
-		background: #0B1120;
-		border-left: 1px solid rgba(0,0,0,0.3);
-		display: flex;
-		flex-direction: column;
-		z-index: 801;
-		box-shadow: -8px 0 32px rgba(0,0,0,0.4);
-		isolation: isolate;
-	}
-
-	:global(.clog-confirm-overlay) {
-		position: absolute;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.6);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 10;
-	}
-
-	:global(.clog-confirm-card) {
-		background: #1E293B;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 10px;
-		padding: 24px 28px;
-		width: min(340px, calc(100% - 40px));
-		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-	}
-
-	:global(.clog-confirm-title) {
-		margin: 0 0 8px;
-		font-size: 15px;
-		font-weight: 600;
-		color: #F1F5F9;
-		font-family: var(--font-sans);
-	}
-
-	:global(.clog-confirm-sub) {
-		margin: 0 0 20px;
-		font-size: 13px;
-		color: #94A3B8;
-		line-height: 1.5;
-		font-family: var(--font-sans);
-	}
-
-	:global(.clog-confirm-actions) {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-	}
-
-	:global(.clog-confirm-btn) {
-		display: inline-flex;
-		align-items: center;
-		padding: 7px 16px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		font-family: var(--font-sans);
-		cursor: pointer;
-		border: 1px solid transparent;
-		transition: all 0.12s;
-	}
-
-	:global(.clog-confirm-cancel) {
-		background: transparent;
-		border-color: rgba(255, 255, 255, 0.12);
-		color: #94A3B8;
-	}
-	:global(.clog-confirm-cancel:hover) { background: rgba(255, 255, 255, 0.06); color: #F1F5F9; }
-
-	:global(.clog-confirm-close) {
-		background: #dc2626;
-		border-color: #dc2626;
-		color: #fff;
-	}
-	:global(.clog-confirm-close:hover) { background: #b91c1c; border-color: #b91c1c; }
-
-	:global(.clog-panel) .log-overlay-header {
-		background: #0F172A;
-		border-bottom-color: rgba(0,0,0,0.2);
-		flex-direction: column;
-		gap: 0;
-		padding: 0;
-	}
-	:global(.clog-panel) .log-overlay-title {
-		color: #E5E7EB;
-	}
-	:global(.clog-panel) .log-dep-time {
-		color: #6B7280;
-	}
-
-	.clog-header-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-wrap: wrap;
-	}
-	.clog-header-top {
-		padding: 8px 12px;
-		border-bottom: 1px solid rgba(255,255,255,0.05);
-	}
 
 	/* Replica dropdown */
 	.clog-replica-select {
@@ -2761,164 +2526,6 @@
 	}
 	.clog-replica-select:focus { border-color: rgba(37,99,235,0.5); }
 
-	/* Search bar */
-	.clog-search-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 12px;
-	}
-	.clog-search-input {
-		flex: 1;
-		background: rgba(255,255,255,0.04);
-		border: 1px solid rgba(255,255,255,0.08);
-		border-radius: 4px;
-		color: #D1D5DB;
-		font-size: 11.5px;
-		font-family: var(--font-mono);
-		padding: 3px 8px;
-		outline: none;
-		transition: border-color 0.12s;
-	}
-	.clog-search-input::placeholder { color: #374151; }
-	.clog-search-input:focus { border-color: rgba(37,99,235,0.45); background: rgba(255,255,255,0.06); }
-	.clog-search-count { font-size: 10px; color: #4B5563; font-family: var(--font-sans); white-space: nowrap; }
-	.clog-search-clear {
-		background: none; border: none; color: #4B5563; cursor: pointer; font-size: 11px; padding: 0 2px;
-	}
-	.clog-search-clear:hover { color: #9CA3AF; }
-
-	/* Tail selector in container log header */
-	.clog-tail-group {
-		display: flex; align-items: center; gap: 2px; margin-right: 8px;
-	}
-	.clog-tail-label {
-		font-size: 10px; font-weight: 600; color: #4B5563;
-		text-transform: uppercase; letter-spacing: 0.06em;
-		margin-right: 4px; font-family: var(--font-sans);
-	}
-	.clog-tail-btn {
-		padding: 2px 7px;
-		font-size: 10px; font-weight: 600; font-family: var(--font-mono);
-		background: transparent; border: 1px solid transparent;
-		border-radius: 3px; color: #4B5563; cursor: pointer;
-		transition: all 0.12s;
-	}
-	.clog-tail-btn:hover { color: #9CA3AF; background: rgba(255,255,255,0.05); }
-	.clog-tail-btn.active { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); color: #E5E7EB; }
-
-	/* Live controls */
-	.log-overlay-controls {
-		display: flex; align-items: center; gap: 7px; margin-left: auto;
-	}
-	.clog-dot {
-		width: 7px; height: 7px; border-radius: 50%;
-		background: #22C55E; box-shadow: 0 0 5px #22C55E;
-		animation: pulse 2s ease-in-out infinite; flex-shrink: 0;
-	}
-	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-	.clog-status-label { font-size: 11px; font-weight: 500; color: #6B7280; }
-	.clog-status-label.muted { color: #4B5563; }
-	.clog-status-label.error { color: #EF4444; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.clog-ctrl-btn {
-		display: flex; align-items: center; gap: 4px;
-		padding: 3px 9px; border-radius: 4px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
-		color: #9CA3AF; cursor: pointer;
-		transition: all 0.15s;
-	}
-	.clog-ctrl-btn:hover { background: rgba(255,255,255,0.1); color: #E5E7EB; }
-	.clog-ctrl-btn.primary { background: rgba(37,99,235,0.2); border-color: rgba(37,99,235,0.4); color: #60A5FA; }
-	.clog-ctrl-btn.primary:hover { background: rgba(37,99,235,0.3); }
-
-	.clog-lines {
-		flex: 1;
-		overflow-y: auto;
-		padding: 4px 0;
-		background: #080E1A;
-		font-family: var(--font-mono);
-	}
-
-	/* Log line base */
-	.clog-line {
-		display: flex;
-		align-items: baseline;
-		gap: 8px;
-		padding: 2px 12px;
-		font-size: 11.5px;
-		line-height: 1.6;
-		border-left: 2px solid transparent;
-		min-width: 0;
-	}
-	.clog-line:hover { background: rgba(255,255,255,0.03); }
-	.clog-line.clog-live { background: rgba(255,255,255,0.012); }
-
-	/* Timestamp */
-	.clog-ts {
-		flex-shrink: 0;
-		color: #374151;
-		font-size: 10.5px;
-		letter-spacing: 0.01em;
-		min-width: 88px;
-		user-select: none;
-	}
-
-	/* Level badge */
-	.clog-badge {
-		flex-shrink: 0;
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		width: 38px;
-		text-align: center;
-		border-radius: 3px;
-		padding: 0 3px;
-		line-height: 1.5;
-	}
-	.clog-badge-info    { color: #6EE7B7; background: rgba(110,231,183,0.08); }
-	.clog-badge-warn    { color: #FCD34D; background: rgba(252,211,77,0.10); }
-	.clog-badge-error   { color: #FCA5A5; background: rgba(252,165,165,0.12); }
-	.clog-badge-debug   { color: #60A5FA; background: rgba(96,165,250,0.08); }
-	.clog-badge-trace   { color: #6B7280; background: rgba(107,114,128,0.08); }
-
-	/* Module/target — inline within message, no clipping */
-	.clog-target-inline {
-		color: #4B5563;
-		font-size: 10.5px;
-	}
-
-	/* Message content */
-	.clog-msg {
-		flex: 1;
-		white-space: pre-wrap;
-		word-break: break-word;
-		min-width: 0;
-	}
-
-	/* Level row tints */
-	.clog-lvl-info  { border-left-color: transparent; }
-	.clog-lvl-info  .clog-msg  { color: #D1FAE5; }
-	.clog-lvl-warn  { border-left-color: #92400E; background: rgba(245,158,11,0.03); }
-	.clog-lvl-warn  .clog-msg  { color: #FDE68A; }
-	.clog-lvl-error { border-left-color: #7F1D1D; background: rgba(239,68,68,0.05); }
-	.clog-lvl-error .clog-msg  { color: #FCA5A5; }
-	.clog-lvl-debug .clog-msg  { color: #6B7280; }
-	.clog-lvl-trace .clog-msg  { color: #374151; }
-	.clog-lvl-error:hover { background: rgba(239,68,68,0.09); }
-	.clog-lvl-warn:hover  { background: rgba(245,158,11,0.07); }
-
-	.clog-stream-divider {
-		padding: 6px 12px;
-		font-size: 10px;
-		color: #1F2937;
-		letter-spacing: 0.08em;
-		user-select: none;
-		border-top: 1px solid #111827;
-		border-bottom: 1px solid #111827;
-		margin: 2px 0;
-	}
-
 	/* ── Footer ── */
 	.panel-footer {
 		border-top: 1px solid var(--border);
@@ -2930,189 +2537,17 @@
 		background: var(--bg-surface);
 	}
 
-	/* ── Log viewer overlay ── */
-	.log-overlay {
-		position: absolute;
-		inset: 0;
-		background: var(--bg-base);
-		display: flex;
-		flex-direction: column;
-		z-index: 20;
-	}
-	.log-overlay-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 14px;
-		border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-		background: var(--bg-surface);
-	}
-	.log-overlay-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-	.log-dep-status { flex-shrink: 0; }
-	.log-dep-time { font-size: 11px; font-weight: 400; color: var(--text-muted); }
-	.live-badge {
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		color: #10B981;
-		background: rgba(16,185,129,0.12);
-		border: 1px solid rgba(16,185,129,0.3);
-		border-radius: 4px;
-		padding: 1px 5px;
-	}
-	.log-loading {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 20px 16px;
-		font-size: 13px;
-		color: var(--text-muted);
-	}
-
-	/* Accordion */
-	.accordion-list {
-		flex: 1;
-		overflow-y: auto;
-		display: flex;
-		flex-direction: column;
-	}
-	.accordion-item {
-		border-bottom: 1px solid var(--border);
-	}
-	.accordion-header {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		width: 100%;
-		padding: 9px 14px;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		font-family: var(--font-sans);
-		font-size: 12px;
-		text-align: left;
-		color: var(--text-primary);
-		transition: background var(--transition-fast);
-	}
-	.accordion-header:hover { background: var(--bg-elevated); }
-	.acc-expanded > .accordion-header { background: var(--bg-elevated); }
-	.acc-icon {
-		font-size: 12px;
-		font-weight: 700;
-		width: 16px;
-		flex-shrink: 0;
-		text-align: center;
-	}
-	.acc-pending  { color: var(--text-dim); }
-	.acc-running  { color: #3B82F6; animation: spin 1s linear infinite; display: inline-block; }
-	.acc-success  { color: #10B981; }
-	.acc-failed   { color: #EF4444; }
-	.acc-skipped  { color: var(--text-dim); }
-	.acc-name { flex: 1; font-weight: 500; color: var(--text-secondary); }
-	.acc-expanded > .accordion-header .acc-name { color: var(--text-primary); }
-	.acc-count {
-		font-size: 10px;
-		padding: 1px 6px;
-		border-radius: 999px;
-		background: var(--bg-hover);
-		color: var(--text-muted);
-		flex-shrink: 0;
-	}
-	.acc-dur {
-		font-size: 10px;
-		color: var(--text-dim);
-		flex-shrink: 0;
-	}
-	.acc-chevron {
-		flex-shrink: 0;
-		color: var(--text-dim);
-		display: flex;
-		align-items: center;
-		transition: transform var(--transition-fast);
-	}
-	.acc-chevron.rotated { transform: rotate(90deg); }
-
-	.acc-logs {
-		background: #0F172A;
-		padding: 6px 0;
-		font-family: var(--font-mono);
-		border-top: 1px solid rgba(0,0,0,0.2);
-	}
-	.acc-empty {
-		padding: 10px 14px;
-		font-size: 11px;
-		color: #4B5563;
-		font-family: var(--font-mono);
-	}
-
-	.log-entry {
-		display: flex;
-		gap: 10px;
-		padding: 1px 14px;
-		font-size: 11px;
-		line-height: 1.7;
-	}
-	.log-entry:hover { background: rgba(255,255,255,0.04); }
-	.log-ts { color: #374151; flex-shrink: 0; }
-	.log-lvl { flex-shrink: 0; font-weight: 600; width: 40px; }
-	.log-msg { color: #9CA3AF; word-break: break-all; }
-	.log-entry.log-error .log-lvl { color: #F87171; }
-	.log-entry.log-error .log-msg { color: #FCA5A5; }
-	.log-entry.log-warn  .log-lvl { color: #FBBF24; }
-	.log-entry.log-warn  .log-msg { color: #FDE68A; }
-	.log-entry.log-debug .log-lvl { color: #374151; }
-	.log-entry.log-info  .log-lvl { color: #60A5FA; }
-	.empty-logs-msg {
-		padding: 32px 16px;
-		text-align: center;
-		color: var(--text-muted);
-		font-size: 13px;
-	}
-
-	/* ── Delete modal (global — node is portalled to body) ── */
-
-	/* ── Shared button variants ── */
-	.icon-btn {
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		color: var(--text-muted);
-		padding: 4px;
-		border-radius: var(--radius-sm);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: color var(--transition-fast), background var(--transition-fast);
-	}
-	.icon-btn:hover { color: var(--text-primary); background: var(--bg-elevated); }
-
 	.font-mono { font-family: var(--font-mono); }
 
 	/* ── Settings tab ── */
 	.settings-section {
 		display: flex;
 		flex-direction: column;
-		gap: 0;
+		gap: 12px;
+		padding: 12px;
 	}
-	.settings-hint {
-		padding: 8px 14px;
-		font-size: 12px;
-		color: var(--text-muted);
-		background: var(--bg-elevated);
-		border-bottom: 1px solid var(--border);
-	}
-	.settings-hint strong { color: var(--text-primary); }
+	.settings-section :global(strong) { color: var(--text-primary); }
 	.settings-group {
-		padding: 14px;
-		border-bottom: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
@@ -3132,120 +2567,21 @@
 		padding: 1px 4px;
 		border-radius: 3px;
 	}
-	.settings-fields-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 16px; }
-	.settings-field { display: flex; flex-direction: column; gap: 5px; }
-	.settings-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
+	.settings-fields-row, .settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+	.settings-group-header-sub { margin-top: 6px; }
 
 	/* Replica stepper */
-	.replica-stepper { display: flex; align-items: center; gap: 0; width: fit-content; }
-	.stepper-btn {
-		width: 30px; height: 30px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		color: var(--text-primary);
-		font-size: 16px; line-height: 1;
-		cursor: pointer;
-		display: flex; align-items: center; justify-content: center;
-		transition: background var(--transition-fast);
-		flex-shrink: 0;
-	}
-	.stepper-btn:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-	.stepper-btn:last-child  { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-	.stepper-btn:hover:not(:disabled) { background: var(--bg-hover); }
-	.stepper-btn:disabled { opacity: 0.4; cursor: default; }
-	.stepper-input {
-		width: 52px; height: 30px;
-		text-align: center;
-		font-size: 14px; font-weight: 600;
-		font-family: var(--font-mono);
-		color: var(--text-primary);
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-left: none; border-right: none;
-		outline: none;
-		-moz-appearance: textfield;
-	}
-	.stepper-input::-webkit-outer-spin-button,
-	.stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+	.replica-stepper { display: flex; align-items: center; gap: 8px; width: fit-content; }
+	.stepper-input { width: 72px; }
 
 	/* Port editor */
 	.port-editor { display: flex; flex-direction: column; gap: 6px; }
 	.port-row { display: flex; align-items: center; gap: 6px; }
-	.port-input {
-		flex: 1;
-		height: 30px;
-		padding: 0 10px;
-		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--text-primary);
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		outline: none;
-		transition: border-color var(--transition-fast);
-	}
-	.port-input:focus { border-color: var(--accent); }
-	.port-remove-btn {
-		width: 26px; height: 26px;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		color: var(--text-dim);
-		display: flex; align-items: center; justify-content: center;
-		border-radius: var(--radius-sm);
-		transition: color var(--transition-fast), background var(--transition-fast);
-		flex-shrink: 0;
-	}
-	.port-remove-btn:hover { color: #EF4444; background: rgba(239,68,68,0.08); }
-
-	.settings-error {
-		margin: 0 14px;
-		padding: 8px 10px;
-		font-size: 12px;
-		color: #EF4444;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-	}
-	.settings-success {
-		margin: 0 14px;
-		padding: 8px 10px;
-		font-size: 12px;
-		color: #10B981;
-		background: rgba(16,185,129,0.08);
-		border: 1px solid rgba(16,185,129,0.2);
-		border-radius: var(--radius-sm);
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
+	.port-input { flex: 1; min-width: 0; }
 	.settings-footer {
-		padding: 14px;
 		display: flex;
 		gap: 8px;
 	}
-
-	.settings-input {
-		height: 30px;
-		padding: 0 10px;
-		font-size: 12px;
-		color: var(--text-primary);
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		outline: none;
-		transition: border-color var(--transition-fast);
-		font-family: var(--font-sans);
-		width: 100%;
-	}
-	.settings-input:focus { border-color: var(--accent); }
-	.settings-input.font-mono { font-family: var(--font-mono); }
 
 	.settings-static {
 		min-height: 30px; display: flex; align-items: center;
@@ -3253,15 +2589,6 @@
 		background: var(--bg-base); border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 	}
-
-	.settings-checkbox {
-		display: flex; align-items: flex-start; gap: 8px;
-		padding: 8px 10px; background: var(--bg-base);
-		border: 1px solid var(--border); border-radius: var(--radius-sm);
-		cursor: pointer;
-	}
-	.settings-checkbox input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
-	.settings-checkbox-text { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-primary); }
 	.settings-checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; }
 	.settings-checkbox-hint code {
 		font-family: var(--font-mono); font-size: 10px;
@@ -3269,15 +2596,8 @@
 		border: 1px solid var(--border);
 	}
 
-	.settings-warn {
-		display: flex; align-items: flex-start; gap: 8px;
-		padding: 9px 11px; font-size: 12px; line-height: 1.5;
-		color: var(--text-secondary);
-		background: color-mix(in srgb, var(--accent-yellow) 9%, transparent);
-		border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-		border-radius: var(--radius-sm);
-	}
-	.settings-warn :global(svg) { flex-shrink: 0; margin-top: 2px; color: var(--accent-yellow); }
+	.settings-warn { display: flex; align-items: flex-start; gap: 8px; }
+	.settings-warn :global(svg) { flex-shrink: 0; margin-top: 2px; }
 	.settings-warn strong { color: var(--text-primary); }
 	.settings-warn-paths { display: inline-flex; flex-wrap: wrap; gap: 4px; margin: 0 3px; }
 	.settings-warn-paths code {
@@ -3287,16 +2607,6 @@
 	}
 
 	.preset-btns { display: flex; flex-wrap: wrap; gap: 5px; }
-	.preset-btn {
-		padding: 3px 8px; font-size: 11px; font-family: var(--font-mono);
-		border: 1px solid var(--border); border-radius: 4px;
-		background: var(--bg-muted); color: var(--text-secondary);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.preset-btn:hover { border-color: var(--accent); color: var(--accent); }
-	.preset-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb, 99,102,241), 0.08); }
-
-	.settings-row { display: flex; gap: 10px; }
 
 	.settings-group-header {
 		display: flex;
@@ -3308,6 +2618,7 @@
 	.settings-group-header-row {
 		display: flex;
 		align-items: flex-start;
+		justify-content: space-between;
 		gap: 8px;
 	}
 
@@ -3335,173 +2646,5 @@
 	:global(.net-icon) { color: var(--text-dim); flex-shrink: 0; }
 	.net-name { flex: 1; font-weight: 500; color: var(--text-primary); }
 	.net-driver { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
-	.net-remove-btn {
-		width: 22px; height: 22px;
-		background: transparent; border: none;
-		cursor: pointer; color: var(--text-dim);
-		display: flex; align-items: center; justify-content: center;
-		border-radius: 3px; flex-shrink: 0;
-		transition: color var(--transition-fast);
-	}
-	.net-remove-btn:hover { color: var(--accent-red); }
 
-	.already-set-badge {
-		font-size: 9px; font-weight: 600; text-transform: uppercase;
-		padding: 1px 5px; border-radius: 99px;
-		background: rgba(16,185,129,0.12);
-		color: #10B981;
-		letter-spacing: 0.05em;
-		border: 1px solid rgba(16,185,129,0.25);
-	}
-
-	/* ── Git tab ─────────────────────────────────────────────────── */
-	.git-config-section {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		padding: 16px;
-	}
-
-	.git-card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 16px;
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-	}
-
-	.git-card-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-	}
-
-	.git-card-title {
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--text-primary);
-	}
-
-	.git-card-desc {
-		font-size: 12px;
-		color: var(--text-muted);
-		margin: 0;
-		line-height: 1.5;
-	}
-
-	.git-field { display: flex; flex-direction: column; gap: 6px; }
-
-	.git-label {
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--text-muted);
-	}
-
-	.git-branch-row {
-		display: flex;
-		align-items: center;
-		gap: 0;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		overflow: hidden;
-		background: var(--bg-base);
-	}
-
-	.git-branch-icon {
-		padding: 0 10px;
-		font-size: 14px;
-		color: var(--text-muted);
-		background: var(--bg-elevated);
-		border-right: 1px solid var(--border);
-		height: 32px;
-		display: flex;
-		align-items: center;
-		flex-shrink: 0;
-	}
-
-	.git-branch-input {
-		flex: 1;
-		padding: 0 10px;
-		height: 32px;
-		font-size: 13px;
-		font-family: var(--font-mono, monospace);
-		background: transparent;
-		border: none;
-		outline: none;
-		color: var(--text-primary);
-	}
-	.git-branch-input:disabled { color: var(--text-muted); cursor: not-allowed; }
-
-	.git-hint {
-		font-size: 11px;
-		color: var(--text-muted);
-		margin: 0;
-	}
-
-	.git-error {
-		font-size: 12px;
-		color: #dc2626;
-		margin: 0;
-	}
-
-	.git-save-row {
-		display: flex;
-		justify-content: flex-end;
-	}
-
-	.git-repo-info {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		font-size: 12px;
-	}
-
-	.git-repo-label {
-		color: var(--text-muted);
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-
-	.git-repo-url {
-		color: var(--accent);
-		text-decoration: none;
-		word-break: break-all;
-	}
-	.git-repo-url:hover { text-decoration: underline; }
-
-	/* Toggle switch */
-	.toggle-switch {
-		position: relative;
-		display: inline-flex;
-		align-items: center;
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-	.toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-
-	.toggle-track {
-		width: 36px;
-		height: 20px;
-		background: var(--border);
-		border-radius: 10px;
-		transition: background 0.2s;
-		position: relative;
-	}
-	.toggle-track::after {
-		content: '';
-		position: absolute;
-		width: 14px;
-		height: 14px;
-		border-radius: 50%;
-		background: #fff;
-		top: 3px;
-		left: 3px;
-		transition: transform 0.2s;
-		box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-	}
-	.toggle-switch input:checked + .toggle-track { background: var(--accent); }
-	.toggle-switch input:checked + .toggle-track::after { transform: translateX(16px); }
 </style>
