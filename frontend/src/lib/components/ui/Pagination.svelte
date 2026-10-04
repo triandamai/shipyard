@@ -65,7 +65,8 @@
 	.ui-pagination {
 		display: flex;
 		align-items: center;
-		gap: 20px;
+		flex-wrap: wrap;
+		gap: 8px 20px;
 		padding: 10px 4px;
 		font-size: 12px;
 		color: var(--text-muted);
@@ -74,5 +75,8 @@
 	.ui-pagination-size-label { white-space: nowrap; }
 	.ui-pagination-size :global(select) { width: 68px; height: 30px; }
 	.ui-pagination-range { font-variant-numeric: tabular-nums; white-space: nowrap; }
-	.ui-pagination-nav { display: flex; gap: 2px; }
+	.ui-pagination-nav { display: flex; gap: 2px; flex-shrink: 0; }
+	@media (max-width: 639px) {
+		.ui-pagination-nav { margin-left: auto; }
+	}
 </style>
