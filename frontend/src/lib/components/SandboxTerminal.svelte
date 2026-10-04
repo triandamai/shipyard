@@ -4,6 +4,7 @@
 	import { FitAddon } from '@xterm/addon-fit';
 	import '@xterm/xterm/css/xterm.css';
 	import { api } from '$lib/api/client';
+	import StatusDot from '$lib/components/ui/StatusDot.svelte';
 
 	interface Props {
 		serviceId: string;
@@ -223,7 +224,7 @@
 		</button>
 		{#if sandboxStatus === 'starting'}
 			<span class="status-pill">
-				<span class="status-dot"></span>
+				<StatusDot status="pending" />
 				Starting…
 			</span>
 		{/if}
@@ -277,17 +278,6 @@
 		color: #d29922;
 		background: rgba(210, 153, 34, 0.12);
 		border-radius: 999px;
-	}
-	.status-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: #d29922;
-		animation: status-pulse 1.2s ease-in-out infinite;
-	}
-	@keyframes status-pulse {
-		0%, 100% { opacity: 1; }
-		50% { opacity: 0.35; }
 	}
 	.term-container {
 		flex: 1;
