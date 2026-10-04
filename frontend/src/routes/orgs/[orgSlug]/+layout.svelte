@@ -5,17 +5,15 @@
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { projectStore } from '$lib/stores/project.store';
-	import { uiStore } from '$lib/stores/ui.store';
 	import { subscribeToOrgEvents } from '$lib/mqtt/subscriptions';
 	import { versionStore } from '$lib/stores/version.store';
-	import IconSidebar from '$lib/components/IconSidebar.svelte';
-	import ContextPanel from '$lib/components/ContextPanel.svelte';
+	import AppNav from '$lib/components/AppNav.svelte';
+	import ProjectDrawer from '$lib/components/ProjectDrawer.svelte';
 	import PanelContainer from '$lib/components/PanelContainer.svelte';
 
 	let { children } = $props();
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
-	let collapsed = $derived($uiStore.sidebarCollapsed);
 
 	let unsubscribeOrgEvents: (() => void) | null = null;
 
@@ -64,13 +62,11 @@
 </script>
 
 <div class="app-shell">
-	<IconSidebar {orgSlug} />
-	<ContextPanel {orgSlug} {collapsed} />
-
-	<main class="main-content" class:panel-hidden={collapsed}>
+	<AppNav {orgSlug} />
+	<ProjectDrawer {orgSlug} />
+	<main class="main-content">
 		{@render children()}
 	</main>
-
 	<PanelContainer />
 </div>
 
@@ -81,28 +77,15 @@
 		overflow: hidden;
 		background: var(--bg-base);
 	}
-
 	.main-content {
 		flex: 1;
-		/* icon sidebar (52px) + context panel (220px) */
-		margin-left: calc(52px + 220px);
+		min-width: 0;
 		height: 100vh;
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		transition: margin-left 0.2s ease;
 	}
-
-	.main-content.panel-hidden {
-		/* icon sidebar only */
-		margin-left: 52px;
-	}
-
 	@media (max-width: 639px) {
-		.main-content,
-		.main-content.panel-hidden {
-			margin-left: 0;
-			padding-bottom: 56px;
-		}
+		.main-content { padding-bottom: 56px; }
 	}
 </style>
