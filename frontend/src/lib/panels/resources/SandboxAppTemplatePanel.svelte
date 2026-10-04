@@ -2,6 +2,7 @@
 	import { Code2, FileCode, Globe, Terminal, Atom, Layers, Flame, Triangle, Box, Rocket } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { uiStore } from '$lib/stores/ui.store';
+	import { Button, FormField, TextField, InlineAlert } from '$lib/components/ui';
 	import type { SandboxTemplate } from '$lib/api/types';
 
 	interface Props {
@@ -73,18 +74,16 @@
 </script>
 
 <div class="template-panel">
-	<label class="field">
-		<span>Name</span>
-		<input class="input" value={name} oninput={(e) => onNameInput(e.currentTarget.value)} placeholder="my-app" />
-	</label>
+	<FormField label="Name" for="sandbox-app-name">
+		<TextField id="sandbox-app-name" value={name} oninput={(e) => onNameInput(e.currentTarget.value)} placeholder="my-app" />
+	</FormField>
 
-	<label class="field">
-		<span>Slug</span>
-		<input class="input" value={slug} oninput={(e) => (slug = e.currentTarget.value)} />
-	</label>
+	<FormField label="Slug" for="sandbox-app-slug">
+		<TextField id="sandbox-app-slug" bind:value={slug} />
+	</FormField>
 
 	<div class="field">
-		<span>Template</span>
+		<span class="field-label">Template</span>
 		<div class="template-group-label">Basic</div>
 		<div class="template-grid">
 			<button class="template-card" class:selected={template === 'node'} onclick={() => selectTemplate('node')}>
@@ -134,12 +133,12 @@
 	</div>
 
 	{#if error}
-		<p class="error">{error}</p>
+		<div role="alert"><InlineAlert tone="error">{error}</InlineAlert></div>
 	{/if}
 
-	<button class="btn btn-primary" onclick={create} disabled={isCreating}>
+	<Button onclick={create} disabled={isCreating}>
 		{isCreating ? 'Creating…' : 'Create App'}
-	</button>
+	</Button>
 </div>
 
 <style>
@@ -153,8 +152,13 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-		font-size: 12px;
-		color: var(--text-secondary);
+	}
+	.field-label {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-dim);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 	.template-group-label {
 		font-size: 11px;
@@ -217,9 +221,5 @@
 	.variant-btn.active {
 		border-color: var(--accent);
 		color: var(--accent);
-	}
-	.error {
-		color: var(--accent-red);
-		font-size: 12px;
 	}
 </style>
