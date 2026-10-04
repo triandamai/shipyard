@@ -19,7 +19,7 @@
 	let mobileOpen    = $state(false);
 
 	onMount(async () => {
-		// Same theme storage key and mechanism as IconSidebar.svelte — one
+		// Same theme storage key and mechanism as AppNav.svelte — one
 		// shared theme state for the whole app, not a separate admin one.
 		const saved = localStorage.getItem('shipyard_theme');
 		theme = saved === 'dark' ? 'dark' : 'light';
@@ -189,12 +189,10 @@
 
 	/* ── Rail footer ──────────────────────── */
 	/* Small fixed overlay pinned to the bottom of NavRail's 60px column, kept
-	   local to this layout rather than folded into NavRail's own API: these
-	   two actions (theme toggle, exit admin) are admin-specific concerns, and
-	   NavRail/NavDrawer are shared design-system components other areas of
-	   the app may reuse — baking an admin footer into their prop surface
-	   would couple a shared component to one consumer for the sake of two
-	   buttons. */
+	   local to this layout. NavRail now exposes a `footer` snippet (and a
+	   `phoneBar`), but this admin overlay predates it and has not been
+	   migrated onto it; the two actions (theme toggle, exit admin) stay
+	   admin-specific. */
 	.rail-footer {
 		position: fixed;
 		left: 0;
@@ -231,9 +229,8 @@
 	/* NOTE: mob-menu-btn still toggles `mobileOpen`, which was wired to the
 	   old 220px sliding `.sidebar` panel. That panel no longer exists (it's
 	   NavRail/NavDrawer now), so this button is currently a no-op on mobile.
-	   This plan's mockups/prototype were desktop-only — mobile nav-rail
-	   behavior hasn't been designed yet. Needs a follow-up task once that
-	   design exists. */
+	   NavRail now has `footer` and `phoneBar` support, but admin has not been
+	   wired to it yet — follow-up. */
 	.mob-topbar {
 		display: none;
 		align-items: center; gap: 10px;
