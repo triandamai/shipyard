@@ -148,7 +148,7 @@
 	let showMonitor     = $state(false);
 
 	// ── Settings edit state ──────────────────────────────────────────
-	let editReplicas = $state(1);
+	let editReplicas = $state<number | null>(1);
 	let editPorts = $state<string[]>([]);
 	let editImage = $state('');
 	let editCpuLimit = $state<number | null>(null);
@@ -801,7 +801,7 @@
 		const ports = editPorts.map(p => p.trim()).filter(Boolean);
 		const image = editImage.trim();
 		const res = await api.updateService(projectId, serviceId, {
-			replicas: editReplicas,
+			replicas: editReplicas as number, // null when the field is cleared (pre-migration behavior)
 			ports,
 			...(image ? { image } : {}),
 			...(editCpuLimit !== null ? { cpu_limit: editCpuLimit } : {}),
@@ -2004,8 +2004,8 @@
 										variant="secondary"
 										size="icon"
 										aria-label="Decrease instance count"
-										onclick={() => editReplicas = Math.max(0, editReplicas - 1)}
-										disabled={editReplicas <= 0}
+										onclick={() => editReplicas = Math.max(0, (editReplicas ?? 0) - 1)}
+										disabled={(editReplicas ?? 0) <= 0}
 									>−</Button>
 									<div class="stepper-input">
 										<TextField
@@ -2013,16 +2013,16 @@
 											type="number"
 											min="0"
 											max="20"
-											value={String(editReplicas)}
-											oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (!isNaN(v)) editReplicas = v; }}
+											value={String(editReplicas ?? '')}
+											oninput={(e) => { const v = parseInt((e.target as HTMLInputElement).value, 10); editReplicas = isNaN(v) ? null : v; }}
 										/>
 									</div>
 									<Button
 										variant="secondary"
 										size="icon"
 										aria-label="Increase instance count"
-										onclick={() => editReplicas = Math.min(20, editReplicas + 1)}
-										disabled={editReplicas >= 20}
+										onclick={() => editReplicas = Math.min(20, (editReplicas ?? 0) + 1)}
+										disabled={(editReplicas ?? 0) >= 20}
 									>+</Button>
 								</div>
 							</FormField>
@@ -2491,6 +2491,8 @@
 	.node-role-dot {
 		width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
 	}
+	.node-role-manager { background: var(--accent); }
+	.node-role-worker  { background: var(--accent-green); }
 
 	.tab-stack { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 	.domain-header-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
