@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui';
 
 	interface Props {
 		title: string;
@@ -20,9 +21,9 @@
 >
 	<div class="panel-header">
 		<h2 class="panel-title">{title}</h2>
-		<button class="close-btn btn btn-ghost btn-icon" onclick={onClose} aria-label="Close panel">
+		<Button variant="ghost" size="icon" aria-label="Close panel" onclick={onClose}>
 			<X size={16} />
-		</button>
+		</Button>
 	</div>
 
 	<div class="panel-body">
@@ -62,9 +63,6 @@
 		font-weight: 600;
 		color: var(--text-primary);
 	}
-
-	.close-btn { color: var(--text-muted); }
-	.close-btn:hover { color: var(--text-primary); }
 
 	.panel-body {
 		flex: 1;
