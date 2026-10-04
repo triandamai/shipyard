@@ -855,9 +855,10 @@ class ApiClient {
 		return this.request('PATCH', `/admin/config/${key}`, { value });
 	}
 
-	getAdminAuditLogs(opts: { cursor?: string; limit?: number; org_id?: string } = {}): Promise<ApiResponse<{ items: import('./types').AuditLogEntry[]; next_cursor: string | null }>> {
+	getAdminAuditLogs(opts: { cursor?: string; page?: number; limit?: number; org_id?: string } = {}): Promise<ApiResponse<{ items: import('./types').AuditLogEntry[]; next_cursor: string | null; total?: number }>> {
 		const p = new URLSearchParams();
 		if (opts.cursor)  p.set('cursor', opts.cursor);
+		if (opts.page !== undefined) p.set('page', String(opts.page));
 		if (opts.limit)   p.set('limit', String(opts.limit));
 		if (opts.org_id)  p.set('org_id', opts.org_id);
 		const qs = p.toString() ? `?${p}` : '';

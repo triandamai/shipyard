@@ -321,11 +321,22 @@ struct AdminUser {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Deserialize)]
+struct ListUsersParams {
+    /// Case-insensitive email substring filter (used by email autocomplete).
+    q:     Option<String>,
+    limit: Option<i64>,
+}
+
 async fn list_users(
     auth: AuthUser,
     State(state): State<AppState>,
+    Query(params): Query<ListUsersParams>,
 ) -> Result<Json<ApiResponse<Vec<AdminUser>>>, ApiAppError> {
     require_admin_access(&state.db, auth.user_id, "shipyard:admin:users:view").await?;
+
+    let q = params.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let limit = params.limit.map(|l| l.clamp(1, 100));
 
     let users: Vec<AdminUser> = sqlx::query_as::<_, AdminUser>(
         r#"SELECT
@@ -334,8 +345,12 @@ async fn list_users(
                u.created_at,
                (SELECT COUNT(*) FROM org_members om WHERE om.user_id = u.id) AS org_count
            FROM users u
-           ORDER BY u.created_at DESC"#,
+           WHERE ($1::text IS NULL OR u.email ILIKE '%' || $1 || '%')
+           ORDER BY u.created_at DESC
+           LIMIT $2"#,
     )
+    .bind(q)
+    .bind(limit)
     .fetch_all(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
@@ -482,6 +497,8 @@ struct AdminAuditParams {
     cursor: Option<String>,
     limit:  Option<i64>,
     org_id: Option<Uuid>,
+    /// 0-indexed page. When set, uses offset pagination and returns `total`.
+    page:   Option<i64>,
 }
 
 async fn list_all_audit_logs(
@@ -504,6 +521,67 @@ async fn list_all_audit_logs(
         ip_address:    Option<String>,
         metadata:      Option<serde_json::Value>,
         created_at:    chrono::DateTime<chrono::Utc>,
+    }
+
+    let row_json = |r: &AuditRow| serde_json::json!({
+        "id":            r.id,
+        "user_id":       r.user_id,
+        "action":        r.action,
+        "resource_type": r.resource_type,
+        "resource_id":   r.resource_id,
+        "ip_address":    r.ip_address,
+        "metadata":      r.metadata,
+        "created_at":    r.created_at,
+    });
+
+    if let Some(page) = params.page {
+        let offset = page.max(0) * limit;
+        let (rows, total): (Vec<AuditRow>, (i64,)) = match &params.org_id {
+            Some(org_id) => {
+                let rows = sqlx::query_as(
+                    r#"SELECT al.id, al.user_id, al.action, al.resource_type, al.resource_id,
+                              al.ip_address, al.metadata, al.created_at
+                       FROM audit_logs al
+                       WHERE (al.resource_type = 'org' AND al.resource_id = $1)
+                          OR al.user_id IN (SELECT user_id FROM org_members WHERE org_id = $1)
+                       ORDER BY al.created_at DESC, al.id DESC LIMIT $2 OFFSET $3"#,
+                )
+                .bind(org_id).bind(limit).bind(offset)
+                .fetch_all(&state.db).await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+                let total = sqlx::query_as(
+                    r#"SELECT COUNT(*)
+                       FROM audit_logs al
+                       WHERE (al.resource_type = 'org' AND al.resource_id = $1)
+                          OR al.user_id IN (SELECT user_id FROM org_members WHERE org_id = $1)"#,
+                )
+                .bind(org_id)
+                .fetch_one(&state.db).await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+                (rows, total)
+            }
+            None => {
+                let rows = sqlx::query_as(
+                    r#"SELECT id, user_id, action, resource_type, resource_id,
+                              ip_address, metadata, created_at
+                       FROM audit_logs
+                       ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2"#,
+                )
+                .bind(limit).bind(offset)
+                .fetch_all(&state.db).await
+                .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+                let total = sqlx::query_as(r#"SELECT COUNT(*) FROM audit_logs"#)
+                    .fetch_one(&state.db).await
+                    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+                (rows, total)
+            }
+        };
+        let items: Vec<serde_json::Value> = rows.iter().map(row_json).collect();
+        return Ok(Json(ApiResponse::ok(serde_json::json!({
+            "items":       items,
+            "total":       total.0,
+            "next_cursor": serde_json::Value::Null,
+        }))));
     }
 
     let rows: Vec<AuditRow> = match (&params.cursor, &params.org_id) {
@@ -568,16 +646,7 @@ async fn list_all_audit_logs(
         None
     };
 
-    let items: Vec<serde_json::Value> = page.iter().map(|r| serde_json::json!({
-        "id":            r.id,
-        "user_id":       r.user_id,
-        "action":        r.action,
-        "resource_type": r.resource_type,
-        "resource_id":   r.resource_id,
-        "ip_address":    r.ip_address,
-        "metadata":      r.metadata,
-        "created_at":    r.created_at,
-    })).collect();
+    let items: Vec<serde_json::Value> = page.iter().map(row_json).collect();
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "items":       items,

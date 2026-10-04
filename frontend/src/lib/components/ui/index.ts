@@ -35,3 +35,6 @@ export { default as ConfirmDialog } from './ConfirmDialog.svelte';
 export { default as Dropdown } from './Dropdown.svelte';
 export { default as NavRail } from './NavRail.svelte';
 export { default as NavDrawer } from './NavDrawer.svelte';
+export { default as BottomSheet } from './BottomSheet.svelte';
+export { default as Autocomplete } from './Autocomplete.svelte';
+export type { AutocompleteOption } from './Autocomplete.svelte';

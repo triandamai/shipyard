@@ -6,14 +6,15 @@
 		Avatar,
 		Badge,
 		Button,
-		Modal,
+		BottomSheet,
 		FormField,
-		TextField,
+		Autocomplete,
 		Checkbox,
 		PageHeader,
 		InlineAlert,
 		ConfirmDialog
 	} from '$lib/components/ui';
+	import type { AutocompleteOption } from '$lib/components/ui';
 
 	interface StaffUser { id: string; email: string; staff_permissions: string[]; created_at: string; }
 
@@ -32,6 +33,39 @@
 	let grantPerms = $state<string[]>([]);
 	let granting = $state(false);
 	let grantError = $state('');
+
+	// ── Email autocomplete ───────────────────────────────────────────────────
+	interface UserMatch { id: string; email: string; is_superadmin: boolean; }
+	let emailOptions = $state<AutocompleteOption[]>([]);
+	let emailLoading = $state(false);
+	let emailSeq = 0;
+	let emailDebounce: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => {
+		const q = grantEmail.trim();
+		clearTimeout(emailDebounce);
+		if (!showGrant || q.length < 2) {
+			emailOptions = [];
+			emailLoading = false;
+			return;
+		}
+		emailDebounce = setTimeout(() => searchUsers(q), 250);
+		return () => clearTimeout(emailDebounce);
+	});
+
+	async function searchUsers(q: string) {
+		const seq = ++emailSeq;
+		emailLoading = true;
+		const res = await api.get<UserMatch[]>(`/admin/users?q=${encodeURIComponent(q)}&limit=8`);
+		if (seq !== emailSeq) return;
+		const staffIds = new Set(staff.map((s) => s.id));
+		emailOptions = (res.data ?? []).map((u) => ({
+			value: u.email,
+			disabled: staffIds.has(u.id) || u.is_superadmin,
+			meta: u.is_superadmin ? 'Superadmin' : staffIds.has(u.id) ? 'Already staff' : undefined,
+		}));
+		emailLoading = false;
+	}
 
 	const PERM_GROUPS = [
 		{ label: 'Organizations', perms: [
@@ -254,11 +288,19 @@
 	onConfirm={confirmRevoke}
 />
 
-<!-- ── Promote to Admin Modal ──────────────────────────────────────────────── -->
-<Modal bind:open={showGrant} title="Promote to Admin">
+<!-- ── Add Staff bottom sheet ──────────────────────────────────────────────── -->
+<BottomSheet bind:open={showGrant} title="Add Staff" subtitle="Grant admin-panel access to an existing user.">
 	{#snippet children()}
 		<FormField label="User Email" for="st-grant-email">
-			<TextField id="st-grant-email" type="email" placeholder="user@example.com" bind:value={grantEmail} />
+			<Autocomplete
+				id="st-grant-email"
+				type="email"
+				placeholder="Start typing an email…"
+				bind:value={grantEmail}
+				options={emailOptions}
+				loading={emailLoading}
+				emptyText="No matching users."
+			/>
 		</FormField>
 		<div class="st-perm-groups">
 			{#each PERM_GROUPS as group}
@@ -288,7 +330,7 @@
 			{granting ? 'Granting…' : 'Grant Admin Access'}
 		</Button>
 	{/snippet}
-</Modal>
+</BottomSheet>
 
 <style>
 	.st-user-cell { display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -299,10 +341,9 @@
 	.st-perms { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 	.st-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
-	/* Promote-to-admin modal: same grouped (one heading per permission
-	   category, two Checkboxes per row) layout the page always used — only
-	   rebuilt on Modal + Checkbox (Task 43). */
-	.st-perm-groups { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; }
+	/* Add-staff sheet: one heading per permission category, two Checkboxes
+	   per group; groups flow into a grid since the sheet body scrolls. */
+	.st-perm-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 16px; }
 	.st-perm-group { display: flex; flex-direction: column; gap: 6px; }
 	.st-perm-group-label { font-size: 10.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 	.st-perm-row { display: flex; gap: 16px; }

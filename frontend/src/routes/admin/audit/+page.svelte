@@ -1,132 +1,107 @@
 <script lang="ts">
 	import { api } from '$lib/api/client';
 	import type { AuditLogEntry } from '$lib/api/types';
-	import { Activity, ChevronDown } from '@lucide/svelte';
-	import { PageHeader, FormField, TextField, ActivityList, ListRow, Button, InlineAlert, EmptyState, Spinner } from '$lib/components/ui';
+	import { ChevronRight } from '@lucide/svelte';
+	import { PageHeader, FormField, TextField, DataTable } from '$lib/components/ui';
 
-	let logs        = $state<AuditLogEntry[]>([]);
-	let nextCursor  = $state<string | null>(null);
-	let loading     = $state(true);
-	let loadingMore = $state(false);
-	let error       = $state('');
+	const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 	let orgIdFilter = $state('');
+	// The backend rejects anything that isn't a full UUID, so the filter only
+	// applies once the field is empty or holds a complete one.
+	let appliedOrg = $state('');
+	let orgInvalid = $derived(orgIdFilter.trim() !== '' && !UUID_RE.test(orgIdFilter.trim()));
 
-	let hasMore = $derived(nextCursor !== null);
+	let orgDebounce: ReturnType<typeof setTimeout> | undefined;
+	$effect(() => {
+		const v = orgIdFilter.trim();
+		clearTimeout(orgDebounce);
+		if (v !== '' && !UUID_RE.test(v)) return;
+		orgDebounce = setTimeout(() => (appliedOrg = v), 300);
+		return () => clearTimeout(orgDebounce);
+	});
 
 	let expanded = $state(new Set<string>());
 	function toggleExpand(id: string) {
-		if (expanded.has(id)) expanded.delete(id);
-		else expanded.add(id);
-		expanded = new Set(expanded);
+		const next = new Set(expanded);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expanded = next;
 	}
 
-	// Monotonic guard so an out-of-order response from an earlier request
-	// (e.g. a stale keystroke's fetch resolving after a newer one) can never
-	// clobber the result of a request started later.
-	let requestSeq = 0;
-
-	async function load(cursor?: string) {
-		const seq = ++requestSeq;
-		if (cursor) loadingMore = true;
-		else { loading = true; logs = []; nextCursor = null; }
-		error = '';
+	async function fetchAuditPage(params: { page: number; pageSize: number; search: string }) {
 		const res = await api.getAdminAuditLogs({
-			cursor,
-			limit: 50,
-			org_id: orgIdFilter.trim() || undefined,
+			page: params.page,
+			limit: params.pageSize,
+			org_id: appliedOrg || undefined,
 		});
-		if (seq !== requestSeq) return; // superseded by a newer request; discard
-		if (res.data) {
-			logs = cursor ? [...logs, ...res.data.items] : res.data.items;
-			nextCursor = res.data.next_cursor;
-		} else {
-			error = res.error?.message ?? 'Failed to load audit logs';
-		}
-		loading = false;
-		loadingMore = false;
+		if (!res.data) throw new Error(res.error?.message ?? 'Failed to load audit logs');
+		return { rows: res.data.items, total: res.data.total ?? res.data.items.length };
 	}
-
-	function loadMore() {
-		if (nextCursor) load(nextCursor);
-	}
-
-	// Refetch from scratch whenever the org-ID filter changes (also fires the
-	// initial load). Replaces the old page's explicit "Apply" button now that
-	// the new template only exposes a bound TextField. Debounced so typing a
-	// UUID doesn't fire a request per keystroke.
-	let orgFilterDebounce: ReturnType<typeof setTimeout> | undefined;
-	let firstLoad = true;
-	$effect(() => {
-		orgIdFilter;
-		if (firstLoad) {
-			firstLoad = false;
-			load();
-			return;
-		}
-		clearTimeout(orgFilterDebounce);
-		orgFilterDebounce = setTimeout(() => load(), 300);
-		return () => clearTimeout(orgFilterDebounce);
-	});
 </script>
 
 <PageHeader title="Audit Log" subtitle="Organization activity history." />
 
-<FormField label="Filter by organization ID">
+<FormField label="Filter by organization ID" hint={orgInvalid ? 'Enter a full organization UUID to filter.' : undefined}>
 	<TextField bind:value={orgIdFilter} placeholder="org UUID (optional)" />
 </FormField>
 
-{#if error}
-	<InlineAlert tone="error">{error}</InlineAlert>
-{:else if loading}
-	<div class="audit-loading"><Spinner size={18} /></div>
-{:else if logs.length === 0}
-	<EmptyState message="No audit entries found." />
-{:else}
-	<ActivityList>
-		{#each logs as log (log.id)}
-			<div class="audit-row-wrap">
-				<button type="button" class="audit-row-toggle" onclick={() => toggleExpand(log.id)}>
-					<ListRow
-						iconTone="blue"
-						title={log.action}
-						meta="{log.resource_type ?? ''} · {log.user_id ?? 'system'} · {log.ip_address ?? ''}"
-					>
-						{#snippet icon()}<Activity size={13} />{/snippet}
-						{#snippet trailing()}<span class="audit-time">{new Date(log.created_at).toLocaleString()}</span>{/snippet}
-					</ListRow>
-				</button>
-				{#if expanded.has(log.id)}
-					<pre class="audit-detail">{JSON.stringify(log.metadata, null, 2)}</pre>
-				{/if}
-			</div>
-		{/each}
-	</ActivityList>
-
-	{#if hasMore}
-		<div class="audit-load-more">
-			<Button variant="secondary" onclick={loadMore} disabled={loadingMore}>
-				<ChevronDown size={13} />
-				{loadingMore ? 'Loading…' : 'Load more'}
-			</Button>
-		</div>
-	{/if}
-{/if}
+{#key appliedOrg}
+	<DataTable
+		fetchPage={fetchAuditPage}
+		rowKey={(log: AuditLogEntry) => log.id}
+		searchable={false}
+		columns={[
+			{ key: 'action', label: 'Action', width: '22%' },
+			{ key: 'resource_type', label: 'Resource', width: '14%' },
+			{ key: 'user_id', label: 'User', width: '30%' },
+			{ key: 'ip_address', label: 'IP', width: '14%' },
+			{ key: 'created_at', label: 'Time', width: '20%' }
+		]}
+		emptyMessage="No audit entries found."
+	>
+		{#snippet row(log: AuditLogEntry)}
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<tr class="audit-row" onclick={() => toggleExpand(log.id)}>
+				<td class="audit-trunc">
+					<span class="audit-expand-cell">
+						<ChevronRight size={12} class={expanded.has(log.id) ? 'audit-chevron audit-chevron-expanded' : 'audit-chevron'} />
+						{log.action}
+					</span>
+				</td>
+				<td class="audit-trunc">{log.resource_type ?? '—'}</td>
+				<td class="audit-mono audit-trunc">{log.user_id ?? 'system'}</td>
+				<td class="audit-mono audit-trunc">{log.ip_address ?? '—'}</td>
+				<td class="audit-time">{new Date(log.created_at).toLocaleString()}</td>
+			</tr>
+			{#if expanded.has(log.id)}
+				<tr class="audit-detail-row">
+					<td colspan="5">
+						<pre class="audit-detail">{JSON.stringify(log.metadata, null, 2)}</pre>
+					</td>
+				</tr>
+			{/if}
+		{/snippet}
+	</DataTable>
+{/key}
 
 <style>
-	.audit-row-toggle { display: block; width: 100%; background: none; border: none; padding: 0; cursor: pointer; text-align: left; }
-	.audit-time { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.audit-row { cursor: pointer; }
+	.audit-mono { font-family: var(--font-mono); font-size: 11.5px; }
+	.audit-trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; max-width: 0; }
+	.audit-expand-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+	:global(.audit-chevron) { color: var(--text-dim); transition: transform 0.2s; flex-shrink: 0; }
+	:global(.audit-chevron-expanded) { transform: rotate(90deg); }
+	.audit-time { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-dim); font-size: 11.5px; }
+	.audit-detail-row td { background: var(--bg-elevated); border-top: 1px solid var(--border); padding: 12px 16px; }
 	.audit-detail {
-		margin: 0 0 8px 42px;
-		padding: 10px 12px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
+		margin: 0;
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--text-secondary);
-		overflow-x: auto;
+		white-space: pre-wrap;
 		max-height: 240px;
+		overflow-y: auto;
 	}
-	.audit-load-more { display: flex; justify-content: center; margin-top: 16px; }
-	.audit-loading { display: flex; justify-content: center; padding: 40px 0; }
 </style>

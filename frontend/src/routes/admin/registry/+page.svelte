@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
-	import { Package, HardDrive, Layers, Archive, RefreshCw, Search, Trash2, ChevronRight, ChevronDown } from '@lucide/svelte';
+	import { Package, HardDrive, Layers, Archive, RefreshCw, Trash2, ChevronRight } from '@lucide/svelte';
 	import {
 		PageHeader,
 		StatCard,
 		SectionLabel,
-		TextField,
 		Button,
 		Badge,
+		DataTable,
 		ActivityList,
 		ListRow,
 		EmptyState,
@@ -36,19 +36,18 @@
 	}
 
 	// ── State ─────────────────────────────────────────────────────────────────────
-	let stats: {
+	interface RegistryStats {
 		total_blobs: number;
 		total_blob_size: number;
 		total_artifacts: number;
 		total_namespaces: number;
 		hostname: string;
 		storage_type: string;
-	} | null = $state(null);
+	}
+	let stats = $state<RegistryStats | null>(null);
 
 	let namespaces = $state<NsRow[]>([]);
 	let loading    = $state(true);
-	let searchQ    = $state('');
-	let searching  = $state(false);
 
 	// Expanded namespaces → lazily loaded repos. Follows the Set<string> expand
 	// pattern established in Tasks 31/35/36/48: a Set of expanded row ids,
@@ -90,42 +89,20 @@
 	async function load() {
 		loading = true;
 		const [sRes, nRes] = await Promise.all([
-			api.get('/admin/registry/stats'),
-			api.get('/admin/registry/namespaces'),
+			api.get<RegistryStats>('/admin/registry/stats'),
+			api.get<NsRow[]>('/admin/registry/namespaces'),
 		]);
 		stats      = sRes.data ?? null;
 		namespaces = nRes.data ?? [];
 		loading    = false;
 	}
 
-	async function search() {
-		if (!searchQ.trim()) { return load(); }
-		searching = true;
-		const res = await api.get(`/admin/registry/namespaces/search?q=${encodeURIComponent(searchQ.trim())}`);
-		if (res.data) namespaces = res.data;
-		searching = false;
-	}
-
-	// Debounced search — preserves the original 280ms setTimeout debounce.
-	// TextField (unlike a raw <input>) exposes no oninput prop, so the
-	// debounce is re-wired onto an $effect watching the bound value instead —
-	// the same approach the audit log page uses for its org-ID filter.
-	let searchDebounce: ReturnType<typeof setTimeout> | undefined;
-	let firstSearchRun = true;
-	$effect(() => {
-		searchQ;
-		if (firstSearchRun) { firstSearchRun = false; return; }
-		clearTimeout(searchDebounce);
-		searchDebounce = setTimeout(search, 280);
-		return () => clearTimeout(searchDebounce);
-	});
-
 	async function loadRepos(nsId: string) {
 		const startLoading = new Set(reposLoadingFor);
 		startLoading.add(nsId);
 		reposLoadingFor = startLoading;
 
-		const res = await api.get(`/admin/registry/namespaces/${nsId}/repos`);
+		const res = await api.get<RepoRow[]>(`/admin/registry/namespaces/${nsId}/repos`);
 		nsRepos = { ...nsRepos, [nsId]: res.data ?? [] };
 
 		const doneLoading = new Set(reposLoadingFor);
@@ -242,60 +219,50 @@
 			{/if}
 		</div>
 
-		<!-- Namespace search + list -->
+		<!-- Namespaces -->
 		<div class="reg-section">
-			<div class="reg-section-header">
-				<SectionLabel>Namespaces</SectionLabel>
-				<div class="reg-search-wrap">
-					<TextField bind:value={searchQ} placeholder="Search by slug…">
-						{#snippet icon()}<Search size={13} />{/snippet}
-					</TextField>
-					{#if searching}<Spinner size={13} />{/if}
-				</div>
-			</div>
-
-			{#if namespaces.length === 0}
-				<EmptyState
-					message={searchQ ? `No namespaces matching "${searchQ}"` : 'No namespaces yet.'}
-					sub={searchQ ? undefined : 'Artifacts are registered here when the build engine first pushes to a project.'}
-				/>
-			{:else}
-				<ActivityList>
-					{#each namespaces as ns (ns.id)}
-						<div class="reg-ns-block">
-							<!-- svelte-ignore a11y_click_events_have_key_events -->
-							<!-- svelte-ignore a11y_no_static_element_interactions -->
-							<div
-								class="reg-ns-toggle"
-								role="button"
-								tabindex="0"
-								onclick={() => toggleExpand(ns)}
-								onkeydown={(e) => {
-									if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(ns); }
-								}}
+			<SectionLabel>Namespaces</SectionLabel>
+			<DataTable
+				items={namespaces}
+				rowKey={(ns) => ns.id}
+				searchFields={['slug']}
+				columns={[
+					{ key: 'slug', label: 'Namespace', width: '46%' },
+					{ key: 'artifact_count', label: 'Artifacts', width: '14%' },
+					{ key: 'total_size', label: 'Size', width: '14%' },
+					{ key: 'last_pushed', label: 'Last Pushed', width: '18%' },
+					{ key: 'actions', label: '', width: '8%' }
+				]}
+				emptyMessage="No namespaces yet. Artifacts are registered here when the build engine first pushes to a project."
+			>
+				{#snippet row(ns)}
+					<!-- svelte-ignore a11y_click_events_have_key_events -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<tr class="reg-row" onclick={() => toggleExpand(ns)}>
+						<td class="reg-mono reg-trunc">
+							<span class="reg-expand-cell">
+								<ChevronRight size={12} class={expanded.has(ns.id) ? 'reg-chevron reg-chevron-expanded' : 'reg-chevron'} />
+								{ns.slug}
+							</span>
+						</td>
+						<td>{ns.artifact_count}</td>
+						<td>{fmtBytes(ns.total_size)}</td>
+						<td>{timeAgo(ns.last_pushed)}</td>
+						<td class="reg-actions">
+							<button
+								type="button"
+								class="reg-delete-btn"
+								title="Delete namespace"
+								aria-label="Delete namespace {ns.slug}"
+								onclick={(e) => { e.stopPropagation(); askDeleteNs(ns); }}
 							>
-								<ListRow
-									iconTone="blue"
-									title={ns.slug}
-									meta="{ns.artifact_count} artifact{ns.artifact_count !== 1 ? 's' : ''} · {fmtBytes(ns.total_size)}{ns.last_pushed ? ` · ${timeAgo(ns.last_pushed)}` : ''}"
-								>
-									{#snippet icon()}
-										{#if expanded.has(ns.id)}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}
-									{/snippet}
-									{#snippet trailing()}
-										<button
-											type="button"
-											class="reg-delete-btn"
-											title="Delete namespace"
-											onclick={(e) => { e.stopPropagation(); askDeleteNs(ns); }}
-										>
-											<Trash2 size={13} />
-										</button>
-									{/snippet}
-								</ListRow>
-							</div>
-
-							{#if expanded.has(ns.id)}
+								<Trash2 size={13} />
+							</button>
+						</td>
+					</tr>
+					{#if expanded.has(ns.id)}
+						<tr class="reg-detail-row">
+							<td colspan="5">
 								<div class="reg-repo-sublist">
 									{#if reposLoadingFor.has(ns.id)}
 										<div class="reg-repo-loading"><Spinner size={13} /> Loading repositories…</div>
@@ -325,11 +292,11 @@
 										</ActivityList>
 									{/if}
 								</div>
-							{/if}
-						</div>
-					{/each}
-				</ActivityList>
-			{/if}
+							</td>
+						</tr>
+					{/if}
+				{/snippet}
+			</DataTable>
 		</div>
 	{/if}
 </div>
@@ -371,16 +338,18 @@
 
 	/* ── Section ── */
 	.reg-section { display: flex; flex-direction: column; gap: 10px; }
-	.reg-section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-
-	/* ── Search ── */
-	.reg-search-wrap { display: flex; align-items: center; gap: 8px; min-width: 220px; }
 
 	/* ── Namespace rows ── */
-	.reg-ns-block + .reg-ns-block { margin-top: 0; }
-	.reg-ns-toggle { cursor: pointer; border-radius: var(--radius-sm); }
-	.reg-ns-toggle:hover { background: var(--bg-hover); }
-	.reg-ns-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.reg-row { cursor: pointer; }
+	.reg-mono { font-family: var(--font-mono); }
+	.reg-trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; max-width: 0; }
+	.reg-expand-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+	:global(.reg-chevron) { color: var(--text-dim); transition: transform 0.2s; flex-shrink: 0; }
+	:global(.reg-chevron-expanded) { transform: rotate(90deg); }
+	.reg-actions { text-align: right; }
+	.reg-actions .reg-delete-btn { margin-left: auto; }
+	.reg-detail-row td { background: var(--bg-elevated); border-top: 1px solid var(--border); padding: 10px 16px 12px; }
+	.reg-repo-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); padding: 6px 0; }
 
 	/* ── Delete button ── */
 	.reg-delete-btn {
@@ -392,7 +361,7 @@
 	.reg-delete-btn:hover { background: var(--accent-red-muted); color: var(--accent-red); }
 
 	/* ── Repo sublist (expanded) ── */
-	.reg-repo-sublist { margin: 2px 0 8px 40px; }
+	.reg-repo-sublist { margin: 0 0 0 18px; }
 
 	@media (max-width: 768px) {
 		.page { padding: 16px; }
