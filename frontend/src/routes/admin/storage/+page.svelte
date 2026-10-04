@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
-	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable } from '$lib/components/ui';
+	import { Card, Button, InlineAlert, Skeleton, EmptyState, DataTable, ListRow } from '$lib/components/ui';
 	import {
 		Folder,
 		File,
@@ -18,8 +18,8 @@
 		Database,
 		Server,
 		FlaskConical,
-		CircleCheck,
-		CircleX,
+		CheckCircle2,
+		XCircle,
 		Loader,
 	} from '@lucide/svelte';
 
@@ -281,72 +281,93 @@
 			<p class="sub">Registry content store explorer (S3 / Local storage backend)</p>
 		</div>
 		<div style="display:flex;gap:8px;align-items:center;">
-			<button class="diag-btn" onclick={() => { diagOpen = !diagOpen; if (diagOpen && !diagResult) runDiagnostics(); }} title="Run storage diagnostics">
-				<FlaskConical width="14" height="14" />
+			<Button variant="secondary" size="sm" onclick={() => { diagOpen = !diagOpen; if (diagOpen && !diagResult) runDiagnostics(); }}>
+				<FlaskConical size={14} />
 				Diagnostics
-			</button>
-			<button class="refresh-btn" onclick={() => selectedBucket ? loadList(currentPrefix) : loadBuckets()} title="Refresh">
-				<RefreshCw width="14" height="14" class={(loading || bucketsLoading) ? 'spin' : ''} />
-			</button>
+			</Button>
+			<Button variant="secondary" size="icon" onclick={() => selectedBucket ? loadList(currentPrefix) : loadBuckets()}>
+				<RefreshCw size={14} class={(loading || bucketsLoading) ? 'spin' : ''} />
+			</Button>
 		</div>
 	</div>
 
 	{#if diagOpen}
-		<div class="diag-panel">
+		<Card padding="0">
 			<div class="diag-header">
 				<span class="diag-title">Storage Diagnostics</span>
 				<div style="display:flex;gap:8px;align-items:center;">
-					<button class="diag-rerun" onclick={runDiagnostics} disabled={diagLoading}>
-						<RefreshCw width="12" height="12" class={diagLoading ? 'spin' : ''} />
+					<Button variant="secondary" size="sm" onclick={runDiagnostics} disabled={diagLoading}>
+						<RefreshCw size={12} class={diagLoading ? 'spin' : ''} />
 						Re-run
-					</button>
-					<button class="diag-close" onclick={() => diagOpen = false}><X width="14" height="14" /></button>
+					</Button>
+					<Button variant="ghost" size="icon" onclick={() => diagOpen = false}><X size={14} /></Button>
 				</div>
 			</div>
 			{#if diagLoading && !diagResult}
-				<div class="diag-loading"><Loader width="14" height="14" class="spin" /> Running storage probe…</div>
+				<div class="diag-loading"><Loader size={14} class="spin" /> Running storage probe…</div>
 			{:else if diagError}
-				<div class="diag-row diag-fail"><CircleX width="14" height="14" /> Request failed: {diagError}</div>
+				<div class="diag-body">
+					<InlineAlert tone="error">Request failed: {diagError}</InlineAlert>
+				</div>
 			{:else if diagResult}
+				{@const d = diagResult}
 				<div class="diag-rows">
-					<div class="diag-row" class:diag-ok={diagResult.put_ok} class:diag-fail={!diagResult.put_ok}>
-						{#if diagResult.put_ok}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
-						<span>PUT test object</span>
-						{#if diagResult.put_error}<span class="diag-detail">{diagResult.put_error}</span>{/if}
-					</div>
-					<div class="diag-row" class:diag-ok={diagResult.exists_after_put} class:diag-fail={!diagResult.exists_after_put}>
-						{#if diagResult.exists_after_put}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
-						<span>EXISTS check after PUT</span>
-					</div>
-					<div class="diag-row" class:diag-ok={!diagResult.list_error} class:diag-fail={!!diagResult.list_error}>
-						{#if !diagResult.list_error}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
-						<span>LIST bucket root</span>
-						{#if diagResult.list_error}<span class="diag-detail">{diagResult.list_error}</span>{/if}
-					</div>
-					{#if !diagResult.list_error}
+					<ListRow
+						iconTone={d.put_ok ? 'green' : 'red'}
+						title="PUT test object"
+						meta={d.put_error ?? undefined}
+					>
+						{#snippet icon()}
+							{#if d.put_ok}<CheckCircle2 size={14} />{:else}<XCircle size={14} />{/if}
+						{/snippet}
+					</ListRow>
+					<ListRow
+						iconTone={d.exists_after_put ? 'green' : 'red'}
+						title="EXISTS check after PUT"
+					>
+						{#snippet icon()}
+							{#if d.exists_after_put}<CheckCircle2 size={14} />{:else}<XCircle size={14} />{/if}
+						{/snippet}
+					</ListRow>
+					<ListRow
+						iconTone={!d.list_error ? 'green' : 'red'}
+						title="LIST bucket root"
+						meta={d.list_error ?? undefined}
+					>
+						{#snippet icon()}
+							{#if !d.list_error}<CheckCircle2 size={14} />{:else}<XCircle size={14} />{/if}
+						{/snippet}
+					</ListRow>
+					{#if !d.list_error}
 						<div class="diag-info">
-							Prefixes found: <span class="mono">{diagResult.list_prefixes.length > 0 ? diagResult.list_prefixes.join(', ') : '(none)'}</span>
+							Prefixes found: <span class="mono">{d.list_prefixes.length > 0 ? d.list_prefixes.join(', ') : '(none)'}</span>
 							&nbsp;·&nbsp;
-							Objects found: <span class="mono">{diagResult.list_objects.length > 0 ? diagResult.list_objects.join(', ') : '(none)'}</span>
+							Objects found: <span class="mono">{d.list_objects.length > 0 ? d.list_objects.join(', ') : '(none)'}</span>
 						</div>
 					{/if}
-					<div class="diag-row" class:diag-ok={diagResult.delete_ok} class:diag-fail={!diagResult.delete_ok}>
-						{#if diagResult.delete_ok}<CircleCheck width="14" height="14" />{:else}<CircleX width="14" height="14" />{/if}
-						<span>DELETE test object</span>
-					</div>
+					<ListRow
+						iconTone={d.delete_ok ? 'green' : 'red'}
+						title="DELETE test object"
+					>
+						{#snippet icon()}
+							{#if d.delete_ok}<CheckCircle2 size={14} />{:else}<XCircle size={14} />{/if}
+						{/snippet}
+					</ListRow>
 				</div>
-				{#if diagResult.put_ok && !diagResult.list_error}
-					{@const hasRealContent = diagResult.list_prefixes.some(p => p !== 'shipyard-storage-test/') || diagResult.list_objects.some(k => !k.startsWith('shipyard-storage-test/'))}
-					<div class="diag-summary" class:diag-summary-warn={!hasRealContent}>
-						{#if hasRealContent}
-							Storage is working and has content. If the browser view is empty, try refreshing after selecting a bucket.
-						{:else}
-							S3 connection is healthy but the bucket has no artifact data yet. Trigger a static site, edge function, or Git-built service deployment to populate storage.
-						{/if}
+				{#if d.put_ok && !d.list_error}
+					{@const hasRealContent = d.list_prefixes.some(p => p !== 'shipyard-storage-test/') || d.list_objects.some(k => !k.startsWith('shipyard-storage-test/'))}
+					<div class="diag-body">
+						<InlineAlert tone={hasRealContent ? 'success' : 'warning'}>
+							{#if hasRealContent}
+								Storage is working and has content. If the browser view is empty, try refreshing after selecting a bucket.
+							{:else}
+								S3 connection is healthy but the bucket has no artifact data yet. Trigger a static site, edge function, or Git-built service deployment to populate storage.
+							{/if}
+						</InlineAlert>
 					</div>
 				{/if}
 			{/if}
-		</div>
+		</Card>
 	{/if}
 
 	{#if selectedBucket}
@@ -543,11 +564,8 @@
 <style>
 	.p { max-width: 1100px; margin: 0 auto; padding: 40px 36px; box-sizing: border-box; }
 	.hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-	.ttl { font-size: 20px; font-weight: 700; color: var(--text); margin: 0 0 4px; letter-spacing: -0.02em; }
-	.sub { font-size: 13px; color: var(--text-3); margin: 0; }
-
-	.refresh-btn { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: var(--radius-sm); cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text-2); transition: background .15s; }
-	.refresh-btn:hover { background: var(--surface-2); }
+	.ttl { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
+	.sub { font-size: 13px; color: var(--text-dim); margin: 0; }
 
 	/* ── Bucket Grid ── */
 	.bucket-grid-skeleton { display: flex; flex-direction: column; gap: 10px; }
@@ -628,29 +646,14 @@
 	.download-link:hover { opacity: 0.9; }
 
 	/* Diagnostics panel */
-	.diag-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; font-family: var(--font); }
-	.diag-btn:hover { background: var(--surface-2); color: var(--text); }
+	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
+	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; }
 
-	.diag-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; overflow: hidden; }
-	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
-	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-2); text-transform: uppercase; letter-spacing: .05em; }
-	.diag-rerun { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; color: var(--text-2); cursor: pointer; font-family: var(--font); }
-	.diag-rerun:hover { background: var(--surface-2); }
-	.diag-rerun:disabled { opacity: .5; cursor: not-allowed; }
-	.diag-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: none; border: none; cursor: pointer; color: var(--text-3); border-radius: 4px; }
-	.diag-close:hover { background: var(--surface-2); color: var(--text-2); }
+	.diag-loading { display: flex; align-items: center; gap: 8px; padding: 14px 16px; font-size: 13px; color: var(--text-muted); }
 
-	.diag-loading { display: flex; align-items: center; gap: 8px; padding: 14px; font-size: 13px; color: var(--text-3); }
-
-	.diag-rows { display: flex; flex-direction: column; padding: 8px 0; }
-	.diag-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 13px; }
-	.diag-ok  { color: var(--ok, #22c55e); }
-	.diag-fail { color: var(--danger, #ef4444); }
-	.diag-detail { font-size: 11px; color: var(--text-3); font-family: var(--mono); word-break: break-all; }
-	.diag-info { padding: 4px 14px 8px 36px; font-size: 12px; color: var(--text-3); }
-
-	.diag-summary { padding: 10px 14px; font-size: 12px; border-top: 1px solid var(--border); color: var(--ok, #22c55e); background: rgba(34,197,94,.06); }
-	.diag-summary-warn { color: var(--warn, #f59e0b); background: rgba(245,158,11,.06); }
+	.diag-rows { display: flex; flex-direction: column; padding: 4px 16px; }
+	.diag-info { padding: 4px 16px 12px 46px; font-size: 12px; color: var(--text-muted); }
+	.diag-body { padding: 12px 16px; }
 
 	/* Responsiveness */
 	@media (max-width: 768px) {
