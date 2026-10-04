@@ -10,10 +10,14 @@
 	interface Props {
 		groups: Group[];
 		activeGroup: string | null;
+		/** Group containing the current route; highlighted when no drawer is open. */
+		currentGroup?: string | null;
+		/** How a label wider than the rail is handled: truncated with "…" or wrapped onto more lines. */
+		labelOverflow?: 'ellipsis' | 'wrap';
 		onSelectGroup: (key: string | null) => void;
 	}
 
-	let { groups, activeGroup = $bindable(), onSelectGroup }: Props = $props();
+	let { groups, activeGroup = $bindable(), currentGroup = null, labelOverflow = 'ellipsis', onSelectGroup }: Props = $props();
 
 	function handleClick(key: string) {
 		onSelectGroup(activeGroup === key ? null : key);
@@ -31,14 +35,17 @@
 				<button
 					type="button"
 					class="ui-nav-rail-btn"
-					class:ui-nav-rail-btn--active={activeGroup === g.key}
+					class:ui-nav-rail-btn--active={activeGroup === g.key || (activeGroup === null && currentGroup === g.key)}
 					onclick={() => handleClick(g.key)}
 					aria-label={g.label}
 					aria-expanded={activeGroup === g.key}
 				>
 					<Icon size={20} />
 				</button>
-				<span class="ui-nav-rail-label">{g.label}</span>
+				<span
+					class="ui-nav-rail-label ui-nav-rail-label--{labelOverflow}"
+					title={labelOverflow === 'ellipsis' ? g.label : undefined}
+				>{g.label}</span>
 			</div>
 		{/each}
 	</nav>
@@ -83,6 +90,8 @@
 		flex-direction: column;
 		align-items: center;
 		gap: 2px;
+		width: 100%;
+		padding: 0 3px;
 	}
 	.ui-nav-rail-btn {
 		width: 40px;
@@ -103,5 +112,17 @@
 		font-size: 8.5px;
 		font-weight: 600;
 		color: var(--text-dim);
+		max-width: 100%;
+		text-align: center;
+	}
+	.ui-nav-rail-label--ellipsis {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.ui-nav-rail-label--wrap {
+		white-space: normal;
+		overflow-wrap: anywhere;
+		line-height: 1.2;
 	}
 </style>

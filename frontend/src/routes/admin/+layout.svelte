@@ -89,6 +89,10 @@
 		},
 	];
 
+	// false: the drawer overlays the page and collapses on outside click,
+	// Escape, or item click. true: it stays docked beside the content.
+	const navPersistent = false;
+
 	let activeGroup = $state<string | null>(null);
 
 	function isActive(href: string): boolean {
@@ -96,17 +100,13 @@
 		return $page.url.pathname.startsWith(href + '/') || $page.url.pathname === href;
 	}
 
-	// Keep activeGroup in sync with the current route. Re-resolves whenever
-	// $page.url.pathname changes (read indirectly via isActive below), NOT
-	// whenever activeGroup changes — so it fires on first load AND after
-	// every client-side navigation (fixing a bug where a drawer-item click
-	// would momentarily see the OLD pathname and lock onto the group being
-	// left), while a manual rail click that only opens/closes a drawer
-	// (no navigation, no pathname change) never re-triggers this effect and
-	// so never fights the user's manual toggle.
+	let currentGroup = $derived(navGroups.find((g) => g.items.some((i) => isActive(i.href)))?.key ?? null);
+
+	// Persistent mode only: follow the route so the docked drawer shows the
+	// current section. Depends on currentGroup (the route), not activeGroup,
+	// so a manual rail toggle is never overridden.
 	$effect(() => {
-		const current = navGroups.find((g) => g.items.some((i) => isActive(i.href)));
-		if (current) activeGroup = current.key;
+		if (navPersistent && currentGroup) activeGroup = currentGroup;
 	});
 </script>
 
@@ -125,6 +125,8 @@
 		<NavRail
 			groups={navGroups.map((g) => ({ key: g.key, label: g.label, icon: g.icon }))}
 			bind:activeGroup
+			{currentGroup}
+			labelOverflow="ellipsis"
 			onSelectGroup={(key) => (activeGroup = activeGroup === key ? null : key)}
 		/>
 		<div class="rail-footer">
@@ -144,7 +146,9 @@
 				open={activeGroup === group.key}
 				title={group.label}
 				items={group.items.map((i) => ({ href: i.href, label: i.label, icon: i.icon, active: isActive(i.href) }))}
-				onNavigate={() => (activeGroup = null)}
+				persistent={navPersistent}
+				onNavigate={() => { if (!navPersistent) activeGroup = null; }}
+				onClose={() => (activeGroup = null)}
 			/>
 		{/each}
 
@@ -214,6 +218,14 @@
 
 	/* ── Main ─────────────────────────────── */
 	.main { flex:1; overflow-y:auto; background:var(--bg-base); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
+	/* Page blocks must keep their natural height so .main scrolls. Without
+	   this, an overflow:hidden child (e.g. DataTable) gets a min-height of 0
+	   and shrinks to the viewport, clipping its own rows. */
+	/* width:100% — pages center a max-width wrapper with margin:0 auto, and
+	   auto margins in a column flex container disable stretching, so the
+	   wrapper would otherwise shrink to its content and change width as
+	   content changes (empty → loaded, detail panel opening, row expanding). */
+	.main > :global(*) { flex-shrink: 0; width: 100%; }
 
 	/* ── Mobile topbar ────────────────────── */
 	/* NOTE: mob-menu-btn still toggles `mobileOpen`, which was wired to the

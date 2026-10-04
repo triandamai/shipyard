@@ -13,12 +13,29 @@
 		title: string;
 		items: Item[];
 		onNavigate: () => void;
+		/** Persistent: docked beside the content, pushes it, stays open. Modal (default): overlays the content and closes on outside click, Escape, or item click. */
+		persistent?: boolean;
+		onClose?: () => void;
 	}
 
-	let { open, title, items, onNavigate }: Props = $props();
+	let { open, title, items, onNavigate, persistent = false, onClose }: Props = $props();
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (open && !persistent && e.key === 'Escape') onClose?.();
+	}
 </script>
 
-<div class="ui-nav-drawer" class:ui-nav-drawer--open={open}>
+<svelte:window onkeydown={handleKeydown} />
+
+{#if open && !persistent}
+	<div class="ui-nav-drawer-scrim" role="presentation" onclick={() => onClose?.()}></div>
+{/if}
+
+<div
+	class="ui-nav-drawer"
+	class:ui-nav-drawer--open={open}
+	class:ui-nav-drawer--persistent={persistent}
+>
 	<div class="ui-nav-drawer-inner">
 		<div class="ui-nav-drawer-title">{title}</div>
 		{#each items as item (item.href)}
@@ -51,6 +68,24 @@
 		box-shadow: var(--shadow-lg);
 	}
 	.ui-nav-drawer--open { width: 230px; }
+	.ui-nav-drawer:not(.ui-nav-drawer--open) { border-right-width: 0; box-shadow: none; }
+	.ui-nav-drawer--persistent {
+		position: relative;
+		left: auto;
+		height: 100vh;
+		flex-shrink: 0;
+		box-shadow: none;
+		z-index: auto;
+	}
+	.ui-nav-drawer-scrim {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 60px;
+		right: 0;
+		z-index: 3;
+		background: rgba(0, 0, 0, 0.32);
+	}
 	.ui-nav-drawer-inner {
 		width: 230px;
 		padding: 18px 12px;
