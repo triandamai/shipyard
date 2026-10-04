@@ -583,8 +583,8 @@
 <!-- ─── Deployment row (Recent Deployments + Deployments tab) ─────────────────── -->
 {#snippet deployRow(dep: Deployment, full: boolean)}
 	{@const Icon = deployStatusIcon(dep.status)}
-	<button type="button" class="dep-row" onclick={() => openDeploymentLogs(dep)}>
-		<ListRow
+	<ListRow
+		onclick={() => openDeploymentLogs(dep)}
 			title={full ? `${dep.id.slice(0, 8)}…` : dep.id.slice(0, 8)}
 			meta={full
 				? `${dep.source_ref ?? '—'} · ${dep.triggered_by ?? '—'} · ${formatTime(dep.created_at)}`
@@ -602,7 +602,6 @@
 				</span>
 			{/snippet}
 		</ListRow>
-	</button>
 {/snippet}
 
 <!-- ─── Main panel ──────────────────────────────────────────────────────────── -->
@@ -1063,10 +1062,8 @@ export default &#123;
 	.stack { display: flex; flex-direction: column; gap: 10px; }
 	.mono-field :global(input) { font-family: var(--font-mono); }
 
-	.dep-row { display: block; width: 100%; padding: 0; background: none; border: none; text-align: left; cursor: pointer; color: inherit; font: inherit; }
-	.dep-row + .dep-row, .domain-item + .domain-item { border-top: 1px solid var(--border); }
-	.dep-row :global(.ui-list-row), .domain-item :global(.ui-list-row) { border-bottom: none; }
-	.dep-row:hover :global(.ui-list-row-title) { color: var(--accent); }
+	.domain-item + .domain-item { border-top: 1px solid var(--border); }
+	.domain-item :global(.ui-list-row) { border-bottom: none; }
 	.dep-status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
 	.domain-dns { padding: 0 0 10px 42px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 

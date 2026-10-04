@@ -24,8 +24,7 @@
 		<p class="hint">Select the account that has access to the repository.</p>
 		<ActivityList>
 			{#each accounts as account (account.id)}
-				<button type="button" class="pick-row" onclick={() => onSelect(account)}>
-					<ListRow title={account.label} meta={account.host}>
+				<ListRow onclick={() => onSelect(account)} title={account.label} meta={account.host}>
 						{#snippet icon()}
 							<!-- lucide has no brand marks: GitBranch = github, GitMerge = gitlab, GitFork = other -->
 							{#if account.id === 'github'}
@@ -38,7 +37,6 @@
 						{/snippet}
 						{#snippet trailing()}<ChevronRight size={16} />{/snippet}
 					</ListRow>
-				</button>
 			{/each}
 		</ActivityList>
 	{/if}
@@ -48,15 +46,4 @@
 	.picker-wrap { padding: 16px; height: 100%; overflow-y: auto; }
 	.hint { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
 
-	.pick-row {
-		display: block; width: 100%; padding: 0 8px; margin: 0;
-		background: transparent; border: none; border-bottom: 1px solid var(--border);
-		color: inherit; font-family: var(--font-sans); text-align: left; cursor: pointer;
-		transition: background var(--transition-fast);
-	}
-	.pick-row:last-child { border-bottom: none; }
-	.pick-row:hover { background: var(--bg-hover); }
-	.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-	.pick-row :global(.ui-list-row) { border-bottom: none; }
-	.pick-row :global(.ui-list-row-trailing) { color: var(--text-dim); display: flex; }
 </style>

@@ -715,8 +715,9 @@
 					{#each functions as fn (fn.id)}
 						{@const expanded = expandedFnId === fn.id}
 						<div class="fn-item">
-							<button class="fn-toggle" aria-expanded={expanded} onclick={() => toggleFn(fn.id)}>
-								<ListRow
+							<ListRow
+									ariaExpanded={expanded}
+									onclick={() => toggleFn(fn.id)}
 									title={fn.name}
 									meta={`${fn.runtime} · ${formatTime(fn.last_deployed_at)}`}
 									iconTone={fn.status === 'active' ? 'green' : 'blue'}
@@ -726,7 +727,6 @@
 										<ChevronRight size={13} class={expanded ? 'fn-chevron rotated' : 'fn-chevron'} />
 									{/snippet}
 								</ListRow>
-							</button>
 
 							{#if expanded}
 								<div class="fn-detail">
@@ -1172,12 +1172,6 @@
 
 	.fn-item + .fn-item { border-top: 1px solid var(--border); }
 	.fn-item :global(.ui-list-row) { border-bottom: none; }
-	.fn-toggle {
-		display: block; width: 100%; padding: 0; background: none; border: none;
-		text-align: left; cursor: pointer; color: inherit; font: inherit;
-	}
-	.fn-toggle:hover :global(.ui-list-row-title) { color: var(--accent); }
-	.fn-toggle :global(.ui-list-row-text) { flex: 1; }
 	:global(.fn-chevron) { color: var(--text-dim); flex-shrink: 0; transition: transform var(--transition-fast); }
 	:global(.fn-chevron.rotated) { transform: rotate(90deg); }
 

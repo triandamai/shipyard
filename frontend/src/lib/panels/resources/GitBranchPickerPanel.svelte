@@ -80,12 +80,10 @@
 		<div class="branch-list">
 			<ActivityList>
 				{#each filtered as branch (branch)}
-					<button type="button" class="pick-row" onclick={() => onSelect(branch)}>
-						<ListRow title={branch}>
+					<ListRow title={branch} onclick={() => onSelect(branch)}>
 							{#snippet icon()}<GitBranch size={14} />{/snippet}
 							{#snippet trailing()}<ChevronRight size={16} />{/snippet}
 						</ListRow>
-					</button>
 				{/each}
 			</ActivityList>
 		</div>
@@ -108,15 +106,4 @@
 
 	.branch-list { flex: 1; overflow-y: auto; padding: 0 16px 16px; }
 
-	.pick-row {
-		display: block; width: 100%; padding: 0 8px; margin: 0;
-		background: transparent; border: none; border-bottom: 1px solid var(--border);
-		color: inherit; font-family: var(--font-sans); text-align: left; cursor: pointer;
-		transition: background var(--transition-fast);
-	}
-	.pick-row:last-child { border-bottom: none; }
-	.pick-row:hover { background: var(--bg-hover); }
-	.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-	.pick-row :global(.ui-list-row) { border-bottom: none; }
-	.pick-row :global(.ui-list-row-trailing) { color: var(--text-dim); display: flex; }
 </style>
