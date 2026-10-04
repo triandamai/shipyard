@@ -12,7 +12,7 @@ use bollard::models::{
     ServiceSpecMode, ServiceSpecModeReplicated, ServiceSpecRollbackConfig,
     ServiceSpecUpdateConfig, ServiceSpecUpdateConfigFailureActionEnum,
     ServiceSpecUpdateConfigOrderEnum, SwarmInitRequest, TaskSpec,
-    TaskSpecContainerSpec, TaskSpecResources,
+    TaskSpecContainerSpec, TaskSpecPlacement, TaskSpecResources,
 };
 use bollard::network::CreateNetworkOptions;
 use bollard::service::{InspectServiceOptions, ListServicesOptions, UpdateServiceOptions};
@@ -104,6 +104,21 @@ pub trait DockerEngine: Send + Sync {
     /// (e.g. `["/var/lib/postgresql/data"]`). Errors if the image is not
     /// present locally (never pulled).
     async fn image_declared_volumes(&self, image_ref: &str) -> AppResult<Vec<String>>;
+
+    /// Volumes (named or anonymous) mounted into a container. Bind and tmpfs
+    /// mounts are skipped.
+    async fn container_volume_mounts(&self, container_id: &str) -> AppResult<Vec<ContainerVolumeMount>>;
+
+    /// Add `mounts` to an existing service (skipping targets it already mounts),
+    /// optionally pin it with a placement `constraint`, and switch it to
+    /// stop-first updates — preserving every other spec field. Used to make a
+    /// running service's data persistent without a full redeploy.
+    async fn secure_service_mounts(
+        &self,
+        id: &str,
+        mounts: Vec<MountSpec>,
+        constraint: Option<String>,
+    ) -> AppResult<()>;
 
     /// Build an image from a local directory context.
     /// `tag` is the full image reference (e.g. `shipyard/my-svc:abc1234`).
@@ -397,6 +412,14 @@ impl BollardDockerEngine {
                 Some(networks)
             },
             resources,
+            placement: if spec.constraints.is_empty() {
+                None
+            } else {
+                Some(TaskSpecPlacement {
+                    constraints: Some(spec.constraints.clone()),
+                    ..Default::default()
+                })
+            },
             ..Default::default()
         };
 
@@ -432,9 +455,13 @@ impl BollardDockerEngine {
         // availability gap during redeploys. Swarm will still record one
         // shutdown task per update (task history), which we keep at 1 via
         // the install-time `docker swarm update --task-history-limit 1`.
+        //
+        // Exception: a service with writable persistent storage must stop the
+        // old task first. Two containers sharing one data directory (e.g. two
+        // Postgres servers on the same PGDATA) can corrupt it.
         let update_config = Some(ServiceSpecUpdateConfig {
             parallelism: Some(1),
-            order: Some(ServiceSpecUpdateConfigOrderEnum::START_FIRST),
+            order: Some(Self::update_order_for(&spec.mounts)),
             failure_action: Some(ServiceSpecUpdateConfigFailureActionEnum::ROLLBACK),
             monitor: Some(5_000_000_000), // 5 s in nanoseconds
             ..Default::default()
@@ -463,6 +490,19 @@ impl BollardDockerEngine {
             rollback_config,
             endpoint_spec,
             ..Default::default()
+        }
+    }
+
+    /// Stop-first when the service has a writable volume or bind mount,
+    /// start-first otherwise.
+    fn update_order_for(mounts: &[MountSpec]) -> ServiceSpecUpdateConfigOrderEnum {
+        let has_writable_storage = mounts
+            .iter()
+            .any(|m| !m.readonly && matches!(m.mount_type, MountType::Volume | MountType::Bind));
+        if has_writable_storage {
+            ServiceSpecUpdateConfigOrderEnum::STOP_FIRST
+        } else {
+            ServiceSpecUpdateConfigOrderEnum::START_FIRST
         }
     }
 
@@ -953,6 +993,69 @@ impl DockerEngine for BollardDockerEngine {
         Ok(())
     }
 
+    async fn secure_service_mounts(
+        &self,
+        id: &str,
+        mounts: Vec<MountSpec>,
+        constraint: Option<String>,
+    ) -> AppResult<()> {
+        let current = self
+            .client
+            .inspect_service(id, None::<InspectServiceOptions>)
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_service failed: {e}")))?;
+
+        let version = current
+            .version
+            .and_then(|v| v.index)
+            .ok_or_else(|| AppError::Docker("Could not read service version".into()))?;
+
+        let mut bollard_spec: BollardServiceSpec = current.spec.unwrap_or_default();
+
+        let tt = bollard_spec.task_template.get_or_insert_with(Default::default);
+        let cs = tt.container_spec.get_or_insert_with(Default::default);
+        let existing = cs.mounts.get_or_insert_with(Vec::new);
+        for m in mounts {
+            if existing.iter().any(|e| e.target.as_deref() == Some(m.target.as_str())) {
+                continue;
+            }
+            existing.push(Mount {
+                source: Some(m.source),
+                target: Some(m.target),
+                typ: Some(match m.mount_type {
+                    MountType::Volume => MountTypeEnum::VOLUME,
+                    MountType::Bind => MountTypeEnum::BIND,
+                    MountType::Tmpfs => MountTypeEnum::TMPFS,
+                }),
+                read_only: Some(m.readonly),
+                ..Default::default()
+            });
+        }
+
+        if let Some(c) = constraint {
+            let placement = tt.placement.get_or_insert_with(Default::default);
+            let constraints = placement.constraints.get_or_insert_with(Vec::new);
+            if !constraints.contains(&c) {
+                constraints.push(c);
+            }
+        }
+
+        let uc = bollard_spec.update_config.get_or_insert_with(Default::default);
+        uc.order = Some(ServiceSpecUpdateConfigOrderEnum::STOP_FIRST);
+
+        self.client
+            .update_service(
+                id,
+                bollard_spec,
+                UpdateServiceOptions { version, ..Default::default() },
+                None,
+            )
+            .await
+            .map_err(|e| AppError::Docker(format!("secure_service_mounts failed: {e}")))?;
+
+        Ok(())
+    }
+
     async fn update_service_image(&self, id: &str, image: &str) -> AppResult<()> {
         let current = self
             .client
@@ -1222,6 +1325,28 @@ impl DockerEngine for BollardDockerEngine {
             .map(|v| v.into_keys().collect())
             .unwrap_or_default();
         Ok(paths)
+    }
+
+    async fn container_volume_mounts(&self, container_id: &str) -> AppResult<Vec<ContainerVolumeMount>> {
+        let info = self
+            .client
+            .inspect_container(container_id, Some(InspectContainerOptions { size: false }))
+            .await
+            .map_err(|e| AppError::Docker(format!("inspect_container failed: {e}")))?;
+
+        let mounts = info
+            .mounts
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.typ == Some(bollard::models::MountPointTypeEnum::VOLUME))
+            .filter_map(|m| {
+                Some(ContainerVolumeMount {
+                    name: m.name.filter(|n| !n.is_empty())?,
+                    destination: m.destination.filter(|d| !d.is_empty())?,
+                })
+            })
+            .collect();
+        Ok(mounts)
     }
 
     // ── Image build ───────────────────────────────────────────────────────────

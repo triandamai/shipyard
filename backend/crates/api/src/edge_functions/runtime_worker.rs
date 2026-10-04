@@ -156,6 +156,7 @@ async fn create_runtime_service(
         mounts,
         networks: vec![state.config.traefik.network.clone()],
         ports: vec![],
+        constraints: vec![],
         resources: Some(ResourceSpec {
             memory_limit_mb: Some(memory_mb),
             cpu_limit: Some(cpu_limit),

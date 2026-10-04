@@ -1292,7 +1292,7 @@ impl DeploymentEngine {
         };
 
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let vol_result = self.step_configure_volumes(service_id).await;
+        let vol_result = self.step_configure_volumes(service_id, project_id, image_ref).await;
         let mounts = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, vol_result).await? {
             Some(v) => v,
             None => return Err(AppError::Internal("configure_volumes returned no value".into())),
@@ -1594,7 +1594,9 @@ impl DeploymentEngine {
 
         // Step 3: Configure volumes — returns Vec<MountSpec>
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let vol_result = self.step_configure_volumes(service_id).await;
+        let vol_result = self
+            .step_configure_volumes(service_id, project_id, &resolved_image_ref)
+            .await;
         let mounts = match self
             .finish_step(
                 org_id,
@@ -3332,7 +3334,30 @@ impl DeploymentEngine {
 
     /// Step 3: Build MountSpec list from the volumes table, supplemented by any
     /// `__VOLUME_MOUNTS__` env var that was stored during service creation.
-    async fn step_configure_volumes(&self, service_id: Uuid) -> AppResult<Vec<MountSpec>> {
+    /// Step 3: the service's configured mounts, plus a durable named volume for
+    /// every `VOLUME` path the image declares that nothing else covers.
+    ///
+    /// Without the latter, Docker gives each new task container a fresh,
+    /// empty anonymous volume — so a database loses all its data whenever
+    /// Swarm replaces its container (redeploy, daemon restart, platform
+    /// update, OOM kill).
+    async fn step_configure_volumes(
+        &self,
+        service_id: Uuid,
+        project_id: Uuid,
+        image_ref: &str,
+    ) -> AppResult<Vec<MountSpec>> {
+        let mut mounts = self.configured_mounts(service_id).await?;
+        let added = self
+            .persist_declared_volumes(&*self.docker, service_id, project_id, image_ref, &mounts)
+            .await;
+        mounts.extend(added);
+        tracing::info!("Configured {} mounts", mounts.len());
+        Ok(mounts)
+    }
+
+    /// Mounts the user configured: rows in `volumes` plus `__VOLUME_MOUNTS__`.
+    async fn configured_mounts(&self, service_id: Uuid) -> AppResult<Vec<MountSpec>> {
         let rows = sqlx::query_as::<_, (String, String, String)>(
             "SELECT name, mount_path, driver
              FROM volumes
@@ -3388,8 +3413,124 @@ impl DeploymentEngine {
             }
         }
 
-        tracing::info!("Configured {} mounts", mounts.len());
         Ok(mounts)
+    }
+
+    /// For each `VOLUME` path declared by `image_ref` that `existing` doesn't
+    /// cover, choose a durable named volume, record it in `volumes` (so it is
+    /// visible in the UI and reused by every later deploy), and return the
+    /// new mounts.
+    ///
+    /// If the service's running task already holds data at that path in an
+    /// anonymous volume, that volume is adopted by name so the data carries
+    /// over; otherwise a deterministic `<prefix>-<service_id>-<path>` name is
+    /// used. Best-effort: an image that can't be inspected adds nothing.
+    async fn persist_declared_volumes(
+        &self,
+        docker: &dyn DockerEngine,
+        service_id: Uuid,
+        project_id: Uuid,
+        image_ref: &str,
+        existing: &[MountSpec],
+    ) -> Vec<MountSpec> {
+        let declared = match docker.image_declared_volumes(image_ref).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(%service_id, "could not inspect image {image_ref} for VOLUME paths: {e}");
+                return vec![];
+            }
+        };
+
+        let covered: Vec<&str> = existing.iter().map(|m| normalize_mount_target(&m.target)).collect();
+        let missing: Vec<&String> = declared
+            .iter()
+            .filter(|p| !covered.contains(&normalize_mount_target(p)))
+            .collect();
+        if missing.is_empty() {
+            return vec![];
+        }
+
+        // Volumes currently held by the running task, keyed by mount path.
+        let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
+        let live = match running_task(docker, &docker_svc_name).await {
+            Some((_, Some(container_id))) => docker
+                .container_volume_mounts(&container_id)
+                .await
+                .unwrap_or_default(),
+            _ => vec![],
+        };
+
+        let mut added = Vec::new();
+        for path in missing {
+            let target = normalize_mount_target(path).to_string();
+            let source = match live.iter().find(|m| normalize_mount_target(&m.destination) == target) {
+                Some(m) => {
+                    tracing::info!(%service_id, volume = %m.name, %target, "adopting existing volume to keep its data");
+                    m.name.clone()
+                }
+                None => persistent_volume_name(&self.label_prefix, service_id, &target),
+            };
+
+            if let Err(e) = sqlx::query(
+                "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
+                 VALUES ($1, $2, $3, $4, 'local')",
+            )
+            .bind(service_id)
+            .bind(project_id)
+            .bind(&source)
+            .bind(&target)
+            .execute(&self.db)
+            .await
+            {
+                // Still mount it — persistence matters more than the UI row.
+                tracing::warn!(%service_id, "failed to record auto volume {source}: {e}");
+            }
+
+            added.push(MountSpec {
+                source,
+                target,
+                mount_type: MountType::Volume,
+                readonly: false,
+            });
+        }
+        added
+    }
+
+    /// Make a running service's image-declared data paths persistent in place,
+    /// without a full redeploy. Called before a platform update so that if the
+    /// update causes Swarm to replace task containers (daemon restart, memory
+    /// pressure), project data survives.
+    ///
+    /// Returns the number of mounts added (0 when already safe or not running).
+    pub async fn secure_service_storage(&self, service_id: Uuid) -> AppResult<usize> {
+        let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM services WHERE id = $1")
+            .bind(service_id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let docker = self.resolve_docker_for_service(service_id).await;
+        let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
+
+        let tasks = docker.list_tasks(&docker_svc_name).await.unwrap_or_default();
+        let image = match tasks.iter().find(|t| t.desired_state == "running" && t.status == "running") {
+            Some(t) => t.image.clone(),
+            None => return Ok(0), // not running — the next deploy persists it
+        };
+
+        let existing = self.configured_mounts(service_id).await?;
+        let added = self
+            .persist_declared_volumes(&*docker, service_id, project_id, &image, &existing)
+            .await;
+        if added.is_empty() {
+            return Ok(0);
+        }
+
+        let count = added.len();
+        let constraint = node_pin_constraint(&*docker, &docker_svc_name).await;
+        docker.secure_service_mounts(&docker_svc_name, added, constraint).await?;
+        tracing::info!(%service_id, "secured {count} data volume(s) before platform update");
+        Ok(count)
     }
 
     /// Step 4: Collect network names from service_networks + networks tables.
@@ -3695,6 +3836,18 @@ impl DeploymentEngine {
             None
         };
 
+        // Local volumes and bind mounts live on one node: keep the service on
+        // the node it already runs on, or Swarm could move it to a node where
+        // the volume is empty.
+        let has_local_data = mounts
+            .iter()
+            .any(|m| !m.readonly && matches!(m.mount_type, MountType::Volume | MountType::Bind));
+        let constraints = if has_local_data {
+            node_pin_constraint(&*self.docker, &docker_svc_name).await.into_iter().collect()
+        } else {
+            vec![]
+        };
+
         let spec = ServiceSpec {
             name: docker_svc_name.clone(),
             image: image_ref.to_string(),
@@ -3705,6 +3858,7 @@ impl DeploymentEngine {
             networks,
             ports: swarm_ports,
             resources,
+            constraints,
         };
 
         // Upsert: try update first; create when the service doesn't exist yet.
@@ -4075,3 +4229,74 @@ fn compose_state_to_container_status(state: &str) -> &'static str {
     }
 }
 
+
+// ─── Persistent volume helpers ───────────────────────────────────────────────
+
+/// `/var/lib/postgresql/data/` → `/var/lib/postgresql/data` (root stays `/`).
+fn normalize_mount_target(t: &str) -> &str {
+    let t = t.trim();
+    if t.len() > 1 { t.trim_end_matches('/') } else { t }
+}
+
+/// Deterministic Docker volume name for an image-declared path, e.g.
+/// `platform-<service_id>-var-lib-postgresql-data`.
+fn persistent_volume_name(label_prefix: &str, service_id: Uuid, target: &str) -> String {
+    let slug: String = target
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let slug = if slug.is_empty() { "data".to_string() } else { slug };
+    format!("{label_prefix}-{service_id}-{slug}")
+}
+
+/// The service's currently running task as `(node_id, container_id)`.
+async fn running_task(
+    docker: &dyn DockerEngine,
+    docker_svc_name: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let tasks = docker.list_tasks(docker_svc_name).await.ok()?;
+    tasks
+        .into_iter()
+        .find(|t| t.desired_state == "running" && t.status == "running")
+        .map(|t| (t.node_id, t.container_id.filter(|c| !c.is_empty())))
+}
+
+/// `node.id==<id>` for the node the service currently runs on, when the swarm
+/// has more than one node. `None` on single-node swarms (nothing to pin to)
+/// and for services that aren't running yet.
+async fn node_pin_constraint(docker: &dyn DockerEngine, docker_svc_name: &str) -> Option<String> {
+    let nodes = docker.swarm_info().await.map(|i| i.nodes).unwrap_or(1);
+    if nodes <= 1 {
+        return None;
+    }
+    let (node_id, _) = running_task(docker, docker_svc_name).await?;
+    node_id.filter(|n| !n.is_empty()).map(|n| format!("node.id=={n}"))
+}
+
+#[cfg(test)]
+mod persistent_volume_tests {
+    use super::*;
+
+    #[test]
+    fn volume_name_is_deterministic_and_docker_safe() {
+        let id = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000001").unwrap();
+        assert_eq!(
+            persistent_volume_name("platform", id, "/var/lib/postgresql/data"),
+            "platform-0190a4b2-0000-7000-8000-000000000001-var-lib-postgresql-data"
+        );
+        assert_eq!(
+            persistent_volume_name("platform", id, "/"),
+            "platform-0190a4b2-0000-7000-8000-000000000001-data"
+        );
+    }
+
+    #[test]
+    fn mount_targets_compare_without_trailing_slash() {
+        assert_eq!(normalize_mount_target("/data/"), "/data");
+        assert_eq!(normalize_mount_target("/"), "/");
+    }
+}
