@@ -223,17 +223,15 @@
 
 	// ── Drop confirm ───────────────────────────────────────────────────────
 	let confirmTable = $state<DbTable | null>(null);
-	let confirmInput = $state('');
 	let dropping     = $state(false);
 	let dropError    = $state('');
 
 	function openConfirm(table: DbTable, e: MouseEvent) {
 		e.stopPropagation();
 		confirmTable = table;
-		confirmInput = '';
 		dropError = '';
 	}
-	function closeConfirm() { if (!dropping) { confirmTable = null; confirmInput = ''; dropError = ''; } }
+	function closeConfirm() { if (!dropping) { confirmTable = null; dropError = ''; } }
 
 	// Returns false on failure so ConfirmDialog stays open (with its typed text) and shows the error.
 	async function dropTable(): Promise<boolean> {

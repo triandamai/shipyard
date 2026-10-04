@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { User, Lock, CheckCircle, AlertCircle, LogOut } from '@lucide/svelte';
+	import { User, Lock, LogOut } from '@lucide/svelte';
 	import { formatDistanceToNow } from 'date-fns';
 	import { authStore } from '$lib/stores/auth.store';
 	import { api } from '$lib/api/client';

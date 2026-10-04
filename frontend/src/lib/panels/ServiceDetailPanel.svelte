@@ -176,7 +176,6 @@
 
 	// ── Danger zone / Delete ─────────────────────────────────────────
 	let showDeleteConfirm = $state(false);
-	let deleteSlugInput = $state('');
 	let isDeleting = $state(false);
 	let deleteError = $state('');
 
@@ -235,20 +234,6 @@
 	);
 
 	// ── Status helpers ───────────────────────────────────────────────
-	function statusClass(status: string) {
-		switch (status) {
-			case 'running':               return 'running';
-			case 'stopping':              return 'stopping';
-			case 'deploying':             return 'deploying';
-			case 'need_attention':        return 'need_attention';
-			case 'pending':
-			case 'queued':
-			case 'preparing':             return 'pending';
-			case 'failed':
-			case 'rejected':              return 'failed';
-			default:                      return 'stopped';
-		}
-	}
 
 	function statusLabel(status: string): string {
 		const map: Record<string, string> = {
@@ -1458,7 +1443,7 @@
 									<Button
 										variant="danger-outline"
 										size="sm"
-										onclick={() => { showDeleteConfirm = true; deleteSlugInput = ''; deleteError = ''; }}
+										onclick={() => { showDeleteConfirm = true; deleteError = ''; }}
 									>
 										<Trash2 size={12} />
 										Delete
