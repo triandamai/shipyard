@@ -14,6 +14,12 @@
 	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
 	import type { VolumeMount } from '$lib/components/VolumeMountList.svelte';
 	import { formatDistanceToNow } from 'date-fns';
+	import {
+		Button, Card, Badge, StatusDot, Tabs, KeyValueList, ListRow,
+		Spinner, EmptyState, InlineAlert, ConfirmDialog
+	} from '$lib/components/ui';
+	import type { KeyValueItem } from '$lib/components/ui';
+	import { toDotStatus } from '$lib/utils/status';
 
 	import { api } from '$lib/api/client';
 	import { serviceStore } from '$lib/stores/service.store';
@@ -219,7 +225,6 @@
 
 	// ── Derived ──────────────────────────────────────────────────────
 	let latestDeployment = $derived(deployments[0] ?? null);
-	let deleteSlugValid = $derived(deleteSlugInput === (service?.slug ?? ''));
 	let runningContainers = $derived(containers.filter(c => c.status === 'running'));
 	// True when a deployment pipeline is actively running — disables deploy/redeploy/restart.
 	let isDeploymentRunning = $derived(
@@ -668,7 +673,7 @@
 	}
 
 	async function deleteService() {
-		if (!service || !deleteSlugValid || isDeleting) return;
+		if (!service || isDeleting) return;
 		isDeleting = true;
 		deleteError = '';
 
@@ -1041,7 +1046,120 @@
 			]
 			: baseTabs
 	);
+
+	// ── Overview (KeyValueList data + snippets) ──────────────────────
+	let overviewItems = $derived<KeyValueItem[]>(
+		service
+			? [
+				{ key: 'Name', value: service.name },
+				{ key: 'Slug', value: service.slug, mono: true },
+				{ key: 'Hostname', value: service.slug, mono: true },
+				{ key: 'Status', value: statusLabel(service.status) },
+				{ key: 'Replicas', value: service.replicas },
+				{ key: 'Created', value: formatTime(service.created_at) },
+				{ key: 'Updated', value: formatTime(service.updated_at) },
+			]
+			: []
+	);
+
+	// Secret rows deliberately carry no `value` so KeyValueList never exposes
+	// the (blurred) text through a hover tooltip; the snippet renders it instead.
+	let connItems = $derived<KeyValueItem[]>([
+		...(connInfo && connInfo.driver !== 'TCP' ? [{ key: 'Driver' }] : []),
+		{ key: 'Host' },
+		...(connInfo ? [{ key: 'URL' }] : []),
+	]);
+
+	async function copyConnUrl() {
+		if (!connInfo) return;
+		await navigator.clipboard.writeText(connInfo.url_template);
+		connInfoCopied = true;
+		setTimeout(() => connInfoCopied = false, 1500);
+	}
+
+	// Delete confirmation: ConfirmDialog owns the type-to-confirm text, so the
+	// failure path returns false to keep the dialog open with `deleteError`.
+	async function confirmDeleteService(): Promise<boolean> {
+		await deleteService();
+		return !deleteError;
+	}
 </script>
+
+<!-- ─── Overview snippets (KeyValueList cells) ───────────────────────── -->
+{#snippet ovValue(item: KeyValueItem)}
+	{#if item.key === 'Status' && service}
+		<StatusDot status={toDotStatus(service.status)} />
+		<span class="kv-text">{item.value}</span>
+	{:else}
+		<span class="kv-text">{item.value === null || item.value === undefined || item.value === '' ? '—' : item.value}</span>
+	{/if}
+{/snippet}
+
+{#snippet ovAction(item: KeyValueItem)}
+	{#if item.key === 'Hostname'}
+		<Button
+			variant="ghost"
+			size="icon"
+			title="Copy hostname — use this to connect from other containers"
+			aria-label="Copy hostname"
+			onclick={() => navigator.clipboard.writeText(service?.slug || '')}
+		><Copy size={12} /></Button>
+	{/if}
+{/snippet}
+
+{#snippet connValue(item: KeyValueItem)}
+	{#if item.key === 'Driver'}
+		<Badge tone="blue">{connInfo?.driver}</Badge>
+	{:else if item.key === 'Host'}
+		<code class="conn-val" class:conn-masked={!connHostRevealed}>
+			{#if connInfo}
+				{connInfo.host}:{connInfo.port}
+			{:else}
+				{service?.slug}
+			{/if}
+		</code>
+	{:else if item.key === 'URL'}
+		<code class="conn-url" class:conn-masked={!connUrlRevealed}>
+			{connInfo?.url_template}
+		</code>
+	{/if}
+{/snippet}
+
+{#snippet connAction(item: KeyValueItem)}
+	{#if item.key === 'Host'}
+		<Button
+			variant="ghost"
+			size="icon"
+			title={connHostRevealed ? 'Hide' : 'Reveal'}
+			aria-label={connHostRevealed ? 'Hide host' : 'Reveal host'}
+			onclick={() => connHostRevealed = !connHostRevealed}
+		>
+			{#if connHostRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon"
+			title="Copy"
+			aria-label="Copy host"
+			onclick={() => navigator.clipboard.writeText(connInfo ? `${connInfo.host}:${connInfo.port}` : service!.slug)}
+		>
+			<Copy size={12} />
+		</Button>
+	{:else if item.key === 'URL'}
+		<Button
+			variant="ghost"
+			size="icon"
+			title={connUrlRevealed ? 'Hide' : 'Reveal'}
+			aria-label={connUrlRevealed ? 'Hide URL' : 'Reveal URL'}
+			onclick={() => connUrlRevealed = !connUrlRevealed}
+		>
+			{#if connUrlRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
+		</Button>
+		<Button variant="ghost" size="icon" title="Copy" aria-label="Copy URL" onclick={copyConnUrl}>
+			{#if connInfoCopied}<CheckCircle2 size={12} />{:else}<Copy size={12} />{/if}
+		</Button>
+	{/if}
+{/snippet}
 
 <!-- ─── DB Client Modal ───────────────────────────────────────────────── -->
 {#if showDbClient && service}
@@ -1127,60 +1245,18 @@
 	</div>
 {/if}
 
-<!-- ─── Delete Confirmation Modal (portalled to body) ────────────────── -->
+<!-- ─── Delete Confirmation (portalled to body) ──────────────────────── -->
 {#if showDeleteConfirm && service}
-	<div use:portal class="sdp-modal-backdrop" role="dialog" aria-modal="true">
-		<div class="sdp-modal">
-			<div class="sdp-modal-header">
-				<AlertTriangle size={18} style="color:#EF4444;flex-shrink:0" />
-				<span>Delete Service</span>
-			</div>
-			<div class="sdp-modal-body">
-				<p class="sdp-modal-warning">
-					This will permanently delete <strong>{service.name}</strong> and all its deployments,
-					env vars, and configuration. If it's currently running on swarm it will be stopped first.
-					<strong>This cannot be undone.</strong>
-				</p>
-				<div class="sdp-confirm-field">
-					<label class="sdp-confirm-label">
-						Type <code class="sdp-confirm-code">{service.slug}</code> to confirm
-					</label>
-					<input
-						class="sdp-confirm-input"
-						type="text"
-						placeholder={service.slug}
-						bind:value={deleteSlugInput}
-						autocomplete="off"
-						spellcheck="false"
-					/>
-				</div>
-				{#if deleteError}
-					<div class="sdp-delete-error">{deleteError}</div>
-				{/if}
-			</div>
-			<div class="sdp-modal-footer">
-				<button
-					class="btn btn-ghost"
-					onclick={() => { showDeleteConfirm = false; deleteSlugInput = ''; deleteError = ''; }}
-					disabled={isDeleting}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-danger"
-					disabled={!deleteSlugValid || isDeleting}
-					onclick={deleteService}
-				>
-					{#if isDeleting}
-						<div class="btn-spinner-dark"></div>
-						Deleting…
-					{:else}
-						<Trash2 size={13} />
-						Delete Service
-					{/if}
-				</button>
-			</div>
-		</div>
+	<div use:portal>
+		<ConfirmDialog
+			bind:open={showDeleteConfirm}
+			title="Delete Service"
+			message={`This will permanently delete ${service.name} and all its deployments, env vars, and configuration. If it's currently running on swarm it will be stopped first. This cannot be undone.`}
+			confirmLabel="Delete Service"
+			confirmText={service.slug}
+			error={deleteError}
+			onConfirm={confirmDeleteService}
+		/>
 	</div>
 {/if}
 
@@ -1188,60 +1264,52 @@
 <div class="panel-content">
 	{#if isLoadingService}
 		<div class="loading-state">
-			<div class="spinner"></div>
+			<Spinner size={28} />
 			<span>Loading service…</span>
 		</div>
 	{:else if serviceError}
 		<div class="error-state">
 			<span>{serviceError}</span>
-			<button class="btn btn-secondary btn-sm" onclick={loadService}>Retry</button>
+			<Button variant="secondary" size="sm" onclick={loadService}>Retry</Button>
 		</div>
 	{:else if service}
+		{@const svc = service}
 		<!-- Header -->
 		<div class="svc-header">
-			<div class="svc-identity-container">
-				<BrandLogo icon={service.icon} type={service.type} size={32} iconSize={16} class="svc-brand-icon" />
-				<div class="svc-identity">
-					<span class="svc-name">{service.name}</span>
-					<div class="svc-meta">
-						<span class="status-dot {statusClass(service.status)}"></span>
-						<span class="svc-status">{statusLabel(service.status)}</span>
-						<span class="meta-sep">·</span>
-						<span class="svc-type">{typeLabel(service.type)}</span>
-						<span class="meta-sep">·</span>
-						<span class="svc-replicas">{service.replicas} replica{service.replicas === 1 ? '' : 's'}</span>
-					</div>
+			<Card padding="4px 14px 12px">
+				<ListRow
+					title={service.name}
+					meta={`${statusLabel(service.status)} · ${typeLabel(service.type)} · ${service.replicas} replica${service.replicas === 1 ? '' : 's'}`}
+				>
+					{#snippet icon()}
+						<BrandLogo icon={svc.icon} type={svc.type} size={22} iconSize={13} />
+					{/snippet}
+					{#snippet trailing()}
+						<StatusDot status={toDotStatus(svc.status)} />
+					{/snippet}
+				</ListRow>
+				<div class="header-actions">
+					{#if service.status === 'running'}
+						<Button variant="secondary" size="sm" onclick={() => showExecPanel = true} title="Open a shell in this container">
+							<Terminal size={12} />
+							Terminal
+						</Button>
+						<Button variant="secondary" size="sm" onclick={() => showMonitor = true} title="View container metrics">
+							<Activity size={12} />
+							Monitor
+						</Button>
+					{/if}
+					<Button variant="secondary" size="sm" onclick={() => showDbClient = true} title="Open database client">
+						<Database size={12} />
+						DB Client
+					</Button>
 				</div>
-			</div>
-			<div class="header-actions">
-				{#if service.status === 'running'}
-					<button class="btn btn-secondary btn-xs" onclick={() => showExecPanel = true} title="Open a shell in this container">
-						<Terminal size={12} />
-						Terminal
-					</button>
-					<button class="btn btn-secondary btn-xs" onclick={() => showMonitor = true} title="View container metrics">
-						<Activity size={12} />
-						Monitor
-					</button>
-				{/if}
-				<button class="btn btn-secondary btn-xs" onclick={() => showDbClient = true} title="Open database client">
-					<Database size={12} />
-					DB Client
-				</button>
-			</div>
+			</Card>
 		</div>
 
 		<!-- Tabs -->
-		<div class="tabs-row">
-			{#each tabs as tab}
-				<button
-					class="tab-btn"
-					class:active={activeTab === tab.id}
-					onclick={() => switchTab(tab.id)}
-				>
-					{tab.label}
-				</button>
-			{/each}
+		<div class="tabs-wrap">
+			<Tabs {tabs} value={activeTab} onChange={(id) => switchTab(id as Tab)} ariaLabel="Service sections" />
 		</div>
 
 		<!-- Deploying banner -->
@@ -1265,57 +1333,21 @@
 
 			<!-- ── Overview ── -->
 			{#if activeTab === 'overview'}
-				<div class="overview-wrap">
-					<!-- Metadata grid -->
-					<div class="overview-grid">
-						<div class="field">
-							<span class="field-label">Name</span>
-							<span class="field-value">{service.name}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Slug</span>
-							<span class="field-value font-mono">{service.slug}</span>
-						</div>
-						<div class="field field-full">
-							<span class="field-label">Hostname</span>
-							<span class="field-value field-copy-row">
-								<span class="font-mono">{service.slug}</span>
-								<button
-									class="btn-copy-inline"
-									title="Copy hostname — use this to connect from other containers"
-									onclick={() => navigator.clipboard.writeText(service?.slug || '')}
-								><Copy size={11} /></button>
-							</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Status</span>
-							<span class="field-value">
-								<span class="status-dot {statusClass(service.status)}"></span>
-								{statusLabel(service.status)}
-							</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Replicas</span>
-							<span class="field-value">{service.replicas}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Created</span>
-							<span class="field-value">{formatTime(service.created_at)}</span>
-						</div>
-						<div class="field">
-							<span class="field-label">Updated</span>
-							<span class="field-value">{formatTime(service.updated_at)}</span>
-						</div>
+<div class="overview-wrap">
+					<!-- Metadata -->
+					<div class="ov-block">
+						<KeyValueList items={overviewItems} keyWidth="90px" value={ovValue} action={ovAction} />
 					</div>
 
-					<!-- Manage Env button -->
+					<!-- Manage Env / logs -->
 					<div class="section-action">
-						<button class="btn btn-secondary btn-sm full-w" onclick={() => showEnvPanel = true}>
+						<Button variant="secondary" size="sm" onclick={() => showEnvPanel = true}>
 							<Settings size={13} />
 							Manage Environment Variables
-						</button>
-						<button
-							class="btn btn-secondary btn-sm full-w"
+						</Button>
+						<Button
+							variant="secondary"
+							size="sm"
 							onclick={() => {
 								const c = containers.find(ct => ct.docker_container_id);
 								if (c) openContainerLogs(c);
@@ -1324,165 +1356,91 @@
 						>
 							<FileText size={13} />
 							View Logs
-						</button>
+						</Button>
 					</div>
 
-					<!-- Type-specific info card -->
-					<div class="info-card">
+					<!-- Type-specific info -->
+					<div class="ov-block">
 						{#if service.type === 'docker' || service.type === 'database'}
-							<div class="info-card-header">
-								<Box size={13} />
-								<span>Docker Image</span>
-							</div>
-							<div class="info-card-body">
+							<div class="ov-block-head"><Box size={13} /><span>Docker Image</span></div>
+							<Card padding="10px 12px">
 								<code class="image-tag">{service.image || '—'}</code>
 								{#if service.ports?.length}
 									<div class="ports-row">
 										{#each service.ports as port}
-											<span class="port-badge">{port}</span>
+											<Badge tone="blue">{port}</Badge>
 										{/each}
 									</div>
 								{/if}
-							</div>
+							</Card>
 
 						{:else if service.type === 'git'}
-							<div class="info-card-header">
-								<GitBranch size={13} />
-								<span>Git Source</span>
-							</div>
-							<div class="info-card-body">
-								<div class="info-row">
-									<span class="info-key">Source path</span>
-									<code class="info-val">{service.directory_path || '—'}</code>
-								</div>
-								<div class="info-row">
-									<span class="info-key">Build type</span>
-									<span class="info-val">Auto-detect (Dockerfile / Nixpacks)</span>
-								</div>
-							</div>
+							<div class="ov-block-head"><GitBranch size={13} /><span>Git Source</span></div>
+							<KeyValueList
+								keyWidth="90px"
+								items={[
+									{ key: 'Source path', value: service.directory_path || '—', mono: true },
+									{ key: 'Build type', value: 'Auto-detect (Dockerfile / Nixpacks)', mono: true }
+								]}
+							/>
 
 						{:else if service.type === 'docker_compose'}
-							<div class="info-card-header">
-								<FileCode size={13} />
-								<span>Docker Compose</span>
-							</div>
-							<div class="info-card-body">
-								<div class="info-row">
-									<span class="info-key">Compose file</span>
-									<code class="info-val">{service.directory_path || 'docker-compose.yml'}</code>
-								</div>
-							</div>
+							<div class="ov-block-head"><FileCode size={13} /><span>Docker Compose</span></div>
+							<KeyValueList
+								keyWidth="90px"
+								items={[{ key: 'Compose file', value: service.directory_path || 'docker-compose.yml', mono: true }]}
+							/>
 						{:else if service.type === 'static'}
-							<div class="info-card-header">
-								<Globe size={13} />
-								<span>Static Site</span>
-							</div>
-							<div class="info-card-body">
+							<div class="ov-block-head"><Globe size={13} /><span>Static Site</span></div>
+							<Card padding="10px 12px">
 								<div class="info-hint">
 									Served by the shared Shipyard nginx server. Click <strong>Open panel</strong> from the topology canvas to configure build settings, upload files, or trigger a deploy.
 								</div>
-							</div>
+							</Card>
 						{:else}
-							<div class="info-card-header">
-								<Terminal size={13} />
-								<span>{typeLabel(service.type)}</span>
-							</div>
-							<div class="info-card-body">
+							<div class="ov-block-head"><Terminal size={13} /><span>{typeLabel(service.type)}</span></div>
+							<Card padding="10px 12px">
 								<code class="info-val">{service.directory_path || '—'}</code>
-							</div>
+							</Card>
 						{/if}
 					</div>
 
-					<!-- Internal connection card — shown for all service types -->
-					<div class="info-card conn-info-card">
-						<div class="info-card-header">
-							<Network size={13} />
-							<span>Internal Connection</span>
-						</div>
+					<!-- Internal connection — shown for all service types -->
+					<div class="ov-block">
+						<div class="ov-block-head"><Network size={13} /><span>Internal Connection</span></div>
 						{#if connInfoLoading}
-							<div class="info-card-body"><span class="conn-loading">Loading…</span></div>
+							<Card padding="10px 12px">
+								<div class="conn-loading"><Spinner size={14} /><span>Loading…</span></div>
+							</Card>
 						{:else}
-							<div class="info-card-body">
-								{#if connInfo && connInfo.driver !== 'TCP'}
-									<div class="conn-row">
-										<span class="conn-label">Driver</span>
-										<span class="conn-driver-badge">{connInfo.driver}</span>
-									</div>
-								{/if}
-
-								<!-- Host : Port -->
-								<div class="conn-row">
-									<span class="conn-label">Host</span>
-									<div class="conn-secret-row">
-										<code class="conn-val" class:conn-masked={!connHostRevealed}>
-											{#if connInfo}
-												{connInfo.host}:{connInfo.port}
-											{:else}
-												{service.slug}
-											{/if}
-										</code>
-										<button class="conn-icon-btn" title={connHostRevealed ? 'Hide' : 'Reveal'}
-										        onclick={() => connHostRevealed = !connHostRevealed}>
-											{#if connHostRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
-										</button>
-										<button class="conn-icon-btn" title="Copy"
-										        onclick={() => navigator.clipboard.writeText(connInfo ? `${connInfo.host}:${connInfo.port}` : service!.slug)}>
-											<Copy size={12} />
-										</button>
-									</div>
-								</div>
-
-								<!-- URL template (only when connInfo available) -->
-								{#if connInfo}
-									<div class="conn-url-block">
-										<span class="conn-label">URL</span>
-										<div class="conn-secret-row" style="margin-top:4px">
-											<code class="conn-url" class:conn-masked={!connUrlRevealed}>
-												{connInfo.url_template}
-											</code>
-											<button class="conn-icon-btn" title={connUrlRevealed ? 'Hide' : 'Reveal'}
-											        onclick={() => connUrlRevealed = !connUrlRevealed}>
-												{#if connUrlRevealed}<EyeOff size={12} />{:else}<Eye size={12} />{/if}
-											</button>
-											<button class="conn-icon-btn" title="Copy"
-											        onclick={async () => {
-													if (!connInfo) return;
-													await navigator.clipboard.writeText(connInfo.url_template);
-													connInfoCopied = true;
-													setTimeout(() => connInfoCopied = false, 1500);
-												}}>
-												{#if connInfoCopied}<CheckCircle2 size={12} />{:else}<Copy size={12} />{/if}
-											</button>
-										</div>
-									</div>
-								{/if}
-							</div>
+							<KeyValueList items={connItems} keyWidth="60px" value={connValue} action={connAction} />
 						{/if}
 					</div>
 
 					<!-- Danger zone -->
 					{#if canDelete}
-					<div class="danger-zone">
-						<div class="danger-header">
-							<AlertTriangle size={13} />
-							<span>Danger Zone</span>
-						</div>
-						<div class="danger-body">
-							<div class="danger-row">
-								<div class="danger-info">
-									<span class="danger-title">Delete this service</span>
-									<span class="danger-desc">Stops the service and permanently removes all data.</span>
+						<div class="ov-block">
+							<Card tone="danger" padding="12px">
+								<div class="danger-header">
+									<AlertTriangle size={13} />
+									<span>Danger Zone</span>
 								</div>
-								<button
-									class="btn btn-danger-outline btn-sm"
-									onclick={() => { showDeleteConfirm = true; deleteSlugInput = ''; deleteError = ''; }}
-								>
-									<Trash2 size={12} />
-									Delete
-								</button>
-							</div>
+								<div class="danger-row">
+									<div class="danger-info">
+										<span class="danger-title">Delete this service</span>
+										<span class="danger-desc">Stops the service and permanently removes all data.</span>
+									</div>
+									<Button
+										variant="danger-outline"
+										size="sm"
+										onclick={() => { showDeleteConfirm = true; deleteSlugInput = ''; deleteError = ''; }}
+									>
+										<Trash2 size={12} />
+										Delete
+									</Button>
+								</div>
+							</Card>
 						</div>
-					</div>
 					{/if}
 				</div>
 
@@ -1677,49 +1635,55 @@
 
 			<!-- ── Replicas ── -->
 			{:else if activeTab === 'replicas'}
-				<div class="replicas-section">
+<div class="replicas-section">
 					{#if replicaDeleteError}
-						<div class="replica-delete-error">
-							<span>{replicaDeleteError}</span>
-							<button class="btn-icon-xs" onclick={() => replicaDeleteError = null}>✕</button>
+						<div class="replica-delete-error" role="alert">
+							<div class="replica-delete-error-msg"><InlineAlert tone="error">{replicaDeleteError}</InlineAlert></div>
+							<Button variant="ghost" size="icon" aria-label="Dismiss error" title="Dismiss" onclick={() => replicaDeleteError = null}>
+								<X size={14} />
+							</Button>
 						</div>
 					{/if}
 					{#if isLoadingContainers}
-						<div class="loading-inline"><div class="spinner-sm"></div><span>Loading…</span></div>
+						<div class="loading-inline"><Spinner size={14} /><span>Loading…</span></div>
 					{:else if containers.length === 0}
-						<div class="empty-state-msg" style="padding: 24px 16px;">No replicas.</div>
+						<EmptyState message="No replicas." />
 					{:else}
 						<ul class="replica-list">
 							{#each containers as c (c.id)}
 								{@const terminal = isTerminal(c.status)}
 								<li class="replica-item" class:replica-stopped={terminal}>
-									<span class="status-dot {statusClass(c.status)}"></span>
+									<StatusDot status={toDotStatus(c.status)} />
 									<div class="replica-info">
 										<div class="replica-name-row">
 											<span class="replica-name">replica-{c.replica_index ?? '?'}</span>
 											{#if terminal}
-												<span class="stopped-badge">{statusLabel(c.status)}</span>
+												<Badge tone="neutral">{statusLabel(c.status)}</Badge>
 											{/if}
 										</div>
 										<div class="replica-meta">
 											<span class="replica-cid-row">
 												<span class="font-mono">{c.docker_container_id.slice(0, 12)}</span>
-												<button
-													class="btn-copy-inline"
+												<Button
+													variant="ghost"
+													size="icon"
 													title="Copy container ID"
+													aria-label="Copy container ID"
 													onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(c.docker_container_id.slice(0, 12)); }}
-												><Copy size={10} /></button>
+												><Copy size={10} /></Button>
 											</span>
 											{#if c.node_id}
 												{@const node = nodeMap.get(c.node_id)}
 												<span class="meta-sep">·</span>
-												<span class="node-badge" title={c.node_id}>
-													{#if node}
-														<span class="node-role-dot node-role-{node.role}"></span>
-														{node.hostname}
-													{:else}
-														{c.node_id.slice(0, 10)}
-													{/if}
+												<span title={c.node_id}>
+													<Badge tone="neutral">
+														{#if node}
+															<span class="node-role-dot node-role-{node.role}"></span>
+															{node.hostname}
+														{:else}
+															{c.node_id.slice(0, 10)}
+														{/if}
+													</Badge>
 												</span>
 											{/if}
 											{#if !terminal && c.started_at}
@@ -1739,22 +1703,24 @@
 										</div>
 									</div>
 									<div class="replica-actions">
-										<button class="btn btn-ghost btn-xs" onclick={() => openContainerLogs(c)} title="View logs">
-											<FileText size={12} />
-										</button>
+										<Button variant="ghost" size="icon" title="View logs" aria-label="View logs" onclick={() => openContainerLogs(c)}>
+											<FileText size={14} />
+										</Button>
 										{#if terminal}
-											<button
-												class="btn btn-ghost btn-xs replica-del-btn"
-												onclick={() => deleteContainerRecord(c.id)}
-												disabled={deletingContainerId === c.id}
+											<Button
+												variant="ghost"
+												size="icon"
 												title="Remove record"
+												aria-label="Remove record"
+												disabled={deletingContainerId === c.id}
+												onclick={() => deleteContainerRecord(c.id)}
 											>
 												{#if deletingContainerId === c.id}
-													<div class="spinner-sm" style="width:10px;height:10px"></div>
+													<Spinner size={12} tone="current" />
 												{:else}
-													<Trash2 size={12} />
+													<Trash2 size={14} />
 												{/if}
-											</button>
+											</Button>
 										{/if}
 									</div>
 								</li>
@@ -2286,13 +2252,6 @@
 		padding: 24px;
 	}
 
-	.spinner {
-		width: 28px; height: 28px;
-		border: 2px solid var(--border);
-		border-top-color: var(--accent);
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
 	.spinner-sm {
 		width: 14px; height: 14px;
 		border: 2px solid var(--border);
@@ -2307,78 +2266,18 @@
 		border-radius: 50%;
 		animation: spin 0.7s linear infinite;
 	}
-	.btn-spinner-dark {
-		width: 12px; height: 12px;
-		border: 2px solid rgba(0,0,0,0.2);
-		border-top-color: #fff;
-		border-radius: 50%;
-		animation: spin 0.7s linear infinite;
-	}
 	@keyframes spin { to { transform: rotate(360deg); } }
 
 	/* ── Header ── */
 	.svc-header {
-		padding: 14px 16px;
-		border-bottom: 1px solid var(--border);
+		padding: 12px 12px 0;
 		flex-shrink: 0;
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 10px;
 	}
-	.svc-identity-container {
-		display: flex;
-		align-items: flex-start;
-		gap: 10px;
-	}
-	.svc-brand-icon {
-		width: 32px;
-		height: 32px;
-		border-radius: var(--radius-sm);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		margin-top: 2px;
-	}
-	.svc-identity { display: flex; flex-direction: column; gap: 4px; }
-	.svc-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
-	.svc-meta {
-		display: flex; align-items: center; gap: 5px;
-		font-size: 12px;
-	}
-	.svc-status { color: var(--text-secondary); }
-	.svc-type { color: var(--text-muted); }
-	.svc-replicas { color: var(--text-muted); }
 	.meta-sep { color: var(--text-dim); }
-	.header-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+	.header-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 10px; border-top: 1px solid var(--border); }
+	.tabs-wrap { flex-shrink: 0; padding: 0 8px; }
 
 	/* ── Tabs ── */
-	.tabs-row {
-		display: flex;
-		border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-		padding: 0 8px;
-		overflow-x: auto;
-		overflow-y: hidden;
-		flex-wrap: nowrap;
-		scrollbar-width: none;
-	}
-	.tabs-row::-webkit-scrollbar { display: none; }
-	.tab-btn {
-		padding: 9px 12px;
-		font-size: 12px; font-weight: 500;
-		font-family: var(--font-sans);
-		background: transparent;
-		border: none;
-		border-bottom: 2px solid transparent;
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: all var(--transition-fast);
-		margin-bottom: -1px;
-	}
-	.tab-btn:hover { color: var(--text-primary); }
-	.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 	/* ── Tab content ── */
 	.tab-content {
@@ -2391,35 +2290,22 @@
 	.overview-wrap {
 		display: flex;
 		flex-direction: column;
-		gap: 0;
+		gap: 12px;
+		padding: 12px;
 	}
-
-	.info-card {
-		margin: 12px 12px 0;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-		background: var(--bg-surface);
-	}
-	.info-card-header {
+	.ov-block { display: flex; flex-direction: column; gap: 6px; }
+	.ov-block-head {
 		display: flex;
 		align-items: center;
 		gap: 7px;
-		padding: 8px 12px;
-		background: var(--bg-elevated);
-		border-bottom: 1px solid var(--border);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-dim);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 	}
-	.info-card-body {
-		padding: 10px 12px;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
+	.kv-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 	.image-tag {
 		font-family: var(--font-mono);
 		font-size: 13px;
@@ -2428,32 +2314,13 @@
 		padding: 4px 8px;
 		border-radius: var(--radius-sm);
 		display: inline-block;
+		word-break: break-all;
 	}
 	.ports-row {
 		display: flex;
 		gap: 6px;
 		flex-wrap: wrap;
 		margin-top: 4px;
-	}
-	.port-badge {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		background: rgba(37, 99, 235, 0.08);
-		color: var(--accent);
-		border: 1px solid rgba(37, 99, 235, 0.2);
-		padding: 2px 7px;
-		border-radius: 999px;
-	}
-	.info-row {
-		display: flex;
-		align-items: baseline;
-		gap: 8px;
-		font-size: 12px;
-	}
-	.info-key {
-		color: var(--text-dim);
-		min-width: 80px;
-		flex-shrink: 0;
 	}
 	.info-val {
 		font-family: var(--font-mono);
@@ -2474,53 +2341,18 @@
 	}
 
 	/* ── Connection info card ─────────────────────────────────────── */
-	.conn-info-card { margin-top: 10px; }
-	.conn-loading { font-size: 12px; color: var(--text-muted); }
-	.conn-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		margin-bottom: 6px;
-	}
-	.conn-label {
-		font-size: 11px;
-		color: var(--text-muted);
-		min-width: 60px;
-	}
+	.conn-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
 	.conn-val {
 		font-family: var(--font-mono);
 		font-size: 12px;
 		color: var(--text-primary);
-	}
-	.conn-driver-badge {
-		font-size: 11px;
-		font-weight: 600;
-		padding: 1px 6px;
-		border-radius: 4px;
-		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		color: var(--accent);
-		text-transform: uppercase;
-	}
-	.conn-url-block { margin-top: 6px; }
-	.conn-url-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-top: 4px;
+		word-break: break-all;
 	}
 	.conn-url {
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: var(--text-secondary);
 		word-break: break-all;
-		flex: 1;
-	}
-	.conn-secret-row {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		flex: 1;
-		min-width: 0;
 	}
 	.conn-masked {
 		filter: blur(5px);
@@ -2528,118 +2360,28 @@
 		pointer-events: none;
 		transition: filter 0.2s;
 	}
-	.conn-icon-btn {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 22px;
-		height: 22px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: none;
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: border-color 0.15s, color 0.15s;
-	}
-	.conn-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 	/* legacy alias kept for any remaining usages */
-	.conn-copy-btn {
-		flex-shrink: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 24px;
-		height: 24px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: none;
-		color: var(--text-muted);
-		cursor: pointer;
-		transition: border-color 0.15s, color 0.15s;
-	}
-	.conn-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-	.overview-grid {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 1px;
-		background: var(--border);
-		margin: 12px 0 0;
-	}
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		padding: 11px 16px;
-		background: var(--bg-base);
-	}
-	.field-label {
-		font-size: 10px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-	.field-value {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		font-size: 13px;
-		color: var(--text-primary);
-		word-break: break-all;
-	}
 
-	.field-full { grid-column: 1 / -1; }
-	.field-copy-row {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.btn-copy-inline {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		padding: 2px 4px;
-		border: none;
-		background: transparent;
-		color: var(--text-dim);
-		cursor: pointer;
-		border-radius: 3px;
-		line-height: 1;
-		flex-shrink: 0;
-	}
-	.btn-copy-inline:hover { background: var(--bg-muted); color: var(--text-primary); }
 
 	.section-action {
-		padding: 12px 12px 0;
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
 	}
-	.full-w { width: 100%; justify-content: center; }
 
 	/* ── Danger zone ── */
-	.danger-zone {
-		margin: 12px;
-		border: 1px solid rgba(239, 68, 68, 0.3);
-		border-radius: var(--radius-md);
-		overflow: hidden;
-	}
 	.danger-header {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		padding: 8px 12px;
-		background: rgba(239, 68, 68, 0.05);
-		border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+		margin-bottom: 8px;
 		font-size: 11px;
 		font-weight: 600;
-		color: #EF4444;
+		color: var(--accent-red);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 	}
-	.danger-body { padding: 10px 12px; }
 	.danger-row {
 		display: flex;
 		align-items: center;
@@ -2931,12 +2673,6 @@
 	.replica-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 	.replica-name-row { display: flex; align-items: center; gap: 6px; }
 	.replica-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-	.stopped-badge {
-		font-size: 10px; font-weight: 600; padding: 1px 6px;
-		border-radius: 99px; text-transform: capitalize;
-		background: var(--bg-elevated); color: var(--text-muted);
-		border: 1px solid var(--border);
-	}
 	.replica-meta {
 		display: flex;
 		align-items: center;
@@ -2951,33 +2687,19 @@
 		gap: 3px;
 	}
 	.exit-code { font-family: var(--font-mono); font-size: 10px; }
-	.exit-nonzero { color: #EF4444; }
+	.exit-nonzero { color: var(--accent-red); }
 	.replica-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-	.replica-del-btn { color: var(--text-dim); }
-	.replica-del-btn:hover { color: #EF4444 !important; }
 	.replica-delete-error {
-		display: flex; align-items: center; justify-content: space-between; gap: 8px;
-		margin: 8px 12px; padding: 8px 10px;
-		background: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px;
-		color: #B91C1C; font-size: 12px;
+		display: flex; align-items: center; gap: 4px;
+		margin: 8px 12px;
 	}
-	.replica-delete-error .btn-icon-xs {
-		background: none; border: none; cursor: pointer; color: #B91C1C;
-		padding: 0 2px; font-size: 11px; line-height: 1; flex-shrink: 0;
-	}
+	.replica-delete-error-msg { flex: 1; min-width: 0; }
 
-	.node-badge {
-		display: inline-flex; align-items: center; gap: 4px;
-		padding: 1px 6px; border-radius: 4px;
-		background: var(--bg-muted); border: 1px solid var(--border);
-		font-size: 10px; font-weight: 500; color: var(--text-secondary);
-		font-family: var(--font-mono);
-	}
 	.node-role-dot {
 		width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
 	}
-	.node-role-manager { background: #6366f1; }
-	.node-role-worker  { background: #16a34a; }
+	.node-role-manager { background: var(--accent); }
+	.node-role-worker  { background: var(--accent-green); }
 
 	/* ── Volumes ── */
 	.volumes-section { display: flex; flex-direction: column; }
@@ -3527,87 +3249,6 @@
 	}
 
 	/* ── Delete modal (global — node is portalled to body) ── */
-	:global(.sdp-modal-backdrop) {
-		position: fixed;
-		inset: 0;
-		background: rgba(0,0,0,0.55);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 9999;
-		padding: 24px;
-	}
-	:global(.sdp-modal) {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		width: 100%;
-		max-width: 440px;
-		overflow: hidden;
-		box-shadow: 0 24px 64px rgba(0,0,0,0.35);
-	}
-	:global(.sdp-modal-header) {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 16px 20px;
-		border-bottom: 1px solid var(--border);
-		font-size: 15px;
-		font-weight: 700;
-		color: var(--text-primary);
-	}
-	:global(.sdp-modal-body) {
-		padding: 20px;
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
-	}
-	:global(.sdp-modal-warning) {
-		font-size: 13px;
-		color: var(--text-secondary);
-		line-height: 1.6;
-		margin: 0;
-	}
-	:global(.sdp-confirm-field) { display: flex; flex-direction: column; gap: 6px; }
-	:global(.sdp-confirm-label) { font-size: 12px; color: var(--text-muted); }
-	:global(.sdp-confirm-code) {
-		font-family: var(--font-mono);
-		background: var(--bg-elevated);
-		padding: 1px 5px;
-		border-radius: 3px;
-		font-size: 12px;
-		color: var(--text-primary);
-	}
-	:global(.sdp-confirm-input) {
-		font-family: var(--font-mono);
-		font-size: 13px;
-		padding: 8px 10px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-base);
-		color: var(--text-primary);
-		outline: none;
-		transition: border-color var(--transition-fast);
-		width: 100%;
-		box-sizing: border-box;
-	}
-	:global(.sdp-confirm-input:focus) { border-color: #EF4444; }
-	:global(.sdp-delete-error) {
-		font-size: 12px;
-		color: #EF4444;
-		background: rgba(239,68,68,0.08);
-		border: 1px solid rgba(239,68,68,0.2);
-		border-radius: var(--radius-sm);
-		padding: 8px 10px;
-	}
-	:global(.sdp-modal-footer) {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 14px 20px;
-		border-top: 1px solid var(--border);
-		background: var(--bg-elevated);
-	}
 
 	/* ── Shared button variants ── */
 	.icon-btn {
@@ -3882,20 +3523,6 @@
 		color: #10B981;
 		letter-spacing: 0.05em;
 		border: 1px solid rgba(16,185,129,0.25);
-	}
-
-	@media (max-width: 639px) {
-		.tabs-row {
-			-webkit-overflow-scrolling: touch;
-		}
-
-		.header-actions {
-			flex-wrap: wrap;
-		}
-
-		.overview-grid {
-			grid-template-columns: 1fr;
-		}
 	}
 
 	/* ── Git tab ─────────────────────────────────────────────────── */
