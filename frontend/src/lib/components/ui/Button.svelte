@@ -8,6 +8,7 @@
 		disabled?: boolean;
 		onclick?: (e: MouseEvent) => void;
 		children: Snippet;
+		'aria-label'?: string;
 	}
 
 	let {
@@ -16,7 +17,8 @@
 		type = 'button',
 		disabled = false,
 		onclick,
-		children
+		children,
+		'aria-label': ariaLabel
 	}: Props = $props();
 </script>
 
@@ -25,6 +27,7 @@
 	{disabled}
 	class="ui-btn ui-btn--{variant} ui-btn--{size}"
 	{onclick}
+	aria-label={ariaLabel}
 >
 	{@render children()}
 </button>

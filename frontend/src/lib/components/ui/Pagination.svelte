@@ -46,16 +46,16 @@
 	</div>
 	<span class="ui-pagination-range">{rangeStart}–{rangeEnd} of {total}</span>
 	<div class="ui-pagination-nav">
-		<Button variant="ghost" size="icon" disabled={page === 0} onclick={() => onPageChange(0)}>
+		<Button variant="ghost" size="icon" disabled={page === 0} onclick={() => onPageChange(0)} aria-label="First page">
 			<ChevronsLeft size={15} />
 		</Button>
-		<Button variant="ghost" size="icon" disabled={page === 0} onclick={() => onPageChange(page - 1)}>
+		<Button variant="ghost" size="icon" disabled={page === 0} onclick={() => onPageChange(page - 1)} aria-label="Previous page">
 			<ChevronLeft size={15} />
 		</Button>
-		<Button variant="ghost" size="icon" disabled={page >= lastPage} onclick={() => onPageChange(page + 1)}>
+		<Button variant="ghost" size="icon" disabled={page >= lastPage} onclick={() => onPageChange(page + 1)} aria-label="Next page">
 			<ChevronRight size={15} />
 		</Button>
-		<Button variant="ghost" size="icon" disabled={page >= lastPage} onclick={() => onPageChange(lastPage)}>
+		<Button variant="ghost" size="icon" disabled={page >= lastPage} onclick={() => onPageChange(lastPage)} aria-label="Last page">
 			<ChevronsRight size={15} />
 		</Button>
 	</div>
