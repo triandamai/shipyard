@@ -8,6 +8,11 @@
 	import { projectStore } from '$lib/stores/project.store';
 	import { get } from 'svelte/store';
 	import type { Project, Organization } from '$lib/api/types';
+	import { Plus, Package } from '@lucide/svelte';
+	import {
+		PageHeader, Card, Button, Modal, FormField, TextField, InlineAlert,
+		EmptyState, Spinner, Avatar
+	} from '$lib/components/ui';
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
 
@@ -43,6 +48,7 @@
 	let newProjectSlug = $state('');
 	let creating = $state(false);
 	let createError = $state('');
+	let createForm = $state<HTMLFormElement>();
 
 	// Auto-generate slug from name
 	$effect(() => {
@@ -100,173 +106,56 @@
 </script>
 
 <div class="projects-scroll">
-	<div style="max-width: 900px; margin: 0 auto;">
+	<div class="projects-inner">
 
-		<!-- Header -->
-		<div
-			style="
-				display: flex;
-				align-items: center;
-				justify-content: space-between;
-				margin-bottom: 28px;
-			"
-		>
-			<div>
-				<h1 style="font-size: 20px; font-weight: 700; margin-bottom: 4px;">Projects</h1>
-				{#if currentOrg}
-					<p style="color: var(--text-muted); font-size: 13px;">{currentOrg.name}</p>
-				{/if}
-			</div>
-			<button class="btn btn-primary" onclick={openModal}>
-				+ New Project
-			</button>
-		</div>
+		<PageHeader title="Projects" subtitle={currentOrg?.name}>
+			{#snippet actions()}
+				<Button onclick={openModal}>
+					<Plus size={14} />
+					New Project
+				</Button>
+			{/snippet}
+		</PageHeader>
 
 		<!-- Error -->
 		{#if fetchError}
-			<div
-				style="
-					padding: 12px 16px;
-					background: var(--accent-red-muted);
-					border: 1px solid var(--accent-red);
-					border-radius: var(--radius-md);
-					color: var(--accent-red);
-					font-size: 13px;
-					margin-bottom: 20px;
-				"
-			>
-				{fetchError}
-			</div>
+			<div role="alert"><InlineAlert tone="error">{fetchError}</InlineAlert></div>
 		{/if}
 
 		<!-- Loading -->
 		{#if loading}
-			<div
-				style="
-					display: flex;
-					align-items: center;
-					justify-content: center;
-					padding: 80px 0;
-					gap: 12px;
-					color: var(--text-muted);
-					font-size: 14px;
-				"
-			>
-				<span
-					style="
-						width: 20px;
-						height: 20px;
-						border: 2px solid var(--border);
-						border-top-color: var(--accent);
-						border-radius: 50%;
-						display: inline-block;
-						animation: spin 0.7s linear infinite;
-					"
-				></span>
+			<div class="loading-wrap">
+				<Spinner size={20} />
 				Loading projects…
 			</div>
 
 		<!-- Empty state -->
 		{:else if projects.length === 0}
-			<div
-				style="
-					display: flex;
-					flex-direction: column;
-					align-items: center;
-					justify-content: center;
-					padding: 80px 0;
-					gap: 16px;
-					text-align: center;
-				"
-			>
-				<div
-					style="
-						width: 56px;
-						height: 56px;
-						border-radius: var(--radius-lg);
-						background: var(--bg-elevated);
-						border: 1px solid var(--border);
-						display: flex;
-						align-items: center;
-						justify-content: center;
-						font-size: 24px;
-					"
-				>
-					📦
-				</div>
-				<div>
-					<p style="color: var(--text-primary); font-weight: 500; margin-bottom: 4px;">
-						No projects yet
-					</p>
-					<p style="color: var(--text-muted); font-size: 13px;">
-						Create your first project to start deploying services
-					</p>
-				</div>
-				<button class="btn btn-primary" onclick={openModal}>
-					+ New Project
-				</button>
+			<div class="empty-wrap">
+				<EmptyState message="No projects yet" sub="Create your first project to start deploying services">
+					{#snippet icon()}<Package size={28} />{/snippet}
+				</EmptyState>
+				<Button onclick={openModal}>
+					<Plus size={14} />
+					New Project
+				</Button>
 			</div>
 
 		<!-- Project grid -->
 		{:else}
-			<div
-				style="
-					display: grid;
-					grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-					gap: 16px;
-				"
-			>
+			<div class="project-grid">
 				{#each projects as project (project.id)}
-					<button
-						class="card card-interactive"
-						style="
-							text-align: left;
-							cursor: pointer;
-							display: flex;
-							flex-direction: column;
-							gap: 12px;
-						"
-						onclick={() => goToProject(project)}
-					>
-						<div
-							style="
-								width: 40px;
-								height: 40px;
-								border-radius: var(--radius-md);
-								background: var(--accent-blue-muted);
-								border: 1px solid rgba(59, 130, 246, 0.3);
-								display: flex;
-								align-items: center;
-								justify-content: center;
-								font-size: 18px;
-								font-weight: 700;
-								color: var(--accent-blue);
-							"
-						>
-							{project.name[0]?.toUpperCase() ?? '?'}
-						</div>
-						<div>
-							<div
-								style="
-									font-size: 14px;
-									font-weight: 600;
-									color: var(--text-primary);
-									margin-bottom: 4px;
-								"
-							>
-								{project.name}
-							</div>
-							<div
-								style="
-									font-size: 12px;
-									color: var(--text-muted);
-									font-family: var(--font-mono);
-								"
-							>
-								{project.slug}
-							</div>
-						</div>
-					</button>
+					<div class="project-tile">
+						<Card padding="0">
+							<button class="project-card" onclick={() => goToProject(project)}>
+								<Avatar initials={project.name[0] ?? '?'} size={40} />
+								<div class="project-text">
+									<div class="project-name">{project.name}</div>
+									<div class="project-slug">{project.slug}</div>
+								</div>
+							</button>
+						</Card>
+					</div>
 				{/each}
 			</div>
 		{/if}
@@ -275,141 +164,46 @@
 </div>
 
 <!-- New Project Modal -->
-{#if showModal}
-	<div
-		style="
-			position: fixed;
-			inset: 0;
-			background: rgba(0,0,0,0.6);
-			z-index: 50;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			padding: 24px;
-		"
-		onclick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
-		onkeydown={(e) => { if (e.key === 'Escape') closeModal(); }}
-		role="dialog"
-		aria-modal="true"
-		aria-label="Create project"
-		tabindex="-1"
-	>
-		<div
-			style="
-				background: var(--bg-elevated);
-				border: 1px solid var(--border);
-				border-radius: var(--radius-xl);
-				padding: 28px;
-				width: 100%;
-				max-width: 420px;
-				box-shadow: var(--shadow-lg);
-			"
-		>
-			<h2 style="font-size: 16px; font-weight: 600; margin-bottom: 20px;">
-				New Project
-			</h2>
+<Modal bind:open={showModal} title="New Project">
+	{#if createError}
+		<div role="alert"><InlineAlert tone="error">{createError}</InlineAlert></div>
+	{/if}
 
-			{#if createError}
-				<div
-					style="
-						padding: 10px 14px;
-						background: var(--accent-red-muted);
-						border: 1px solid var(--accent-red);
-						border-radius: var(--radius-md);
-						color: var(--accent-red);
-						font-size: 13px;
-						margin-bottom: 16px;
-					"
-				>
-					{createError}
-				</div>
+	<form class="create-form" bind:this={createForm} onsubmit={handleCreateProject}>
+		<FormField label="Project Name" for="project-name">
+			<TextField
+				id="project-name"
+				type="text"
+				placeholder="My Project"
+				bind:value={newProjectName}
+				required
+			/>
+		</FormField>
+
+		<FormField label="Slug" for="project-slug" hint="Lowercase letters, numbers, and hyphens only">
+			<TextField
+				id="project-slug"
+				type="text"
+				placeholder="my-project"
+				bind:value={newProjectSlug}
+				required
+				pattern="[a-z0-9-]+"
+			/>
+		</FormField>
+	</form>
+
+	{#snippet footer()}
+		<Button variant="secondary" onclick={closeModal} disabled={creating}>Cancel</Button>
+		<Button onclick={() => createForm?.requestSubmit()} disabled={creating || !newProjectName.trim()}>
+			{#if creating}
+				<Spinner size={14} tone="current" />
+				Creating…
+			{:else}
+				Create Project
 			{/if}
-
-			<form
-				onsubmit={handleCreateProject}
-				style="display: flex; flex-direction: column; gap: 16px;"
-			>
-				<div style="display: flex; flex-direction: column; gap: 6px;">
-					<label
-						for="project-name"
-						style="font-size: 13px; font-weight: 500; color: var(--text-secondary);"
-					>
-						Project Name
-					</label>
-					<input
-						id="project-name"
-						type="text"
-						class="input"
-						placeholder="My Project"
-						bind:value={newProjectName}
-						required
-					/>
-				</div>
-
-				<div style="display: flex; flex-direction: column; gap: 6px;">
-					<label
-						for="project-slug"
-						style="font-size: 13px; font-weight: 500; color: var(--text-secondary);"
-					>
-						Slug
-					</label>
-					<input
-						id="project-slug"
-						type="text"
-						class="input"
-						placeholder="my-project"
-						bind:value={newProjectSlug}
-						required
-						pattern="[a-z0-9-]+"
-					/>
-					<span style="font-size: 11px; color: var(--text-dim);">
-						Lowercase letters, numbers, and hyphens only
-					</span>
-				</div>
-
-				<div
-					style="
-						display: flex;
-						justify-content: flex-end;
-						gap: 10px;
-						margin-top: 4px;
-					"
-				>
-					<button
-						type="button"
-						class="btn btn-secondary"
-						onclick={closeModal}
-						disabled={creating}
-					>
-						Cancel
-					</button>
-					<button
-						type="submit"
-						class="btn btn-primary"
-						disabled={creating || !newProjectName.trim()}
-					>
-						{#if creating}
-							<span
-								style="
-									width: 14px;
-									height: 14px;
-									border: 2px solid rgba(255,255,255,0.3);
-									border-top-color: white;
-									border-radius: 50%;
-									display: inline-block;
-									animation: spin 0.7s linear infinite;
-								"
-							></span>
-							Creating…
-						{:else}
-							Create Project
-						{/if}
-					</button>
-				</div>
-			</form>
-		</div>
-	</div>
-{/if}
+		</Button>
+	{/snippet}
+</Modal>
 
 <style>
 	.projects-scroll {
@@ -417,12 +211,68 @@
 		overflow-y: auto;
 		height: 100%;
 	}
+	.projects-inner {
+		max-width: 900px;
+		margin: 0 auto;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
 
 	@media (max-width: 639px) {
 		.projects-scroll { padding: 16px 16px 72px; }
 	}
 
-	@keyframes spin {
-		to { transform: rotate(360deg); }
+	.loading-wrap {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 80px 0;
+		gap: 12px;
+		color: var(--text-muted);
+		font-size: 14px;
 	}
+	.empty-wrap {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		padding: 40px 0;
+		gap: 8px;
+	}
+
+	.project-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+		gap: 16px;
+	}
+	.project-tile :global(.ui-card) { transition: border-color var(--transition-fast); }
+	.project-tile:hover :global(.ui-card) { border-color: var(--border-hover); }
+	.project-card {
+		width: 100%;
+		text-align: left;
+		cursor: pointer;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		padding: 16px;
+		background: transparent;
+		border: none;
+		border-radius: var(--radius-lg);
+		font-family: inherit;
+		color: inherit;
+	}
+	.project-text { min-width: 0; }
+	.project-name {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--text-primary);
+		margin-bottom: 4px;
+		overflow-wrap: anywhere;
+	}
+	.project-slug {
+		font-size: 12px;
+		color: var(--text-muted);
+		font-family: var(--font-mono);
+	}
+	.create-form { display: flex; flex-direction: column; gap: 16px; }
 </style>
