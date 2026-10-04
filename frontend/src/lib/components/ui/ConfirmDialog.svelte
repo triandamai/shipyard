@@ -41,6 +41,11 @@
 		confirmText === undefined || (confirmText !== '' && typedConfirm === confirmText)
 	);
 
+	// A reopened dialog must never start armed from text typed before an Escape/scrim close.
+	$effect(() => {
+		if (open) typedConfirm = '';
+	});
+
 	async function handleConfirm() {
 		if (!canConfirm || confirming) return;
 		confirming = true;
