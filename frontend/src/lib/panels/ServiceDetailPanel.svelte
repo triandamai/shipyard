@@ -6,7 +6,8 @@
 		GitBranch, Box, FileCode, Terminal, Settings, X,
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
-		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database, Activity
+		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database, Activity,
+		Check, Minus, Circle, Undo2
 	} from '@lucide/svelte';
 	import DbClientModal from '$lib/components/DbClientModal.svelte';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
@@ -270,15 +271,39 @@
 		}
 	}
 
-	function stepStatusIcon(s: string): string {
+	function deployBadgeTone(s: string): 'green' | 'blue' | 'yellow' | 'red' | 'neutral' {
 		switch (s) {
-			case 'success': return '✓';
-			case 'running': return '⟳';
-			case 'failed':  return '✗';
-			case 'skipped': return '–';
-			default:        return '○';
+			case 'success': return 'green';
+			case 'running': return 'blue';
+			case 'queued':  return 'yellow';
+			case 'failed':  return 'red';
+			default:        return 'neutral';
 		}
 	}
+
+	function stepTone(s: string): 'blue' | 'green' | 'red' | 'yellow' {
+		switch (s) {
+			case 'success': return 'green';
+			case 'failed':  return 'red';
+			case 'skipped': return 'yellow';
+			default:        return 'blue';
+		}
+	}
+
+	const webhookProviderTabs = (['github', 'gitlab', 'gitea'] as const).map((p) => ({
+		id: p,
+		label: p.charAt(0).toUpperCase() + p.slice(1)
+	}));
+
+	let webhookItems = $derived<KeyValueItem[]>([
+		{
+			key: 'URL',
+			mono: true,
+			value: webhookToken
+				? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
+				: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`
+		}
+	]);
 
 	function formatTime(ts: string | null | undefined): string {
 		if (!ts) return '–';
@@ -1315,7 +1340,7 @@
 		<!-- Deploying banner -->
 		{#if isDeploying || isDeploymentRunning}
 			<div class="deploying-banner">
-				<Loader2 size={13} class="spin" />
+				<Loader2 size={13} class="spin-icon" />
 				<span>Deploying{isDeploymentRunning && !isDeploying ? ' — pipeline running' : '…'}</span>
 			</div>
 		{/if}
@@ -1323,7 +1348,7 @@
 		<!-- Stopping banner -->
 		{#if isStopping}
 			<div class="stopping-banner">
-				<Loader2 size={13} class="spin" />
+				<Loader2 size={13} class="spin-icon" />
 				<span>Stopping service… please wait</span>
 			</div>
 		{/if}
@@ -1448,33 +1473,31 @@
 			{:else if activeTab === 'deploy'}
 				<div class="deploy-section">
 					<div class="deploy-trigger-row">
-						<button class="btn btn-primary" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerDeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? '' : 'Insufficient permissions'}>
+						<Button variant="primary" size="sm" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerDeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? '' : 'Insufficient permissions'}>
 							{#if isDeploying || isDeploymentRunning}
-								<div class="btn-spinner"></div>{isDeploymentRunning && !isDeploying ? 'Running…' : 'Deploying…'}
+								<Spinner size={12} tone="current" />{isDeploymentRunning && !isDeploying ? 'Running…' : 'Deploying…'}
 							{:else}
 								<Play size={14} />Deploy
 							{/if}
-						</button>
-						<button class="btn btn-secondary" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerRedeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Redeploy last successful build' : 'Insufficient permissions'}>
+						</Button>
+						<Button variant="secondary" size="sm" disabled={isDeploying || isRestarting || isDeploymentRunning || !canDeploy} onclick={triggerRedeploy} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Redeploy last successful build' : 'Insufficient permissions'}>
 							<RefreshCw size={14} />Redeploy
-						</button>
-						<button class="btn btn-secondary" disabled={isRestarting || isDeploying || isDeploymentRunning || !canDeploy} onclick={triggerRestart} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Restart containers without rebuilding' : 'Insufficient permissions'}>
+						</Button>
+						<Button variant="secondary" size="sm" disabled={isRestarting || isDeploying || isDeploymentRunning || !canDeploy} onclick={triggerRestart} title={isDeploymentRunning ? 'A deployment is already running' : canDeploy ? 'Restart containers without rebuilding' : 'Insufficient permissions'}>
 							{#if isRestarting}
-								<Loader2 size={14} class="spin" />Restarting…
+								<Spinner size={12} tone="current" />Restarting…
 							{:else}
 								<RefreshCw size={14} />Restart
 							{/if}
-						</button>
+						</Button>
 					</div>
 
 					<!-- Latest deployment steps -->
 					{#if latestDeployment}
-						<div class="latest-dep-card">
+						<Card>
 							<div class="dep-card-header">
 								<span class="dep-card-label">Latest deployment</span>
-								<span class="dep-card-badge {deployStatusClass(latestDeployment.status)}">
-									{latestDeployment.status}
-								</span>
+								<Badge tone={deployBadgeTone(latestDeployment.status)}>{latestDeployment.status}</Badge>
 							</div>
 							<div class="dep-card-meta">
 								<span class="font-mono">{latestDeployment.source_ref || '–'}</span>
@@ -1484,22 +1507,25 @@
 							{#if steps.length > 0}
 								<div class="steps-list">
 									{#each steps as step (step.id)}
-										<div class="step-item"
-											class:step-running={step.status === 'running'}
-											class:step-failed={step.status === 'failed'}
-											class:step-success={step.status === 'success'}>
-											<span class="step-icon">{stepStatusIcon(step.status)}</span>
-											<span class="step-name">{step.name.replace(/_/g, ' ')}</span>
-											{#if step.started_at}
-												<span class="step-time">{formatTime(step.started_at)}</span>
-											{/if}
-										</div>
+										<ListRow
+											iconTone={stepTone(step.status)}
+											title={step.name.replace(/_/g, ' ')}
+											meta={step.started_at ? formatTime(step.started_at) : undefined}
+										>
+											{#snippet icon()}
+												{#if step.status === 'success'}<Check size={14} />
+												{:else if step.status === 'running'}<Loader2 size={14} class="spin-icon" />
+												{:else if step.status === 'failed'}<X size={14} />
+												{:else if step.status === 'skipped'}<Minus size={14} />
+												{:else}<Circle size={12} />{/if}
+											{/snippet}
+										</ListRow>
 									{/each}
 								</div>
 							{/if}
-						</div>
+						</Card>
 					{:else}
-						<div class="empty-state-msg">No deployments yet. Click Deploy to start.</div>
+						<EmptyState message="No deployments yet. Click Deploy to start." />
 					{/if}
 				</div>
 
@@ -1507,92 +1533,92 @@
 			{:else if activeTab === 'logs'}
 				<div class="logs-section">
 					<!-- Webhook trigger URL -->
-					<div class="webhook-section">
+					<Card>
 						<div class="webhook-header">
 							<span class="webhook-label">Deployment webhook</span>
-							<div class="webhook-provider-tabs">
-								{#each (['github', 'gitlab', 'gitea'] as const) as p}
-									<button class:active={webhookProvider === p} onclick={() => webhookProvider = p}>
-										{p.charAt(0).toUpperCase() + p.slice(1)}
-									</button>
-								{/each}
-							</div>
+							<Tabs
+								tabs={webhookProviderTabs}
+								value={webhookProvider}
+								onChange={(id) => webhookProvider = id as typeof webhookProvider}
+								ariaLabel="Webhook provider"
+							/>
 						</div>
 
 						{#if isLoadingWebhook}
-							<div class="webhook-loading"><div class="spinner-xs"></div>Loading…</div>
+							<div class="webhook-loading"><Spinner size={14} /><span>Loading…</span></div>
 						{:else}
-							<div class="webhook-url-row">
-								<input
-									class="webhook-url-input"
-									readonly
-									value={webhookToken
-										? `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/${webhookToken}`
-										: `${window.location.origin}/api/webhooks/${webhookProvider}/${serviceId}/…`}
-								/>
-								<button class="webhook-copy-btn" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
-									{#if webhookCopied}
-										<CheckCircle2 size={13} />Copied
-									{:else}
-										<Copy size={13} />Copy
-									{/if}
-								</button>
-							</div>
+							<KeyValueList items={webhookItems} keyWidth="40px">
+								{#snippet action()}
+									<Button variant="secondary" size="sm" onclick={copyWebhookUrl} disabled={!webhookToken || isRotatingWebhook}>
+										{#if webhookCopied}
+											<CheckCircle2 size={13} />Copied
+										{:else}
+											<Copy size={13} />Copy
+										{/if}
+									</Button>
+								{/snippet}
+							</KeyValueList>
 
 							<div class="webhook-actions">
 								{#if rotateConfirm}
 									<span class="webhook-rotate-confirm-text">This will invalidate the current URL. Continue?</span>
-									<button class="webhook-rotate-btn danger" onclick={rotateWebhook} disabled={isRotatingWebhook}>
-										{#if isRotatingWebhook}<div class="spinner-xs"></div>Rotating…{:else}Yes, rotate{/if}
-									</button>
-									<button class="webhook-rotate-btn" onclick={() => rotateConfirm = false}>Cancel</button>
+									<Button variant="danger-outline" size="sm" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+										{#if isRotatingWebhook}<Spinner size={12} tone="current" />Rotating…{:else}Yes, rotate{/if}
+									</Button>
+									<Button variant="secondary" size="sm" onclick={() => rotateConfirm = false}>Cancel</Button>
 								{:else}
-									<button class="webhook-rotate-btn" onclick={rotateWebhook} disabled={isRotatingWebhook}>
-										<RefreshCw size={11} />Rotate URL
-									</button>
+									<Button variant="secondary" size="sm" onclick={rotateWebhook} disabled={isRotatingWebhook}>
+										<RefreshCw size={12} />Rotate URL
+									</Button>
 								{/if}
 							</div>
 							{#if service.git_provider_id && (webhookProvider === 'github' || webhookProvider === 'gitlab')}
-								<div class="webhook-status info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</div>
+								<InlineAlert tone="info">Webhook is auto-registered on {webhookProvider === 'github' ? 'GitHub' : 'GitLab'} when auto deploy is enabled.</InlineAlert>
 							{/if}
 						{/if}
-					</div>
+					</Card>
 					<div class="logs-intro">Select a deployment to view its logs.</div>
 					{#if deployments.length === 0}
-						<div class="empty-state-msg">No deployments yet.</div>
+						<EmptyState message="No deployments yet." />
 					{:else}
-						<ul class="dep-list">
+						<Card padding="2px 14px">
 							{#each deployments as dep (dep.id)}
-								<li class="dep-list-item">
-									<button
-										class="dep-list-row"
-										onclick={() => openDeploymentLogs(dep)}
-									>
-										<span class="dep-row-status status-dot {deployStatusClass(dep.status)}"></span>
-										<div class="dep-row-info">
-											<span class="dep-row-ref font-mono">{dep.source_ref || 'manual'}</span>
-											<span class="dep-row-meta">
-												{formatTime(dep.created_at)}
-												<span class="meta-sep">·</span>
-												{dep.triggered_by}
-											</span>
+								<ListRow
+									title={dep.source_ref || 'manual'}
+									meta={`${formatTime(dep.created_at)} · ${dep.triggered_by}`}
+								>
+									{#snippet icon()}
+										<StatusDot status={toDotStatus(deployStatusClass(dep.status))} />
+									{/snippet}
+									{#snippet trailing()}
+										<div class="dep-row-trailing">
+											<Badge tone={deployBadgeTone(dep.status)}>{dep.status}</Badge>
+											{#if dep.status === 'success' && dep.deployed_image}
+												<Button
+													variant="ghost"
+													size="icon"
+													title="Rollback to this deployment"
+													aria-label="Rollback to this deployment"
+													disabled={!!isRollingBack}
+													onclick={(e) => triggerRollback(dep, e)}
+												>
+													{#if isRollingBack === dep.id}<Spinner size={12} />{:else}<Undo2 size={14} />{/if}
+												</Button>
+											{/if}
+											<Button
+												variant="ghost"
+												size="icon"
+												title="View logs"
+												aria-label="View deployment logs"
+												onclick={() => openDeploymentLogs(dep)}
+											>
+												<ChevronRight size={14} />
+											</Button>
 										</div>
-										<span class="dep-row-badge {deployStatusClass(dep.status)}">{dep.status}</span>
-										<ChevronRight size={14} class="dep-row-arrow" />
-									</button>
-									{#if dep.status === 'success' && dep.deployed_image}
-										<button
-											class="dep-rollback-btn"
-											title="Rollback to this deployment"
-											disabled={!!isRollingBack}
-											onclick={(e) => triggerRollback(dep, e)}
-										>
-											{isRollingBack === dep.id ? '…' : '↩'}
-										</button>
-									{/if}
-								</li>
+									{/snippet}
+								</ListRow>
 							{/each}
-						</ul>
+						</Card>
 					{/if}
 				</div>
 
@@ -2188,7 +2214,7 @@
 			</button>
 			<button class="btn btn-secondary btn-sm" disabled={isStopping || !canDeploy} onclick={triggerStop} title={canDeploy ? '' : 'Insufficient permissions'}>
 				{#if isStopping}
-					<Loader2 size={13} class="spin" />Stopping…
+					<Loader2 size={13} class="spin-icon" />Stopping…
 				{:else}
 					<Square size={13} />Stop
 				{/if}
@@ -2399,260 +2425,63 @@
 		flex-direction: column;
 		gap: 14px;
 	}
-	.deploy-trigger-row { display: flex; gap: 8px; }
-
-	.latest-dep-card {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-md);
-		padding: 12px;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
+	.deploy-trigger-row { display: flex; flex-wrap: wrap; gap: 8px; }
 	.dep-card-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 8px;
 	}
 	.dep-card-label {
-		font-size: 11px; font-weight: 600;
-		color: var(--text-dim);
+		font-size: 11px;
+		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
+		color: var(--text-muted);
 	}
-	.dep-card-badge {
-		font-size: 11px;
-		padding: 2px 8px;
-		border-radius: 999px;
-		text-transform: capitalize;
-		font-weight: 500;
-	}
-	.dep-card-badge.running  { background: rgba(59,130,246,0.12); color: #3B82F6; }
-	.dep-card-badge.success,
-	.dep-card-badge.running-ok { background: rgba(16,185,129,0.12); color: #10B981; }
-	.dep-card-badge.failed   { background: rgba(239,68,68,0.12);   color: #EF4444; }
-	.dep-card-badge.stopped,
-	.dep-card-badge.pending  { background: var(--bg-elevated);      color: var(--text-muted); }
 	.dep-card-meta {
 		display: flex;
 		align-items: center;
-		gap: 5px;
+		gap: 6px;
+		margin-top: 6px;
 		font-size: 12px;
 		color: var(--text-muted);
 	}
+	.steps-list { margin-top: 6px; }
 
-	.steps-list { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
-	.step-item {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 5px 8px;
-		border-radius: var(--radius-sm);
-		background: var(--bg-elevated);
-		font-size: 12px;
-	}
-	.step-item.step-running  { background: rgba(59,130,246,0.07); }
-	.step-item.step-failed   { background: rgba(239,68,68,0.07); }
-	.step-item.step-success  { background: rgba(16,185,129,0.07); }
-	.step-icon { font-size: 11px; font-weight: 700; width: 14px; flex-shrink: 0; color: var(--text-muted); }
-	.step-item.step-running .step-icon { color: #3B82F6; }
-	.step-item.step-failed  .step-icon { color: #EF4444; }
-	.step-item.step-success .step-icon { color: #10B981; }
-	.step-name { flex: 1; color: var(--text-primary); }
-	.step-time { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
-
-	.empty-state-msg {
-		padding: 28px 16px;
-		text-align: center;
-		color: var(--text-muted);
-		font-size: 13px;
-	}
-
-	/* ── Webhook section ── */
-	.webhook-section {
-		border-bottom: 1px solid var(--border);
-		padding: 10px 14px;
+	/* ── Logs tab (webhook + deployment list) ── */
+	.logs-section {
 		display: flex;
 		flex-direction: column;
-		gap: 7px;
-		background: var(--bg-surface);
-		flex-shrink: 0;
+		gap: 12px;
+		padding: 14px;
 	}
 	.webhook-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		flex-wrap: wrap;
 		gap: 8px;
+		margin-bottom: 10px;
 	}
 	.webhook-label {
-		font-size: 11px; font-weight: 600;
-		color: var(--text-dim);
+		font-size: 11px;
+		font-weight: 600;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-	}
-	.webhook-provider-tabs { display: flex; gap: 2px; }
-	.webhook-provider-tabs button {
-		font-size: 10px; font-weight: 500; font-family: var(--font-sans);
-		padding: 2px 8px;
-		border-radius: 4px;
-		border: 1px solid var(--border);
-		background: transparent;
 		color: var(--text-muted);
-		cursor: pointer;
-		transition: all var(--transition-fast);
 	}
-	.webhook-provider-tabs button:hover { color: var(--text-primary); }
-	.webhook-provider-tabs button.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: rgba(37,99,235,0.07);
-	}
-	.webhook-url-row { display: flex; gap: 6px; align-items: center; }
-	.webhook-url-input {
-		flex: 1;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-secondary);
-		background: var(--bg-base);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		padding: 5px 8px;
-		outline: none;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.webhook-copy-btn {
-		display: flex; align-items: center; gap: 4px;
-		font-size: 11px; font-weight: 500; font-family: var(--font-sans);
-		padding: 5px 10px;
-		border-radius: var(--radius-sm);
-		border: 1px solid var(--border);
-		background: var(--bg-elevated);
-		color: var(--text-secondary);
-		cursor: pointer;
-		white-space: nowrap;
-		flex-shrink: 0;
-		transition: all var(--transition-fast);
-	}
-	.webhook-copy-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.webhook-copy-btn:disabled { opacity: 0.5; cursor: default; }
-	.webhook-loading { display: flex; align-items: center; gap: 6px; padding: 10px 14px; font-size: 12px; color: var(--text-dim); }
-	.spinner-xs { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+	.webhook-loading { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
 	.webhook-actions {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		padding: 6px 14px 10px;
 		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 10px;
 	}
-	.webhook-rotate-confirm-text { font-size: 11px; color: var(--text-muted); flex: 1; }
-	.webhook-rotate-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-muted);
-		font-size: 11px;
-		font-family: var(--font-sans);
-		padding: 3px 9px;
-		cursor: pointer;
-		transition: all var(--transition-fast);
-	}
-	.webhook-rotate-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.webhook-rotate-btn.danger { border-color: rgba(239,68,68,0.5); color: #EF4444; }
-	.webhook-rotate-btn.danger:hover:not(:disabled) { background: rgba(239,68,68,0.08); }
-	.webhook-rotate-btn:disabled { opacity: 0.5; cursor: default; }
-
-	.webhook-status {
-		margin: 6px 14px 0;
-		font-size: 11px;
-		padding: 6px 8px;
-		border-radius: var(--radius-sm);
-	}
-	.webhook-status.success {
-		background: rgba(16,185,129,0.08);
-		color: #10B981;
-		border: 1px solid rgba(16,185,129,0.15);
-	}
-	.webhook-status.error {
-		background: rgba(239,68,68,0.08);
-		color: #EF4444;
-		border: 1px solid rgba(239,68,68,0.15);
-	}
-	.webhook-status.info {
-		background: color-mix(in srgb, var(--accent) 6%, transparent);
-		color: var(--text-muted);
-		border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
-	}
-
-	/* ── Logs tab (deployment list) ── */
-	.logs-section { display: flex; flex-direction: column; height: 100%; }
-	.logs-intro {
-		padding: 10px 16px 6px;
-		font-size: 12px;
-		color: var(--text-muted);
-		border-bottom: 1px solid var(--border);
-	}
-	.dep-list { list-style: none; margin: 0; padding: 4px 0; }
-	.dep-list-item { position: relative; display: flex; align-items: stretch; }
-	.dep-list-item .dep-list-row { flex: 1; }
-	.dep-rollback-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 32px;
-		flex-shrink: 0;
-		background: transparent;
-		border: none;
-		border-bottom: 1px solid var(--border);
-		border-left: 1px solid var(--border);
-		cursor: pointer;
-		color: var(--text-muted);
-		font-size: 14px;
-		transition: background var(--transition-fast), color var(--transition-fast);
-	}
-	.dep-rollback-btn:hover:not(:disabled) { background: var(--bg-elevated); color: var(--accent); }
-	.dep-rollback-btn:disabled { opacity: 0.4; cursor: default; }
-	.dep-list-row {
-		display: flex;
-		width: 100%;
-		align-items: center;
-		gap: 10px;
-		padding: 10px 16px;
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		text-align: left;
-		font-family: var(--font-sans);
-		border-bottom: 1px solid var(--border);
-		transition: background var(--transition-fast);
-		color: inherit;
-	}
-	.dep-list-row:hover { background: var(--bg-elevated); }
-	.dep-row-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-	.dep-row-ref { font-size: 13px; font-weight: 500; color: var(--text-primary); }
-	.dep-row-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
-	.dep-row-badge {
-		font-size: 10px;
-		padding: 2px 7px;
-		border-radius: 999px;
-		text-transform: capitalize;
-		font-weight: 500;
-		flex-shrink: 0;
-	}
-	.dep-row-badge.running  { background: rgba(59,130,246,0.12); color: #3B82F6; }
-	.dep-row-badge.running-ok,
-	.dep-row-badge.success  { background: rgba(16,185,129,0.12); color: #10B981; }
-	.dep-row-badge.failed   { background: rgba(239,68,68,0.12);  color: #EF4444; }
-	.dep-row-badge.queued   { background: rgba(245,158,11,0.12); color: #F59E0B; }
-	.dep-row-badge.stopped,
-	.dep-row-badge.pending  { background: var(--bg-elevated);     color: var(--text-muted); }
-	:global(.dep-row-arrow) { color: var(--text-dim); flex-shrink: 0; }
+	.webhook-rotate-confirm-text { font-size: 11px; color: var(--text-muted); flex: 1 1 100%; }
+	.logs-intro { font-size: 12px; color: var(--text-muted); }
+	.dep-row-trailing { display: flex; align-items: center; gap: 4px; }
 
 	/* ── Replicas ── */
 	.replicas-section { padding: 4px 0; }
