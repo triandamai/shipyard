@@ -4,7 +4,8 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm, isAdminRole } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
-	import { FileText, RefreshCw, ChevronRight, AlertCircle, Globe, ScrollText, Square, Loader2, WifiOff, Play, Wifi } from '@lucide/svelte';
+	import { FileText, RefreshCw, ChevronRight, Globe, ScrollText, Square, WifiOff, Play, Wifi } from '@lucide/svelte';
+	import { Card, Button, Badge, StatusDot, ListRow, InlineAlert, EmptyState, Spinner } from '$lib/components/ui';
 	import type { LogLevel } from '$lib/api/types';
 	import LogViewer from '$lib/components/LogViewer.svelte';
 
@@ -191,25 +192,26 @@
 			<Globe size={15} />
 			<span class="toolbar-title">Static Server</span>
 			{#if confList}
-				<span class="count-chip">{confList.files.length} site{confList.files.length === 1 ? '' : 's'}</span>
+				<Badge tone="neutral">{confList.files.length} site{confList.files.length === 1 ? '' : 's'}</Badge>
 			{/if}
 		</div>
-		<button class="refresh-btn" onclick={loadList} disabled={loading}>
-			<RefreshCw size={14} class={loading ? 'spin' : ''} />
+		<Button variant="secondary" onclick={loadList} disabled={loading}>
+			{#if loading}<Spinner size={14} tone="current" />{:else}<RefreshCw size={14} />{/if}
 			Refresh
-		</button>
+		</Button>
 	</div>
 
 	{#if listError}
-		<div class="error-banner"><AlertCircle size={14} />{listError}</div>
+		<div role="alert"><InlineAlert tone="error">{listError}</InlineAlert></div>
 	{/if}
 
 	{#if loading}
-		<div class="empty-state"><div class="spinner"></div> Loading nginx conf files…</div>
+		<div class="loading"><Spinner size={18} /> Loading nginx conf files…</div>
 	{:else if !confList || confList.files.length === 0}
-		<div class="empty-state muted">No .conf files found in {confList?.dir ?? '/etc/nginx/conf.d'}</div>
+		<EmptyState message="No .conf files found in {confList?.dir ?? '/etc/nginx/conf.d'}" />
 	{:else}
 
+		<Card padding="0">
 		<div class="conf-layout">
 
 			<!-- File list -->
@@ -222,18 +224,13 @@
 					{#each confList.files as entry (entry.name)}
 						<li>
 							<button
-								class="conf-item"
-								class:active={selected === entry.name}
+								class={selected === entry.name ? 'conf-item active' : 'conf-item'}
 								onclick={() => selectConf(entry.name)}
 							>
-								<div class="conf-item-inner">
-									<div class="conf-dot"></div>
-									<div class="conf-info">
-										<span class="conf-name">{entry.name}</span>
-										<span class="conf-id">{siteIdFromName(entry.name)}</span>
-									</div>
-								</div>
-								<ChevronRight size={13} class="conf-chevron" />
+								<ListRow iconTone="green" title={entry.name} meta={siteIdFromName(entry.name)}>
+									{#snippet icon()}<StatusDot status="running" />{/snippet}
+									{#snippet trailing()}<ChevronRight size={13} class="conf-chevron" />{/snippet}
+								</ListRow>
 							</button>
 						</li>
 					{/each}
@@ -248,9 +245,9 @@
 						<span>Select a conf file to view its content</span>
 					</div>
 				{:else if loadingFile}
-					<div class="content-empty"><div class="spinner"></div> Loading…</div>
+					<div class="content-empty"><Spinner size={18} /> Loading…</div>
 				{:else if fileContent?.error}
-					<div class="content-empty error"><AlertCircle size={16} />{fileContent.error}</div>
+					<div class="content-empty"><InlineAlert tone="error">{fileContent.error}</InlineAlert></div>
 				{:else if fileContent?.content}
 					<div class="content-header">
 						<span class="content-filename">{fileContent.name}</span>
@@ -260,11 +257,12 @@
 			</div>
 
 		</div>
+		</Card>
 
 	{/if}
 
 	<!-- ── Static Site Logs ───────────────────────────────────────── -->
-	<section class="log-section">
+	<Card padding="0">
 		<div class="log-section-header">
 			<div class="log-title">
 				<div class="section-icon"><ScrollText size={16} /></div>
@@ -275,24 +273,24 @@
 			</div>
 			<div class="log-controls">
 				{#if logStatus === 'connected'}
-					<span class="status-dot connected"></span>
+					<StatusDot status="running" />
 					<span class="status-label">Live</span>
-					<button class="btn btn-ghost btn-sm log-btn" onclick={disconnectLogs}>
+					<Button variant="ghost" size="sm" onclick={disconnectLogs}>
 						<Square size={12} />Stop
-					</button>
+					</Button>
 				{:else if logStatus === 'connecting'}
-					<Loader2 size={14} class="spin" />
+					<Spinner size={14} />
 					<span class="status-label muted">Connecting…</span>
 				{:else if logStatus === 'error'}
-					<WifiOff size={14} style="color:#EF4444" />
+					<WifiOff size={14} class="log-err-icon" />
 					<span class="status-label error">{logError}</span>
-					<button class="btn btn-ghost btn-sm log-btn" onclick={connectLogs}>
+					<Button variant="ghost" size="sm" onclick={connectLogs}>
 						<Play size={12} />Retry
-					</button>
+					</Button>
 				{:else}
-					<button class="btn btn-primary btn-sm log-btn" onclick={connectLogs}>
+					<Button size="sm" onclick={connectLogs}>
 						<Play size={12} />Connect
-					</button>
+					</Button>
 				{/if}
 			</div>
 		</div>
@@ -307,15 +305,12 @@
 				<LogViewer {logs} follow={true} maxHeight="420px" />
 			</div>
 		{/if}
-	</section>
+	</Card>
 
 </div>
 {/if}
 
 <style>
-	@keyframes spin { to { transform: rotate(360deg); } }
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-
 	.static-page { display: flex; flex-direction: column; gap: 16px; }
 
 	.page-toolbar {
@@ -323,34 +318,13 @@
 	}
 	.toolbar-left { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
 	.toolbar-title { font-weight: 600; color: var(--text-primary); }
-	.count-chip {
-		padding: 2px 8px; background: var(--bg-muted); border: 1px solid var(--border);
-		border-radius: 10px; font-size: 11px; color: var(--text-muted);
-	}
-	.refresh-btn {
-		display: flex; align-items: center; gap: 6px;
-		padding: 6px 12px; font-size: 12px; font-weight: 500;
-		background: var(--bg-surface); border: 1px solid var(--border);
-		border-radius: var(--radius); color: var(--text-secondary);
-		cursor: pointer; transition: all var(--transition-fast);
-	}
-	.refresh-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-	.refresh-btn:disabled { opacity: 0.5; cursor: default; }
 
-	.error-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: var(--radius-md); color: #EF4444; font-size: 13px; }
-
-	.empty-state { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 60px; color: var(--text-muted); font-size: 13px; }
-	.empty-state.muted { color: var(--text-dim); font-style: italic; }
-	.spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+	.loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 60px; color: var(--text-muted); font-size: 13px; }
 
 	.conf-layout {
 		display: grid;
 		grid-template-columns: 260px 1fr;
 		gap: 0;
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		overflow: hidden;
 		min-height: 400px;
 	}
 
@@ -358,51 +332,48 @@
 		border-right: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
+		min-width: 0;
 	}
 	.panel-header {
 		display: flex; align-items: center; gap: 7px;
 		padding: 10px 14px;
 		font-size: 11px; font-weight: 600; color: var(--text-muted);
 		text-transform: uppercase; letter-spacing: 0.05em;
-		background: var(--bg-muted); border-bottom: 1px solid var(--border);
+		background: var(--bg-elevated); border-bottom: 1px solid var(--border);
 		font-family: var(--font-mono);
 	}
 	.conf-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
 
 	.conf-item {
 		width: 100%;
-		display: flex; align-items: center; justify-content: space-between;
-		padding: 10px 14px;
-		background: transparent; border: none; border-bottom: 1px solid var(--border);
+		display: block;
+		padding: 0 14px;
+		background: transparent; border: none;
 		cursor: pointer; text-align: left;
+		font-family: var(--font-sans);
 		transition: background var(--transition-fast);
 	}
-	.conf-item:last-child { border-bottom: none; }
 	.conf-item:hover { background: var(--bg-elevated); }
 	.conf-item.active { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 	.conf-item.active :global(.conf-chevron) { color: var(--accent); }
-
-	.conf-item-inner { display: flex; align-items: center; gap: 10px; min-width: 0; }
-	.conf-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; flex-shrink: 0; }
-	.conf-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-	.conf-name { font-size: 12px; font-weight: 500; color: var(--text-primary); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.conf-id   { font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.conf-item :global(.ui-list-row-title),
+	.conf-item :global(.ui-list-row-meta) { font-family: var(--font-mono); }
 	:global(.conf-chevron) { color: var(--text-dim); flex-shrink: 0; transition: color var(--transition-fast); }
 
 	.conf-content-panel {
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		min-width: 0;
 	}
 	.content-empty {
 		flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-		gap: 10px; color: var(--text-muted); font-size: 13px;
+		gap: 10px; color: var(--text-muted); font-size: 13px; padding: 16px;
 	}
-	.content-empty.error { color: #EF4444; }
 	.content-header {
 		padding: 10px 16px;
 		border-bottom: 1px solid var(--border);
-		background: var(--bg-muted);
+		background: var(--bg-elevated);
 	}
 	.content-filename { font-size: 12px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
 	.conf-code {
@@ -419,15 +390,6 @@
 	}
 
 	/* ── Log section ── */
-	.log-section {
-		background: var(--bg-surface);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
-	}
-
 	.log-section-header {
 		display: flex; align-items: center; justify-content: space-between;
 		padding: 14px 20px;
@@ -443,18 +405,11 @@
 	.section-desc { font-size: 12px; color: var(--text-muted); margin: 0; }
 
 	.log-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-
-	.status-dot {
-		width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-	}
-	.status-dot.connected { background: #22C55E; box-shadow: 0 0 6px #22C55E; animation: pulse 2s ease-in-out infinite; }
-	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+	:global(.log-err-icon) { color: var(--accent-red); }
 
 	.status-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
 	.status-label.muted { color: var(--text-dim); }
-	.status-label.error { color: #EF4444; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-	.log-btn { display: flex; align-items: center; gap: 5px; }
+	.status-label.error { color: var(--accent-red); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	.log-placeholder {
 		display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -463,8 +418,6 @@
 	}
 	.log-placeholder p { margin: 0; color: var(--text-muted); }
 	.log-placeholder strong { color: var(--text-primary); }
-
-	.log-viewer-wrap { flex: 1; }
 
 	@media (max-width: 767px) {
 		.conf-layout { grid-template-columns: 1fr; }
