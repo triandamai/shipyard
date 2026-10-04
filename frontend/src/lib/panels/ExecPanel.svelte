@@ -2,7 +2,8 @@
 	import { onDestroy } from 'svelte';
 	import { Terminal } from '@xterm/xterm';
 	import { FitAddon } from '@xterm/addon-fit';
-	import { X, Loader2, AlertCircle, Terminal as TermIcon } from '@lucide/svelte';
+	import { X, AlertCircle, Terminal as TermIcon } from '@lucide/svelte';
+	import { Button, Badge, Spinner, ConfirmDialog } from '$lib/components/ui';
 
 	interface Replica {
 		id: string;
@@ -233,29 +234,15 @@
 			<TermIcon size={14} />
 			<span>Terminal — <strong>{serviceName}</strong></span>
 		</div>
-		<button class="close-btn" onclick={requestClose} aria-label="Close terminal">
+		<Button variant="ghost" size="icon" onclick={requestClose} aria-label="Close terminal">
 			<X size={15} />
-		</button>
+		</Button>
 	</div>
-
-	{#if showCloseConfirm}
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="confirm-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCloseConfirm = false; }} onkeydown={() => {}}>
-			<div class="confirm-card">
-				<p class="confirm-title">Close terminal?</p>
-				<p class="confirm-sub">The active terminal session will be terminated.</p>
-				<div class="confirm-actions">
-					<button class="btn btn-cancel" onclick={() => showCloseConfirm = false}>Cancel</button>
-					<button class="btn btn-close-panel" onclick={confirmClose}>Close</button>
-				</div>
-			</div>
-		</div>
-	{/if}
 
 	<div class="exec-body">
 		{#if state === 'loading'}
 			<div class="exec-center">
-				<Loader2 size={20} class="spin" />
+				<Spinner size={20} />
 				<span>Finding containers…</span>
 			</div>
 
@@ -263,7 +250,7 @@
 			<div class="exec-center error">
 				<AlertCircle size={20} />
 				<span>{errorMsg}</span>
-				<button class="btn btn-secondary btn-sm" onclick={loadReplicas}>Retry</button>
+				<Button variant="secondary" size="sm" onclick={loadReplicas}>Retry</Button>
 			</div>
 
 		{:else if state === 'pick'}
@@ -272,7 +259,7 @@
 				{#each replicas as r}
 					<button class="pick-item" onclick={() => startExec(r.container_id!)}>
 						<span class="pick-slot">Replica {r.slot ?? '?'}</span>
-						<span class="pick-status" class:running={r.status === 'running'}>{r.status}</span>
+						<Badge tone={r.status === 'running' ? 'green' : 'neutral'}>{r.status}</Badge>
 						<code class="pick-id">{r.container_id!.slice(0, 12)}</code>
 					</button>
 				{/each}
@@ -282,7 +269,7 @@
 			<!-- connecting or connected — terminal renders here -->
 			{#if state === 'connecting'}
 				<div class="term-overlay">
-					<Loader2 size={16} class="spin" />
+					<Spinner size={16} />
 					<span>Connecting…</span>
 				</div>
 			{/if}
@@ -291,10 +278,15 @@
 	</div>
 </div>
 
-<style>
-	:global(.spin) { animation: spin 0.8s linear infinite; }
-	@keyframes spin { to { transform: rotate(360deg); } }
+<ConfirmDialog
+	bind:open={showCloseConfirm}
+	title="Close terminal?"
+	message="The active terminal session will be terminated."
+	confirmLabel="Close"
+	onConfirm={() => { onClose(); }}
+/>
 
+<style>
 	.exec-backdrop {
 		position: fixed;
 		inset: 0;
@@ -308,12 +300,12 @@
 		top: 0;
 		width: min(900px, 100vw);
 		height: 100vh;
-		background: #0d1117;
-		border-left: 1px solid #30363d;
+		background: var(--bg-base);
+		border-left: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
 		z-index: 71;
-		box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+		box-shadow: var(--shadow-lg);
 		isolation: isolate;
 	}
 
@@ -321,10 +313,10 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 16px;
+		padding: 0 12px 0 16px;
 		height: 44px;
-		border-bottom: 1px solid #30363d;
-		background: #161b22;
+		border-bottom: 1px solid var(--border);
+		background: var(--bg-surface);
 		flex-shrink: 0;
 	}
 
@@ -333,22 +325,9 @@
 		align-items: center;
 		gap: 8px;
 		font-size: 13px;
-		color: #8b949e;
+		color: var(--text-muted);
 	}
-	.exec-title strong { color: #e6edf3; }
-
-	.close-btn {
-		background: none;
-		border: none;
-		color: #8b949e;
-		cursor: pointer;
-		padding: 4px;
-		border-radius: 4px;
-		display: flex;
-		align-items: center;
-		transition: color 0.15s;
-	}
-	.close-btn:hover { color: #e6edf3; }
+	.exec-title strong { color: var(--text-primary); }
 
 	.exec-body {
 		flex: 1;
@@ -365,10 +344,10 @@
 		justify-content: center;
 		gap: 12px;
 		height: 100%;
-		color: #8b949e;
+		color: var(--text-muted);
 		font-size: 13px;
 	}
-	.exec-center.error { color: #f85149; }
+	.exec-center.error { color: var(--accent-red); }
 
 	.pick-list {
 		display: flex;
@@ -378,7 +357,7 @@
 	}
 	.pick-hint {
 		font-size: 13px;
-		color: #8b949e;
+		color: var(--text-muted);
 		margin: 0 0 8px;
 	}
 	.pick-item {
@@ -386,24 +365,24 @@
 		align-items: center;
 		gap: 12px;
 		padding: 12px 16px;
-		background: #161b22;
-		border: 1px solid #30363d;
-		border-radius: 6px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
 		cursor: pointer;
 		text-align: left;
-		transition: border-color 0.15s;
+		transition: border-color var(--transition-fast);
 		font-family: inherit;
 	}
-	.pick-item:hover { border-color: #58a6ff; }
-	.pick-slot { font-size: 13px; color: #e6edf3; font-weight: 600; flex: 1; }
-	.pick-status { font-size: 11px; color: #8b949e; }
-	.pick-status.running { color: #3fb950; }
-	.pick-id { font-size: 11px; color: #8b949e; font-family: monospace; }
+	.pick-item:hover { border-color: var(--accent); }
+	.pick-slot { font-size: 13px; color: var(--text-primary); font-weight: 600; flex: 1; }
+	.pick-id { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
 
+	/* Terminal surface keeps the xterm theme's own dark colors in both app themes */
 	.term-wrap {
 		flex: 1;
 		padding: 8px;
 		overflow: hidden;
+		background: #0d1117;
 	}
 	.term-wrap :global(.xterm) { height: 100%; }
 	.term-wrap :global(.xterm-viewport) { border-radius: 0; }
@@ -420,72 +399,4 @@
 		background: #0d1117;
 		z-index: 1;
 	}
-
-	.btn-sm { font-size: 12px; padding: 5px 12px; }
-
-	/* ── Close confirmation overlay ── */
-	.confirm-overlay {
-		position: absolute;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.65);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 10;
-	}
-
-	.confirm-card {
-		background: #161b22;
-		border: 1px solid #30363d;
-		border-radius: 10px;
-		padding: 24px 28px;
-		width: min(340px, calc(100% - 40px));
-		box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-	}
-
-	.confirm-title {
-		margin: 0 0 8px;
-		font-size: 15px;
-		font-weight: 600;
-		color: #e6edf3;
-	}
-
-	.confirm-sub {
-		margin: 0 0 20px;
-		font-size: 13px;
-		color: #8b949e;
-		line-height: 1.5;
-	}
-
-	.confirm-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-	}
-
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		padding: 7px 14px;
-		border-radius: 6px;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		border: 1px solid transparent;
-		transition: all 0.12s;
-	}
-
-	.btn-cancel {
-		background: transparent;
-		border-color: #30363d;
-		color: #8b949e;
-	}
-	.btn-cancel:hover { background: #21262d; color: #e6edf3; }
-
-	.btn-close-panel {
-		background: #da3633;
-		border-color: #da3633;
-		color: #fff;
-	}
-	.btn-close-panel:hover { background: #b91c1c; border-color: #b91c1c; }
 </style>
