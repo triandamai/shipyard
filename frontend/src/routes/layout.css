@@ -56,6 +56,7 @@
   /* Rules */
   --border: #DCDCD6;
   --border-hover: #C4C4BC;
+  --border-control: #8A9097;  /* form field edges: 3:1 against surfaces */
 
   /* Text */
   --text-primary: #16181B;
@@ -137,6 +138,7 @@
 
   --border: #2A2D32;
   --border-hover: #3A3E44;
+  --border-control: #6B7178;
 
   --text-primary: #ECEDEE;
   --text-secondary: #C3C6CA;
