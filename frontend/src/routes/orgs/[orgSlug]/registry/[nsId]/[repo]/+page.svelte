@@ -182,6 +182,6 @@
 	.tag-pill { font-family: var(--font-mono); }
 	.digest { font-size: 11px; color: var(--text-muted); }
 	.pull-cmd { display: flex; flex-direction: column; gap: 6px; }
-	.pull-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+	.pull-label { font-size: 11px; font-weight: 600; color: var(--text-muted); }
 	.pull-code { font-size: 12px; font-family: var(--font-mono); color: var(--text-primary); word-break: break-all; }
 </style>

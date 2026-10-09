@@ -427,7 +427,7 @@
 		min-height: 42px;
 	}
 	.version-chip { display: flex; align-items: center; gap: 6px; }
-	.version-label { font-size: 10px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; }
+	.version-label { font-size: 10px; font-weight: 600; color: var(--text-dim); }
 	.version-sha {
 		font-family: var(--font-mono);
 		font-size: 12px;
@@ -457,8 +457,8 @@
 	.clear-log-btn { margin-left: auto; }
 
 	.update-log {
-		background: #0d1117;
-		border: 1px solid #30363d;
+		background: var(--terminal-bg);
+		border: 1px solid var(--terminal-border);
 		border-radius: var(--radius-md);
 		overflow-y: auto;
 		max-height: 340px;
@@ -471,26 +471,26 @@
 		align-items: center;
 		gap: 6px;
 		padding: 7px 12px;
-		border-bottom: 1px solid #21262d;
-		color: #8b949e;
+		border-bottom: 1px solid var(--terminal-border);
+		color: var(--terminal-dim);
 		font-size: 11px;
 		font-family: var(--font-sans);
 	}
 
 	.update-log-line {
 		padding: 2px 14px;
-		color: #e6edf3;
+		color: var(--terminal-fg);
 		white-space: pre-wrap;
 		word-break: break-all;
 		line-height: 1.6;
 	}
-	.update-log-line.log-done    { color: #3fb950; }
-	.update-log-line.log-error   { color: #f85149; }
-	.update-log-line.log-restart { color: #d29922; }
+	.update-log-line.log-done    { color: var(--terminal-green); }
+	.update-log-line.log-error   { color: var(--terminal-red); }
+	.update-log-line.log-restart { color: var(--terminal-yellow); }
 
 	.update-log-cursor {
 		padding: 2px 14px 6px;
-		color: #e6edf3;
+		color: var(--terminal-fg);
 		animation: blink 1s step-end infinite;
 	}
 	@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
@@ -509,7 +509,7 @@
 
 	.infra-chips { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
 	.infra-chip { display:flex; flex-direction:column; gap:2px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; min-width:100px; }
-	.infra-chip-label { font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.07em; }
+	.infra-chip-label { font-size:10px; font-weight:700; color:var(--text-dim); }
 	.infra-chip-val { font-size:18px; font-weight:800; color:var(--text-primary); }
 	.infra-chip-val small { font-size:13px; font-weight:600; }
 	.region-val { font-size:14px; }

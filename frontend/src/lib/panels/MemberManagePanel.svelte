@@ -360,7 +360,6 @@
 	.section-label {
 		display: flex; align-items: center; gap: 6px;
 		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.08em;
 	}
 
 	/* ── Role ── */
@@ -370,7 +369,7 @@
 	/* ── Permissions ── */
 	.perm-groups { display: flex; flex-direction: column; gap: 10px; }
 	.perm-group { display: flex; flex-direction: column; gap: 5px; }
-	.perm-group-name { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+	.perm-group-name { font-size: 10px; font-weight: 700; color: var(--text-dim); }
 	.perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
 	.perm-check { display: flex; padding: 4px 7px; font-size: 11px; }
 	.perm-check :global(.ui-checkbox), .perm-chip-row :global(.ui-checkbox) { font-size: 11px; }
@@ -410,7 +409,6 @@
 	.add-label {
 		display: flex; align-items: center; gap: 5px;
 		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
 	}
 	.project-chips { display: flex; gap: 4px; flex-wrap: wrap; }
 

@@ -463,7 +463,7 @@
 	/* Table list */
 	.db-tlist { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; max-height: 640px; }
 	.db-tlist-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
-	.db-tlist-title { font-size: 10.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.07em; }
+	.db-tlist-title { font-size: 10.5px; font-weight: 700; color: var(--text-dim); }
 	.db-tlist-search { padding: 8px; border-bottom: 1px solid var(--border); }
 	.db-tlist-body { overflow-y: auto; flex: 1; padding: 6px 10px; }
 	.db-tlist-skeleton { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }

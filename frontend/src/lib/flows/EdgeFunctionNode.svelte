@@ -99,22 +99,21 @@
 	}
 
 	.efn-node.live {
-		border-color: color-mix(in srgb, #22c55e 40%, transparent);
+		border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
 	}
 	.efn-node.live:hover {
-		border-color: #22c55e;
+		border-color: var(--accent-green);
 	}
 
 	.live-badge {
-		font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
-		text-transform: uppercase; padding: 1px 6px; border-radius: 99px;
-		background: color-mix(in srgb, #22c55e 15%, transparent);
-		color: #22c55e; border: 1px solid color-mix(in srgb, #22c55e 30%, transparent);
+		font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 99px;
+		background: color-mix(in srgb, var(--accent-green) 15%, transparent);
+		color: var(--accent-green); border: 1px solid color-mix(in srgb, var(--accent-green) 30%, transparent);
 		flex-shrink: 0;
 	}
 
-	.icon-live { background: color-mix(in srgb, #22c55e 15%, transparent); color: #22c55e; }
-	.val-live { color: #22c55e; }
+	.icon-live { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+	.val-live { color: var(--accent-green); }
 
 	.node-header {
 		display: flex;

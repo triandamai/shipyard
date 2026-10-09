@@ -344,7 +344,7 @@
 		background: var(--accent);
 		border-radius: var(--radius-md);
 		display: flex; align-items: center; justify-content: center;
-		color: white;
+		color: var(--accent-fg);
 	}
 
 	.card-title {
@@ -402,8 +402,7 @@
 	.meta-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 	.meta-label {
 		width: 80px; flex-shrink: 0;
-		font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em;
+		font-weight: 600; color: var(--text-dim); font-size: 10px;
 	}
 	.meta-value { color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
 	.meta-value.mono { font-family: var(--font-mono); font-size: 12px; }

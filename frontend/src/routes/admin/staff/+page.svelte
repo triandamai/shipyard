@@ -345,7 +345,7 @@
 	   per group; groups flow into a grid since the sheet body scrolls. */
 	.st-perm-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 16px; }
 	.st-perm-group { display: flex; flex-direction: column; gap: 6px; }
-	.st-perm-group-label { font-size: 10.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+	.st-perm-group-label { font-size: 10.5px; font-weight: 700; color: var(--text-dim); }
 	.st-perm-row { display: flex; gap: 16px; }
 	.st-perm-hint { font-size: 11px; color: var(--text-dim); flex: 1; display: flex; align-items: center; }
 </style>

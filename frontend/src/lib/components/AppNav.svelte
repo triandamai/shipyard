@@ -169,8 +169,8 @@
 		width: 32px;
 		height: 32px;
 		border-radius: 50%;
-		background: var(--accent-muted);
-		color: var(--accent);
+		background: var(--rail-active-bg);
+		color: var(--rail-fg-active);
 		font-size: 12px;
 		font-weight: 700;
 		display: flex;
@@ -178,7 +178,7 @@
 		justify-content: center;
 		flex-shrink: 0;
 	}
-	.app-nav-avatar--lg { width: 34px; height: 34px; }
+	.app-nav-avatar--lg { width: 34px; height: 34px; background: var(--bg-hover); color: var(--text-primary); }
 	.app-nav-update-dot {
 		position: absolute;
 		top: 0;
@@ -187,7 +187,7 @@
 		height: 8px;
 		border-radius: 50%;
 		background: var(--accent-yellow);
-		border: 2px solid var(--bg-surface);
+		border: 2px solid var(--rail-bg);
 	}
 	.app-nav-menu-header { display: flex; align-items: center; gap: 10px; min-width: 220px; }
 	.app-nav-menu-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -232,7 +232,7 @@
 
 	.version-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
 	.v-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-	.v-label { font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
+	.v-label { font-size: 10.5px; font-weight: 700; color: var(--text-muted); }
 	.v-sha {
 		font-family: var(--font-mono);
 		font-size: 12px;
@@ -269,8 +269,8 @@
 	   theme-aware tokens, per the task brief). ── */
 	.log {
 		margin: 0 18px 18px;
-		background: #0d1117;
-		border: 1px solid #30363d;
+		background: var(--terminal-bg);
+		border: 1px solid var(--terminal-border);
 		border-radius: var(--radius-md);
 		overflow-y: auto;
 		max-height: 400px;
@@ -280,13 +280,13 @@
 	.log-hdr {
 		display: flex; align-items: center; gap: 6px;
 		padding: 6px 12px;
-		border-bottom: 1px solid #21262d;
-		color: #8b949e; font-size: 11px;
+		border-bottom: 1px solid var(--terminal-border);
+		color: var(--terminal-dim); font-size: 11px;
 		font-family: var(--font-sans);
 	}
 	.log-line {
 		padding: 2px 14px;
-		color: #e6edf3;
+		color: var(--terminal-fg);
 		white-space: pre-wrap;
 		word-break: break-all;
 		line-height: 1.6;
@@ -294,7 +294,7 @@
 	.log-ok   { color: var(--accent-green); }
 	.log-err  { color: var(--accent-red); }
 	.log-warn { color: var(--accent-yellow); }
-	.log-cursor { padding: 2px 14px 8px; color: #e6edf3; animation: blink 1s step-end infinite; }
+	.log-cursor { padding: 2px 14px 8px; color: var(--terminal-fg); animation: blink 1s step-end infinite; }
 	@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
 	.reconnect-wrap { margin: 0 18px 18px; }

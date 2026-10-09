@@ -112,19 +112,19 @@
 			fontSize: 13,
 			fontFamily: 'Menlo, Monaco, "Courier New", monospace',
 			theme: {
-				background:  '#0d1117',
-				foreground:  '#e6edf3',
-				cursor:      '#58a6ff',
-				black:       '#484f58',
-				red:         '#ff7b72',
-				green:       '#3fb950',
-				yellow:      '#d29922',
-				blue:        '#58a6ff',
-				magenta:     '#bc8cff',
-				cyan:        '#39d353',
-				white:       '#b1bac4',
-				brightBlack: '#6e7681',
-				brightWhite: '#f0f6fc',
+				background: '#141619',
+				foreground: '#C3C6CA',
+				cursor: '#F26B1D',
+				black: '#3A3E44',
+				red: '#F87171',
+				green: '#4ADE80',
+				yellow: '#FBBF24',
+				blue: '#60A5FA',
+				magenta: '#C4B5FD',
+				cyan: '#5EEAD4',
+				white: '#C3C6CA',
+				brightBlack: '#8B9097',
+				brightWhite: '#ECEDEE',
 			},
 		});
 
@@ -382,7 +382,7 @@
 		flex: 1;
 		padding: 8px;
 		overflow: hidden;
-		background: #0d1117;
+		background: var(--terminal-bg);
 	}
 	.term-wrap :global(.xterm) { height: 100%; }
 	.term-wrap :global(.xterm-viewport) { border-radius: 0; }
@@ -394,9 +394,9 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		color: #8b949e;
+		color: var(--terminal-dim);
 		font-size: 13px;
-		background: #0d1117;
+		background: var(--terminal-bg);
 		z-index: 1;
 	}
 </style>

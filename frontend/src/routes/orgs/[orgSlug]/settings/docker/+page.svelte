@@ -772,7 +772,7 @@
 	}
 	.detail-field { display: flex; flex-direction: column; gap: 2px; }
 	.detail-field.full { grid-column: 1 / -1; }
-	.dk { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+	.dk { font-size: 11px; color: var(--text-muted); }
 	.dv { font-size: 12px; color: var(--text-primary); word-break: break-all; }
 
 	.label-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
@@ -828,8 +828,7 @@
 	.m-row:last-child { border-bottom: none; }
 	.m-row .mono { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.m-label {
-		font-size: 10px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+		font-size: 10px; font-weight: 600; color: var(--text-muted); flex-shrink: 0;
 	}
 	.m-detail {
 		border-top: 1px solid var(--border);

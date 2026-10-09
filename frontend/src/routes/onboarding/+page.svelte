@@ -369,7 +369,7 @@
 		transition: background var(--transition-normal), color var(--transition-normal);
 		flex-shrink: 0;
 	}
-	.step.active .step-dot { background: var(--accent); color: #fff; }
+	.step.active .step-dot { background: var(--accent); color: var(--accent-fg); }
 	.step.done .step-dot { background: var(--accent-green); color: #fff; }
 	.step-label { font-size: 11px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
 	.step.active .step-label { color: var(--accent); }
@@ -402,7 +402,7 @@
 	.plan-card.highlight:not(.selected) { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 	.plan-badge {
 		position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
-		font-size: 10px; font-weight: 700; color: #fff;
+		font-size: 10px; font-weight: 700; color: var(--accent-fg);
 		background: var(--accent); border-radius: 0 0 6px 6px;
 		padding: 2px 10px; white-space: nowrap;
 	}
@@ -415,8 +415,7 @@
 	.plan-selected-indicator {
 		margin-top: 12px; padding: 5px 0;
 		border-top: 1px solid var(--border);
-		font-size: 11px; font-weight: 700; color: var(--accent);
-		text-transform: uppercase; letter-spacing: .05em; text-align: center;
+		font-size: 11px; font-weight: 700; color: var(--accent); text-align: center;
 	}
 
 	/* ── Form ── */
@@ -441,7 +440,7 @@
 	/* ── Setup grid ── */
 	.setup-grid { display: flex; flex-direction: column; gap: 20px; margin-bottom: 16px; }
 	.setup-section { display: flex; flex-direction: column; gap: 8px; }
-	.setup-label { font-size: 11.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
+	.setup-label { font-size: 11.5px; font-weight: 700; color: var(--text-muted); }
 
 	.provider-row { display: flex; gap: 8px; flex-wrap: wrap; }
 	.pv-btn {

@@ -47,7 +47,7 @@
 <div class="root">
 	<div class="login-card">
 		<div class="logo">
-			<Anchor size={22} color="white" strokeWidth={2.5} />
+			<Anchor size={22} strokeWidth={2.5} />
 		</div>
 		<h1 class="title">Admin Login</h1>
 		<p class="sub">Shipyard administration panel</p>
@@ -98,99 +98,98 @@
 </div>
 
 <style>
-	:global(body) { margin:0; font-family:system-ui,-apple-system,'Segoe UI',sans-serif; }
+	/* The staff sign-in is graphite regardless of theme. */
+	:global(body) { margin:0; font-family:var(--font-sans); }
 
 	.root {
 		display:flex; align-items:center; justify-content:center;
 		min-height:100vh;
-		background:#0d0d0d;
+		background:var(--rail-bg);
+		padding:16px;
 	}
 
 	.login-card {
 		width:100%; max-width:360px;
-		background:#1a1a1a;
-		border:1px solid rgba(255,255,255,0.08);
-		border-radius:14px;
-		padding:36px 32px;
-		box-shadow:0 20px 60px rgba(0,0,0,0.5);
+		background:#1B1D21;
+		border:1px solid #2A2D32;
+		border-radius:var(--radius-lg);
+		padding:32px 28px;
 	}
 
 	.logo {
-		width:48px; height:48px; border-radius:12px;
-		background:#2563eb;
+		width:44px; height:44px; border-radius:var(--radius-md);
+		background:#262A30;
+		color:var(--accent);
 		display:flex; align-items:center; justify-content:center;
-		margin:0 auto 20px;
+		margin:0 0 20px;
 	}
 
 	.title {
-		font-size:20px; font-weight:700; color:#fff;
-		text-align:center; margin:0 0 4px;
-		letter-spacing:-0.02em;
+		font-size:20px; font-weight:600; color:#ECEDEE;
+		margin:0 0 4px;
+		letter-spacing:-0.01em;
 	}
 
 	.sub {
-		font-size:12.5px; color:rgba(255,255,255,0.32);
-		text-align:center; margin:0 0 24px;
+		font-size:13px; color:#9097A0;
+		margin:0 0 24px;
 	}
 
 	.err {
-		padding:10px 13px;
-		background:rgba(239,68,68,0.12);
-		border:1px solid rgba(239,68,68,0.3);
-		border-radius:8px;
-		color:#f87171;
+		padding:10px 12px;
+		background:rgba(248,113,113,0.12);
+		border:1px solid rgba(248,113,113,0.3);
+		border-radius:var(--radius-md);
+		color:#FCA5A5;
 		font-size:13px;
 		margin-bottom:16px;
 	}
 
 	.form { display:flex; flex-direction:column; gap:14px; }
 
-	.field { display:flex; flex-direction:column; gap:5px; }
+	.field { display:flex; flex-direction:column; gap:6px; }
 
-	.label { font-size:12px; font-weight:600; color:rgba(255,255,255,0.45); }
+	.label { font-size:13px; font-weight:500; color:#C3C6CA; }
 
 	.inp {
-		height:38px; padding:0 12px;
-		background:rgba(255,255,255,0.05);
-		border:1px solid rgba(255,255,255,0.1);
-		border-radius:8px;
-		font-size:13.5px; color:#fff;
+		height:40px; padding:0 12px;
+		background:#141619;
+		border:1px solid #3A3E44;
+		border-radius:var(--radius-md);
+		font-size:14px; color:#ECEDEE;
 		font-family:inherit;
-		outline:none;
-		transition:border-color .15s, box-shadow .15s;
+		transition:border-color .15s;
 	}
-	.inp::placeholder { color:rgba(255,255,255,0.2); }
-	.inp:focus {
-		border-color:rgba(37,99,235,0.7);
-		box-shadow:0 0 0 3px rgba(37,99,235,0.2);
-	}
+	.inp::placeholder { color:#767C83; }
+	.inp:focus { border-color:#F26B1D; outline:none; }
+	.inp:focus-visible { outline:2px solid #F26B1D; outline-offset:2px; }
 
 	.login-btn {
 		height:40px; padding:0 16px; margin-top:4px;
-		background:#2563eb; color:#fff;
-		border:none; border-radius:8px;
-		font-size:13.5px; font-weight:600;
+		background:#F26B1D; color:#141619;
+		border:none; border-radius:var(--radius-md);
+		font-size:14px; font-weight:600;
 		cursor:pointer; font-family:inherit;
 		display:flex; align-items:center; justify-content:center; gap:8px;
 		transition:background .15s, opacity .15s;
 	}
-	.login-btn:hover:not(:disabled) { background:#1d4ed8; }
+	.login-btn:hover:not(:disabled) { background:#FB8B47; }
 	.login-btn:disabled { opacity:.5; cursor:not-allowed; }
 
 	.spin {
 		width:14px; height:14px;
-		border:2px solid rgba(255,255,255,0.25);
-		border-top-color:#fff;
+		border:2px solid rgba(20,22,25,0.25);
+		border-top-color:#141619;
 		border-radius:50%;
 		animation:spin .7s linear infinite;
 	}
 	@keyframes spin { to { transform:rotate(360deg); } }
 
 	.back {
-		display:block; text-align:center; margin-top:18px;
-		font-size:12px; color:rgba(255,255,255,0.28);
+		display:block; margin-top:18px;
+		font-size:13px; color:#9097A0;
 		text-decoration:none;
 		transition:color .15s;
 	}
-	.back:hover { color:rgba(255,255,255,0.6); }
+	.back:hover { color:#ECEDEE; }
 </style>

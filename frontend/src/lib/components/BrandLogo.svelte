@@ -53,7 +53,7 @@
 	let brandColor = $derived(icon && !hasError ? BRAND_COLORS[icon] : null);
 	let style = $derived(brandColor
 		? `background: ${brandColor}12; color: ${brandColor}; border: 1px solid ${brandColor}24; width: ${size}px; height: ${size}px;`
-		: `background: var(--accent-muted); color: var(--accent); width: ${size}px; height: ${size}px;`
+		: `background: var(--bg-hover); color: var(--text-secondary); width: ${size}px; height: ${size}px;`
 	);
 </script>
 

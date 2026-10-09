@@ -28,8 +28,6 @@
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 	}
 	.ui-form-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 	.ui-form-error { font-size: 11px; color: var(--accent-red); line-height: 1.5; }

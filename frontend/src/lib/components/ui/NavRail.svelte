@@ -89,8 +89,7 @@
 	.ui-nav-rail {
 		width: 60px;
 		flex-shrink: 0;
-		background: var(--bg-surface);
-		border-right: 1px solid var(--border);
+		background: var(--rail-bg);
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -103,9 +102,9 @@
 	.ui-nav-rail-logo {
 		width: 30px;
 		height: 30px;
-		border-radius: var(--radius-sm);
-		background: var(--accent);
-		color: #fff;
+		border-radius: var(--radius-md);
+		background: var(--rail-active-bg);
+		color: var(--accent);
 		margin-bottom: 14px;
 		display: flex;
 		align-items: center;
@@ -134,20 +133,25 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: var(--text-muted);
+		color: var(--rail-fg);
 		background: none;
 		border: none;
 		cursor: pointer;
 		text-decoration: none;
 		transition: background var(--transition-fast), color var(--transition-fast);
 	}
-	.ui-nav-rail-btn:hover { background: var(--bg-hover); color: var(--accent); }
+	.ui-nav-rail-btn:hover { background: var(--rail-hover-bg); color: var(--rail-fg-active); }
 	.ui-nav-rail-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-	.ui-nav-rail-btn--active { background: var(--accent-muted); color: var(--accent); }
+	/* Active: lit icon plus a signal bar on the leading edge. */
+	.ui-nav-rail-btn--active {
+		background: var(--rail-active-bg);
+		color: var(--rail-fg-active);
+		box-shadow: inset 2px 0 0 var(--accent);
+	}
 	.ui-nav-rail-label {
-		font-size: 8.5px;
-		font-weight: 600;
-		color: var(--text-dim);
+		font-size: 9px;
+		font-weight: 500;
+		color: var(--rail-fg);
 		max-width: 100%;
 		text-align: center;
 	}
@@ -169,6 +173,12 @@
 		gap: 4px;
 		width: 100%;
 	}
+	/* Footer controls sit on graphite, not on a surface. */
+	.ui-nav-rail-footer :global(.ui-btn--ghost) { color: var(--rail-fg); }
+	.ui-nav-rail-footer :global(.ui-btn--ghost:hover:not(:disabled)) {
+		background: var(--rail-hover-bg);
+		color: var(--rail-fg-active);
+	}
 
 	@media (max-width: 639px) {
 		.ui-nav-rail--phone-bar {
@@ -181,8 +191,7 @@
 			flex-direction: row;
 			padding: 0 4px;
 			gap: 0;
-			border-right: none;
-			border-top: 1px solid var(--border);
+			border-top: 1px solid var(--rail-hover-bg);
 			z-index: 60;
 		}
 		.ui-nav-rail--phone-bar .ui-nav-rail-logo { display: none; }
@@ -194,6 +203,7 @@
 		}
 		.ui-nav-rail--phone-bar .ui-nav-rail-group { width: auto; padding: 0 6px; }
 		.ui-nav-rail--phone-bar .ui-nav-rail-btn { width: 36px; height: 32px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-btn--active { box-shadow: inset 0 2px 0 var(--accent); }
 		.ui-nav-rail--phone-bar .ui-nav-rail-footer {
 			flex-direction: row;
 			margin-top: 0;

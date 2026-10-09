@@ -338,7 +338,6 @@
 		display: flex; align-items: center; gap: 7px;
 		padding: 10px 14px;
 		font-size: 11px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.05em;
 		background: var(--bg-elevated); border-bottom: 1px solid var(--border);
 		font-family: var(--font-mono);
 	}

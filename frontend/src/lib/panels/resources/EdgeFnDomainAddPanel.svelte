@@ -243,8 +243,7 @@
 		border-radius: var(--radius-sm);
 	}
 	.preview-label {
-		font-size: 10px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0;
+		font-size: 10px; font-weight: 600; color: var(--text-dim); flex-shrink: 0;
 	}
 	.preview-route {
 		font-family: var(--font-mono); font-size: 12px; color: var(--accent);

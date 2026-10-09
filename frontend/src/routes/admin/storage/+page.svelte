@@ -472,7 +472,7 @@
 
 	.bucket-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 	.bucket-field { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-	.bucket-field-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; width: 58px; flex-shrink: 0; }
+	.bucket-field-label { font-size: 10px; font-weight: 700; color: var(--text-dim); width: 58px; flex-shrink: 0; }
 	.bucket-field-value { font-size: 12.5px; color: var(--text-primary); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	:global(.bucket-chevron) { color: var(--text-dim); flex-shrink: 0; }
@@ -495,7 +495,7 @@
 
 	/* Diagnostics panel */
 	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
-	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; }
+	.diag-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); }
 
 	.diag-loading { display: flex; align-items: center; gap: 8px; padding: 14px 16px; font-size: 13px; color: var(--text-muted); }
 

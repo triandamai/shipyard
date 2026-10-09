@@ -424,7 +424,7 @@
 	.net-wrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 8px; }
 	.net-scroll { overflow-x: auto; }
 	.net-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-	.net-table thead th { text-align: left; padding: 9px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+	.net-table thead th { text-align: left; padding: 9px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); font-size: 10.5px; font-weight: 700; color: var(--text-dim); white-space: nowrap; }
 	.net-table tbody td { padding: 10px 16px; border-bottom: 1px solid var(--border); }
 	.net-table tbody tr:last-child td { border-bottom: none; }
 	.net-table tbody tr:hover { background: var(--bg-hover); }
@@ -436,7 +436,7 @@
 
 	.token-row { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 	.token-divider { height: 1px; background: var(--border); }
-	.token-label { font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+	.token-label { font-size: 11px; font-weight: 700; color: var(--text-muted); }
 	.token-body { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 	.token-val { font-size: 11.5px; font-family: var(--font-mono); color: var(--text-secondary); background: var(--bg-elevated); padding: 4px 8px; border-radius: var(--radius-sm); word-break: break-all; flex: 1; border: 1px solid var(--border); }
 	.token-actions { display: flex; gap: 6px; }

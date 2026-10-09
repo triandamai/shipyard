@@ -31,7 +31,7 @@
 		padding: 0 12px 0 30px;
 		background: var(--bg-elevated);
 		border: 1px solid var(--border);
-		border-radius: 999px;
+		border-radius: var(--radius-md);
 		font-size: 12.5px;
 		color: var(--text-primary);
 		outline: none;

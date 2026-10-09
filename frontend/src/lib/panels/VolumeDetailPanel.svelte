@@ -168,8 +168,7 @@
 	.detail-section { display: flex; flex-direction: column; gap: 10px; }
 
 	.section-title {
-		font-size: 11px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em; margin: 0;
+		font-size: 11px; font-weight: 600; color: var(--text-dim); margin: 0;
 	}
 
 	/* Danger Zone */

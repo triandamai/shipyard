@@ -618,8 +618,6 @@
 	.provision-node-name {
 		font-size: 12px;
 		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 		color: var(--text-muted);
 		margin-bottom: 8px;
 		display: block;

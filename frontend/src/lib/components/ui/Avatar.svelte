@@ -29,5 +29,5 @@
 	.ui-avatar--green  { background: var(--accent-green-muted);  color: var(--accent-green); }
 	.ui-avatar--red    { background: var(--accent-red-muted);    color: var(--accent-red); }
 	.ui-avatar--yellow { background: var(--accent-yellow-muted); color: var(--accent-yellow); }
-	.ui-avatar--purple { background: color-mix(in srgb, #7c3bc2 14%, transparent); color: #7c3bc2; }
+	.ui-avatar--purple { background: color-mix(in srgb, var(--accent-purple) 14%, transparent); color: var(--accent-purple); }
 </style>

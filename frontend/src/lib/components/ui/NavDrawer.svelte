@@ -131,8 +131,6 @@
 		font-size: 11px;
 		font-weight: 700;
 		color: var(--text-primary);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		padding: 4px 10px 10px;
 	}
 	.ui-nav-drawer-items { flex: 1; min-height: 0; overflow-y: auto; }

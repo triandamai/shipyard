@@ -34,8 +34,6 @@
 		font-size: 11px;
 		font-weight: 700;
 		color: var(--accent);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
 		margin-bottom: 6px;
 	}
 	.ui-page-header-title {

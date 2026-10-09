@@ -175,9 +175,9 @@
 	}
 
 	function statusColor(code: number): string {
-		if (code < 300) return '#22c55e';
-		if (code < 400) return '#f59e0b';
-		return '#ef4444';
+		if (code < 300) return 'var(--accent-green)';
+		if (code < 400) return 'var(--accent-yellow)';
+		return 'var(--accent-red)';
 	}
 
 	function repoName(url: string) {
@@ -456,7 +456,7 @@
 		{ key: 'method',      label: 'Method',   width: '70px',  mono: true },
 		{ key: 'path',        label: 'Path',     mono: true },
 		{ key: 'status_code', label: 'Status',   width: '65px',  mono: true,
-			color: (row) => row.status_code < 300 ? '#22c55e' : row.status_code < 400 ? '#f59e0b' : '#ef4444' },
+			color: (row) => row.status_code < 300 ? 'var(--accent-green)' : row.status_code < 400 ? 'var(--accent-yellow)' : 'var(--accent-red)' },
 		{ key: 'duration_ms', label: 'Duration', width: '80px',  format: (v) => `${v}ms` },
 		{ key: 'error',       label: 'Error',    format: (v) => v ?? '' },
 	];
@@ -1013,7 +1013,6 @@
 	}
 	.section-title {
 		font-size: 11px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.05em;
 	}
 
 	.git-repo { margin-top: 12px; }
@@ -1027,7 +1026,6 @@
 		display: flex; align-items: center; gap: 6px;
 		padding: 7px 12px;
 		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
 		border-bottom: 1px solid var(--border); background: var(--bg-elevated);
 	}
 	.dep-loading, .dep-empty {
@@ -1107,7 +1105,6 @@
 		display: flex; align-items: center; gap: 6px;
 		color: var(--accent-red); margin-bottom: 10px;
 		font-size: 11px; font-weight: 700;
-		text-transform: uppercase; letter-spacing: 0.05em;
 	}
 	.danger-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
 	.danger-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }

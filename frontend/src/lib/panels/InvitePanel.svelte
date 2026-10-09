@@ -336,7 +336,6 @@
 	.perm-group  { display: flex; flex-direction: column; gap: 6px; }
 	.group-name  {
 		font-size: 10px; font-weight: 700; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.07em;
 	}
 	.perm-grid { display: flex; flex-direction: column; gap: 2px; }
 

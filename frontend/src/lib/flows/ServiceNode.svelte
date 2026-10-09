@@ -201,39 +201,39 @@
 		padding: 10px 14px;
 		min-width: 190px;
 		max-width: 250px;
-		box-shadow: var(--shadow-sm);
 		cursor: pointer;
-		transition: all var(--transition-fast);
+		transition: border-color var(--transition-fast);
 		font-family: var(--font-sans);
 	}
 
 	.service-node:hover {
 		border-color: var(--border-hover);
-		box-shadow: var(--shadow-md);
 	}
 
+	/* Selection is the signal colour as a ring, never a glow. */
 	.service-node.selected {
 		border-color: var(--accent);
-		box-shadow: 0 0 0 2px var(--accent-muted), var(--shadow-md);
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
 	.service-node.deploying {
-		border-color: #3b82f6;
+		border-color: var(--accent-blue);
 		animation: node-deploy-pulse 1.4s ease-in-out infinite;
 	}
 
 	.service-node.stopping {
-		border-color: #f59e0b;
+		border-color: var(--accent-yellow);
 		animation: node-deploy-pulse 1.8s ease-in-out infinite;
 	}
 
 	.service-node.need-attention {
-		border-color: #f97316;
+		border-color: var(--accent-yellow);
 	}
 
 	@keyframes node-deploy-pulse {
 		0%, 100% { box-shadow: 0 0 0 0 transparent; }
-		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, #3b82f6 30%, transparent); }
+		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 30%, transparent); }
 	}
 
 	.service-node.stopping {
@@ -241,7 +241,7 @@
 	}
 	@keyframes node-stop-pulse {
 		0%, 100% { box-shadow: 0 0 0 0 transparent; }
-		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 30%, transparent); }
+		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-yellow) 30%, transparent); }
 	}
 
 	.node-header {
@@ -269,8 +269,8 @@
 	}
 
 	.node-slug {
-		font-size: 10px;
-		color: var(--text-dim);
+		font-size: 11px;
+		color: var(--text-muted);
 		font-family: var(--font-mono);
 		white-space: nowrap;
 		overflow: hidden;
@@ -305,7 +305,7 @@
 		font-size: 10px;
 		font-weight: 500;
 		padding: 1px 6px;
-		border-radius: 100px;
+		border-radius: var(--radius-sm);
 		background: var(--bg-elevated);
 		color: var(--text-muted);
 		border: 1px solid var(--border);
@@ -313,9 +313,8 @@
 	}
 
 	.replicas-chip {
-		background: var(--accent-blue-muted);
-		color: var(--accent-blue);
-		border-color: transparent;
+		font-family: var(--font-mono);
+		text-transform: none;
 	}
 
 	.port-row {
@@ -331,9 +330,9 @@
 		font-weight: 600;
 		font-family: var(--font-mono);
 		padding: 1px 6px;
-		border-radius: 4px;
-		background: color-mix(in srgb, var(--accent) 8%, transparent);
-		color: var(--accent);
-		border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+		border-radius: var(--radius-sm);
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		border: 1px solid var(--border);
 	}
 </style>
