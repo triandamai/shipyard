@@ -160,7 +160,7 @@
 				</button>
 				<div class="mob-brand">
 					<div class="mob-brand-icon">
-						<Anchor size={14} color="white" strokeWidth={2.5} />
+						<Anchor size={14} strokeWidth={2.5} />
 					</div>
 					<span class="mob-brand-name">Admin</span>
 				</div>
@@ -174,8 +174,8 @@
 
 <style>
 	/* ── Gate ─────────────────────────────── */
-	.gate { display:flex; align-items:center; justify-content:center; height:100vh; background:#0d0d0d; }
-	.gate-ring { width:24px; height:24px; border:2px solid rgba(255,255,255,0.1); border-top-color:rgba(59,130,246,0.8); border-radius:50%; animation:spin 0.75s linear infinite; }
+	.gate { display:flex; align-items:center; justify-content:center; height:100vh; background:var(--rail-bg); }
+	.gate-ring { width:24px; height:24px; border:2px solid var(--rail-active-bg); border-top-color:var(--accent); border-radius:50%; animation:spin 0.75s linear infinite; }
 	@keyframes spin { to { transform:rotate(360deg); } }
 
 	.shell {
@@ -235,15 +235,15 @@
 		display: none;
 		align-items: center; gap: 10px;
 		padding: 12px 16px;
-		background: #0d0d0d;
-		border-bottom: 1px solid rgba(255,255,255,0.07);
+		background: var(--rail-bg);
+		border-bottom: 1px solid var(--rail-hover-bg);
 		flex-shrink: 0;
 	}
-	.mob-menu-btn { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:8px; border:none; background:rgba(255,255,255,0.07); color:rgba(255,255,255,0.7); cursor:pointer; }
-	.mob-menu-btn:hover { background:rgba(255,255,255,0.12); }
+	.mob-menu-btn { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:var(--radius-md); border:none; background:var(--rail-hover-bg); color:var(--rail-fg-active); cursor:pointer; }
+	.mob-menu-btn:hover { background:var(--rail-active-bg); }
 	.mob-brand { display:flex; align-items:center; gap:8px; }
-	.mob-brand-icon { width:24px; height:24px; border-radius:6px; background:#2563eb; display:flex; align-items:center; justify-content:center; }
-	.mob-brand-name { font-size:13px; font-weight:700; color:#fff; }
+	.mob-brand-icon { width:24px; height:24px; border-radius:var(--radius-sm); background:var(--rail-active-bg); color:var(--accent); display:flex; align-items:center; justify-content:center; }
+	.mob-brand-name { font-size:13px; font-weight:600; color:var(--rail-fg-active); }
 
 	/* ── Mobile backdrop ──────────────────── */
 	.mob-backdrop { position:fixed; inset:0; z-index:39; background:rgba(0,0,0,0.55); }

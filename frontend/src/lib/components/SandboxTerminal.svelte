@@ -36,19 +36,19 @@
 			fontSize: 13,
 			fontFamily: 'Menlo, Monaco, "Courier New", monospace',
 			theme: {
-				background: '#0d1117',
-				foreground: '#e6edf3',
-				cursor: '#58a6ff',
-				black: '#484f58',
-				red: '#ff7b72',
-				green: '#3fb950',
-				yellow: '#d29922',
-				blue: '#58a6ff',
-				magenta: '#bc8cff',
-				cyan: '#39d353',
-				white: '#b1bac4',
-				brightBlack: '#6e7681',
-				brightWhite: '#f0f6fc'
+				background: '#141619',
+				foreground: '#C3C6CA',
+				cursor: '#F26B1D',
+				black: '#3A3E44',
+				red: '#F87171',
+				green: '#4ADE80',
+				yellow: '#FBBF24',
+				blue: '#60A5FA',
+				magenta: '#C4B5FD',
+				cyan: '#5EEAD4',
+				white: '#C3C6CA',
+				brightBlack: '#8B9097',
+				brightWhite: '#ECEDEE'
 			}
 		});
 
@@ -240,7 +240,7 @@
 		display: flex;
 		flex-direction: column;
 		height: 100%;
-		background: #0d1117;
+		background: var(--terminal-bg);
 	}
 	.terminal-mode-tabs {
 		display: flex;
@@ -255,16 +255,16 @@
 		background: transparent;
 		border: none;
 		border-radius: 4px 4px 0 0;
-		color: #7d8590;
+		color: var(--terminal-dim);
 		cursor: pointer;
 	}
 	.mode-tab:hover {
-		color: #e6edf3;
+		color: var(--terminal-fg);
 		background: rgba(255, 255, 255, 0.05);
 	}
 	.mode-tab.active {
-		color: #58a6ff;
-		background: rgba(88, 166, 255, 0.1);
+		color: var(--terminal-blue);
+		background: color-mix(in srgb, var(--terminal-blue) 10%, transparent);
 	}
 	.status-pill {
 		display: flex;
@@ -275,8 +275,8 @@
 		padding: 3px 8px;
 		font-size: 11px;
 		font-weight: 500;
-		color: #d29922;
-		background: rgba(210, 153, 34, 0.12);
+		color: var(--terminal-yellow);
+		background: color-mix(in srgb, var(--terminal-yellow) 12%, transparent);
 		border-radius: 999px;
 	}
 	.term-container {
@@ -285,7 +285,7 @@
 		padding: 4px;
 	}
 	.error {
-		color: #ff7b72;
+		color: var(--terminal-red);
 		font-size: 12px;
 		padding: 8px;
 	}

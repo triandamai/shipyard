@@ -434,8 +434,7 @@
 	}
 
 	.metric-label {
-		font-size: 10px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.07em; flex-shrink: 0;
+		font-size: 10px; font-weight: 600; color: var(--text-muted); flex-shrink: 0;
 	}
 
 	.metric-value {

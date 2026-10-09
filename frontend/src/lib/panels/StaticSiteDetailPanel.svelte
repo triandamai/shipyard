@@ -1066,7 +1066,7 @@ export default &#123;
 
 	.domain-item + .domain-item { border-top: 1px solid var(--border); }
 	.domain-item :global(.ui-list-row) { border-bottom: none; }
-	.dep-status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+	.dep-status { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; color: var(--text-muted); }
 	.domain-dns { padding: 0 0 10px 42px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 	.loading-row {
@@ -1098,8 +1098,6 @@ export default &#123;
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 	}
 
 	.section-desc {
@@ -1188,7 +1186,7 @@ export default &#123;
 	.detect-table { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; font-size: 11px; }
 	.detect-row { display: grid; grid-template-columns: 2fr 1.2fr 1fr; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); color: var(--text-primary); align-items: center; }
 	.detect-row:last-child { border-bottom: none; }
-	.detect-row.header { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); background: var(--bg-base); }
+	.detect-row.header { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--bg-base); }
 
 	.code-block {
 		font-family: var(--font-mono);
@@ -1215,8 +1213,6 @@ export default &#123;
 		color: var(--accent-red);
 		font-size: 11px;
 		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 		margin-bottom: 10px;
 	}
 

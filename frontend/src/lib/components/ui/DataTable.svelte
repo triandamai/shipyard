@@ -223,8 +223,6 @@
 		font-size: 10.5px;
 		font-weight: 700;
 		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		white-space: nowrap;
 	}
 	.ui-data-table-el :global(tbody tr) {

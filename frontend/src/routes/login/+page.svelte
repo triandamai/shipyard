@@ -151,11 +151,10 @@
 		width: 420px;
 		flex-shrink: 0;
 		/* Brand panel is always dark (white title), independent of theme */
-		--brand-text: #5E7A96;
-		--brand-text-strong: #9DB8D0;
-		background: #0F1827;
+		--brand-text: var(--rail-fg);
+		--brand-text-strong: var(--terminal-fg);
+		background: var(--rail-bg);
 		padding: 48px 48px 36px;
-		border-right: 1px solid rgba(255, 255, 255, 0.07);
 	}
 
 	@media (min-width: 900px) {
@@ -176,16 +175,16 @@
 		justify-content: center;
 		width: 48px;
 		height: 48px;
-		border-radius: 12px;
-		background: rgba(59, 130, 246, 0.16);
-		color: #60A5FA;
+		border-radius: var(--radius-md);
+		background: var(--rail-active-bg);
+		color: var(--accent);
 	}
 
 	.brand-name {
 		font-size: 28px;
 		font-weight: 700;
-		color: #FFFFFF;
-		letter-spacing: -0.03em;
+		color: var(--rail-fg-active);
+		letter-spacing: -0.02em;
 		margin: 0;
 	}
 
@@ -220,9 +219,7 @@
 		top: 6px;
 		width: 6px;
 		height: 6px;
-		border-radius: 50%;
-		background: #3B82F6;
-		opacity: 0.7;
+		background: var(--accent);
 	}
 
 	.brand-footer {
@@ -304,12 +301,12 @@
 	}
 
 	.admin-link a {
-		color: var(--text-dim, #9ca3af);
+		color: var(--text-dim);
 		text-decoration: none;
 	}
 
 	.admin-link a:hover {
-		color: var(--text-muted, #6b7280);
+		color: var(--text-muted);
 		text-decoration: underline;
 	}
 </style>

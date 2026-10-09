@@ -440,8 +440,7 @@
 	.scope-divider { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
 	.scope-divider::before, .scope-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 	.scope-divider span {
-		font-size: 10px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
+		font-size: 10px; font-weight: 600; color: var(--text-muted); white-space: nowrap;
 	}
 	.scope-toggle {
 		display: flex;

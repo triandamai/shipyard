@@ -125,7 +125,7 @@
 
 	<!-- Crawlers & theme -->
 	<meta name="robots"      content="noindex, nofollow" />
-	<meta name="theme-color" content="#0F1827" />
+	<meta name="theme-color" content="#141619" />
 </svelte:head>
 
 {@render children()}

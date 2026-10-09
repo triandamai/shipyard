@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <defs>
-    <linearGradient id="oceanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#2563eb" />
-      <stop offset="100%" stop-color="#06b6d4" />
-    </linearGradient>
-  </defs>
-  <rect width="32" height="32" rx="8" fill="url(#oceanGrad)" />
-  <g transform="translate(4, 4)" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+  <rect width="32" height="32" rx="6" fill="#141619" />
+  <g transform="translate(4, 4)" stroke="#F26B1D" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
     <circle cx="12" cy="5" r="3" />
     <line x1="12" y1="22" x2="12" y2="8" />
     <path d="M5 12H2a10 10 0 0 0 20 0h-3" />

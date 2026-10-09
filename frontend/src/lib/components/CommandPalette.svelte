@@ -349,8 +349,6 @@
 	.group-label {
 		font-size: 10px;
 		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
 		color: var(--text-dim);
 		padding: 8px 16px 4px;
 	}

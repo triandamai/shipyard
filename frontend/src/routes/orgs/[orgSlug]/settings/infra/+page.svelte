@@ -972,8 +972,6 @@
     text-align: left;
     font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     color: var(--text-muted);
     background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
@@ -1152,8 +1150,6 @@
   .core-state-badge {
     font-size: 10px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
   .core-desc {
     font-size: 11px;
@@ -1199,8 +1195,6 @@
   .core-metric-label {
     font-size: 9px;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
     color: var(--text-dim);
     width: 24px;
     flex-shrink: 0;

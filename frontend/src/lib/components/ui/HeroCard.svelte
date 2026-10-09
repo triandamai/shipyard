@@ -50,8 +50,6 @@
 		font-size: 10.5px;
 		font-weight: 700;
 		color: var(--accent);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
 	}
 	.ui-hero-title {
 		font-size: 21px;

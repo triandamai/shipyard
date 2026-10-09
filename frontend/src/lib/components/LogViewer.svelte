@@ -216,7 +216,6 @@
 
 	.tail-label {
 		font-size: 10px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
 		margin-right: 2px; font-family: var(--font-sans);
 	}
 

@@ -25,12 +25,10 @@
 <style>
 	.ui-form-field { display: flex; flex-direction: column; gap: 6px; }
 	.ui-form-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		font-size: 12.5px;
+		font-weight: 500;
+		color: var(--text-secondary);
 	}
-	.ui-form-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
-	.ui-form-error { font-size: 11px; color: var(--accent-red); line-height: 1.5; }
+	.ui-form-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+	.ui-form-error { font-size: 12px; color: var(--accent-red-text); line-height: 1.5; }
 </style>

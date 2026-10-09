@@ -170,9 +170,9 @@
 	}
 
 	.source-chip {
-		background: color-mix(in srgb, #22c55e 10%, transparent);
-		color: #22c55e;
-		border-color: color-mix(in srgb, #22c55e 25%, transparent);
+		background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+		color: var(--accent-green);
+		border-color: color-mix(in srgb, var(--accent-green) 25%, transparent);
 	}
 
 	.domain-row {
@@ -189,9 +189,9 @@
 		font-family: var(--font-mono);
 		padding: 1px 6px;
 		border-radius: 4px;
-		background: color-mix(in srgb, #22c55e 8%, transparent);
-		color: #22c55e;
-		border: 1px solid color-mix(in srgb, #22c55e 25%, transparent);
+		background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+		color: var(--accent-green);
+		border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;

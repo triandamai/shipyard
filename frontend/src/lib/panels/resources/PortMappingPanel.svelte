@@ -166,7 +166,6 @@
 	.pm-thead {
 		background: var(--bg-elevated); border-bottom: 1px solid var(--border);
 		font-size: 10px; font-weight: 600; color: var(--text-dim);
-		text-transform: uppercase; letter-spacing: 0.06em;
 	}
 	.pm-row { border-bottom: 1px solid var(--border); }
 	.pm-row:last-child { border-bottom: none; }

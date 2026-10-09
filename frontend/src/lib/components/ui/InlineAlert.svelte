@@ -22,21 +22,21 @@
 	.ui-alert--error {
 		background: var(--accent-red-muted);
 		border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
-		color: var(--accent-red);
+		color: var(--accent-red-text);
 	}
 	.ui-alert--success {
 		background: var(--accent-green-muted);
 		border-color: color-mix(in srgb, var(--accent-green) 30%, transparent);
-		color: var(--accent-green);
+		color: var(--accent-green-text);
 	}
 	.ui-alert--warning {
 		background: var(--accent-yellow-muted);
 		border-color: color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-		color: var(--accent-yellow);
+		color: var(--accent-yellow-text);
 	}
 	.ui-alert--info {
-		background: var(--accent-muted);
-		border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-		color: var(--accent);
+		background: var(--accent-blue-muted);
+		border-color: color-mix(in srgb, var(--accent-blue) 30%, transparent);
+		color: var(--accent-blue-text);
 	}
 </style>

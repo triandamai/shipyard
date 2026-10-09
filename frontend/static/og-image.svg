@@ -1,77 +1,31 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0D1421"/>
-      <stop offset="100%" stop-color="#162133"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="28%" cy="52%" r="52%" gradientUnits="objectBoundingBox">
-      <stop offset="0%" stop-color="#2563EB" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="#0D1421" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-
-  <!-- Background -->
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <rect width="1200" height="630" fill="url(#glow)"/>
-
-  <!-- Left accent stripe -->
-  <rect x="0" y="0" width="5" height="630" fill="#2563EB"/>
-
-  <!-- Decorative dots grid (top-right corner) -->
-  <g opacity="0.07" fill="#60A5FA">
-    <circle cx="850" cy="80"  r="3"/><circle cx="890" cy="80"  r="3"/><circle cx="930" cy="80"  r="3"/><circle cx="970" cy="80"  r="3"/><circle cx="1010" cy="80"  r="3"/><circle cx="1050" cy="80"  r="3"/><circle cx="1090" cy="80"  r="3"/><circle cx="1130" cy="80"  r="3"/>
-    <circle cx="850" cy="120" r="3"/><circle cx="890" cy="120" r="3"/><circle cx="930" cy="120" r="3"/><circle cx="970" cy="120" r="3"/><circle cx="1010" cy="120" r="3"/><circle cx="1050" cy="120" r="3"/><circle cx="1090" cy="120" r="3"/><circle cx="1130" cy="120" r="3"/>
-    <circle cx="850" cy="160" r="3"/><circle cx="890" cy="160" r="3"/><circle cx="930" cy="160" r="3"/><circle cx="970" cy="160" r="3"/><circle cx="1010" cy="160" r="3"/><circle cx="1050" cy="160" r="3"/><circle cx="1090" cy="160" r="3"/><circle cx="1130" cy="160" r="3"/>
-    <circle cx="850" cy="200" r="3"/><circle cx="890" cy="200" r="3"/><circle cx="930" cy="200" r="3"/><circle cx="970" cy="200" r="3"/><circle cx="1010" cy="200" r="3"/><circle cx="1050" cy="200" r="3"/><circle cx="1090" cy="200" r="3"/><circle cx="1130" cy="200" r="3"/>
-    <circle cx="850" cy="240" r="3"/><circle cx="890" cy="240" r="3"/><circle cx="930" cy="240" r="3"/><circle cx="970" cy="240" r="3"/><circle cx="1010" cy="240" r="3"/><circle cx="1050" cy="240" r="3"/><circle cx="1090" cy="240" r="3"/><circle cx="1130" cy="240" r="3"/>
+  <!-- Drydock: graphite ground, one signal orange, IBM Plex with system fallbacks. -->
+  <rect width="1200" height="630" fill="#141619"/>
+  <!-- Concrete slab on the right with a 24px dot grid: the topology canvas. -->
+  <rect x="780" y="0" width="420" height="630" fill="#1B1D21"/>
+  <g fill="#2A2D32">
+    <circle cx="804" cy="48" r="2"/><circle cx="852" cy="48" r="2"/><circle cx="900" cy="48" r="2"/><circle cx="948" cy="48" r="2"/><circle cx="996" cy="48" r="2"/><circle cx="1044" cy="48" r="2"/><circle cx="1092" cy="48" r="2"/><circle cx="1140" cy="48" r="2"/>
+    <circle cx="804" cy="582" r="2"/><circle cx="852" cy="582" r="2"/><circle cx="900" cy="582" r="2"/><circle cx="948" cy="582" r="2"/><circle cx="996" cy="582" r="2"/><circle cx="1044" cy="582" r="2"/><circle cx="1092" cy="582" r="2"/><circle cx="1140" cy="582" r="2"/>
   </g>
-
-  <!-- Anchor icon -->
-  <g transform="translate(82, 202)" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Ring top -->
-    <circle cx="80" cy="28" r="22" fill="none" stroke="#3B82F6" stroke-width="11"/>
-    <!-- Stem -->
-    <line x1="80" y1="50" x2="80" y2="166" stroke="#3B82F6" stroke-width="11"/>
-    <!-- Crossbar -->
-    <line x1="18" y1="82" x2="142" y2="82" stroke="#3B82F6" stroke-width="11"/>
-    <!-- Curved arms -->
-    <path d="M18 82 Q18 166 80 166 Q142 166 142 82" fill="none" stroke="#3B82F6" stroke-width="11"/>
-    <!-- End caps -->
-    <circle cx="18"  cy="82" r="9" fill="#60A5FA"/>
-    <circle cx="142" cy="82" r="9" fill="#60A5FA"/>
-    <!-- Center dot in ring -->
-    <circle cx="80" cy="28" r="5" fill="#60A5FA"/>
+  <!-- Three service nodes joined by connectors -->
+  <g font-family="'IBM Plex Mono', ui-monospace, Menlo, monospace" font-size="18">
+    <line x1="988" y1="196" x2="988" y2="268" stroke="#3A3E44" stroke-width="2"/>
+    <line x1="988" y1="364" x2="988" y2="436" stroke="#3A3E44" stroke-width="2"/>
+    <rect x="868" y="124" width="240" height="72" rx="6" fill="#17191C" stroke="#2A2D32" stroke-width="2"/>
+    <circle cx="896" cy="160" r="6" fill="#4ADE80"/><text x="916" y="166" fill="#C3C6CA">web</text>
+    <rect x="868" y="268" width="240" height="96" rx="6" fill="#17191C" stroke="#F26B1D" stroke-width="2"/>
+    <rect x="860" y="260" width="256" height="112" rx="10" fill="none" stroke="#F26B1D" stroke-width="2"/>
+    <circle cx="896" cy="316" r="6" fill="#4ADE80"/><text x="916" y="322" fill="#ECEDEE">postgres</text>
+    <rect x="868" y="436" width="240" height="72" rx="6" fill="#17191C" stroke="#2A2D32" stroke-width="2"/>
+    <circle cx="896" cy="472" r="6" fill="#60A5FA"/><text x="916" y="478" fill="#C3C6CA">api</text>
   </g>
-
-  <!-- "OPEN SOURCE" badge -->
-  <rect x="300" y="185" width="148" height="30" rx="15" fill="rgba(37,99,235,0.18)" stroke="rgba(96,165,250,0.35)" stroke-width="1"/>
-  <text x="374" y="205" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" font-weight="700" fill="#60A5FA" text-anchor="middle" letter-spacing="0.1em">OPEN SOURCE</text>
-
-  <!-- Main heading -->
-  <text x="300" y="308" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="90" font-weight="800" fill="#FFFFFF" letter-spacing="-3">Shipyard</text>
-
-  <!-- Tagline -->
-  <text x="300" y="358" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="26" font-weight="400" fill="#9DB8D0">Self-hosted container orchestration for your VPS</text>
-
-  <!-- Sub-tagline -->
-  <text x="300" y="396" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="17" font-weight="400" fill="#5E7A96">One-command install · Automatic HTTPS · Live topology canvas · Git deploys</text>
-
-  <!-- Feature chips -->
-  <!-- Chip 1 -->
-  <rect x="300" y="426" width="156" height="36" rx="18" fill="rgba(37,99,235,0.13)" stroke="rgba(59,130,246,0.28)" stroke-width="1"/>
-  <circle cx="322" cy="444" r="5" fill="#10B981"/>
-  <text x="384" y="449" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="500" fill="#93C5FD" text-anchor="middle">One-Click Deploy</text>
-
-  <!-- Chip 2 -->
-  <rect x="468" y="426" width="130" height="36" rx="18" fill="rgba(37,99,235,0.13)" stroke="rgba(59,130,246,0.28)" stroke-width="1"/>
-  <circle cx="488" cy="444" r="5" fill="#10B981"/>
-  <text x="534" y="449" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="500" fill="#93C5FD" text-anchor="middle">Auto HTTPS</text>
-
-  <!-- Chip 3 -->
-  <rect x="610" y="426" width="134" height="36" rx="18" fill="rgba(37,99,235,0.13)" stroke="rgba(59,130,246,0.28)" stroke-width="1"/>
-  <circle cx="630" cy="444" r="5" fill="#10B981"/>
-  <text x="678" y="449" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" font-weight="500" fill="#93C5FD" text-anchor="middle">Rust + Svelte</text>
-
-  <!-- Domain -->
-  <text x="1160" y="598" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="17" font-weight="400" fill="rgba(94,122,150,0.75)" text-anchor="end">shipyard.trian.space</text>
+  <!-- Mark -->
+  <rect x="80" y="152" width="72" height="72" rx="10" fill="#22252A"/>
+  <g transform="translate(92, 164) scale(2)" stroke="#F26B1D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/>
+  </g>
+  <text x="76" y="340" font-family="'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="104" font-weight="600" fill="#ECEDEE" letter-spacing="-3">Shipyard</text>
+  <text x="80" y="398" font-family="'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="26" fill="#C3C6CA">Self-hosted container orchestration for your VPS</text>
+  <text x="80" y="440" font-family="'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" fill="#8B9097">Git deploys, automatic HTTPS, a live topology canvas.</text>
+  <text x="80" y="574" font-family="'IBM Plex Mono', ui-monospace, Menlo, monospace" font-size="18" fill="#8B9097">shipyard.trian.space</text>
 </svg>

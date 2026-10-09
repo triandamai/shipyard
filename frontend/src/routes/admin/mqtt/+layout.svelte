@@ -110,16 +110,16 @@
 	.log-section { margin-top:28px; }
 	.log-hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
 	.log-title { font-size:13px; font-weight:700; color:var(--text-primary); letter-spacing:-0.01em; }
-	.log-connect-btn { padding:5px 14px; height:28px; border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer; border:none; background:var(--accent); color:#fff; transition:opacity .15s; font-family:var(--font-sans); }
+	.log-connect-btn { padding:5px 14px; height:28px; border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer; border:none; background:var(--accent); color: var(--accent-fg); transition:opacity .15s; font-family:var(--font-sans); }
 	.log-connect-btn:hover { opacity:.88; }
 	.copy-btn { padding:3px 10px; height:24px; border-radius:var(--radius-md); font-size:11.5px; font-weight:500; cursor:pointer; border:1px solid var(--border); background:var(--bg-surface); color:var(--text-secondary); font-family:var(--font-sans); transition:background .15s; }
 	.copy-btn:hover { background:var(--bg-elevated); }
 	.conn-dot { width:7px; height:7px; border-radius:50%; background:var(--text-muted); transition:background .3s; }
 	.conn-dot.conn-ok { background:var(--accent-green); }
-	.log-shell { background:#0f1117; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-lg); overflow:hidden; }
+	.log-shell { background:var(--terminal-bg); border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-lg); overflow:hidden; }
 	.log-body { height:320px; overflow-y:auto; padding:12px 14px; font-family:var(--font-mono); font-size:11.5px; line-height:1.6; }
-	.log-line { color:#c9d1d9; white-space:pre-wrap; word-break:break-all; }
-	.log-empty { color:#6e7681; font-style:italic; }
+	.log-line { color:var(--terminal-fg); white-space:pre-wrap; word-break:break-all; }
+	.log-empty { color:var(--terminal-dim); font-style:italic; }
 
 	@media (max-width: 640px) {
 		.p { padding:20px 12px; }

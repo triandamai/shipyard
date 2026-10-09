@@ -63,7 +63,7 @@
 		gap: 6px;
 		border-radius: var(--radius-md);
 		font-family: var(--font-sans);
-		font-weight: 600;
+		font-weight: 500;
 		cursor: pointer;
 		border: 1px solid transparent;
 		transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
@@ -96,7 +96,7 @@
 
 	.ui-btn--primary {
 		background: var(--accent);
-		color: #fff;
+		color: var(--accent-fg);
 		border-color: var(--accent);
 	}
 	.ui-btn--primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -116,7 +116,7 @@
 
 	.ui-btn--danger {
 		background: var(--accent-red);
-		color: #fff;
+		color: var(--accent-fg);
 		border-color: var(--accent-red);
 	}
 

@@ -157,15 +157,11 @@
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 	}
 	.template-group-label {
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 		margin-top: 8px;
 	}
 	.template-grid {

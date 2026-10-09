@@ -626,7 +626,6 @@
 	.lvo-table th {
 		padding: 8px 14px; text-align: left;
 		font-size: 10px; font-weight: 700; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.07em;
 		border-bottom: 1px solid var(--border);
 		white-space: nowrap;
 	}

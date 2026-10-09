@@ -93,7 +93,7 @@
 			'.cm-activeLineGutter': { backgroundColor: 'transparent' },
 			'.cm-activeLine': { backgroundColor: 'rgba(255,255,255,0.025)' },
 			'.cm-selectionBackground, ::selection': {
-				backgroundColor: 'rgba(37,99,235,0.25) !important',
+				backgroundColor: 'rgba(242,107,29,0.22) !important',
 			},
 			'.cm-cursor': { borderLeftColor: 'var(--accent)', borderLeftWidth: '2px' },
 			'.cm-matchingBracket': { outline: '1px solid var(--accent)', borderRadius: '2px' },

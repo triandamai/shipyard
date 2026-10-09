@@ -123,7 +123,7 @@
 {#if data.alreadySetup}
 <div style="min-height:100vh;background:var(--bg-base);display:flex;align-items:center;justify-content:center;padding:24px;">
 	<div style="width:100%;max-width:480px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:24px;">
-		<div style="width:72px;height:72px;border-radius:50%;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);display:flex;align-items:center;justify-content:center;font-size:32px;">⚓</div>
+		<div style="width:72px;height:72px;border-radius:50%;background:var(--accent-muted);border:1px solid color-mix(in srgb, var(--accent) 25%, transparent);display:flex;align-items:center;justify-content:center;font-size:32px;">⚓</div>
 		<div>
 			<h1 style="font-size:24px;font-weight:700;margin:0 0 10px;color:var(--text-primary);">Shipyard is already set up</h1>
 			<p style="font-size:14px;line-height:1.7;color:var(--text-muted);margin:0;">This instance has already been initialized. Setup can only be performed once.</p>
@@ -337,7 +337,7 @@
 		border:1px solid var(--border);
 	}
 	.step-done { background:var(--accent-green) !important; color:white !important; border-color:var(--accent-green) !important; }
-	.step-active { background:var(--accent) !important; color:white !important; border-color:var(--accent) !important; }
+	.step-active { background:var(--accent) !important; color:var(--accent-fg) !important; border-color:var(--accent) !important; }
 	.step-label { font-size:11px; font-weight:500; color:var(--text-muted); }
 	.step-label-active { color:var(--text-primary); }
 	.step-line { height:1px; flex:1; margin-bottom:20px; background:var(--border); transition:background .3s; }
@@ -371,7 +371,7 @@
 		transition:border-color .15s, box-shadow .15s;
 	}
 	.plan-card:hover { border-color:var(--accent); }
-	.plan-selected { border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-ring, rgba(99,102,241,0.15)); }
+	.plan-selected { border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-muted); }
 	.plan-card-hdr { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; }
 	.plan-name { font-size:15px; font-weight:800; color:var(--text-primary); letter-spacing:-0.01em; }
 	.plan-price { font-size:12px; color:var(--text-muted); margin-top:2px; font-weight:600; }

@@ -15,8 +15,6 @@
 		font-size: 11px;
 		font-weight: 700;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
 		margin-bottom: 12px;
 	}
 </style>

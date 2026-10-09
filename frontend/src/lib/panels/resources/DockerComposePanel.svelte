@@ -593,8 +593,6 @@ networks:
 		font-size: 10px;
 		font-weight: 700;
 		color: var(--text-dim);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
 	}
 
 	.preview-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }

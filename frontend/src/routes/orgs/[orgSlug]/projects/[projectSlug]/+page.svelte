@@ -559,6 +559,15 @@
 		background: var(--bg-base);
 		--xy-edge-label-background-color: var(--bg-surface);
 		--xy-edge-label-color: var(--text-secondary);
+		--xy-minimap-background-color: var(--bg-surface);
+		--xy-minimap-mask-background-color: color-mix(in srgb, var(--bg-base) 70%, transparent);
+		--xy-minimap-node-background-color: var(--border-hover);
+		--xy-controls-button-background-color: var(--bg-surface);
+		--xy-controls-button-background-color-hover: var(--bg-hover);
+		--xy-controls-button-color: var(--text-secondary);
+		--xy-controls-button-color-hover: var(--text-primary);
+		--xy-controls-button-border-color: var(--border);
+		--xy-attribution-background-color: transparent;
 	}
 
 	/* Edge label pill — HTML div rendered via portal inside .svelte-flow */

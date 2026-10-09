@@ -51,13 +51,13 @@
 
 <style>
 	.portal-node {
-		background: color-mix(in srgb, #7c3aed 6%, var(--bg-surface));
-		border: 1.5px dashed #7c3aed;
+		background: color-mix(in srgb, var(--accent-purple) 6%, var(--bg-surface));
+		border: 1.5px dashed var(--accent-purple);
 		border-radius: var(--radius-md);
 		padding: 10px 14px;
 		min-width: 190px;
 		max-width: 250px;
-		box-shadow: 0 0 12px rgba(124, 58, 237, 0.15), var(--shadow-sm);
+		box-shadow: 0 0 12px color-mix(in srgb, var(--accent-purple) 15%, transparent), var(--shadow-sm);
 		cursor: default;
 		transition: all var(--transition-fast);
 		font-family: var(--font-sans);
@@ -65,13 +65,13 @@
 	}
 
 	.portal-node:hover {
-		box-shadow: 0 0 20px rgba(124, 58, 237, 0.25), var(--shadow-md);
-		border-color: #a78bfa;
+		box-shadow: 0 0 20px color-mix(in srgb, var(--accent-purple) 25%, transparent), var(--shadow-md);
+		border-color: var(--accent-purple);
 	}
 
 	.portal-node.selected {
-		border-color: #a78bfa;
-		box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.3), 0 0 20px rgba(124, 58, 237, 0.3);
+		border-color: var(--accent-purple);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-purple) 30%, transparent), 0 0 20px color-mix(in srgb, var(--accent-purple) 30%, transparent);
 	}
 
 	.cross-chip {
@@ -80,13 +80,11 @@
 		gap: 4px;
 		font-size: 9px;
 		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
 		padding: 2px 6px;
 		border-radius: 100px;
-		background: rgba(124, 58, 237, 0.18);
-		color: #a78bfa;
-		border: 1px solid rgba(124, 58, 237, 0.35);
+		background: color-mix(in srgb, var(--accent-purple) 18%, transparent);
+		color: var(--accent-purple);
+		border: 1px solid color-mix(in srgb, var(--accent-purple) 35%, transparent);
 		margin-bottom: 8px;
 	}
 
@@ -101,8 +99,8 @@
 		width: 24px;
 		height: 24px;
 		border-radius: var(--radius-sm);
-		background: rgba(124, 58, 237, 0.18);
-		color: #a78bfa;
+		background: color-mix(in srgb, var(--accent-purple) 18%, transparent);
+		color: var(--accent-purple);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -120,7 +118,7 @@
 	.node-name {
 		font-size: 13px;
 		font-weight: 600;
-		color: #c4b5fd;
+		color: var(--accent-purple);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -129,7 +127,7 @@
 
 	.node-type {
 		font-size: 10px;
-		color: #7c3aed;
+		color: var(--accent-purple);
 		font-family: var(--font-mono);
 		text-transform: capitalize;
 	}
@@ -153,7 +151,7 @@
 	}
 
 	.from-value {
-		color: #a78bfa;
+		color: var(--accent-purple);
 		font-weight: 500;
 		white-space: nowrap;
 		overflow: hidden;
@@ -162,7 +160,7 @@
 
 	.connected-row {
 		font-size: 10px;
-		color: #7c3aed;
+		color: var(--accent-purple);
 		opacity: 0.7;
 		font-style: italic;
 	}

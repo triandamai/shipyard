@@ -339,7 +339,7 @@
 	.plan-features li::before { content: '· '; color: var(--text-dim); }
 	.plan-check {
 		position: absolute; top: 10px; right: 10px; width: 18px; height: 18px; border-radius: 50%;
-		background: var(--accent); color: #fff;
+		background: var(--accent); color: var(--accent-fg);
 		display: flex; align-items: center; justify-content: center;
 	}
 	.paid-note { font-size: 12px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; margin: 4px 0 0; }

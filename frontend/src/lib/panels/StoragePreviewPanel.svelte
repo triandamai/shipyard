@@ -159,7 +159,7 @@
 	.preview-binary p { font-size: 12.5px; color: var(--text-muted); margin: 0 0 16px; line-height: 1.5; }
 
 	.dl-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 16px; height: 36px; box-sizing: border-box; border-radius: var(--radius-md); border: 1px solid transparent; font-family: var(--font-sans); font-size: 13px; font-weight: 600; white-space: nowrap; text-decoration: none; transition: background var(--transition-fast), border-color var(--transition-fast); }
-	.dl-link--primary, .dl-link--primary:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+	.dl-link--primary, .dl-link--primary:hover { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 	.dl-link--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 	.dl-link--secondary, .dl-link--secondary:hover { background: var(--bg-surface); border-color: var(--border); color: var(--text-secondary); }
 	.dl-link--secondary:hover { background: var(--bg-hover); }

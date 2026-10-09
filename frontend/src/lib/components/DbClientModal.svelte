@@ -638,7 +638,7 @@
 	}
 	.conn-detail code { font-family: var(--font-mono); }
 	.sep { color: var(--border-hover); }
-	.engine-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
+	.engine-label { font-size: 10px; }
 
 	.editor-wrap {
 		display: flex;
@@ -652,8 +652,6 @@
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
 	}
 
 	.sql-editor {
@@ -742,8 +740,6 @@
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
 		white-space: nowrap;
 		border-bottom: 1px solid var(--border);
 	}
@@ -789,8 +785,6 @@
 		font-size: 10px;
 		font-weight: 700;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		flex-shrink: 0;
 	}
 

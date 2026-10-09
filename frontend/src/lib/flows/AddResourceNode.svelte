@@ -61,7 +61,7 @@
 	
 	.add-resource-node:hover .node-icon {
 		background: var(--accent);
-		color: white;
+		color: var(--accent-fg);
 	}
 
 	.node-name {

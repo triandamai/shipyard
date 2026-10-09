@@ -354,7 +354,7 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.detail-kv { display: flex; flex-direction: column; gap: 2px; }
-	.detail-k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+	.detail-k { font-size: 11px; color: var(--text-muted); }
 	.detail-v { font-size: 12px; color: var(--text-primary); word-break: break-all; }
 
 	.mono { font-family: var(--font-mono); font-size: 12px; }
@@ -390,8 +390,7 @@
 	}
 	.m-row:last-child { border-bottom: none; }
 	.m-label {
-		font-size: 10px; font-weight: 600; color: var(--text-muted);
-		text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0;
+		font-size: 10px; font-weight: 600; color: var(--text-muted); flex-shrink: 0;
 	}
 	.m-detail {
 		border-top: 1px solid var(--border);

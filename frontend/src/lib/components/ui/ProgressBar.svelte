@@ -17,13 +17,13 @@
 	.ui-progress {
 		width: 100%;
 		height: 6px;
-		border-radius: 999px;
+		border-radius: 2px;
 		background: var(--border);
 		overflow: hidden;
 	}
 	.ui-progress-fill {
 		height: 100%;
-		border-radius: 999px;
+		border-radius: 2px;
 		transition: width var(--transition-normal);
 	}
 	.ui-progress-fill--blue   { background: var(--accent); }
