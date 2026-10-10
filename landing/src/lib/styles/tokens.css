@@ -1,0 +1,100 @@
+/* Drydock tokens for the Shipyard website (landing + docs).
+   Mirrors frontend/src/routes/layout.css. */
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/400-italic.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+:root {
+	--bg-base: #ecece8;
+	--bg-surface: #ffffff;
+	--bg-elevated: #f7f7f5;
+	--bg-hover: #e6e6e1;
+	--rail-bg: #141619;
+	--accent: #c2410c;
+	--accent-hover: #9a3412;
+	--accent-fg: #ffffff;
+	--accent-muted: rgba(194, 65, 12, 0.09);
+	--link: #9a3412;
+	--blue: #1d4ed8;
+	--blue-muted: rgba(29, 78, 216, 0.07);
+	--blue-text: #1e3a8a;
+	--green: #15803d;
+	--green-muted: rgba(21, 128, 61, 0.08);
+	--green-text: #14532d;
+	--yellow: #a16207;
+	--yellow-muted: rgba(161, 98, 7, 0.09);
+	--yellow-text: #713f12;
+	--border: #dcdcd6;
+	--border-hover: #c4c4bc;
+	--text-primary: #16181b;
+	--text-secondary: #41464d;
+	--text-muted: #5f656c;
+	--terminal-bg: #141619;
+	--terminal-border: #2a2d32;
+	--terminal-fg: #c3c6ca;
+	--terminal-dim: #8b9097;
+	--font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		--bg-base: #0e0f11;
+		--bg-surface: #17191c;
+		--bg-elevated: #131518;
+		--bg-hover: #22252a;
+		--rail-bg: #0a0b0c;
+		--accent: #f26b1d;
+		--accent-hover: #fb8b47;
+		--accent-fg: #141619;
+		--accent-muted: rgba(242, 107, 29, 0.14);
+		--link: #fb8b47;
+		--blue: #60a5fa;
+		--blue-muted: rgba(96, 165, 250, 0.1);
+		--blue-text: #93c5fd;
+		--green: #4ade80;
+		--green-muted: rgba(74, 222, 128, 0.1);
+		--green-text: #86efac;
+		--yellow: #fbbf24;
+		--yellow-muted: rgba(251, 191, 36, 0.1);
+		--yellow-text: #fcd34d;
+		--border: #2a2d32;
+		--border-hover: #3a3e44;
+		--text-primary: #ecedee;
+		--text-secondary: #c3c6ca;
+		--text-muted: #9097a0;
+		color-scheme: dark;
+	}
+}
+:root[data-theme='dark'] {
+	--bg-base: #0e0f11;
+	--bg-surface: #17191c;
+	--bg-elevated: #131518;
+	--bg-hover: #22252a;
+	--rail-bg: #0a0b0c;
+	--accent: #f26b1d;
+	--accent-hover: #fb8b47;
+	--accent-fg: #141619;
+	--accent-muted: rgba(242, 107, 29, 0.14);
+	--link: #fb8b47;
+	--blue: #60a5fa;
+	--blue-muted: rgba(96, 165, 250, 0.1);
+	--blue-text: #93c5fd;
+	--green: #4ade80;
+	--green-muted: rgba(74, 222, 128, 0.1);
+	--green-text: #86efac;
+	--yellow: #fbbf24;
+	--yellow-muted: rgba(251, 191, 36, 0.1);
+	--yellow-text: #fcd34d;
+	--border: #2a2d32;
+	--border-hover: #3a3e44;
+	--text-primary: #ecedee;
+	--text-secondary: #c3c6ca;
+	--text-muted: #9097a0;
+	color-scheme: dark;
+}
+
