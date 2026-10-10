@@ -6,7 +6,10 @@ export async function GET() {
 		{ path: 'docs', changefreq: 'weekly', priority: '0.8' },
 		{ path: 'docs/api', changefreq: 'weekly', priority: '0.7' },
 		{ path: 'docs/edge-functions', changefreq: 'weekly', priority: '0.7' },
-		{ path: 'docs/registry', changefreq: 'weekly', priority: '0.7' }
+		{ path: 'docs/registry', changefreq: 'weekly', priority: '0.7' },
+		{ path: 'docs/sandbox', changefreq: 'weekly', priority: '0.7' },
+		{ path: 'llms.txt', changefreq: 'weekly', priority: '0.5' },
+		{ path: 'llms-full.txt', changefreq: 'weekly', priority: '0.5' }
 	];
 
 	const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
