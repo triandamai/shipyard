@@ -1,5 +1,6 @@
 <script lang="ts">
 	import favicon from '$lib/assets/favicon.svg';
+	import { page } from '$app/state';
 
 	let { children } = $props();
 
@@ -15,7 +16,7 @@
 	<!-- Primary -->
 	<title>{OG_TITLE}</title>
 	<meta name="description" content={OG_DESC} />
-	<link rel="canonical" href={SITE_URL} />
+	{#if page.url.pathname === '/'}<link rel="canonical" href={SITE_URL} />{/if}
 
 	<!-- Open Graph (Facebook, WhatsApp, Telegram, LinkedIn, etc.) -->
 	<meta property="og:type"        content="website" />
@@ -39,7 +40,7 @@
 
 	<!-- Extra signals for crawlers -->
 	<meta name="robots"   content="index, follow" />
-	<meta name="theme-color" content="#0F1827" />
+	<meta name="theme-color" content="#141619" />
 </svelte:head>
 
 {@render children()}

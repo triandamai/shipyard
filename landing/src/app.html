@@ -6,6 +6,12 @@
 		<meta name="text-scale" content="scale" />
 		<title>Shipyard — Deploy &amp; Orchestrate Containers on Your VPS</title>
 		<meta name="description" content="Open-source platform to deploy, manage, and scale Docker services on your own VPS. One-command install, automatic HTTPS, and a live topology canvas." />
+		<script>
+			try {
+				var t = localStorage.getItem('shipyard_docs_theme');
+				if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+			} catch (e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
