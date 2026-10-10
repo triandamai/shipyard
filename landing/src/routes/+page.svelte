@@ -1,1084 +1,1195 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		Anchor, Container, Globe, Shield, Zap, ArrowRight, Terminal, Copy, Check, ChevronRight,
-		GitBranch, RotateCcw, Key, ShieldCheck, Mail, Cpu, Server, FileCode, Activity, Webhook
-	} from '@lucide/svelte';
 	import { SHIPYARD_VERSION } from '$lib/version';
+	import '$lib/styles/tokens.css';
 
+	const GITHUB = 'https://github.com/triandamai/shipyard';
+	const DESCRIPTION =
+		'Shipyard is an open-source platform you install on your own server. Deploy from Git or any Docker image, get HTTPS on your domain, roll back in one click, and see every service on a live canvas.';
+
+	let installCmd = $state('curl -fsSL https://shipyard.trian.space/install.sh | sudo bash');
 	let copied = $state(false);
-	let installCmd = $state('curl -fsSL https://shipyard.trian.space/install.sh | bash');
+
+	// Hero: one deploy plays out on the canvas once, then rests in its final state.
+	const DEPLOY_STEPS = ['Pull image', 'Apply variables', 'Mount volumes', 'Update service'];
+	let doneSteps = $state(0);
+	let live = $state(false);
+
+	// The canvas is drawn at 600×500 and scaled to fit its column.
+	let canvasWrap: HTMLDivElement | undefined = $state();
+	let scale = $state(1);
 
 	onMount(() => {
-		installCmd = `curl -fsSL ${window.location.protocol}//${window.location.host}/install.sh | bash`;
+		installCmd = `curl -fsSL ${location.origin}/install.sh | sudo bash`;
+
+		const ro = new ResizeObserver(([entry]) => {
+			scale = Math.min(1, entry.contentRect.width / 600);
+		});
+		if (canvasWrap) ro.observe(canvasWrap);
+
+		const timers: ReturnType<typeof setTimeout>[] = [];
+		if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+			doneSteps = DEPLOY_STEPS.length;
+			live = true;
+		} else {
+			DEPLOY_STEPS.forEach((_, i) => timers.push(setTimeout(() => (doneSteps = i + 1), 900 + i * 700)));
+			timers.push(setTimeout(() => (live = true), 900 + DEPLOY_STEPS.length * 700));
+		}
+		return () => {
+			ro.disconnect();
+			timers.forEach(clearTimeout);
+		};
 	});
 
 	async function copyInstall() {
-		await navigator.clipboard.writeText(installCmd);
-		copied = true;
-		setTimeout(() => (copied = false), 2000);
+		try {
+			await navigator.clipboard.writeText(installCmd);
+			copied = true;
+			setTimeout(() => (copied = false), 1600);
+		} catch {
+			/* clipboard unavailable: the command stays selectable */
+		}
 	}
 
-	const steps = [
-		{ num: '01', title: 'Run the install script', desc: 'One command sets up Docker, generates secrets, and starts all services.' },
-		{ num: '02', title: 'Open the dashboard', desc: 'Shipyard is running at your server IP. Create your admin account.' },
-		{ num: '03', title: 'Deploy your first app', desc: 'Point to a Git repo or Docker image and hit Deploy — Shipyard handles the rest.' },
-	];
+	const builtOn = ['Docker Swarm', 'Traefik', "Let's Encrypt", 'PostgreSQL', 'Rust', 'SvelteKit'];
 
-	const features = [
+	const featureGroups = [
 		{
-			icon: Container,
-			title: 'Container Orchestration',
-			desc: 'Run any Docker image as a replicated Swarm service. Scale up, scale down, or pin to a node — all from the dashboard.',
+			title: 'Deploy',
+			items: [
+				['From Git', 'Push to deploy. Shipyard builds from your Dockerfile or with Nixpacks on your server.'],
+				['From any image', 'Run anything from Docker Hub, GHCR or Shipyard’s own built-in registry.'],
+				['Docker Compose import', 'Paste a Compose file and get managed services, networks and volumes.'],
+				['One-click rollback', 'Every deploy records its exact image digest, so going back is instant.'],
+				['API keys and webhooks', 'Trigger deploys from GitHub Actions, scripts or another platform.']
+			]
 		},
 		{
-			icon: GitBranch,
-			title: 'Git-based Deployments',
-			desc: 'Connect a repo and push to deploy. Shipyard auto-detects Dockerfile or Nixpacks and builds the image on the server.',
+			title: 'Run',
+			items: [
+				['Automatic HTTPS', 'Add a domain and Traefik issues a Let’s Encrypt certificate for it.'],
+				['Persistent volumes', 'Databases keep their data across redeploys, restarts and updates.'],
+				['Resource limits', 'Cap CPU and memory per service so one container can’t starve the rest.'],
+				['Multi-node Swarm', 'Join more servers with one script. Swarm spreads and reschedules work.'],
+				['Edge functions and sandboxes', 'Run TypeScript functions on Deno, or build small apps in the browser.']
+			]
 		},
 		{
-			icon: RotateCcw,
-			title: 'One-click Rollback',
-			desc: 'Every successful deployment records its exact image digest. Roll back to any prior version instantly — no guesswork.',
-		},
-		{
-			icon: Globe,
-			title: 'Automatic HTTPS',
-			desc: 'Traefik handles TLS termination and Let\'s Encrypt certificate issuance. Add a domain and HTTPS is live in seconds.',
-		},
-		{
-			icon: Zap,
-			title: 'Live Topology Canvas',
-			desc: 'Visual graph of services, networks, and volumes with real-time status updates pushed over MQTT — no polling.',
-		},
-		{
-			icon: Cpu,
-			title: 'Resource Limits',
-			desc: 'Set CPU and memory limits per service, enforced by Docker Swarm. Prevent one noisy container from starving the rest.',
-		},
-		{
-			icon: Shield,
-			title: 'Role-based Access',
-			desc: 'Owner, admin, member, and viewer roles with fine-grained permission grants per org and per project.',
-		},
-		{
-			icon: Key,
-			title: 'API Keys & Webhooks',
-			desc: 'Generate SHA-256-hashed API keys for CI/CD pipelines. Trigger deployments via webhook from GitHub Actions or any script.',
-		},
-		{
-			icon: FileCode,
-			title: 'Docker Compose Import',
-			desc: 'Paste a Compose file and Shipyard turns it into managed services, networks, and volumes — preserving all dependencies.',
-		},
-		{
-			icon: ShieldCheck,
-			title: 'Audit Logs',
-			desc: 'Full audit trail of every action across your organization — who deployed what, when, and from which IP.',
-		},
-		{
-			icon: Server,
-			title: 'Multi-node Swarm',
-			desc: 'Join additional VPS nodes to the cluster. Swarm schedules replicas across all nodes and re-schedules on failure.',
-		},
-		{
-			icon: Activity,
-			title: 'Live Monitoring',
-			desc: 'Per-service CPU, memory, and network charts plus host-level disk and network metrics streamed in real time.',
-		},
-	];
-
-	const stack = [
-		{
-			name: 'Rust',
-			role: 'Backend',
-			desc: 'Axum web framework powers the API — safe, fast, and zero-cost abstractions.',
-			color: '#f97316',
-			logo: `<svg viewBox="0 0 106 106" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M51.9 3.1a2.2 2.2 0 0 1 2.2 0l46.8 27a2.2 2.2 0 0 1 1.1 1.9v54a2.2 2.2 0 0 1-1.1 1.9l-46.8 27a2.2 2.2 0 0 1-2.2 0L5.1 87.9A2.2 2.2 0 0 1 4 86V32a2.2 2.2 0 0 1 1.1-1.9L51.9 3.1z"/></svg>`,
-		},
-		{
-			name: 'SvelteKit',
-			role: 'Frontend',
-			desc: 'Svelte 5 Runes with fine-grained reactivity for the dashboard and this landing page.',
-			color: '#ff3e00',
-			logo: `<svg viewBox="0 0 98.1 118" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M91.8 15.6C80.9-.1 59.2-4.7 43.6 5.5L16.1 22.8A29.6 29.6 0 0 0 3.4 49.2a31 31 0 0 0 4.2 16.4 29.6 29.6 0 0 0-4.4 13.9 31.3 31.3 0 0 0 5.3 18.5c10.9 15.7 32.6 20.3 48.2 10.1l27.5-17.3a29.6 29.6 0 0 0 12.7-26.4 31 31 0 0 0-4.2-16.4 29.6 29.6 0 0 0 4.4-13.9 31.3 31.3 0 0 0-5.3-18.5" fill="currentColor"/></svg>`,
-		},
-		{
-			name: 'PostgreSQL',
-			role: 'Database',
-			desc: 'All platform state — orgs, services, deployments — lives in Postgres via SQLx.',
-			color: '#336791',
-			logo: `<svg viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 2C8.3 2 2 8.3 2 16s6.3 14 14 14 14-6.3 14-14S23.7 2 16 2zm0 2c6.6 0 12 5.4 12 12s-5.4 12-12 12S4 22.6 4 16 9.4 4 16 4z"/></svg>`,
-		},
-		{
-			name: 'Docker',
-			role: 'Runtime',
-			desc: 'Containers are orchestrated via the Docker Engine API — Swarm mode for replicas.',
-			color: '#2496ed',
-			logo: `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M13.98 11.08h2.12v-2h-2.12v2zm-3.06 0h2.12v-2h-2.12v2zm-3.07 0h2.12v-2H7.85v2zM4.78 11.08H6.9v-2H4.78v2zm3.07-3.07h2.12v-2H7.85v2zm3.07 0h2.12v-2h-2.12v2zm3.06 0h2.12v-2h-2.12v2zM23.7 11.5a4.35 4.35 0 0 0-3.7-1.35 5.1 5.1 0 0 0-1.7-3.27l-.34-.27-.3.32a4.82 4.82 0 0 0-.92 3.12 4.4 4.4 0 0 0 .5 1.83 5.84 5.84 0 0 1-2.13.4H.3l-.06.38a9.4 9.4 0 0 0 .47 4.57l.2.53.06.15a7.05 7.05 0 0 0 6.35 3.6 13.62 13.62 0 0 0 6.56-1.67 11.44 11.44 0 0 0 4.44-4.5 8.1 8.1 0 0 0 3.76-.9c1.01-.55 1.76-1.4 2.1-2.42l.12-.37-.6-.15z"/></svg>`,
-		},
-		{
-			name: 'Traefik',
-			role: 'Reverse Proxy',
-			desc: 'Automatic routing and TLS via Traefik — domain configuration written dynamically.',
-			color: '#24a1c1',
-			logo: `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`,
-		},
-		{
-			name: 'MQTT',
-			role: 'Real-time Events',
-			desc: 'RMQTT broker pushes topology and log events to the dashboard without polling.',
-			color: '#660066',
-			logo: `<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>`,
-		},
+			title: 'Operate',
+			items: [
+				['Live topology canvas', 'Services, volumes and domains on one canvas, updated as they change.'],
+				['Logs, terminal and metrics', 'Stream logs, open a shell in a container, watch CPU and memory.'],
+				['Roles and permissions', 'Owner, admin, member and viewer, per organization and per project.'],
+				['Audit log', 'Who deployed what, when and from where, for every action.'],
+				['Docs for people and LLMs', 'Every docs page is also plain Markdown, indexed by llms.txt.']
+			]
+		}
 	];
 </script>
 
 <svelte:head>
-	<title>Shipyard — Weigh anchor. Ship your app.</title>
-	<meta name="description" content="Self-hosted container platform. Deploy, manage, and scale Docker services with automatic HTTPS and a live topology canvas." />
-	<meta property="og:title" content="Shipyard" />
-	<meta property="og:description" content="Weigh anchor. Ship your app." />
+	<title>Shipyard · Deploy apps to servers you own</title>
+	<meta name="description" content={DESCRIPTION} />
+	<link rel="canonical" href="https://shipyard.trian.space/" />
+	<meta property="og:url" content="https://shipyard.trian.space/" />
+	<meta property="og:title" content="Shipyard · Deploy apps to servers you own" />
+	<meta property="og:description" content={DESCRIPTION} />
+	<meta name="twitter:title" content="Shipyard · Deploy apps to servers you own" />
+	<meta name="twitter:description" content={DESCRIPTION} />
 </svelte:head>
 
-<!-- ─── Page ──────────────────────────────────────────────────────────────── -->
-<div class="root">
+<div class="site">
+	<a class="skip" href="#main">Skip to content</a>
 
-	<!-- ── Nav ── -->
 	<header class="nav">
-		<nav class="nav-inner">
-			<a href="/" class="brand">
-				<Anchor size={20} strokeWidth={2.5} />
-				<span>Shipyard</span>
+		<div class="wrap nav-inner">
+			<a class="brand" href="/" aria-label="Shipyard home">
+				<span class="mark" aria-hidden="true">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>
+				</span>
+				Shipyard
 			</a>
-			<ul class="nav-links" role="list">
-				<li><a href="#install" class="nav-link">Install</a></li>
-				<li><a href="#features" class="nav-link">Features</a></li>
-				<li><a href="/docs" class="nav-link">Docs</a></li>
-				<li>
-					<a
-						href="https://github.com/triandamai/shipyard"
-						target="_blank"
-						rel="noopener noreferrer"
-						class="nav-link"
-					>
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-							<path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
-						</svg>
-						GitHub
-					</a>
-				</li>
-			</ul>
-			<a href="#install" class="btn btn-nav">
-				Get started
-				<ChevronRight size={14} />
-			</a>
-		</nav>
+			<nav aria-label="Main">
+				<ul class="nav-links">
+					<li><a href="#features">Features</a></li>
+					<li><a href="#how">How it works</a></li>
+					<li><a href="/docs">Docs</a></li>
+					<li><a href="/docs/api">API</a></li>
+					<li><a href={GITHUB} rel="noopener noreferrer">GitHub</a></li>
+				</ul>
+			</nav>
+			<a class="btn btn-primary btn-sm" href="#install">Install</a>
+		</div>
 	</header>
 
-	<!-- ── Hero ── -->
-	<section class="hero">
-		<!-- Decorative grid -->
-		<div class="hero-grid" aria-hidden="true"></div>
-		<!-- Glow orbs -->
-		<div class="orb orb-1" aria-hidden="true"></div>
-		<div class="orb orb-2" aria-hidden="true"></div>
-
-		<div class="hero-content">
-			<div class="hero-badge">
-				<span class="badge-dot"></span>
-				Open-source · Self-hosted · MIT License
-				<span class="badge-sep">·</span>
-				<a
-					href="https://github.com/triandamai/shipyard/releases/tag/v{SHIPYARD_VERSION}"
-					target="_blank"
-					rel="noopener noreferrer"
-					class="badge-version"
-				>v{SHIPYARD_VERSION}</a>
+	<main id="main">
+		<!-- Hero -->
+		<section class="hero wrap">
+			<div class="hero-copy">
+				<h1>Deploy apps to servers you own.</h1>
+				<p class="lead">
+					Shipyard is an open-source platform you install on your own server. Deploy from Git or any
+					Docker image, get HTTPS on your domain, roll back in one click, and see every service on a
+					live canvas.
+				</p>
+				<div class="hero-actions">
+					<a class="btn btn-primary" href="#install">Install Shipyard</a>
+					<a class="btn btn-secondary" href="/docs">Read the docs</a>
+				</div>
+				<div class="cmd">
+					<code>{installCmd}</code>
+					<button type="button" onclick={copyInstall} aria-label="Copy install command">{copied ? 'Copied' : 'Copy'}</button>
+				</div>
+				<p class="fine">Free and open source under the MIT license. Current release v{SHIPYARD_VERSION}.</p>
 			</div>
 
-			<h1 class="hero-title">
-				Weigh anchor.<br />
-				<em>Ship your app.</em>
-			</h1>
+			<div class="hero-visual" bind:this={canvasWrap} style="height: {500 * scale}px" aria-label="A project on the Shipyard canvas while its api service deploys" role="img">
+				<div class="canvas" style="transform: scale({scale})">
+					<div class="edge h" style="left:170px; top:66px; width:40px"></div>
+					<div class="edge v" style="left:297px; top:116px; height:72px"></div>
+					<div class="edge h" style="left:385px; top:232px; width:30px"></div>
+					<div class="edge v dashed" style="left:497px; top:96px; height:92px"></div>
+					<div class="edge v" style="left:355px; top:282px; height:102px"></div>
+					<div class="edge h" style="left:355px; top:384px; width:60px"></div>
 
-			<p class="hero-sub">
-				Shipyard is a self-hosted PaaS built on Docker Swarm. Deploy from Git or any image,
-				roll back in one click, manage domains with auto-TLS, and monitor your entire
-				cluster — from a dashboard that runs on your own server.
-			</p>
+					<div class="node portal" style="left:20px; top:40px; width:150px">
+						<span class="domain">shop.acme.io</span>
+						<span class="sub">HTTPS</span>
+					</div>
 
-			<div class="hero-ctas">
-				<a href="#install" class="btn btn-primary">
-					Install Shipyard
-					<ArrowRight size={16} />
-				</a>
-				<a
-					href="https://github.com/triandamai/shipyard"
-					target="_blank"
-					rel="noopener noreferrer"
-					class="btn btn-outline"
-				>
-					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-						<path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
-					</svg>
-					View on GitHub
-				</a>
+					<div class="node" style="left:210px; top:24px; width:175px">
+						<div class="node-head"><span class="tile">JS</span><span class="name">web<small>git · main</small></span></div>
+						<div class="node-foot"><span class="state"><i class="dot run"></i>Running</span><span class="mono">2/2</span></div>
+					</div>
+
+					<div class="node" class:selected={!live} style="left:210px; top:188px; width:175px">
+						<div class="node-head"><span class="tile">RS</span><span class="name">api<small>git · a91f2c0</small></span></div>
+						<div class="node-foot">
+							{#if live}
+								<span class="state"><i class="dot run"></i>Running</span>
+							{:else}
+								<span class="state deploying"><i class="dot dep"></i>Deploying</span>
+							{/if}
+							<span class="mono">:8080</span>
+						</div>
+						{#if !live}<div class="bar"><span style="width:{(doneSteps / DEPLOY_STEPS.length) * 100}%"></span></div>{/if}
+					</div>
+
+					<div class="node volume" style="left:415px; top:40px; width:165px">
+						<span class="name">pgdata<small>persistent volume</small></span>
+					</div>
+
+					<div class="node" style="left:415px; top:188px; width:165px">
+						<div class="node-head"><span class="tile">PG</span><span class="name">postgres<small>postgres:16</small></span></div>
+						<div class="node-foot"><span class="state"><i class="dot run"></i>Running</span><span class="mono">1/1</span></div>
+					</div>
+
+					<div class="node" style="left:415px; top:340px; width:165px">
+						<div class="node-head"><span class="tile">RD</span><span class="name">redis<small>redis:7</small></span></div>
+						<div class="node-foot"><span class="state"><i class="dot run"></i>Running</span><span class="mono">1/1</span></div>
+					</div>
+
+					<div class="deploy-card">
+						<p class="deploy-title">{live ? 'api is live' : 'Deploying api'}</p>
+						<ol>
+							{#each DEPLOY_STEPS as step, i (step)}
+								<li class:done={i < doneSteps}>
+									<span class="tick" aria-hidden="true">{i < doneSteps ? '✓' : ''}</span>{step}
+								</li>
+							{/each}
+						</ol>
+						<p class="deploy-foot mono">{live ? 'Deployed in 41s · rollback ready' : 'step ' + Math.min(doneSteps + 1, DEPLOY_STEPS.length) + ' of ' + DEPLOY_STEPS.length}</p>
+					</div>
+				</div>
 			</div>
+		</section>
 
-			<!-- Install card -->
-			<div class="install-card" id="install">
-				<div class="install-card-header">
-					<Terminal size={14} />
-					<span>Quick install — Linux / macOS with Docker</span>
-				</div>
-				<div class="install-card-body">
-					<code class="install-cmd">{installCmd}</code>
-					<button class="copy-btn" onclick={copyInstall} aria-label="Copy install command">
-						{#if copied}
-							<Check size={14} />
-						{:else}
-							<Copy size={14} />
-						{/if}
-					</button>
-				</div>
-				<div class="install-card-footer">
-					Requires Docker ≥ 24 and Docker Compose v2. Tested on Ubuntu 22+, Debian 12+.
-				</div>
+		<!-- Built on -->
+		<section class="wrap built" aria-labelledby="built-title">
+			<p id="built-title">Built on open-source infrastructure you already trust</p>
+			<ul>
+				{#each builtOn as name (name)}<li>{name}</li>{/each}
+			</ul>
+		</section>
+
+		<!-- Pillars -->
+		<section class="wrap pillars" aria-label="Why Shipyard">
+			<div>
+				<h2>Runs on your servers</h2>
+				<p>Install on any Linux VPS with Docker. Your code, data and logs stay on machines you control, and there’s no per-seat bill. Add servers later and Swarm spreads the work.</p>
 			</div>
-		</div>
-	</section>
+			<div>
+				<h2>Deploys that keep your data</h2>
+				<p>Databases get a persistent volume automatically, and stateful services stop before they restart, so a redeploy or a Shipyard update never brings them back empty.</p>
+			</div>
+			<div>
+				<h2>Every service, live</h2>
+				<p>Services, volumes and domains sit on one canvas with their status, logs and resource use streamed as they change, so you see a failing deploy before your users do.</p>
+			</div>
+		</section>
 
-	<!-- ── How it works ── -->
-	<section class="steps-section" id="install-steps">
-		<div class="wrap">
-			<div class="section-label">How it works</div>
-			<h2 class="section-title">Up and running in three steps</h2>
-			<div class="steps-grid">
-				{#each steps as step}
-					<div class="step-card">
-						<div class="step-num">{step.num}</div>
-						<h3 class="step-title">{step.title}</h3>
-						<p class="step-desc">{step.desc}</p>
+		<!-- How it works -->
+		<section class="how" id="how" aria-labelledby="how-title">
+			<div class="wrap">
+				<div class="how-head">
+					<h2 id="how-title">From a fresh server to a live app in three steps</h2>
+					<p>No control plane to rent and nothing to sign up for. Shipyard installs next to your apps and manages them from there.</p>
+				</div>
+
+				<ol class="steps">
+					<li class="step">
+						<div class="frag term" aria-hidden="true">
+							<div class="term-bar">install.sh</div>
+							<pre><span class="dim">$</span> curl -fsSL …/install.sh | sudo bash
+<span class="ok">✔</span> Docker 26.1 and Compose v2.27 found
+<span class="dim">?</span> Domain: ship.acme.io
+<span class="dim">?</span> Enable HTTPS? Y
+<span class="ok">✔</span> Secrets generated, config written
+<span class="ok">✔</span> Stack started</pre>
+						</div>
+						<div class="step-text">
+							<span class="num">1</span>
+							<h3>Install on your server</h3>
+							<p>Run one command on any Linux machine with Docker. It writes the config, generates secrets, sets up Traefik and HTTPS, and starts the stack.</p>
+						</div>
+					</li>
+					<li class="step">
+						<div class="frag form" aria-hidden="true">
+							<p class="frag-title">Create your organization</p>
+							<div class="field"><span>Name</span><span class="val">Acme</span></div>
+							<div class="field"><span>URL</span><span class="val mono">ship.acme.io/orgs/acme</span></div>
+							<div class="field"><span>Invite</span><span class="val">ops@acme.io <em>Admin</em></span></div>
+						</div>
+						<div class="step-text">
+							<span class="num">2</span>
+							<h3>Create your organization</h3>
+							<p>Open your domain, make the admin account and your first organization, and invite your team with roles from owner to viewer.</p>
+						</div>
+					</li>
+					<li class="step">
+						<div class="frag form" aria-hidden="true">
+							<p class="frag-title">New service</p>
+							<div class="field"><span>Image</span><span class="val mono">ghcr.io/acme/web:latest</span></div>
+							<div class="field"><span>Domain</span><span class="val mono">shop.acme.io</span></div>
+							<div class="frag-actions"><span class="fake-btn">Deploy</span></div>
+						</div>
+						<div class="step-text">
+							<span class="num">3</span>
+							<h3>Deploy your first app</h3>
+							<p>Point Shipyard at a Git repo or an image, add a domain and press Deploy. Every deploy is recorded, so rolling back is one click.</p>
+						</div>
+					</li>
+				</ol>
+				<a class="btn btn-onDark" href="/docs#installation">Read the install guide</a>
+			</div>
+		</section>
+
+		<!-- Features -->
+		<section class="wrap features" id="features" aria-labelledby="features-title">
+			<h2 id="features-title">Everything a small team needs to run production</h2>
+			<div class="groups">
+				{#each featureGroups as g (g.title)}
+					<div class="group">
+						<h3>{g.title}</h3>
+						<dl>
+							{#each g.items as [term, desc] (term)}
+								<div><dt>{term}</dt><dd>{desc}</dd></div>
+							{/each}
+						</dl>
 					</div>
 				{/each}
 			</div>
+		</section>
 
-			<!-- Detailed install block -->
-			<div class="install-detail">
-				<div class="install-detail-col">
-					<h3 class="install-detail-title">What the script does</h3>
-					<ul class="install-checklist">
-						<li><Check size={14} /> Checks Docker & Docker Compose prerequisites</li>
-						<li><Check size={14} /> Generates secure random secrets</li>
-						<li><Check size={14} /> Writes <code>/opt/shipyard/.env</code> and <code>docker-compose.yml</code></li>
-						<li><Check size={14} /> Configures Traefik with optional HTTPS</li>
-						<li><Check size={14} /> Pulls images and starts the stack</li>
+		<!-- Install -->
+		<section class="install" id="install" aria-labelledby="install-title">
+			<div class="wrap install-inner">
+				<div>
+					<h2 id="install-title">Install it on your server</h2>
+					<p>Needs Docker 24 or later and Docker Compose v2. Tested on Ubuntu 22.04+ and Debian 12+. The script installs Docker for you if it’s missing.</p>
+					<div class="cmd cmd-lg">
+						<code>{installCmd}</code>
+						<button type="button" onclick={copyInstall} aria-label="Copy install command">{copied ? 'Copied' : 'Copy'}</button>
+					</div>
+					<ul class="does">
+						<li>Checks Docker and Docker Compose</li>
+						<li>Generates secure random secrets</li>
+						<li>Writes <code>/opt/shipyard/.env</code> and <code>docker-compose.yml</code></li>
+						<li>Configures Traefik, with HTTPS if you want it</li>
+						<li>Pulls the images and starts the stack</li>
 					</ul>
+					<p class="install-links"><a href="/docs#installation">Installation guide</a> <a href={GITHUB} rel="noopener noreferrer">Source on GitHub</a></p>
 				</div>
-				<div class="terminal-block">
-					<div class="terminal-bar">
-						<span class="t-dot t-red"></span>
-						<span class="t-dot t-yellow"></span>
-						<span class="t-dot t-green"></span>
-						<span class="t-title">install.sh</span>
-					</div>
-					<pre class="terminal-body"><span class="t-dim">$</span> <span class="t-cmd">{installCmd}</span>
+				<div class="frag term term-lg" aria-hidden="true">
+					<div class="term-bar">ship.acme.io: install.sh</div>
+					<pre><span class="dim">$</span> curl -fsSL https://shipyard.trian.space/install.sh | sudo bash
+<span class="ok">✔</span> Docker 26.1.4 found
+<span class="ok">✔</span> Docker Compose v2.27 found
+<span class="dim">?</span> Domain (e.g. shipyard.example.com): ship.acme.io
+<span class="dim">?</span> Enable HTTPS? [Y/n]: Y
+<span class="dim">?</span> Admin email for Let's Encrypt: ops@acme.io
+<span class="ok">✔</span> Secrets generated
+<span class="ok">✔</span> Config written to /opt/shipyard/
+<span class="ok">✔</span> Images pulled
+<span class="ok">✔</span> Stack started
 
-<span class="t-green-txt">✔</span> Docker 26.1.4 found
-<span class="t-green-txt">✔</span> Docker Compose v2.27 found
-<span class="t-dim">?</span> <span class="t-white">Domain (e.g. shipyard.example.com):</span> <span class="t-blue">ship.acme.io</span>
-<span class="t-dim">?</span> <span class="t-white">Enable HTTPS? [Y/n]:</span> <span class="t-blue">Y</span>
-<span class="t-dim">?</span> <span class="t-white">Admin email for Let's Encrypt:</span> <span class="t-blue">ops@acme.io</span>
-
-<span class="t-green-txt">✔</span> Secrets generated
-<span class="t-green-txt">✔</span> Config written to /opt/shipyard/
-<span class="t-green-txt">✔</span> Images pulled
-<span class="t-green-txt">✔</span> Stack started
-
-<span class="t-white">Open https://ship.acme.io to finish setup.</span></pre>
+Open <span class="link">https://ship.acme.io</span> to finish setup.</pre>
 				</div>
 			</div>
-		</div>
-	</section>
+		</section>
+	</main>
 
-	<!-- ── Features ── -->
-	<section class="features-section" id="features">
-		<div class="wrap">
-			<div class="section-label">Features</div>
-			<h2 class="section-title">Everything you need to ship</h2>
-			<div class="features-grid">
-				{#each features as f}
-					<div class="feature-card">
-						<div class="feature-icon-wrap">
-							<f.icon size={20} strokeWidth={1.75} />
-						</div>
-						<h3 class="feature-title">{f.title}</h3>
-						<p class="feature-desc">{f.desc}</p>
-					</div>
-				{/each}
-			</div>
-		</div>
-	</section>
-
-	<!-- ── Tech stack ── -->
-	<section class="stack-section">
-		<div class="wrap">
-			<div class="section-label">Built with</div>
-			<h2 class="section-title">Open-source, all the way down</h2>
-			<p class="stack-intro">
-				Shipyard is built entirely on production-grade open-source technology.
-				No proprietary runtime, no hidden dependency.
-			</p>
-			<div class="stack-grid">
-				{#each stack as tech}
-					<div class="stack-card">
-						<div class="stack-card-top">
-							<div class="stack-logo" style="color: {tech.color}; background: {tech.color}1a; border-color: {tech.color}33">
-								{@html tech.logo}
-							</div>
-							<div class="stack-meta">
-								<span class="stack-name">{tech.name}</span>
-								<span class="stack-role">{tech.role}</span>
-							</div>
-						</div>
-						<p class="stack-desc">{tech.desc}</p>
-					</div>
-				{/each}
-			</div>
-		</div>
-	</section>
-
-	<!-- ── CTA band ── -->
-	<section class="cta-section">
-		<div class="wrap cta-inner">
-			<div class="cta-bg-lines" aria-hidden="true"></div>
-			<Anchor size={36} class="cta-anchor-icon" strokeWidth={1.5} />
-			<h2 class="cta-title">Your infra, your rules.</h2>
-			<p class="cta-sub">No vendor lock-in. No per-seat pricing. One install command.</p>
-			<div class="cta-btns">
-				<a href="#install" class="btn btn-primary btn-lg">
-					Install now
-					<ArrowRight size={16} />
-				</a>
-				<a
-					href="https://github.com/triandamai/shipyard"
-					target="_blank"
-					rel="noopener noreferrer"
-					class="btn btn-outline btn-lg"
-				>
-					Star on GitHub
-				</a>
-			</div>
-		</div>
-	</section>
-
-	<!-- ── Footer ── -->
 	<footer class="footer">
-		<div class="footer-inner">
-			<span class="footer-brand">
-				<Anchor size={14} strokeWidth={2.5} />
-				Shipyard
-			</span>
-			<span class="footer-sep"></span>
-			<span class="footer-copy">Open-source container platform — MIT License</span>
-			<a
-				href="https://github.com/triandamai/shipyard/releases/tag/v{SHIPYARD_VERSION}"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="footer-version"
-			>v{SHIPYARD_VERSION}</a>
-			<a
-				href="https://github.com/triandamai/shipyard"
-				target="_blank"
-				rel="noopener noreferrer"
-				class="footer-gh"
-			>
-				<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-					<path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
-				</svg>
-				GitHub
-			</a>
+		<div class="wrap footer-inner">
+			<div class="footer-brand">
+				<a class="brand" href="/">
+					<span class="mark" aria-hidden="true">
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><line x1="12" y1="22" x2="12" y2="8"></line><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path></svg>
+					</span>
+					Shipyard
+				</a>
+				<p>Open-source platform for deploying apps to servers you own. MIT license, v{SHIPYARD_VERSION}.</p>
+			</div>
+			<nav aria-label="Documentation">
+				<p class="footer-title">Docs</p>
+				<ul>
+					<li><a href="/docs">Guide</a></li>
+					<li><a href="/docs/api">API reference</a></li>
+					<li><a href="/docs/edge-functions">Edge functions</a></li>
+					<li><a href="/docs/registry">Container registry</a></li>
+				</ul>
+			</nav>
+			<nav aria-label="Project">
+				<p class="footer-title">Project</p>
+				<ul>
+					<li><a href={GITHUB} rel="noopener noreferrer">GitHub</a></li>
+					<li><a href="{GITHUB}/releases" rel="noopener noreferrer">Releases</a></li>
+					<li><a href="/llms.txt">llms.txt</a></li>
+				</ul>
+			</nav>
 		</div>
 	</footer>
-
 </div>
 
 <style>
-	/* ── Reset & base ────────────────────────────────────────────── */
-	:global(*, *::before, *::after) { box-sizing: border-box; margin: 0; padding: 0; }
-	:global(html) { scroll-behavior: smooth; }
 	:global(body) {
-		font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-		background: #0a0a0f;
-		color: #e2e8f0;
+		margin: 0;
+		background: var(--bg-base);
+	}
+	.site {
+		background: var(--bg-surface);
+		color: var(--text-primary);
+		font-family: var(--font-sans);
+		font-size: 16px;
 		line-height: 1.6;
 		-webkit-font-smoothing: antialiased;
 	}
-
-	.root { min-height: 100vh; display: flex; flex-direction: column; }
-	.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
-
-	/* ── Nav ────────────────────────────────────────────────────── */
-	.nav {
-		position: sticky;
-		top: 0;
-		z-index: 100;
-		background: rgba(10,10,15,0.8);
-		backdrop-filter: blur(16px) saturate(1.4);
-		border-bottom: 1px solid rgba(255,255,255,0.06);
+	.site :global(*),
+	.site :global(*::before),
+	.site :global(*::after) {
+		box-sizing: border-box;
 	}
-	.nav-inner {
-		max-width: 1120px;
+	.site :focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+	.site a {
+		color: var(--link);
+	}
+	.wrap {
+		max-width: 1200px;
 		margin: 0 auto;
-		padding: 0 24px;
-		height: 60px;
-		display: flex;
-		align-items: center;
-		gap: 32px;
+		padding-inline: 24px;
 	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 15px;
-		font-weight: 700;
-		color: #fff;
-		text-decoration: none;
-		letter-spacing: -0.01em;
-		flex-shrink: 0;
+	.mono {
+		font-family: var(--font-mono);
 	}
-	.brand :global(svg) { color: #3b82f6; }
-	.nav-links {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		list-style: none;
-		flex: 1;
-	}
-	.nav-link {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 12px;
-		font-size: 14px;
-		font-weight: 500;
-		color: rgba(255,255,255,0.55);
-		text-decoration: none;
+	.skip {
+		position: absolute;
+		left: 16px;
+		top: -48px;
+		z-index: 30;
+		padding: 8px 12px;
 		border-radius: 6px;
-		transition: color 0.15s, background 0.15s;
+		background: var(--accent);
+		color: var(--accent-fg) !important;
+		text-decoration: none;
 	}
-	.nav-link:hover { color: #fff; background: rgba(255,255,255,0.06); }
+	.skip:focus {
+		top: 8px;
+	}
 
-	/* ── Buttons ─────────────────────────────────────────────────── */
+	/* Buttons */
 	.btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 7px;
-		border-radius: 8px;
-		font-family: inherit;
-		font-weight: 600;
+		justify-content: center;
+		min-height: 44px;
+		padding: 0 20px;
+		border-radius: 6px;
+		border: 1px solid transparent;
+		font: 500 15px var(--font-sans);
 		text-decoration: none;
-		cursor: pointer;
-		transition: all 0.18s;
 		white-space: nowrap;
-		border: none;
+	}
+	.btn-sm {
+		min-height: 36px;
+		padding: 0 14px;
 		font-size: 14px;
-		padding: 8px 18px;
 	}
-	.btn-lg { font-size: 15px; padding: 11px 24px; }
-
-	.btn-nav {
-		background: #1d4ed8;
-		color: #fff;
-		margin-left: auto;
-		font-size: 13px;
-		padding: 7px 16px;
-	}
-	.btn-nav:hover { background: #2563eb; transform: translateY(-1px); }
-
 	.btn-primary {
-		background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-		color: #fff;
-		box-shadow: 0 1px 3px rgba(37,99,235,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+		background: var(--accent);
+		color: var(--accent-fg) !important;
 	}
 	.btn-primary:hover {
-		background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-		transform: translateY(-2px);
-		box-shadow: 0 6px 20px rgba(37,99,235,0.4);
+		background: var(--accent-hover);
+	}
+	.btn-secondary {
+		background: var(--bg-surface);
+		border-color: var(--border-hover);
+		color: var(--text-primary) !important;
+	}
+	.btn-secondary:hover {
+		background: var(--bg-hover);
+	}
+	.btn-onDark {
+		border-color: #3a3e44;
+		color: #ecedee !important;
+		margin-top: 8px;
+	}
+	.btn-onDark:hover {
+		background: #22252a;
 	}
 
-	.btn-outline {
-		background: transparent;
-		color: rgba(255,255,255,0.7);
-		border: 1px solid rgba(255,255,255,0.15);
+	/* Nav */
+	.nav {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+		backdrop-filter: blur(8px);
+		border-bottom: 1px solid var(--border);
 	}
-	.btn-outline:hover {
-		color: #fff;
-		border-color: rgba(255,255,255,0.35);
-		background: rgba(255,255,255,0.05);
-	}
-
-	/* ── Hero ────────────────────────────────────────────────────── */
-	.hero {
-		position: relative;
-		overflow: hidden;
-		padding: 96px 24px 80px;
+	.nav-inner {
 		display: flex;
-		justify-content: center;
-	}
-
-	/* Angular-style dot grid */
-	.hero-grid {
-		position: absolute;
-		inset: 0;
-		background-image:
-			radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
-		background-size: 32px 32px;
-		mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 100%);
-		pointer-events: none;
-	}
-
-	.orb {
-		position: absolute;
-		border-radius: 50%;
-		filter: blur(80px);
-		pointer-events: none;
-	}
-	.orb-1 {
-		width: 600px; height: 600px;
-		top: -200px; left: 50%;
-		transform: translateX(-50%);
-		background: radial-gradient(circle, rgba(37,99,235,0.22) 0%, transparent 70%);
-	}
-	.orb-2 {
-		width: 300px; height: 300px;
-		top: 60px; right: 5%;
-		background: radial-gradient(circle, rgba(99,102,241,0.14) 0%, transparent 70%);
-	}
-
-	.hero-content {
-		position: relative;
-		display: flex;
-		flex-direction: column;
 		align-items: center;
-		text-align: center;
-		gap: 24px;
-		max-width: 760px;
-		width: 100%;
+		gap: 32px;
+		min-height: 64px;
 	}
-
-	.hero-badge {
+	.brand {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		padding: 5px 14px;
-		background: rgba(37,99,235,0.12);
-		border: 1px solid rgba(59,130,246,0.25);
-		border-radius: 999px;
-		font-size: 12px;
+		gap: 10px;
 		font-weight: 600;
-		color: #93c5fd;
-		letter-spacing: 0.02em;
-		text-transform: uppercase;
+		font-size: 17px;
+		letter-spacing: -0.01em;
+		color: var(--text-primary) !important;
+		text-decoration: none;
 	}
-	.badge-dot {
+	.mark {
+		width: 30px;
+		height: 30px;
+		border-radius: 6px;
+		background: var(--rail-bg);
+		color: #f26b1d;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+	nav {
+		flex: 1;
+	}
+	.nav-links {
+		display: flex;
+		justify-content: center;
+		gap: 4px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.nav-links a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 40px;
+		padding: 0 12px;
+		border-radius: 6px;
+		color: var(--text-secondary);
+		text-decoration: none;
+		font-size: 15px;
+	}
+	.nav-links a:hover {
+		color: var(--text-primary);
+		background: var(--bg-hover);
+	}
+
+	/* Hero */
+	.hero {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+		gap: 56px;
+		align-items: center;
+		padding-block: 88px 72px;
+	}
+	h1 {
+		margin: 0;
+		font-size: clamp(44px, 6vw, 72px);
+		line-height: 1.02;
+		font-weight: 500;
+		letter-spacing: -0.035em;
+		text-wrap: balance;
+	}
+	.lead {
+		margin: 24px 0 0;
+		max-width: 52ch;
+		font-size: 19px;
+		line-height: 1.55;
+		color: var(--text-secondary);
+	}
+	.hero-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+		margin-top: 32px;
+	}
+	.cmd {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 20px;
+		max-width: 520px;
+		padding: 6px 6px 6px 14px;
+		border-radius: 8px;
+		background: var(--terminal-bg);
+		border: 1px solid var(--terminal-border);
+	}
+	.cmd code {
+		flex: 1;
+		min-width: 0;
+		overflow-x: auto;
+		white-space: nowrap;
+		font: 400 13px var(--font-mono);
+		color: var(--terminal-fg);
+		scrollbar-width: none;
+	}
+	.cmd button {
+		min-height: 32px;
+		padding: 0 12px;
+		border-radius: 4px;
+		border: 1px solid #3a3e44;
+		background: transparent;
+		color: #ecedee;
+		font: 500 13px var(--font-sans);
+		cursor: pointer;
+	}
+	.cmd button:hover {
+		background: #22252a;
+	}
+	.fine {
+		margin: 12px 0 0;
+		font-size: 14px;
+		color: var(--text-muted);
+	}
+
+	/* Hero canvas: the product's own topology view */
+	.hero-visual {
+		position: relative;
+		overflow: hidden;
+	}
+	.canvas {
+		position: absolute;
+		left: 0;
+		top: 0;
+		width: 600px;
+		height: 500px;
+		transform-origin: 0 0;
+		border-radius: 12px;
+		border: 1px solid var(--border);
+		background-color: var(--bg-base);
+		background-image: radial-gradient(var(--border-hover) 1px, transparent 1px);
+		background-size: 20px 20px;
+	}
+	.edge {
+		position: absolute;
+		background: var(--border-hover);
+	}
+	.edge.h {
+		height: 1px;
+	}
+	.edge.v {
+		width: 1px;
+	}
+	.edge.dashed {
+		background: none;
+		border-left: 1px dashed var(--text-muted);
+	}
+	.node {
+		position: absolute;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		font-size: 12px;
+	}
+	.node.selected {
+		border-color: var(--blue);
+	}
+	.node-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px;
+		border-bottom: 1px solid var(--border);
+	}
+	.tile {
+		width: 26px;
+		height: 26px;
+		flex-shrink: 0;
+		border-radius: 4px;
+		background: var(--bg-hover);
+		color: var(--text-secondary);
+		font: 600 10px var(--font-mono);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.name {
+		display: flex;
+		flex-direction: column;
+		font-size: 13px;
+		font-weight: 600;
+		line-height: 1.25;
+	}
+	.name small {
+		font: 400 11px var(--font-mono);
+		color: var(--text-muted);
+	}
+	.node-foot {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 8px 10px;
+		color: var(--text-muted);
+	}
+	.state {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--text-secondary);
+	}
+	.state.deploying {
+		color: var(--blue-text);
+		font-weight: 500;
+	}
+	.dot {
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: #3b82f6;
-		box-shadow: 0 0 6px #3b82f6;
-		animation: pulse 2s ease-in-out infinite;
 	}
-	.badge-sep { opacity: 0.4; }
-	.badge-version {
-		color: #93c5fd;
-		text-decoration: none;
-		font-weight: 700;
-		transition: color 0.15s;
+	.dot.run {
+		background: var(--green);
 	}
-	.badge-version:hover { color: #fff; }
+	.dot.dep {
+		background: var(--blue);
+		animation: pulse 1.2s ease-in-out infinite;
+	}
 	@keyframes pulse {
-		0%, 100% { opacity: 1; }
-		50%       { opacity: 0.4; }
+		50% {
+			opacity: 0.3;
+		}
 	}
-
-	.hero-title {
-		font-size: clamp(2.4rem, 6vw, 4rem);
-		font-weight: 800;
-		line-height: 1.08;
-		letter-spacing: -0.04em;
-		color: #fff;
-	}
-	.hero-title em {
-		font-style: normal;
-		background: linear-gradient(135deg, #60a5fa 0%, #818cf8 50%, #a78bfa 100%);
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		background-clip: text;
-	}
-
-	.hero-sub {
-		font-size: 17px;
-		line-height: 1.65;
-		color: rgba(255,255,255,0.5);
-		max-width: 540px;
-	}
-
-	.hero-ctas {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		flex-wrap: wrap;
-		justify-content: center;
-	}
-
-	/* ── Install card ─────────────────────────────────────────────── */
-	.install-card {
-		width: 100%;
-		max-width: 620px;
-		background: #111118;
-		border: 1px solid rgba(255,255,255,0.1);
-		border-radius: 12px;
+	.bar {
+		height: 2px;
+		background: var(--bg-hover);
+		border-radius: 0 0 6px 6px;
 		overflow: hidden;
-		box-shadow: 0 0 0 1px rgba(59,130,246,0.08), 0 20px 48px rgba(0,0,0,0.5);
-		text-align: left;
-		margin-top: 8px;
 	}
-	.install-card-header {
+	.bar span {
+		display: block;
+		height: 2px;
+		background: var(--blue);
+		transition: width 600ms ease;
+	}
+	.node.portal {
+		padding: 9px 12px;
+		display: flex;
+		flex-direction: column;
+	}
+	.domain {
+		font: 500 12px var(--font-mono);
+	}
+	.sub {
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+	.node.volume {
+		padding: 10px 12px;
+		border-style: dashed;
+		border-color: var(--text-muted);
+		background: var(--bg-elevated);
+	}
+	.deploy-card {
+		position: absolute;
+		left: 20px;
+		top: 292px;
+		width: 290px;
+		padding: 14px 16px;
+		border-radius: 8px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		box-shadow: 0 16px 40px rgba(20, 22, 25, 0.14), 0 2px 6px rgba(20, 22, 25, 0.06);
+	}
+	.deploy-title {
+		margin: 0 0 8px;
+		font-size: 14px;
+		font-weight: 600;
+	}
+	.deploy-card ol {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		font-size: 13px;
+		color: var(--text-muted);
+	}
+	.deploy-card li {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 10px 16px;
-		background: rgba(255,255,255,0.03);
-		border-bottom: 1px solid rgba(255,255,255,0.07);
-		font-size: 12px;
-		color: rgba(255,255,255,0.4);
+		padding: 2px 0;
 	}
-	.install-card-body {
-		display: flex;
+	.deploy-card li.done {
+		color: var(--text-primary);
+	}
+	.tick {
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		border: 1px solid var(--border-hover);
+		display: inline-flex;
 		align-items: center;
-		gap: 12px;
-		padding: 14px 16px;
+		justify-content: center;
+		font-size: 10px;
+		color: var(--green-text);
 	}
-	.install-cmd {
-		flex: 1;
-		font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', ui-monospace, monospace;
-		font-size: 13px;
-		color: #93c5fd;
-		word-break: break-all;
-		user-select: all;
+	li.done .tick {
+		border-color: var(--green);
+		background: var(--green-muted);
 	}
-	.copy-btn {
-		flex-shrink: 0;
+	.deploy-foot {
+		margin: 10px 0 0;
+		padding-top: 10px;
+		border-top: 1px solid var(--border);
+		font-size: 12px;
+		color: var(--text-muted);
+	}
+
+	/* Built on */
+	.built {
+		padding-block: 8px 72px;
+		text-align: center;
+	}
+	.built p {
+		margin: 0 0 20px;
+		font-size: 14px;
+		color: var(--text-muted);
+	}
+	.built ul {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 12px 44px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		font-size: 20px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		color: var(--text-muted);
+	}
+
+	/* Pillars */
+	.pillars {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 48px;
+		padding-block: 72px 112px;
+		border-top: 1px solid var(--border);
+	}
+	.pillars h2 {
+		margin: 0 0 10px;
+		font-size: 22px;
+		font-weight: 500;
+		letter-spacing: -0.015em;
+	}
+	.pillars p {
+		margin: 0;
+		color: var(--text-secondary);
+		font-size: 16px;
+		line-height: 1.65;
+	}
+
+	/* How it works: graphite in both themes */
+	.how {
+		background: #141619;
+		color: #ecedee;
+		padding-block: 112px;
+	}
+	.how-head {
+		max-width: 640px;
+		margin-bottom: 64px;
+	}
+	.how h2 {
+		margin: 0;
+		font-size: clamp(30px, 3.6vw, 44px);
+		line-height: 1.1;
+		font-weight: 500;
+		letter-spacing: -0.025em;
+		text-wrap: balance;
+	}
+	.how-head p {
+		margin: 16px 0 0;
+		font-size: 18px;
+		color: #c3c6ca;
+	}
+	.steps {
+		list-style: none;
+		margin: 0 0 40px;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 40px;
+	}
+	.step {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 64px;
+		align-items: center;
+	}
+	.step-text {
+		position: relative;
+		padding-left: 56px;
+	}
+	.num {
+		position: absolute;
+		left: 0;
+		top: 0;
 		width: 32px;
 		height: 32px;
+		border-radius: 50%;
+		border: 1px solid #f26b1d;
+		color: #f26b1d;
+		font: 500 14px var(--font-mono);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: rgba(255,255,255,0.05);
-		border: 1px solid rgba(255,255,255,0.1);
-		border-radius: 6px;
-		cursor: pointer;
-		color: rgba(255,255,255,0.5);
-		transition: all 0.15s;
 	}
-	.copy-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
-	.install-card-footer {
-		padding: 8px 16px;
-		background: rgba(255,255,255,0.02);
-		border-top: 1px solid rgba(255,255,255,0.06);
-		font-size: 11.5px;
-		color: rgba(255,255,255,0.3);
+	.step:not(:last-child) .step-text::before {
+		content: '';
+		position: absolute;
+		left: 16px;
+		top: 40px;
+		bottom: -120px;
+		width: 1px;
+		background: #2a2d32;
 	}
-
-	/* ── Steps section ───────────────────────────────────────────── */
-	.steps-section {
-		padding: 96px 0;
-		border-top: 1px solid rgba(255,255,255,0.06);
+	.step h3 {
+		margin: 2px 0 8px;
+		font-size: 21px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
 	}
-	.section-label {
-		font-size: 12px;
-		font-weight: 700;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
-		color: #3b82f6;
-		margin-bottom: 12px;
+	.step p {
+		margin: 0;
+		color: #c3c6ca;
+		line-height: 1.65;
+		max-width: 48ch;
 	}
-	.section-title {
-		font-size: clamp(1.5rem, 3vw, 2.25rem);
-		font-weight: 700;
-		letter-spacing: -0.03em;
-		color: #fff;
-		margin-bottom: 48px;
+	.frag {
+		border-radius: 8px;
+		border: 1px solid #2a2d32;
+		background: #1b1d21;
 	}
-	.steps-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-		gap: 1px;
-		background: rgba(255,255,255,0.06);
-		border: 1px solid rgba(255,255,255,0.06);
-		border-radius: 12px;
-		overflow: hidden;
-		margin-bottom: 64px;
+	.term {
+		background: #0a0b0c;
 	}
-	.step-card {
-		padding: 32px 28px;
-		background: #0a0a0f;
+	.term-bar {
+		padding: 9px 14px;
+		border-bottom: 1px solid #22252a;
+		font: 400 12px var(--font-mono);
+		color: #8b9097;
+	}
+	.term pre {
+		margin: 0;
+		padding: 14px 16px 16px;
+		overflow-x: auto;
+		font: 400 13px/1.75 var(--font-mono);
+		color: #c3c6ca;
+	}
+	.term .ok {
+		color: #4ade80;
+	}
+	.term .dim {
+		color: #8b9097;
+	}
+	.term .link {
+		color: #fb8b47;
+	}
+	.form {
+		padding: 18px 20px;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		transition: background 0.2s;
-	}
-	.step-card:hover { background: #0f0f1a; }
-	.step-num {
-		font-size: 12px;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		color: #3b82f6;
-		font-variant-numeric: tabular-nums;
-	}
-	.step-title {
-		font-size: 16px;
-		font-weight: 650;
-		color: #f1f5f9;
-		letter-spacing: -0.01em;
-	}
-	.step-desc {
 		font-size: 14px;
-		color: rgba(255,255,255,0.45);
-		line-height: 1.6;
+	}
+	.frag-title {
+		margin: 0 0 4px;
+		font-weight: 600;
+	}
+	.field {
+		display: grid;
+		grid-template-columns: 72px minmax(0, 1fr);
+		gap: 12px;
+		align-items: center;
+		color: #8b9097;
+	}
+	.val {
+		padding: 8px 12px;
+		border-radius: 6px;
+		border: 1px solid #3a3e44;
+		background: #141619;
+		color: #ecedee;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.val.mono {
+		font-size: 13px;
+	}
+	.val em {
+		margin-left: 8px;
+		font-style: normal;
+		font-size: 12px;
+		color: #8b9097;
+	}
+	.frag-actions {
+		display: flex;
+		justify-content: flex-end;
+		margin-top: 4px;
+	}
+	.fake-btn {
+		padding: 8px 18px;
+		border-radius: 6px;
+		background: #f26b1d;
+		color: #141619;
+		font-weight: 500;
 	}
 
-	/* ── Install detail ──────────────────────────────────────────── */
-	.install-detail {
+	/* Features */
+	.features {
+		padding-block: 112px;
+	}
+	.features > h2 {
+		margin: 0 0 56px;
+		max-width: 20ch;
+		font-size: clamp(30px, 3.6vw, 44px);
+		line-height: 1.1;
+		font-weight: 500;
+		letter-spacing: -0.025em;
+	}
+	.groups {
 		display: grid;
-		grid-template-columns: 1fr 1.4fr;
-		gap: 40px;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 48px;
+	}
+	.group h3 {
+		margin: 0 0 8px;
+		padding-bottom: 12px;
+		border-bottom: 2px solid var(--text-primary);
+		font-size: 15px;
+		font-weight: 600;
+	}
+	.group dl {
+		margin: 0;
+	}
+	.group dl > div {
+		padding: 16px 0;
+		border-bottom: 1px solid var(--border);
+	}
+	.group dt {
+		font-weight: 500;
+		margin-bottom: 4px;
+	}
+	.group dd {
+		margin: 0;
+		font-size: 15px;
+		line-height: 1.55;
+		color: var(--text-secondary);
+	}
+
+	/* Install */
+	.install {
+		background: var(--bg-base);
+		padding-block: 112px;
+		border-top: 1px solid var(--border);
+	}
+	.install-inner {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+		gap: 64px;
 		align-items: start;
 	}
-	.install-detail-title {
-		font-size: 16px;
-		font-weight: 650;
-		color: #f1f5f9;
-		margin-bottom: 20px;
-		letter-spacing: -0.01em;
+	.install h2 {
+		margin: 0;
+		font-size: clamp(30px, 3.6vw, 44px);
+		line-height: 1.1;
+		font-weight: 500;
+		letter-spacing: -0.025em;
 	}
-	.install-checklist {
+	.install-inner > div > p {
+		margin: 16px 0 0;
+		color: var(--text-secondary);
+		max-width: 52ch;
+	}
+	.cmd-lg {
+		margin-top: 28px;
+		max-width: none;
+	}
+	.does {
+		margin: 28px 0 0;
+		padding: 0;
 		list-style: none;
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-	}
-	.install-checklist li {
-		display: flex;
-		align-items: flex-start;
 		gap: 10px;
-		font-size: 14px;
-		color: rgba(255,255,255,0.6);
-		line-height: 1.5;
+		color: var(--text-secondary);
 	}
-	.install-checklist li :global(svg) {
-		color: #22c55e;
-		flex-shrink: 0;
-		margin-top: 2px;
-	}
-	.install-checklist code {
-		font-family: ui-monospace, monospace;
-		font-size: 12px;
-		color: #93c5fd;
-		background: rgba(59,130,246,0.1);
-		padding: 1px 5px;
-		border-radius: 4px;
-	}
-
-	/* ── Terminal block ──────────────────────────────────────────── */
-	.terminal-block {
-		background: #0d1017;
-		border: 1px solid rgba(255,255,255,0.08);
-		border-radius: 10px;
-		overflow: hidden;
-		box-shadow: 0 16px 40px rgba(0,0,0,0.4);
-	}
-	.terminal-bar {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 10px 14px;
-		background: rgba(255,255,255,0.03);
-		border-bottom: 1px solid rgba(255,255,255,0.06);
-	}
-	.t-dot {
-		width: 10px;
-		height: 10px;
-		border-radius: 50%;
-	}
-	.t-red    { background: #ff5f57; }
-	.t-yellow { background: #febc2e; }
-	.t-green  { background: #28c840; }
-	.t-title {
-		margin-left: 8px;
-		font-size: 12px;
-		color: rgba(255,255,255,0.3);
-		font-family: ui-monospace, monospace;
-	}
-	.terminal-body {
-		padding: 20px;
-		font-family: 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
-		font-size: 12.5px;
-		line-height: 1.75;
-		white-space: pre;
-		overflow-x: auto;
-		color: rgba(255,255,255,0.7);
-	}
-	.t-dim       { color: rgba(255,255,255,0.25); }
-	.t-cmd       { color: #93c5fd; }
-	.t-green-txt { color: #4ade80; }
-	.t-white     { color: rgba(255,255,255,0.85); }
-	.t-blue      { color: #7dd3fc; }
-
-	/* ── Features ────────────────────────────────────────────────── */
-	.features-section {
-		padding: 96px 0;
-		border-top: 1px solid rgba(255,255,255,0.06);
-		background: linear-gradient(180deg, rgba(15,15,26,0.8) 0%, #0a0a0f 100%);
-	}
-	.features-grid {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 1px;
-		background: rgba(255,255,255,0.06);
-		border: 1px solid rgba(255,255,255,0.06);
-		border-radius: 12px;
-		overflow: hidden;
-	}
-	@media (max-width: 1024px) {
-		.features-grid { grid-template-columns: repeat(3, 1fr); }
-	}
-	@media (max-width: 720px) {
-		.features-grid { grid-template-columns: repeat(2, 1fr); }
-	}
-	@media (max-width: 480px) {
-		.features-grid { grid-template-columns: 1fr; }
-	}
-	.feature-card {
-		padding: 32px 28px;
-		background: #0a0a0f;
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		transition: background 0.2s;
-	}
-	.feature-card:hover { background: #0f0f1a; }
-	.feature-icon-wrap {
-		width: 40px;
-		height: 40px;
-		border-radius: 10px;
-		background: rgba(37,99,235,0.12);
-		border: 1px solid rgba(59,130,246,0.2);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		color: #60a5fa;
-	}
-	.feature-title {
-		font-size: 15px;
-		font-weight: 650;
-		color: #f1f5f9;
-		letter-spacing: -0.01em;
-	}
-	.feature-desc {
-		font-size: 13.5px;
-		line-height: 1.6;
-		color: rgba(255,255,255,0.42);
-	}
-
-	/* ── CTA section ─────────────────────────────────────────────── */
-	.cta-section {
-		padding: 96px 24px;
-		border-top: 1px solid rgba(255,255,255,0.06);
-		overflow: hidden;
-	}
-	.cta-inner {
+	.does li {
 		position: relative;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		text-align: center;
-		gap: 20px;
+		padding-left: 18px;
 	}
-	/* Angular-style diagonal line decoration */
-	.cta-bg-lines {
+	.does li::before {
+		content: '';
 		position: absolute;
-		inset: -60px;
-		background-image:
-			repeating-linear-gradient(
-				-45deg,
-				transparent,
-				transparent 40px,
-				rgba(59,130,246,0.04) 40px,
-				rgba(59,130,246,0.04) 41px
-			);
-		pointer-events: none;
-		border-radius: 12px;
+		left: 0;
+		top: 10px;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--green);
 	}
-	:global(.cta-anchor-icon) { color: #3b82f6; position: relative; }
-	.cta-title {
-		font-size: clamp(1.75rem, 4vw, 2.75rem);
-		font-weight: 800;
-		color: #fff;
-		letter-spacing: -0.04em;
-		position: relative;
+	.does code {
+		font: 400 0.88em var(--font-mono);
+		padding: 0.1em 0.35em;
+		border-radius: 4px;
+		background: var(--bg-hover);
 	}
-	.cta-sub {
-		font-size: 16px;
-		color: rgba(255,255,255,0.45);
-		max-width: 400px;
-		position: relative;
-	}
-	.cta-btns {
+	.install-links {
 		display: flex;
-		align-items: center;
-		gap: 12px;
-		flex-wrap: wrap;
-		justify-content: center;
-		position: relative;
-		margin-top: 4px;
+		gap: 20px;
+		margin-top: 28px !important;
+	}
+	.term-lg pre {
+		font-size: 13.5px;
 	}
 
-	/* ── Footer ──────────────────────────────────────────────────── */
+	/* Footer */
 	.footer {
-		border-top: 1px solid rgba(255,255,255,0.06);
-		padding: 20px 24px;
+		padding-block: 56px;
+		border-top: 1px solid var(--border);
 	}
 	.footer-inner {
-		max-width: 1120px;
-		margin: 0 auto;
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		font-size: 13px;
-		flex-wrap: wrap;
-	}
-	.footer-brand {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-weight: 700;
-		color: rgba(255,255,255,0.7);
-	}
-	.footer-sep {
-		width: 1px;
-		height: 14px;
-		background: rgba(255,255,255,0.1);
-	}
-	.footer-copy { color: rgba(255,255,255,0.3); flex: 1; }
-	.footer-gh {
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		color: rgba(255,255,255,0.35);
-		text-decoration: none;
-		transition: color 0.15s;
-	}
-	.footer-gh:hover { color: rgba(255,255,255,0.8); }
-	.footer-version {
-		font-size: 12px;
-		font-weight: 600;
-		font-family: ui-monospace, monospace;
-		color: rgba(255,255,255,0.3);
-		text-decoration: none;
-		padding: 2px 8px;
-		border: 1px solid rgba(255,255,255,0.08);
-		border-radius: 999px;
-		transition: color 0.15s, border-color 0.15s;
-	}
-	.footer-version:hover { color: #93c5fd; border-color: rgba(96,165,250,0.3); }
-
-	/* ── Tech stack ─────────────────────────────────────────────── */
-	.stack-section {
-		padding: 96px 0;
-		border-top: 1px solid rgba(255,255,255,0.06);
-	}
-	.stack-intro {
-		font-size: 15px;
-		color: rgba(255,255,255,0.42);
-		line-height: 1.65;
-		max-width: 520px;
-		margin-bottom: 48px;
-	}
-	.stack-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 1px;
-		background: rgba(255,255,255,0.06);
-		border: 1px solid rgba(255,255,255,0.06);
-		border-radius: 12px;
-		overflow: hidden;
+		grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+		gap: 40px;
 	}
-	.stack-card {
-		padding: 28px;
-		background: #0a0a0f;
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		transition: background 0.2s;
+	.footer-brand p {
+		margin: 12px 0 0;
+		max-width: 40ch;
+		font-size: 14px;
+		color: var(--text-muted);
 	}
-	.stack-card:hover { background: #0f0f1a; }
-	.stack-card-top {
-		display: flex;
-		align-items: center;
-		gap: 14px;
+	.footer nav {
+		flex: none;
 	}
-	.stack-logo {
-		width: 44px;
-		height: 44px;
-		border-radius: 10px;
-		border: 1px solid;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		padding: 10px;
-	}
-	.stack-logo :global(svg) { width: 100%; height: 100%; }
-	.stack-meta {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.stack-name {
-		font-size: 15px;
-		font-weight: 650;
-		color: #f1f5f9;
-		letter-spacing: -0.01em;
-	}
-	.stack-role {
-		font-size: 11px;
+	.footer-title {
+		margin: 0 0 10px;
+		font-size: 14px;
 		font-weight: 600;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
-		color: rgba(255,255,255,0.3);
 	}
-	.stack-desc {
-		font-size: 13.5px;
-		line-height: 1.6;
-		color: rgba(255,255,255,0.42);
+	.footer ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		font-size: 14px;
+	}
+	.footer ul a {
+		color: var(--text-secondary);
+		text-decoration: none;
+	}
+	.footer ul a:hover {
+		color: var(--text-primary);
+		text-decoration: underline;
 	}
 
-	/* ── Responsive ──────────────────────────────────────────────── */
-	@media (max-width: 768px) {
-		.hero { padding: 64px 20px 56px; }
-		.install-detail { grid-template-columns: 1fr; }
-		.terminal-block { display: none; }
-		.nav-links { display: none; }
-		.steps-section, .features-section { padding: 64px 0; }
-		.section-title { margin-bottom: 32px; }
+	/* Responsive */
+	@media (max-width: 960px) {
+		.hero,
+		.install-inner {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 48px;
+		}
+		.hero {
+			padding-block: 56px;
+		}
+		.pillars,
+		.groups {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 36px;
+		}
+		.step {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 24px;
+		}
+		.step .frag {
+			order: 2;
+		}
+		.step:not(:last-child) .step-text::before {
+			display: none;
+		}
+		.footer-inner {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		}
+		.footer-brand {
+			grid-column: 1 / -1;
+		}
 	}
-	@media (max-width: 480px) {
-		.hero-title { font-size: 2rem; }
-		.hero-ctas { flex-direction: column; align-items: stretch; }
-		.hero-ctas .btn { justify-content: center; }
-		.install-cmd { font-size: 11px; }
+	@media (max-width: 720px) {
+		.wrap {
+			padding-inline: 16px;
+		}
+		.nav-inner {
+			gap: 12px;
+		}
+		.nav-links li:not(:nth-child(3)) {
+			display: none;
+		}
+		.how,
+		.features,
+		.install {
+			padding-block: 72px;
+		}
+		.built ul {
+			gap: 8px 24px;
+			font-size: 17px;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.dot.dep {
+			animation: none;
+		}
+		.bar span {
+			transition: none;
+		}
 	}
 </style>
