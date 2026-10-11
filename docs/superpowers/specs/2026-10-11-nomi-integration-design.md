@@ -173,6 +173,13 @@ Nomi is already deployed on this Shipyard instance, in its own org (the **platfo
 
 Each step gets a test: a container in tenant org A cannot resolve or connect to a service in org B, in the platform org, or on `shipyard_internal`.
 
+**Implemented (first cut), behind `SHIPYARD__DOCKER__TENANT_ISOLATION=true`:**
+
+- Steps 1 and 2: per-org networks `platform-edge-<org>` (`shipyard_docker::isolation`). Services, sandboxes, edge runtimes and the macOS port proxy join the org network instead of `platform_proxy`. Compose stacks that use `platform_proxy` are pointed at the org network. A stack that names another org's network, or uses `network_mode: host` / `container:`, is rejected. Project networks reserved for the platform or another org are skipped.
+- Step 4, partly: `SHIPYARD__DOCKER__APP_NODE_POOL=apps` adds `node.labels.pool==apps` to services and edge runtimes. A service pinned to a node for its volumes keeps the pin. Per-org pools and `build`/`devdb` pools come with Phase 1.
+- Check: `scripts/check-tenant-isolation.sh`. Unit tests cover network naming, the join rules, compose rewriting and constraints.
+- **Known gap for step 3:** the backend container is connected to every org network so it can dial sandboxes and edge runtimes can call it back, so tenants can reach the backend's HTTP port directly, not only through Traefik. No route trusts the caller's network location (`/internal/mqtt/auth` checks credentials), so this matches the public API surface. The follow-up is to dial sandboxes through Traefik and point edge runtimes at `runtime_api_url`, then drop the backend from org networks.
+
 Orgs share `pool=apps` nodes with per-org CPU/memory quotas; paid orgs can move to dedicated nodes with Shipyard's existing node provisioning.
 
 ## API surface

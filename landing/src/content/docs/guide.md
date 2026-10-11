@@ -488,6 +488,51 @@ Find the ready-to-copy `docker swarm join` commands in **Settings → Infrastruc
 
 The **Swarm Nodes** table on the infra page shows each node's hostname, role, status (*ready / down*), availability (*active / drain / pause*), address, and Docker engine version.
 
+## Tenant isolation {#tenant-isolation}
+
+By default every service, sandbox and edge runtime joins one shared network, `platform_proxy`, so Traefik can reach it. That is fine when everyone on the Shipyard trusts each other. When unrelated organizations share it, turn on tenant isolation.
+
+```bash
+# /opt/shipyard/.env
+SHIPYARD__DOCKER__TENANT_ISOLATION=true
+# optional, these are the defaults
+SHIPYARD__DOCKER__TRAEFIK_CONTAINER=shipyard-traefik
+SHIPYARD__DOCKER__BACKEND_CONTAINER=shipyard-backend
+```
+
+With it on:
+
+- Each organization gets its own overlay network, `platform-edge-<org id>`, created on its first deploy. Traefik and the backend are connected to every one of them; nothing else is. Tenants can still reach those two, which are public anyway.
+- Services, sandboxes and edge runtimes join their organization's network instead of `platform_proxy`. A container in one org can't reach another org's containers, or MQTT and the dashboard on `platform_proxy`. Postgres and Redis stay on the internal network as before.
+- Compose stacks that join `platform_proxy` as an external network are pointed at their org's network automatically. A stack that names another org's network, or uses `network_mode: host` or `container:…`, is rejected.
+- Existing services move on their next deploy. Existing edge runtimes move when they are recreated (remove the `shipyard-edge-*` service and it comes back on the new network).
+
+> [!WARNING]
+> A deploy fails if Traefik can't be connected to the org network, rather than shipping a service that would answer 502. Check the container name if you renamed it.
+
+### Node pools
+
+To keep tenant workloads off the manager that runs Shipyard itself, label the nodes that should run apps and set the pool:
+
+```bash
+docker node update --label-add pool=apps <worker-node>
+# /opt/shipyard/.env
+SHIPYARD__DOCKER__APP_NODE_POOL=apps
+```
+
+Services and edge runtimes then get the placement constraint `node.labels.pool==apps`. A service pinned to a node because it holds local volumes (a database) keeps its pin until its data is moved, so it never becomes unschedulable.
+
+### Checking isolation
+
+`scripts/check-tenant-isolation.sh` starts a throwaway container on one org's network and tries to reach targets that must be unreachable from there:
+
+```bash
+sudo scripts/check-tenant-isolation.sh <org-a-id> \
+  platform-<org-b-service-id>:3000 shipyard-mqtt:1883 shipyard-frontend:3000 shipyard-postgres:5432
+```
+
+It exits non-zero if any target answers.
+
 ## Static server {#static-server}
 
 Shipyard includes an nginx-based static file server (`shipyard-nginx-static`) that hosts static sites deployed from the platform. Navigate to **Settings → Static** to inspect its current nginx configuration. Requires the `static:read` permission (or `infra:read` / Admin).

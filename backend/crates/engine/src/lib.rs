@@ -16,6 +16,7 @@ use shipyard_common::error::{AppError, AppResult};
 use shipyard_common::types::{LogLevel, MqttPayload};
 use shipyard_docker::engine::DockerEngine;
 use shipyard_docker::types::{MountSpec, MountType, PortSpec, ResourceSpec, ServiceSpec};
+use shipyard_docker::isolation;
 use shipyard_docker::BollardDockerEngine;
 use shipyard_git::GitService;
 use shipyard_mqtt::publisher::MqttPublisher;
@@ -1299,7 +1300,7 @@ impl DeploymentEngine {
         };
 
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
-        let net_result = self.step_configure_networks(service_id).await;
+        let net_result = self.step_configure_networks(org_id, service_id).await;
         let networks = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, net_result).await? {
             Some(v) => v,
             None => return Err(AppError::Internal("configure_networks returned no value".into())),
@@ -1614,7 +1615,7 @@ impl DeploymentEngine {
 
         // Step 4: Configure networks — returns Vec<String> of network names
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 4).await?;
-        let net_result = self.step_configure_networks(service_id).await;
+        let net_result = self.step_configure_networks(org_id, service_id).await;
         let networks = match self
             .finish_step(
                 org_id,
@@ -2074,6 +2075,7 @@ impl DeploymentEngine {
     /// and returns the path of the file to actually pass to `docker compose -f`.
     async fn preprocess_compose_for_deploy(
         &self,
+        org_id: Uuid,
         directory_path: &str,
         compose_file: &str,
     ) -> AppResult<String> {
@@ -2084,7 +2086,16 @@ impl DeploymentEngine {
         let mut doc: serde_yaml::Value =
             serde_yaml::from_str(&content).map_err(|e| AppError::BadRequest(format!("Invalid compose YAML: {e}")))?;
 
-        let mut modified = false;
+        let iso = isolation::settings();
+        let mut modified = if iso.tenant_isolation {
+            let changed = isolate_compose_networks(&mut doc, iso, org_id)?;
+            if changed {
+                isolation::tenant_network(&*self.docker, org_id).await?;
+            }
+            changed
+        } else {
+            false
+        };
 
         if let Some(networks) = doc.get_mut("networks").and_then(|v| v.as_mapping_mut()) {
             for (_, net_val) in networks.iter_mut() {
@@ -2443,7 +2454,7 @@ impl DeploymentEngine {
 
         // Preprocess: overlay networks need attachable:true for standalone compose containers.
         let effective_file = self
-            .preprocess_compose_for_deploy(directory_path, compose_file)
+            .preprocess_compose_for_deploy(org_id, directory_path, compose_file)
             .await?;
 
         let msg = format!("Running: docker compose -f {effective_file} up -d --remove-orphans");
@@ -3534,9 +3545,11 @@ impl DeploymentEngine {
     }
 
     /// Step 4: Collect network names from service_networks + networks tables.
-    /// Always includes the Traefik overlay network so Traefik can reach the
-    /// service via its file-provider backend URL regardless of domain config.
-    async fn step_configure_networks(&self, service_id: Uuid) -> AppResult<Vec<String>> {
+    /// Always includes a network Traefik is on so it can reach the service via
+    /// its file-provider backend URL regardless of domain config: the shared
+    /// Traefik network, or the org's own edge network when tenant isolation is
+    /// on (see `shipyard_docker::isolation`).
+    async fn step_configure_networks(&self, org_id: Uuid, service_id: Uuid) -> AppResult<Vec<String>> {
         let rows = sqlx::query_as::<_, (String,)>(
             "SELECT n.name
              FROM service_networks sn
@@ -3549,12 +3562,25 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let mut networks: Vec<String> = rows.into_iter().map(|(n,)| n).collect();
+        let iso = isolation::settings();
+        let mut networks: Vec<String> = Vec::new();
+        for (name,) in rows {
+            if iso.tenant_may_join(org_id, &name) {
+                networks.push(name);
+            } else {
+                tracing::warn!(%service_id, "skipping network {name}: reserved for the platform or another org");
+            }
+        }
 
-        // Always attach the Traefik overlay network so the service is reachable
-        // by its DNS name from Traefik, even before domains are configured.
-        if !networks.contains(&self.traefik_network) {
-            networks.push(self.traefik_network.clone());
+        // Always attach a Traefik network so the service is reachable by its
+        // DNS name from Traefik, even before domains are configured.
+        let edge = if iso.tenant_isolation {
+            isolation::tenant_network(&*self.docker, org_id).await?
+        } else {
+            self.traefik_network.clone()
+        };
+        if !networks.contains(&edge) {
+            networks.push(edge);
         }
 
         tracing::info!("Configured networks: {:?}", networks);
@@ -3842,11 +3868,12 @@ impl DeploymentEngine {
         let has_local_data = mounts
             .iter()
             .any(|m| !m.readonly && matches!(m.mount_type, MountType::Volume | MountType::Bind));
-        let constraints = if has_local_data {
-            node_pin_constraint(&*self.docker, &docker_svc_name).await.into_iter().collect()
+        let node_pin = if has_local_data {
+            node_pin_constraint(&*self.docker, &docker_svc_name).await
         } else {
-            vec![]
+            None
         };
+        let constraints = placement_constraints(node_pin, isolation::settings().pool_constraint());
 
         let spec = ServiceSpec {
             name: docker_svc_name.clone(),
@@ -3883,7 +3910,12 @@ impl DeploymentEngine {
         // Swarm iptables-based port forwarding is not proxied by Docker Desktop
         // on macOS; standard docker-run bridge bindings are. The proxy connects
         // to the same overlay network so it can resolve the service by DNS name.
-        self.manage_port_proxies(&docker_svc_name, &proxy_ports).await?;
+        let proxy_network = if isolation::settings().tenant_isolation {
+            isolation::settings().org_network(org_id)
+        } else {
+            self.traefik_network.clone()
+        };
+        self.manage_port_proxies(&docker_svc_name, &proxy_network, &proxy_ports).await?;
 
         Ok(())
     }
@@ -3898,6 +3930,7 @@ impl DeploymentEngine {
     async fn manage_port_proxies(
         &self,
         svc_name: &str,
+        network: &str,
         ports: &[PortSpec],
     ) -> AppResult<()> {
         if !self.port_proxy {
@@ -3931,7 +3964,7 @@ impl DeploymentEngine {
 
             // Attach proxy to the same overlay so it can resolve the service by name
             let mut endpoints_config = serde_json::Map::new();
-            endpoints_config.insert(self.traefik_network.clone(), serde_json::json!({}));
+            endpoints_config.insert(network.to_string(), serde_json::json!({}));
 
             let mut exposed_ports = serde_json::Map::new();
             exposed_ports.insert(format!("{host_port}/tcp"), serde_json::json!({}));
@@ -4268,6 +4301,83 @@ async fn running_task(
 /// `node.id==<id>` for the node the service currently runs on, when the swarm
 /// has more than one node. `None` on single-node swarms (nothing to pin to)
 /// and for services that aren't running yet.
+/// Apply tenant isolation to a compose file: references to the shared Traefik
+/// network are pointed at the org's edge network, and a stack may not join
+/// another org's edge network or use host / another container's networking.
+/// Returns whether the document changed.
+fn isolate_compose_networks(
+    doc: &mut serde_yaml::Value,
+    iso: &isolation::IsolationSettings,
+    org_id: Uuid,
+) -> AppResult<bool> {
+    use serde_yaml::Value;
+
+    if let Some(services) = doc.get("services").and_then(|v| v.as_mapping()) {
+        for (svc_name, svc) in services {
+            let mode = svc.get("network_mode").and_then(|v| v.as_str()).unwrap_or("");
+            if mode == "host" || mode.starts_with("container:") {
+                return Err(AppError::BadRequest(format!(
+                    "Service {} uses network_mode '{mode}', which isn't allowed on this Shipyard.",
+                    svc_name.as_str().unwrap_or("?")
+                )));
+            }
+        }
+    }
+
+    let org_net = iso.org_network(org_id);
+    let mut changed = false;
+    let Some(networks) = doc.get_mut("networks").and_then(|v| v.as_mapping_mut()) else {
+        return Ok(false);
+    };
+    for (key, net) in networks.iter_mut() {
+        let key = key.as_str().unwrap_or_default().to_string();
+        let Value::Mapping(map) = net else { continue };
+        let name_key = Value::String("name".into());
+        let external = match map.get(Value::String("external".into())) {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Mapping(_)) => true,
+            _ => false,
+        };
+        // Effective Docker network name. Non-external networks without `name`
+        // are prefixed with the compose project, so they can't collide.
+        let legacy_name = map
+            .get(Value::String("external".into()))
+            .and_then(|e| e.get("name"))
+            .and_then(|n| n.as_str())
+            .map(String::from);
+        let effective = map
+            .get(&name_key)
+            .and_then(|n| n.as_str())
+            .map(String::from)
+            .or(legacy_name)
+            .or_else(|| external.then(|| key.clone()));
+        let Some(effective) = effective else { continue };
+
+        if effective == iso.shared_network {
+            map.insert(name_key, Value::String(org_net.clone()));
+            map.insert(Value::String("external".into()), Value::Bool(true));
+            changed = true;
+        } else if !iso.tenant_may_join(org_id, &effective) {
+            return Err(AppError::BadRequest(format!(
+                "Network '{key}' refers to '{effective}', which belongs to the platform or another organization."
+            )));
+        }
+    }
+    Ok(changed)
+}
+
+/// Combine the data-volume node pin with the app node pool. A pinned service
+/// keeps only its pin: its volumes live on that node, and adding a pool
+/// constraint the node may not match would leave it unschedulable. It moves
+/// into the pool when its data is migrated.
+fn placement_constraints(node_pin: Option<String>, pool: Option<String>) -> Vec<String> {
+    match (node_pin, pool) {
+        (Some(pin), _) => vec![pin],
+        (None, Some(pool)) => vec![pool],
+        (None, None) => vec![],
+    }
+}
+
 async fn node_pin_constraint(docker: &dyn DockerEngine, docker_svc_name: &str) -> Option<String> {
     let nodes = docker.swarm_info().await.map(|i| i.nodes).unwrap_or(1);
     if nodes <= 1 {
@@ -4292,6 +4402,64 @@ mod persistent_volume_tests {
             persistent_volume_name("platform", id, "/"),
             "platform-0190a4b2-0000-7000-8000-000000000001-data"
         );
+    }
+
+    fn iso_on() -> isolation::IsolationSettings {
+        isolation::IsolationSettings {
+            tenant_isolation: true,
+            label_prefix: "platform".into(),
+            shared_network: "platform_proxy".into(),
+            traefik_container: "shipyard-traefik".into(),
+            backend_container: "shipyard-backend".into(),
+            app_node_pool: None,
+        }
+    }
+
+    #[test]
+    fn compose_shared_network_is_pointed_at_org_network() {
+        let org = Uuid::now_v7();
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(
+            "services:\n  web:\n    image: nginx\n    networks: [proxy, default]\nnetworks:\n  proxy:\n    external: true\n    name: platform_proxy\n  platform_proxy:\n    external: true\n",
+        )
+        .unwrap();
+        assert!(isolate_compose_networks(&mut doc, &iso_on(), org).unwrap());
+        let org_net = iso_on().org_network(org);
+        assert_eq!(doc["networks"]["proxy"]["name"].as_str(), Some(org_net.as_str()));
+        assert_eq!(doc["networks"]["platform_proxy"]["name"].as_str(), Some(org_net.as_str()));
+    }
+
+    #[test]
+    fn compose_other_org_network_and_host_mode_are_rejected() {
+        let org = Uuid::now_v7();
+        let other = iso_on().org_network(Uuid::now_v7());
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(&format!(
+            "services:\n  web:\n    image: nginx\nnetworks:\n  x:\n    external: true\n    name: {other}\n"
+        ))
+        .unwrap();
+        assert!(isolate_compose_networks(&mut doc, &iso_on(), org).is_err());
+
+        let mut doc: serde_yaml::Value =
+            serde_yaml::from_str("services:\n  web:\n    image: nginx\n    network_mode: host\n").unwrap();
+        assert!(isolate_compose_networks(&mut doc, &iso_on(), org).is_err());
+
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(
+            "services:\n  web:\n    image: nginx\nnetworks:\n  backend: {}\n",
+        )
+        .unwrap();
+        assert!(!isolate_compose_networks(&mut doc, &iso_on(), org).unwrap());
+    }
+
+    #[test]
+    fn node_pin_wins_over_pool() {
+        assert_eq!(
+            placement_constraints(Some("node.id==n1".into()), Some("node.labels.pool==apps".into())),
+            vec!["node.id==n1".to_string()]
+        );
+        assert_eq!(
+            placement_constraints(None, Some("node.labels.pool==apps".into())),
+            vec!["node.labels.pool==apps".to_string()]
+        );
+        assert!(placement_constraints(None, None).is_empty());
     }
 
     #[test]

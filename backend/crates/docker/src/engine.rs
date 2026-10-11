@@ -14,12 +14,13 @@ use bollard::models::{
     ServiceSpecUpdateConfigOrderEnum, SwarmInitRequest, TaskSpec,
     TaskSpecContainerSpec, TaskSpecPlacement, TaskSpecResources,
 };
-use bollard::network::CreateNetworkOptions;
+use bollard::network::{ConnectNetworkOptions, CreateNetworkOptions, InspectNetworkOptions};
 use bollard::service::{InspectServiceOptions, ListServicesOptions, UpdateServiceOptions};
 use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::errors::Error as BollardError;
 use bollard::Docker;
 use bytes::Bytes;
+use std::collections::HashMap;
 use futures::{StreamExt, TryStreamExt};
 use shipyard_common::error::{AppError, AppResult};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -66,6 +67,18 @@ pub trait DockerEngine: Send + Sync {
 
     /// Remove a network by ID or name.
     async fn remove_network(&self, id: &str) -> AppResult<()>;
+
+    /// Create an attachable overlay network with the given labels unless one
+    /// with that name already exists. Idempotent and race-safe.
+    async fn ensure_overlay_network(
+        &self,
+        name: &str,
+        labels: HashMap<String, String>,
+    ) -> AppResult<()>;
+
+    /// Connect a running container to a network. Succeeds if the container is
+    /// already connected.
+    async fn connect_container_to_network(&self, network: &str, container: &str) -> AppResult<()>;
 
     /// Create a named volume.
     async fn create_volume(&self, name: &str, driver: &str) -> AppResult<()>;
@@ -1174,6 +1187,66 @@ impl DockerEngine for BollardDockerEngine {
             .await
             .map_err(|e| AppError::Docker(format!("remove_network failed: {e}")))?;
         Ok(())
+    }
+
+    async fn ensure_overlay_network(
+        &self,
+        name: &str,
+        labels: HashMap<String, String>,
+    ) -> AppResult<()> {
+        match self
+            .client
+            .inspect_network(name, None::<InspectNetworkOptions<String>>)
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(BollardError::DockerResponseServerError { status_code: 404, .. }) => {}
+            Err(e) => return Err(AppError::Docker(format!("inspect_network failed: {e}"))),
+        }
+
+        let result = self
+            .client
+            .create_network(CreateNetworkOptions {
+                name: name.to_string(),
+                driver: "overlay".to_string(),
+                check_duplicate: true,
+                attachable: true,
+                labels,
+                ..Default::default()
+            })
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            // Another request created it between our inspect and create.
+            Err(BollardError::DockerResponseServerError { status_code: 409, .. }) => Ok(()),
+            Err(e) => Err(AppError::Docker(format!("create_network {name} failed: {e}"))),
+        }
+    }
+
+    async fn connect_container_to_network(&self, network: &str, container: &str) -> AppResult<()> {
+        let result = self
+            .client
+            .connect_network(
+                network,
+                ConnectNetworkOptions {
+                    container: container.to_string(),
+                    endpoint_config: EndpointSettings::default(),
+                },
+            )
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(BollardError::DockerResponseServerError { message, .. })
+                if message.contains("already exists") =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(AppError::Docker(format!(
+                "connect {container} to network {network} failed: {e}"
+            ))),
+        }
     }
 
     // ── Volume management ─────────────────────────────────────────────────────
