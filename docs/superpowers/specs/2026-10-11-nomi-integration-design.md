@@ -1,72 +1,24 @@
 # Nomi on Shipyard: first-class integration
 
 **Date:** 2026-10-11
-**Status:** Draft design for review. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
+**Status:** Draft design, decisions from review applied (see "Decisions"). Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
 **Companion:** `2026-10-11-nomi-integration-guide.md` (the developer guide, published at `/docs/nomi` once the endpoints ship).
 
 ## What we're building
 
-Nomi is a coding agent that builds web apps (SvelteKit, Next.js, Nuxt, React/Vue/Svelte SPAs) on Postgres with Drizzle. Shipyard becomes the place those apps run. A Nomi user never logs into Shipyard: Nomi drives it through the Open API.
+Nomi is a coding agent that builds web apps (SvelteKit, Next.js, Nuxt, React/Vue/Svelte SPAs) on Postgres with Drizzle. Nomi already runs each user's **development** in its own web containers. Shipyard takes over from there: it is where those apps are **deployed and published**, and where development databases live.
 
-Requirements from Nomi:
+Nomi is the interface. Shipyard is driven through the Open API, and a Nomi admin decides whether their users may also open the Shipyard dashboard.
 
-1. Every app gets **environments**: `dev`, `staging`, `prod`.
-2. A reliable way to **build and deploy** any of those frameworks.
-3. **Postgres per environment**, with Drizzle migrations applied on deploy.
-4. Users can **read build logs, runtime logs and errors** inside Nomi (and Nomi's agent can read them to fix its own code).
-5. **Creating an org in Nomi creates a Shipyard org.**
-6. A **dedicated Nomi guide** in the docs.
+## Decisions
 
-## Answers to the questions asked
-
-### Docker image or something else?
-
-**Build an OCI image once per commit, then promote the same image digest from dev to staging to prod.** Never rebuild per environment: what passed staging is byte-for-byte what reaches prod, and promotion takes seconds.
-
-Who builds it:
-
-| Option | How | Verdict |
-| --- | --- | --- |
-| **A. Shipyard builds from uploaded source** | Nomi uploads a source tarball; Shipyard builds it with the app's Dockerfile, or its existing auto-detection for SvelteKit / Next.js / Nuxt / Angular, and stores the image in its built-in registry | **Recommended.** Nomi needs no build infrastructure. Reuses `crates/engine` build + `crates/registry`. |
-| B. Nomi builds and pushes | Nomi runs BuildKit, `docker push`es to the Shipyard registry with an org API key (works today) | Supported as an alternative if Nomi already has builders. |
-| C. Git push | Nomi pushes to a git host; Shipyard clones and builds | Not needed: adds a git host and webhook for no gain. |
-| D. Buildpacks / Nixpacks | Detect and build without a Dockerfile | Slower and less predictable than a Dockerfile Nomi controls. |
-
-**Nomi's templates should ship a `Dockerfile`** (SvelteKit with `adapter-node`, Next.js `output: 'standalone'`, Nuxt `node-server`). Shipyard's auto-detection stays as a fallback, but a Dockerfile Nomi owns gives deterministic builds and lets Nomi's agent fix build errors in a file it understands.
-
-**Pure SPAs** (Vite React/Vue/Svelte with no server) don't need a container: Nomi uploads the built `dist/` and Shipyard serves it from its static server, which is cheaper and faster. The API takes `kind: "static"` for these.
-
-### Can the backend run on edge functions?
-
-**Not for these apps.** SvelteKit, Next.js and Nuxt already contain their backend (server routes, form actions, server components, auth sessions). Moving that code into Shipyard edge functions would mean rewriting the framework's server layer as standalone handlers, and edge functions here have hard limits: one shared Deno runtime per org, a 10 s (Free) / 30 s (Pro) request timeout, and a 1–10 MB request body cap. Long Drizzle queries, file uploads and streaming responses would hit them.
-
-The simpler thing to maintain is **one container per app per environment**, running the framework's own Node server, talking to that environment's Postgres. Edge functions remain useful for small side jobs (incoming webhooks, a public form endpoint) and Nomi can generate them when a user asks for exactly that.
-
-### Reading logs and errors
-
-Three kinds, all through the Open API and pushed to Nomi by webhook:
-
-| What | Endpoint | Notes |
-| --- | --- | --- |
-| Build and deploy logs | `GET /deployments/:id/logs`, `?follow=1` streams (SSE) | Step-by-step, including Drizzle migration output |
-| Runtime logs | `GET /services/:id/logs?since=&tail=&level=error`, `?follow=1` streams | Merged across replicas; stderr is `level=error`; env var values masked |
-| Errors and events | `GET /services/:id/events` | Crash with exit code, OOM kill, restart loop, health check failing, deploy failed |
-| Push | Webhook to Nomi: `deployment.succeeded`, `deployment.failed`, `service.crashed` | Signed with HMAC so Nomi can trust it |
-
-The important loop: **a failed build or a crash goes back to Nomi's agent** with the log tail, the agent fixes the code, and redeploys to `dev`. That's what makes Shipyard feel built for Nomi.
-
-### Org creation
-
-Shipyard gets a **platform integration** credential (issued by a Shipyard superadmin, one per integrator):
-
-- `POST /openapi/v1/orgs` with `{ name, external_id: "<nomi org id>", plan }` creates the org. It is **idempotent on `external_id`**: retrying never creates a second org.
-- The response includes an **org-scoped API key** (shown once). Nomi stores it encrypted and uses it for everything inside that org.
-- `PATCH` (rename, change plan/quota), `POST .../suspend` and `DELETE` mirror Nomi's org lifecycle.
-- The integration key can only touch orgs it created.
-
-### Documentation
-
-A **Nomi guide** at `/docs/nomi` (draft in the companion file), written for Nomi's engineers and for Nomi's agent: it is plain Markdown like the other pages, so it's in `/llms.txt` and the agent can read it directly.
+| # | Decision |
+| --- | --- |
+| 1 | **Shipyard owns the web addresses.** Hostnames are generated under a Shipyard-managed base domain, like sandbox preview URLs. |
+| 2 | **Flat hostnames, auto-generated.** `<app>-<env>.<base>` when that name is free; otherwise an auto-generated `app-<8 hex>.<base>`, exactly as sandboxes fall back to `preview-<id>.<base>`. |
+| 3 | **Shipyard is for deployment only.** Development happens in Nomi's containers, so Shipyard environments are `staging` and `production` (plus optional previews later). No `dev` environment on Shipyard. |
+| 4 | **Nomi is the interface; dashboard access is a Nomi admin's choice.** Off by default, granted per user through the API. |
+| 5 | **Shipyard provides development databases** for Nomi's dev containers, from a shared Postgres (one database and role per app), so development doesn't need its own server per app. |
 
 ## How it works
 
@@ -76,101 +28,150 @@ A **Nomi guide** at `/docs/nomi` (draft in the companion file), written for Nomi
 | --- | --- |
 | Organization | Organization (`external_id` = Nomi org id) |
 | App | A group of projects sharing `app_key` |
-| Environment (`dev` / `staging` / `prod`) | One **project** per environment: `app_key` + `environment` columns, unique per org |
-| App's web server | Service in that project (`kind: image` built from source, or `kind: static`) |
-| App's database | `postgres` service from the existing template, with its persistent volume, in the same project |
-
-**Why a project per environment** instead of environments inside one project: each environment gets its own network, its own Postgres and its own env vars with no chance of staging talking to prod's database, and the dashboard's canvas, logs and permissions already work per project. Two nullable columns on `projects` (`app_key`, `environment`) let the API and dashboard group them as one app.
+| `staging`, `production` | One **project** per environment (`app_key` + `environment` columns, unique per org): own network, own Postgres, own variables |
+| App's server | Service in that project, built from source (or `kind: static` for SPAs) |
+| App's production/staging database | `postgres` service from the existing template, with its persistent volume |
+| App's development database | A database + role on the shared **dev Postgres** (not a service per app) |
 
 ### Sequence
 
 ```text
 Nomi user creates org "Acme"
-  Nomi → POST /orgs {name: "Acme", external_id: "nomi_org_123"}       (integration key)
-  ← org + org API key (Nomi stores it)
+  Nomi → POST /orgs {name: "Acme", external_id: "nomi_org_123"}        (integration key)
+  ← org + org API key (Nomi stores it encrypted)
 
-User creates app "shop" in Nomi
-  Nomi → POST /apps {app_key: "shop", environments: ["dev","staging","prod"],
-                     framework: "sveltekit", database: "postgres"}     (org key)
-  Shipyard creates 3 projects, each with: web service + postgres service,
-  DATABASE_URL wired to that project's postgres, a hostname per environment:
-    shop-dev.acme.nomi.app   shop-staging.acme.nomi.app   shop.acme.nomi.app
-  ← app with environment ids and URLs
+User creates app "shop"
+  Nomi → POST /apps {app_key: "shop", environments: ["staging","production"],
+                     database: "postgres", dev_database: true}          (org key)
+  Shipyard: 2 projects, each with web + postgres, DATABASE_URL wired,
+            hostnames shop-staging.<base> and shop-production.<base>
+            (or app-3f9c1a2e.<base> if taken);
+            a database "shop_acme_dev" + role on the shared dev Postgres
+  ← environments with URLs, and the dev DATABASE_URL
 
-Agent finishes a change
-  Nomi → POST /apps/shop/builds  (multipart: source.tar.gz, commit: "a91f2c0")
-  ← build id; Shipyard builds image → registry, digest sha256:…
-  Nomi → POST /apps/shop/environments/dev/deploy {build_id}
-  Shipyard: run release command (drizzle-kit migrate) with the new image
-            → if it fails, stop; dev keeps running the old version
-            → update service (stop-first if it holds data, else start-first)
-  → webhook deployment.succeeded {url: https://shop-dev.acme.nomi.app}
+User develops in Nomi
+  Nomi's dev container uses the dev DATABASE_URL; drizzle-kit push/migrate
+  runs against it from Nomi. Shipyard is not involved otherwise.
 
-User clicks "Promote to staging", then "Publish"
-  Nomi → POST /apps/shop/environments/staging/deploy {build_id}       (same digest, no rebuild)
-  Nomi → POST /apps/shop/environments/prod/deploy {build_id}
+User clicks "Deploy to staging"
+  Nomi → POST /apps/shop/builds (source.tar.gz, commit)  → image in registry
+  Nomi → POST /apps/shop/environments/staging/deploy {build_id}
+  Shipyard: release command (drizzle-kit migrate) in the new image
+            → fails: stop, staging keeps the old version
+            → passes: update service
+  → webhook deployment.succeeded {url}
+
+User clicks "Publish"
+  Nomi → POST /apps/shop/environments/production/deploy {build_id}    (same digest)
 
 Something breaks
-  Shipyard → webhook service.crashed {exit_code: 1, log_tail: [...]}
-  Nomi's agent reads GET /services/:id/logs?level=error, fixes, redeploys dev
-  Or the user hits "Roll back": POST /apps/shop/environments/prod/rollback {to: previous}
+  → webhook service.crashed {exit_code, log_tail}
+  Nomi's agent reads logs, fixes the code in the dev container, redeploys
 ```
 
-### Database and Drizzle
+### Build: one image, promoted
 
-- Each environment's Postgres is a normal Shipyard service with a persistent volume (PR #1 guarantees it survives redeploys and Shipyard updates) and is only reachable inside that project's network.
-- `DATABASE_URL` is set on the web service using the existing service reference (`platform-<slug>` host), so it follows the database if it moves.
-- **Release command** (new): each service can declare a command run once per deploy in a one-off container from the *new* image with the environment's variables, before traffic moves. Nomi sets it to `npx drizzle-kit migrate` (or `node build/migrate.js`). Non-zero exit fails the deploy and leaves the old version serving.
-- Nightly `pg_dump` backups for `prod` to the configured storage (Phase 3), plus "copy prod data to staging" as an explicit, logged action, never automatic.
+Unchanged from review: Nomi uploads a source tarball, Shipyard builds it with the app's `Dockerfile` (or its SvelteKit / Next.js / Nuxt / Angular auto-detection) into its built-in registry, and the **same image digest** is deployed to staging and then production. SPAs upload a built `dist/` and are served by the static server. Nomi pushing its own images to the registry stays available as an alternative.
 
-### Environment variables
+### Backend: the framework's own server, not edge functions
 
-Per environment, write-only (`PUT /apps/:app/environments/:env/variables`). Nomi can mark a variable as shared across environments; Shipyard still stores it per project so a prod-only change never leaks into dev. Values are never returned by the API and are masked in logs.
+Unchanged: SvelteKit, Next.js and Nuxt contain their backend; it runs in the app's container. Edge functions (one shared Deno runtime per org, 10–30 s timeout, 1–10 MB bodies) stay for small side endpoints only.
 
-### Domains
+### Web addresses (decisions 1 and 2)
 
-A wildcard DNS record (`*.nomi.app`) points at Shipyard's Traefik; hostnames are assigned automatically per environment and get Let's Encrypt certificates. Custom domains for prod go through `POST /apps/:app/environments/prod/domains`, and the existing Cloudflare integration can create the DNS record when the user's zone is on Cloudflare.
+Mirrors the sandbox preview setup, which already does this for `preview-<id>.<preview_base_domain>`:
+
+- New setting `apps.base_domain` (e.g. `nomi.app` or `apps.shipyard.example`), owned by the Shipyard instance.
+- One **wildcard DNS record** `*.<base>` pointing at Shipyard's Traefik, created through the existing Cloudflare integration's wildcard sync (the same code path as the sandbox preview wildcard), and a **wildcard certificate** via Traefik's DNS-01 resolver, so new apps are live instantly with no per-host certificate wait.
+- Hostname per environment, single label so the one wildcard covers it:
+  - `<app>-<env>.<base>` if that label is valid and unused (`shop-staging`, `shop-production`);
+  - otherwise `app-<8 hex>.<base>`, generated and stored, never reused.
+- Production may also get a **custom domain** later (`POST .../production/domains`); the generated hostname keeps working.
+
+### Development databases (decision 5)
+
+Nomi's dev containers need Postgres while the user builds. Running a Postgres container per app for development wastes memory, so Shipyard runs **one shared dev Postgres** (a regular Shipyard service in a system project, with a persistent volume) and hands out isolated databases on it:
+
+- `POST /apps/:app/dev-database` creates database `<app>_<org>_dev` and a role that owns only that database (`CONNECT` revoked from `PUBLIC`, no superuser, connection limit per role), and returns its `DATABASE_URL`.
+- `POST /apps/:app/dev-database/reset` drops and recreates it; `DELETE` removes it when the app is deleted.
+- Reachable from Nomi's dev containers over **TLS on a dedicated port**, restricted to Nomi's egress IPs (Traefik TCP router with an IP allowlist), never public.
+- Size and connection quotas per org plan; databases idle for 30 days are reported to Nomi before cleanup.
+- **Opt-in alternative**: `"dev_database": "dedicated"` provisions a separate small Postgres service for that app instead of a shared database, for users who need extensions or a specific Postgres version.
+
+Staging and production always get their own dedicated Postgres services (with persistent volumes, and stop-first restarts); they never share.
+
+### Migrations
+
+Per service **release command** run once per deploy in a one-off container from the new image with that environment's variables, before traffic moves. Nomi sets it to `npx drizzle-kit migrate` (or `node migrate.js`). A non-zero exit fails the deploy and leaves the previous version serving. During development, migrations run from Nomi's container against the dev database.
+
+### Logs and errors
+
+| What | Endpoint |
+| --- | --- |
+| Build logs | `GET /builds/:id/logs` (`?follow=1` streams) |
+| Deploy logs, including migration output | `GET /deployments/:id/logs` |
+| Runtime logs, merged across replicas | `GET /apps/:app/environments/:env/logs?since=&level=error&follow=1` |
+| Crashes, OOM kills, restart loops, failing health checks | `GET /apps/:app/environments/:env/events` |
+| Push to Nomi | Signed webhooks: `build.*`, `deployment.*`, `service.crashed` |
+
+Env var values are masked in every log line returned.
+
+### Dashboard access (decision 4)
+
+Nomi is the only interface by default. A Nomi admin can grant a user access to the Shipyard dashboard for their org:
+
+- `POST /orgs/:id/members {email, role}` with `role` ∈ `viewer` (read-only: logs, canvas, metrics) or `admin`; idempotent per email. Removing the user in Nomi calls `DELETE /orgs/:id/members/:email`.
+- `POST /orgs/:id/login-links {email}` returns a single-use URL valid for 5 minutes, so an allowed user can jump from Nomi into the Shipyard dashboard without a separate password. Only issued for users already granted access.
+- Default role for granted users is `viewer`, so a dashboard click can't change what Nomi manages unless the admin chose `admin`.
+- Org setting `dashboard_access: off | invited` (managed with the integration key) is the master switch Nomi's admin toggles.
+
+### Org provisioning
+
+Integration key (`ship_int_…`, one per integrator, issued by a Shipyard superadmin) can only manage orgs it created:
+
+- `POST /orgs {name, external_id, plan}`, idempotent on `external_id`, returns the org and an org-scoped key (shown once).
+- `PATCH /orgs/:id`, `POST /orgs/:id/suspend`, `DELETE /orgs/:id` mirror Nomi's org lifecycle.
 
 ### Where it runs
 
-Nomi operates one Shipyard control plane. All Nomi orgs start on shared worker nodes with per-org CPU/memory quotas; paid orgs can move to dedicated nodes using Shipyard's existing node provisioning. Nothing in the API changes between the two.
+One Shipyard control plane operated for Nomi. Orgs share worker nodes with per-org CPU/memory quotas; paid orgs can move to dedicated nodes with Shipyard's existing node provisioning. The shared dev Postgres runs on a node of its own so development load never touches production apps.
 
 ## API surface
 
-All under `/openapi/v1`, documented in `api.md` and the Nomi guide.
+All under `/openapi/v1`.
 
-| Endpoint | Credential | New / exists |
+| Endpoint | Key | Phase |
 | --- | --- | --- |
-| `POST /orgs`, `PATCH /orgs/:id`, `POST /orgs/:id/suspend`, `DELETE /orgs/:id` | integration | new |
-| `POST /apps`, `GET /apps/:app`, `DELETE /apps/:app` | org | new (creates/groups projects) |
-| `POST /apps/:app/builds` (source tarball or static bundle), `GET /builds/:id`, `GET /builds/:id/logs` | org | new (reuses engine build) |
-| `POST /apps/:app/environments/:env/deploy {build_id}` | org | new (wraps existing deploy) |
-| `POST /apps/:app/environments/:env/rollback` | org | new |
-| `PUT /apps/:app/environments/:env/variables` | org | new |
-| `POST/DELETE /apps/:app/environments/:env/domains` | org | new |
-| `GET /deployments/:id`, `GET /deployments/:id/logs` | org | `get` exists, logs new |
-| `GET /services/:id/logs`, `GET /services/:id/events` | org | new (dashboard has logs internally) |
-| `POST /webhooks` (register Nomi's endpoint + secret) | org or integration | new |
+| `POST /orgs`, `PATCH /orgs/:id`, `POST /orgs/:id/suspend`, `DELETE /orgs/:id` | integration | 1 |
+| `POST /apps`, `GET /apps/:app`, `DELETE /apps/:app` | org | 1 |
+| `POST /apps/:app/dev-database`, `.../reset`, `DELETE` | org | 1 |
+| `POST /apps/:app/builds`, `GET /builds/:id`, `GET /builds/:id/logs` | org | 1 |
+| `POST /apps/:app/environments/:env/deploy {build_id}` | org | 1 |
+| `GET /deployments/:id/logs` | org | 1 |
+| `POST /apps/:app/environments/:env/rollback` | org | 2 |
+| `PUT /apps/:app/environments/:env/variables` | org | 2 |
+| `GET /apps/:app/environments/:env/logs`, `.../events` | org | 2 |
+| `POST /webhooks` | org | 3 |
+| `POST/DELETE /apps/:app/environments/production/domains` | org | 3 |
+| `POST /orgs/:id/members`, `DELETE /orgs/:id/members/:email`, `POST /orgs/:id/login-links` | integration | 3 |
 
 ## Delivery
 
 | Phase | Ships | Unblocks for Nomi |
 | --- | --- | --- |
-| **1. Provision and deploy** | Integration keys, `POST /orgs`, `POST /apps` with environments, source-tarball builds into the registry, deploy by build id, build/deploy logs, `DATABASE_URL` wiring | An app goes from Nomi to a live `dev` URL |
-| **2. Promote and migrate** | Release command (Drizzle), promote across environments, rollback, per-environment variables, runtime logs (SSE), events | dev → staging → prod with migrations and a rollback button |
-| **3. Operate** | Webhooks, custom domains, prod backups, quotas per Nomi plan, `/docs/nomi` published | Production-ready, self-serve for Nomi users |
+| **1. Provision, develop, deploy** | Integration keys and `POST /orgs`; `apps.base_domain` with wildcard DNS + certificate and generated hostnames; `POST /apps` (staging + production); shared dev Postgres and `dev-database` endpoints; source builds into the registry; deploy by build id; build and deploy logs | Nomi users get a dev database, and an app reaches a live staging URL |
+| **2. Publish safely** | Release command for Drizzle, promote the same build to production, rollback, per-environment variables, runtime logs (SSE), events | Staging → production with migrations and a rollback button |
+| **3. Operate** | Webhooks, custom domains for production, production backups, plan quotas, dashboard access (members + login links), `/docs/nomi` published | Production-ready and self-serve |
 
-Each phase ends with an end-to-end test: a fixture SvelteKit + Drizzle app driven only through the Open API.
+Each phase ends with an end-to-end test driven only through the Open API: a fixture SvelteKit + Drizzle app that gets a dev database, builds, deploys to staging, runs a migration and is promoted to production.
 
-## Open questions
+## Still open
 
-1. **Hostname scheme**: `shop-dev.acme.nomi.app` (flat, one wildcard cert per level) or `dev.shop.acme.nomi.app` (needs deeper wildcards)? Recommend flat.
-2. **Who owns the `nomi.app` DNS zone and certificates**: Nomi or the Shipyard instance? Recommend Shipyard's Traefik with a DNS-01 wildcard cert.
-3. **Preview environments per branch/PR** (`shop-pr-42`)? Cheap to add on top of this model; decide whether Nomi wants them in Phase 2.
-4. **Free-tier limits**: sleep idle `dev` environments (scale to zero, like sandbox idle timeout) to save capacity?
-5. **Shipyard dashboard access for Nomi users**: none (Nomi is the only UI), or read-only SSO for power users later?
+1. **Base domain name** for generated hostnames (`nomi.app`, or a Shipyard-branded one)? It must be a zone on the Cloudflare account Shipyard's DNS owner org uses.
+2. **Preview environments per branch** (`shop-pr-42.<base>`): Phase 2 or later?
+3. **Idle staging**: scale staging to zero after inactivity on the free plan (like the sandbox idle reaper)?
 
 ## Out of scope
 
-- Shipyard hosting Nomi's own agent or model calls.
-- Managed Postgres features beyond one instance per environment (read replicas, PITR) until a customer needs them.
+- Running Nomi's development containers on Shipyard (Nomi already does this).
+- Managed Postgres features beyond one instance per staging/production environment (replicas, point-in-time recovery).
