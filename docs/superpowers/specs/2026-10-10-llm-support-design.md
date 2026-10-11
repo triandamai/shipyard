@@ -32,6 +32,8 @@ Each phase stands alone and ships independently. Phases 0–1 are the core; 2–
 
 ## Phase 1: Open API for platform integrators (Nomi)
 
+> Superseded in detail by `2026-10-11-nomi-integration-design.md` (environments, source builds, migrations, logs, org provisioning).
+
 **Decision (2026-10-10): no MCP server.** The first integrator is Nomi, an agent orchestrator that builds web apps and uses Shipyard to deploy and publish them. Deploying is a fixed pipeline from Nomi's side (create, upload, deploy, wait, return a URL), so it belongs in Nomi's code calling a typed HTTP API, not in an LLM choosing tools turn by turn. Nomi exposes its own high-level tools (e.g. `publish_app`) to its models and implements them on this API. An MCP layer can be added later on top of the same endpoints if a generic agent client needs it; nothing here depends on it.
 
 ### What Nomi needs that the Open API lacks
