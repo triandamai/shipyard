@@ -12,7 +12,7 @@ description: Deploy apps built by Nomi to Shipyard: development databases, stagi
 
 Nomi builds web apps in its own development containers; Shipyard deploys and publishes them, and provides the databases they use while in development. This guide is for engineers wiring Nomi to a Shipyard instance, and for Nomi's agent, which can read it as Markdown at `/docs/nomi.md`.
 
-Everything here goes through the Open API at `https://<shipyard>/openapi/v1`. Nomi users never need a Shipyard login.
+Everything here goes through the Open API at `/openapi/v1`. Nomi runs on the same Shipyard, so it calls the API and receives webhooks over the internal network. Nomi users never need a Shipyard login.
 
 ## How the pieces map {#mapping}
 
@@ -104,7 +104,7 @@ Use `"kind": "static"` for single-page apps with no server (Vite React, Vue or S
 Your development containers stay in Nomi. Point them at the app's development database, which lives on a shared Postgres that Shipyard runs for development only:
 
 - One database and one role per app; the role can't see other apps' databases.
-- TLS is required, and only Nomi's servers can connect.
+- It is only reachable from Nomi's development containers, over Shipyard's internal network.
 - Run `drizzle-kit push` or `drizzle-kit migrate` from the development container as usual.
 
 Create it later if you didn't ask for it with the app, reset it to empty, or remove it:
@@ -281,7 +281,7 @@ Register one endpoint for the organization:
 curl -X POST https://ship.example.com/openapi/v1/webhooks \
   -H "Authorization: Bearer ship_…" \
   -H "Content-Type: application/json" \
-  -d '{ "url": "https://api.nomi.app/hooks/shipyard", "events": ["build.*", "deployment.*", "service.crashed"] }'
+  -d '{ "url": "http://nomi-api:3000/hooks/shipyard", "events": ["build.*", "deployment.*", "service.crashed"] }'
 ```
 
 Each delivery has a `Shipyard-Signature` header: an HMAC-SHA256 of the raw body with the secret returned when you registered. Reject deliveries whose signature doesn't match.

@@ -1,7 +1,7 @@
 # Nomi on Shipyard: first-class integration
 
 **Date:** 2026-10-11
-**Status:** Design agreed in review (see "Decisions"); "What to prepare" lists the inputs needed before Phase 1. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
+**Status:** Design agreed in review (see "Decisions"). Nomi runs on the same Shipyard, so Phase 0 (tenant isolation) comes first; "What to prepare" lists the inputs needed. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
 **Companion:** `2026-10-11-nomi-integration-guide.md` (the developer guide, published at `/docs/nomi` once the endpoints ship).
 
 ## What we're building
@@ -22,6 +22,7 @@ Nomi is the interface. Shipyard is driven through the Open API, and a Nomi admin
 | 6 | **Base domain is Shipyard-branded** and dedicated to user apps, separate from the dashboard's domain (exact name chosen by the operator; see "What to prepare"). |
 | 7 | **Preview environments** per branch or change, in Phase 2. |
 | 8 | **Free plan sleeps idle environments**: staging and previews stop after inactivity and wake on the next request. Production never sleeps. |
+| 9 | **Nomi itself runs on the same Shipyard.** Nomi's own services are a Shipyard org; its users' apps are other orgs on the same instance. Tenant isolation is therefore a prerequisite (Phase 0). |
 
 ## How it works
 
@@ -113,7 +114,7 @@ Nomi's dev containers need Postgres while the user builds. Running a Postgres co
 
 - `POST /apps/:app/dev-database` creates database `<app>_<org>_dev` and a role that owns only that database (`CONNECT` revoked from `PUBLIC`, no superuser, connection limit per role), and returns its `DATABASE_URL`.
 - `POST /apps/:app/dev-database/reset` drops and recreates it; `DELETE` removes it when the app is deleted.
-- Reachable from Nomi's dev containers over **TLS on a dedicated port**, restricted to Nomi's egress IPs (Traefik TCP router with an IP allowlist), never public.
+- Reachable only from Nomi's dev containers over the internal `nomi-dev` overlay network (TLS still on), never from tenant apps and never public.
 - Size and connection quotas per org plan; databases idle for 30 days are reported to Nomi before cleanup.
 - **Opt-in alternative**: `"dev_database": "dedicated"` provisions a separate small Postgres service for that app instead of a shared database, for users who need extensions or a specific Postgres version.
 
@@ -151,9 +152,28 @@ Integration key (`ship_int_…`, one per integrator, issued by a Shipyard supera
 - `POST /orgs {name, external_id, plan}`, idempotent on `external_id`, returns the org and an org-scoped key (shown once).
 - `PATCH /orgs/:id`, `POST /orgs/:id/suspend`, `DELETE /orgs/:id` mirror Nomi's org lifecycle.
 
-### Where it runs
+### Where it runs: Nomi and its users on one Shipyard (decision 9)
 
-One Shipyard control plane operated for Nomi. Orgs share worker nodes with per-org CPU/memory quotas; paid orgs can move to dedicated nodes with Shipyard's existing node provisioning. The shared dev Postgres runs on a node of its own so development load never touches production apps.
+Nomi is already deployed on this Shipyard instance, in its own org (the **platform org**). Its users' apps will be other orgs on the same instance. That simplifies the integration and adds one hard requirement.
+
+**Simpler:**
+
+- Nomi calls the Open API and receives webhooks **over the internal network** (`http://shipyard-backend:3001`, `http://<nomi-api service>:<port>/hooks/shipyard`); no public round-trip, though webhooks are still HMAC-signed.
+- Nomi's dev containers reach the shared dev Postgres over an internal overlay network (`nomi-dev`), so there is **no public database port and no IP allowlist**.
+- One set of servers, one dashboard, one backup and monitoring setup.
+
+**Required first: tenant isolation (Phase 0).** Today every service and every sandbox container is attached to one shared overlay network, the Traefik network `platform_proxy` (`step_configure_networks` in `engine/src/lib.rs` always adds it; sandboxes join it too). On a shared instance that means a user's deployed app can open connections to **Nomi's own services** (its API, workers, database if attached) and to **other users' apps** by service name, bypassing Traefik. Before any Nomi user app is deployed:
+
+1. **Per-org edge networks.** Replace the single shared network with one overlay network per org (`edge-<org>`), each attached to Traefik. A service joins only its own org's edge network plus its project network. Traefik reaches everything; tenants can't reach each other.
+2. **Internal-only platform services.** Nomi's database, queues and workers join only private project networks, never an edge network; only Nomi's public web service has a route through Traefik.
+3. **No backend reachability from tenants.** Shipyard's backend, Postgres, Redis and MQTT stay on `shipyard_internal`; user apps reach Shipyard only through its public URL like any outsider.
+4. **Node pools.** Label nodes `pool=platform` (Shipyard, Nomi), `pool=apps` (user apps), `pool=build`, `pool=devdb`, and add placement constraints so user workloads never land on platform nodes and a noisy app can't starve Nomi.
+5. **Least privilege for Nomi.** Nomi's own runtime holds only the integration key for user orgs; it is not a superadmin and its platform org gets no special access to tenant orgs.
+6. **Egress controls (later).** Optional per-plan outbound rules for user apps (e.g. block SMTP 25, metadata endpoints).
+
+Each step gets a test: a container in tenant org A cannot resolve or connect to a service in org B, in the platform org, or on `shipyard_internal`.
+
+Orgs share `pool=apps` nodes with per-org CPU/memory quotas; paid orgs can move to dedicated nodes with Shipyard's existing node provisioning.
 
 ## API surface
 
@@ -180,6 +200,7 @@ All under `/openapi/v1`.
 
 | Phase | Ships | Unblocks for Nomi |
 | --- | --- | --- |
+| **0. Isolate tenants** | Per-org edge networks, internal-only platform services, node pools with placement constraints, isolation tests | Safe to host Nomi users' apps next to Nomi itself |
 | **1. Provision, develop, deploy** | Integration keys and `POST /orgs`; `apps.base_domain` with wildcard DNS + certificate and generated hostnames; `POST /apps` (staging + production); shared dev Postgres and `dev-database` endpoints; source builds into the registry; deploy by build id; build and deploy logs | Nomi users get a dev database, and an app reaches a live staging URL |
 | **2. Publish safely** | Release command for Drizzle, promote the same build to production, rollback, per-environment variables, runtime logs (SSE), events, preview environments, sleep-on-idle for free staging/previews | Staging → production with migrations, previews per change, a rollback button |
 | **3. Operate** | Webhooks, custom domains for production, production backups, plan quotas, dashboard access (members + login links), `/docs/nomi` published | Production-ready and self-serve |
@@ -195,25 +216,26 @@ Each phase ends with an end-to-end test driven only through the Open API: a fixt
 | **Apps domain** (Shipyard-branded, e.g. `shipyardapp.dev`) | Generated hostnames for every user app | Must not be the dashboard domain. Registered and moved to Cloudflare. |
 | **Cloudflare API token** for that zone | Wildcard `*.<base>` DNS record and DNS-01 wildcard certificate | Permissions: Zone:Read, DNS:Edit, limited to that zone. Connected to the DNS-owner org like the sandbox preview domain. |
 | **Let's Encrypt contact email** | Certificate expiry and account notices | |
-| **App worker nodes** | Where staging, previews and production run | Start with 2 × 4 vCPU / 8 GB; add nodes as orgs grow. Docker installed, joined with `worker-setup.sh`. |
+| **Node pools** on the existing Shipyard | Keep user apps away from Shipyard and Nomi | Label current nodes `pool=platform`; add app nodes (start with 2 × 4 vCPU / 8 GB) labelled `pool=apps`, joined with `worker-setup.sh`. |
 | **Build capacity** | Source tarballs are built into images | A dedicated builder node (4 vCPU / 8 GB / 100 GB disk) keeps builds off app nodes. |
-| **Dev Postgres node** | Shared development databases | 2 vCPU / 4 GB / 100 GB SSD to start, isolated from app nodes. Port (e.g. `5433`) open only to Nomi's egress IPs. |
+| **Dev Postgres node** | Shared development databases | 2 vCPU / 4 GB / 100 GB SSD, labelled `pool=devdb`. Reached over the internal `nomi-dev` network only; no public port. |
 | **Registry storage** | Built images for promote and rollback | Local disk on the control plane (≥ 200 GB) or S3-compatible storage; retention policy (e.g. keep last 20 builds per app). |
 | **Backup bucket** (Phase 3) | Nightly `pg_dump` of production databases | S3-compatible bucket and keys; retention (e.g. 14 daily, 8 weekly). |
 | **Plan limits** | Quotas Shipyard enforces per org | Free / paid values for apps, previews, CPU and memory per environment, build minutes, dev database size and connections, idle timeout. |
 | **Abuse and terms** | Public hosting of user-generated apps | Terms of use for hosted apps, an abuse contact address on the apps domain, and the Public Suffix List submission. |
-| **Integration key for Nomi** | Nomi's credential for orgs | Created once in Shipyard admin when Phase 1 ships, handed to Nomi through a secret manager. |
+| **Integration key for Nomi** | Nomi's credential for orgs | Created once in Shipyard admin when Phase 1 ships, stored as an env var on Nomi's service (write-only), not in Nomi's code. |
+| **Inventory of Nomi's services** | Phase 0 network split | Which of Nomi's services must be public (web) and which must be private (API, workers, database, queue). |
 
 ### Nomi
 
 | Item | Why | Notes |
 | --- | --- | --- |
-| **Static egress IPs** of the dev containers | Dev database allowlist | List every IP the containers connect from; tell Shipyard before Phase 1 testing. |
+| **How dev containers are created** | Dev database connectivity | Are they Shipyard sandbox apps or containers Nomi starts itself? Either way they join the internal `nomi-dev` network; no public IPs needed. |
 | **Secret storage** | Integration key, per-org Shipyard keys, webhook secret | Encrypted at rest; org keys looked up by Nomi org id. |
 | **Data model additions** | Link Nomi records to Shipyard | `org.shipyard_org_id`, `org.shipyard_key`, `app.app_key`, per build `build_id` and commit, per environment URL and state. |
 | **Templates per framework** | Deterministic builds | `Dockerfile` (SvelteKit `adapter-node`, Next.js `output: 'standalone'`, Nuxt `node-server`), `.dockerignore`, listening on `PORT`, a `GET /healthz` route, `drizzle.config.ts` reading `DATABASE_URL`, migrations in `drizzle/` shipped in the image, and a `migrate.js` fallback. |
 | **Packaging** | Upload source | `tar.gz` without `node_modules`, `.git` and build output; under 200 MB. SPAs: zip of `dist/`. |
-| **Webhook endpoint** | Build, deploy, crash, sleep events | Public HTTPS URL, verifies `Shipyard-Signature` (HMAC-SHA256), idempotent on event id. |
+| **Webhook endpoint** | Build, deploy, crash, sleep events | An internal URL on Nomi's API service (no public exposure needed); verifies `Shipyard-Signature` (HMAC-SHA256), idempotent on event id. |
 | **Agent tools** | Let the agent publish and self-repair | `deploy_to_staging`, `publish`, `create_preview`, `read_build_logs`, `read_runtime_errors`; feed failed log tails back into the agent. |
 | **UI** | Nomi is the interface | Deploy / publish buttons, environment URLs and states (including sleeping), logs view (SSE), write-only variables editor, previews list, rollback, and an admin-only toggle for Shipyard dashboard access. |
 | **Preview trigger rule** | When a preview is created | Per branch, per change request, or manual; and the naming (`pr-42`, branch slug). |
@@ -222,8 +244,8 @@ Each phase ends with an end-to-end test driven only through the Open API: a fixt
 ### Send to the Shipyard side before Phase 1 starts
 
 1. The apps domain name, once it is on Cloudflare, and the scoped API token.
-2. Nomi's dev-container egress IPs.
-3. Nomi's webhook URL.
+2. How Nomi's dev containers are created (Shipyard sandboxes or Nomi's own containers).
+3. The list of Nomi's services, marked public or private, and its internal webhook URL.
 4. The plan limits table (free and paid).
 
 ## Out of scope
