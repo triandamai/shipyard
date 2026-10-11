@@ -167,6 +167,33 @@ pub struct DockerConfig {
     /// on Linux production servers where Swarm host-mode ports bind directly.
     #[serde(default)]
     pub port_proxy: bool,
+    /// Give every org its own overlay network (`{label_prefix}-edge-{org}`)
+    /// instead of putting all tenant workloads on the shared Traefik network.
+    /// Traefik and the backend are connected to each org network so routing
+    /// and sandbox/edge dialing keep working; tenants can no longer reach each
+    /// other or platform services (MQTT, frontend) over the shared network.
+    #[serde(default)]
+    pub tenant_isolation: bool,
+    /// Container name of Traefik, connected to each org edge network.
+    #[serde(default = "default_traefik_container")]
+    pub traefik_container: String,
+    /// Container name of the Shipyard backend, connected to each org edge
+    /// network so it can dial sandboxes and edge runtimes can call it back.
+    #[serde(default = "default_backend_container")]
+    pub backend_container: String,
+    /// When set, tenant services are placed only on Swarm nodes labelled
+    /// `pool=<value>` (e.g. `apps`), keeping them off the manager that runs
+    /// the platform. Unset = no pool constraint.
+    #[serde(default)]
+    pub app_node_pool: Option<String>,
+}
+
+fn default_traefik_container() -> String {
+    "shipyard-traefik".to_string()
+}
+
+fn default_backend_container() -> String {
+    "shipyard-backend".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -444,6 +471,10 @@ impl Default for AppConfig {
                 socket_path: None,
                 label_prefix: "platform".to_string(),
                 port_proxy: false,
+                tenant_isolation: false,
+                traefik_container: default_traefik_container(),
+                backend_container: default_backend_container(),
+                app_node_pool: None,
             },
             auth: AuthConfig {
                 jwt_secret: "change-me-in-production".to_string(),

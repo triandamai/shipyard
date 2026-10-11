@@ -139,6 +139,14 @@ async fn create_runtime_service(
         readonly: true,
     }];
 
+    let network = shipyard_docker::isolation::tenant_network(&*state.docker, org_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let constraints: Vec<String> = shipyard_docker::isolation::settings()
+        .pool_constraint()
+        .into_iter()
+        .collect();
+
     let spec = ServiceSpec {
         name: service_name.to_string(),
         image: state.config.edge_functions.runtime_image.clone(),
@@ -154,9 +162,9 @@ async fn create_runtime_service(
         ],
         labels,
         mounts,
-        networks: vec![state.config.traefik.network.clone()],
+        networks: vec![network],
         ports: vec![],
-        constraints: vec![],
+        constraints,
         resources: Some(ResourceSpec {
             memory_limit_mb: Some(memory_mb),
             cpu_limit: Some(cpu_limit),

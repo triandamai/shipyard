@@ -4,6 +4,7 @@
 //! for swarm service management, image operations, and event streaming.
 
 pub mod engine;
+pub mod isolation;
 pub mod types;
 
 pub use engine::BollardDockerEngine;

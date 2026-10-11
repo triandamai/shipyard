@@ -76,6 +76,7 @@ async fn async_main() {
         AppConfig::default()
     });
     config.apply_docker_secrets();
+    shipyard_docker::isolation::init(shipyard_docker::isolation::IsolationSettings::from_config(&config));
 
     // ── Security sanity checks ────────────────────────────────────────────────
     // Refuse to boot with default secrets so a misconfigured prod deploy is

@@ -344,6 +344,10 @@ async fn provision_sandbox(
     let (pull_image, pull_tag) = split_image_ref(&base_image);
     state.docker.pull_image(pull_image, pull_tag, None).await?;
 
+    // The backend dials the sandbox by name, so it must share the network:
+    // the org's edge network with tenant isolation on, else the shared one.
+    let network = shipyard_docker::isolation::tenant_network(&*state.docker, org_id).await?;
+
     let container_id = state
         .docker
         .create_container(ContainerSpec {
@@ -357,7 +361,7 @@ async fn provision_sandbox(
                 mount_type: MountType::Volume,
                 readonly: false,
             }],
-            network: Some(state.config.traefik.network.clone()),
+            network: Some(network),
             network_aliases: vec![container_name.clone()],
             runtime_class: Some(state.config.sandbox.runtime_class.clone()),
             working_dir: Some("/app".to_string()),
