@@ -174,6 +174,8 @@ CMD ["node", "server.js"]
 > [!NOTE]
 > The release command runs inside this image, so anything it needs (`drizzle-kit`, your `drizzle/` migrations folder, `drizzle.config.ts`) must be in the final stage. If you prune dev dependencies, either keep `drizzle-kit` as a dependency or ship a small `migrate.js` that uses `drizzle-orm/node-postgres/migrator` and set `release_command` to `node migrate.js`.
 
+Add a `GET /healthz` route that returns `200` once the app can serve requests; Shipyard uses it to decide when a new version is ready and when a sleeping environment has woken up.
+
 Read the database URL from the environment, never from a file:
 
 ```ts title="src/lib/server/db.ts"
@@ -225,6 +227,25 @@ To publish, deploy the same `build_id` to `production`. There is no rebuild, so 
 
 To roll back, `POST /apps/shop/environments/production/rollback` returns to the previous successful deployment. Rolling back does not undo migrations: write migrations that the previous version can still run against.
 
+## Preview environments {#previews}
+
+Give a branch or change its own short-lived environment:
+
+```bash
+curl -X POST https://ship.example.com/openapi/v1/apps/shop/previews \
+  -H "Authorization: Bearer ship_…" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "pr-42", "build_id": "019a…" }'
+```
+
+A preview gets its own hostname, variables copied from staging, and a fresh database with your migrations applied. Pass `"database": "staging-copy"` to start from a copy of staging's data instead. Deploy new builds to it with `POST /apps/shop/previews/pr-42/deploy` and remove it with `DELETE /apps/shop/previews/pr-42`. Previews nobody has deployed to for 7 days are removed automatically, after a `preview.expiring` webhook.
+
+## Sleeping environments {#sleeping}
+
+On the free plan, staging and previews go to sleep after 30 minutes without a request. The next visitor sees a short "Starting…" page while the app and its database start, usually a few seconds, and then the app itself. Production never sleeps.
+
+Each environment reports `state` (`running`, `sleeping`, `starting`) in `GET /apps/:app`, and Shipyard sends `environment.slept` and `environment.woke` webhooks. Wake one ahead of a demo with `POST /apps/shop/environments/staging/wake`.
+
 ## Variables {#variables}
 
 Set variables per environment. Values are write-only: the API never returns them and they are masked in logs.
@@ -270,6 +291,8 @@ Each delivery has a `Shipyard-Signature` header: an HMAC-SHA256 of the raw body 
 | `build.succeeded`, `build.failed` | A build finishes |
 | `deployment.succeeded`, `deployment.failed` | A deploy finishes, with the environment URL or the failing step |
 | `service.crashed` | A running app exits unexpectedly, with exit code and the last log lines |
+| `environment.slept`, `environment.woke` | A free-plan environment goes to sleep or wakes up |
+| `preview.expiring` | A preview will be removed in 24 hours |
 
 ## Dashboard access {#dashboard}
 

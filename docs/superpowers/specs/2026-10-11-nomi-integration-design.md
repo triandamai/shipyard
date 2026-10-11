@@ -1,7 +1,7 @@
 # Nomi on Shipyard: first-class integration
 
 **Date:** 2026-10-11
-**Status:** Draft design, decisions from review applied (see "Decisions"). Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
+**Status:** Design agreed in review (see "Decisions"); "What to prepare" lists the inputs needed before Phase 1. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
 **Companion:** `2026-10-11-nomi-integration-guide.md` (the developer guide, published at `/docs/nomi` once the endpoints ship).
 
 ## What we're building
@@ -19,6 +19,9 @@ Nomi is the interface. Shipyard is driven through the Open API, and a Nomi admin
 | 3 | **Shipyard is for deployment only.** Development happens in Nomi's containers, so Shipyard environments are `staging` and `production` (plus optional previews later). No `dev` environment on Shipyard. |
 | 4 | **Nomi is the interface; dashboard access is a Nomi admin's choice.** Off by default, granted per user through the API. |
 | 5 | **Shipyard provides development databases** for Nomi's dev containers, from a shared Postgres (one database and role per app), so development doesn't need its own server per app. |
+| 6 | **Base domain is Shipyard-branded** and dedicated to user apps, separate from the dashboard's domain (exact name chosen by the operator; see "What to prepare"). |
+| 7 | **Preview environments** per branch or change, in Phase 2. |
+| 8 | **Free plan sleeps idle environments**: staging and previews stop after inactivity and wake on the next request. Production never sleeps. |
 
 ## How it works
 
@@ -81,12 +84,28 @@ Unchanged: SvelteKit, Next.js and Nuxt contain their backend; it runs in the app
 
 Mirrors the sandbox preview setup, which already does this for `preview-<id>.<preview_base_domain>`:
 
-- New setting `apps.base_domain` (e.g. `nomi.app` or `apps.shipyard.example`), owned by the Shipyard instance.
+- New setting `apps.base_domain`: a Shipyard-branded domain used only for user apps (for example `shipyardapp.dev`), never the dashboard's own domain, so a user's app can't read or set the dashboard's cookies. It is later submitted to the Public Suffix List so apps can't set cookies for each other either.
 - One **wildcard DNS record** `*.<base>` pointing at Shipyard's Traefik, created through the existing Cloudflare integration's wildcard sync (the same code path as the sandbox preview wildcard), and a **wildcard certificate** via Traefik's DNS-01 resolver, so new apps are live instantly with no per-host certificate wait.
 - Hostname per environment, single label so the one wildcard covers it:
   - `<app>-<env>.<base>` if that label is valid and unused (`shop-staging`, `shop-production`);
   - otherwise `app-<8 hex>.<base>`, generated and stored, never reused.
 - Production may also get a **custom domain** later (`POST .../production/domains`); the generated hostname keeps working.
+
+### Preview environments (decision 7)
+
+- `POST /apps/:app/previews {name, build_id}` creates a short-lived environment (`name` is a branch or change label, e.g. `pr-42`) as its own project with web service, hostname `<app>-<name>.<base>` (or generated), and variables copied from staging.
+- Database: a fresh database on the shared dev Postgres by default (cheap, isolated, empty plus migrations), or `"database": "staging-copy"` to restore a snapshot of staging's data.
+- Redeploy with `POST /apps/:app/previews/:name/deploy {build_id}`; `DELETE` removes the project, its database and hostname. Previews untouched for 7 days are deleted automatically, with a webhook first.
+- Counted against a per-plan preview limit.
+
+### Sleeping when idle (decision 8)
+
+Free plan only, for staging and previews (production never sleeps):
+
+- **Idle** = no HTTP request for 30 minutes (per plan, configurable), read from Traefik access logs per router; deployed apps have no editor heartbeat like sandboxes do.
+- On idle, the service is scaled to zero and its route is pointed at Shipyard's **cold-start responder** (the one sandbox previews already use): the next request shows a short "Starting…" page, scales the service back to one replica and reloads when it's healthy, typically a few seconds.
+- Databases keep their data (persistent volumes); the dedicated staging Postgres sleeps with its app and starts first on wake.
+- Nomi sees `environment.slept` / `environment.woke` webhooks and a `state: sleeping` field, and can wake an environment ahead of time with `POST .../wake`.
 
 ### Development databases (decision 5)
 
@@ -149,6 +168,8 @@ All under `/openapi/v1`.
 | `POST /apps/:app/environments/:env/deploy {build_id}` | org | 1 |
 | `GET /deployments/:id/logs` | org | 1 |
 | `POST /apps/:app/environments/:env/rollback` | org | 2 |
+| `POST /apps/:app/previews`, `.../previews/:name/deploy`, `DELETE .../previews/:name` | org | 2 |
+| `POST /apps/:app/environments/:env/wake`; sleep on idle (free plan) | org | 2 |
 | `PUT /apps/:app/environments/:env/variables` | org | 2 |
 | `GET /apps/:app/environments/:env/logs`, `.../events` | org | 2 |
 | `POST /webhooks` | org | 3 |
@@ -160,16 +181,50 @@ All under `/openapi/v1`.
 | Phase | Ships | Unblocks for Nomi |
 | --- | --- | --- |
 | **1. Provision, develop, deploy** | Integration keys and `POST /orgs`; `apps.base_domain` with wildcard DNS + certificate and generated hostnames; `POST /apps` (staging + production); shared dev Postgres and `dev-database` endpoints; source builds into the registry; deploy by build id; build and deploy logs | Nomi users get a dev database, and an app reaches a live staging URL |
-| **2. Publish safely** | Release command for Drizzle, promote the same build to production, rollback, per-environment variables, runtime logs (SSE), events | Staging → production with migrations and a rollback button |
+| **2. Publish safely** | Release command for Drizzle, promote the same build to production, rollback, per-environment variables, runtime logs (SSE), events, preview environments, sleep-on-idle for free staging/previews | Staging → production with migrations, previews per change, a rollback button |
 | **3. Operate** | Webhooks, custom domains for production, production backups, plan quotas, dashboard access (members + login links), `/docs/nomi` published | Production-ready and self-serve |
 
 Each phase ends with an end-to-end test driven only through the Open API: a fixture SvelteKit + Drizzle app that gets a dev database, builds, deploys to staging, runs a migration and is promoted to production.
 
-## Still open
+## What to prepare
 
-1. **Base domain name** for generated hostnames (`nomi.app`, or a Shipyard-branded one)? It must be a zone on the Cloudflare account Shipyard's DNS owner org uses.
-2. **Preview environments per branch** (`shop-pr-42.<base>`): Phase 2 or later?
-3. **Idle staging**: scale staging to zero after inactivity on the free plan (like the sandbox idle reaper)?
+### Shipyard operator
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **Apps domain** (Shipyard-branded, e.g. `shipyardapp.dev`) | Generated hostnames for every user app | Must not be the dashboard domain. Registered and moved to Cloudflare. |
+| **Cloudflare API token** for that zone | Wildcard `*.<base>` DNS record and DNS-01 wildcard certificate | Permissions: Zone:Read, DNS:Edit, limited to that zone. Connected to the DNS-owner org like the sandbox preview domain. |
+| **Let's Encrypt contact email** | Certificate expiry and account notices | |
+| **App worker nodes** | Where staging, previews and production run | Start with 2 × 4 vCPU / 8 GB; add nodes as orgs grow. Docker installed, joined with `worker-setup.sh`. |
+| **Build capacity** | Source tarballs are built into images | A dedicated builder node (4 vCPU / 8 GB / 100 GB disk) keeps builds off app nodes. |
+| **Dev Postgres node** | Shared development databases | 2 vCPU / 4 GB / 100 GB SSD to start, isolated from app nodes. Port (e.g. `5433`) open only to Nomi's egress IPs. |
+| **Registry storage** | Built images for promote and rollback | Local disk on the control plane (≥ 200 GB) or S3-compatible storage; retention policy (e.g. keep last 20 builds per app). |
+| **Backup bucket** (Phase 3) | Nightly `pg_dump` of production databases | S3-compatible bucket and keys; retention (e.g. 14 daily, 8 weekly). |
+| **Plan limits** | Quotas Shipyard enforces per org | Free / paid values for apps, previews, CPU and memory per environment, build minutes, dev database size and connections, idle timeout. |
+| **Abuse and terms** | Public hosting of user-generated apps | Terms of use for hosted apps, an abuse contact address on the apps domain, and the Public Suffix List submission. |
+| **Integration key for Nomi** | Nomi's credential for orgs | Created once in Shipyard admin when Phase 1 ships, handed to Nomi through a secret manager. |
+
+### Nomi
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **Static egress IPs** of the dev containers | Dev database allowlist | List every IP the containers connect from; tell Shipyard before Phase 1 testing. |
+| **Secret storage** | Integration key, per-org Shipyard keys, webhook secret | Encrypted at rest; org keys looked up by Nomi org id. |
+| **Data model additions** | Link Nomi records to Shipyard | `org.shipyard_org_id`, `org.shipyard_key`, `app.app_key`, per build `build_id` and commit, per environment URL and state. |
+| **Templates per framework** | Deterministic builds | `Dockerfile` (SvelteKit `adapter-node`, Next.js `output: 'standalone'`, Nuxt `node-server`), `.dockerignore`, listening on `PORT`, a `GET /healthz` route, `drizzle.config.ts` reading `DATABASE_URL`, migrations in `drizzle/` shipped in the image, and a `migrate.js` fallback. |
+| **Packaging** | Upload source | `tar.gz` without `node_modules`, `.git` and build output; under 200 MB. SPAs: zip of `dist/`. |
+| **Webhook endpoint** | Build, deploy, crash, sleep events | Public HTTPS URL, verifies `Shipyard-Signature` (HMAC-SHA256), idempotent on event id. |
+| **Agent tools** | Let the agent publish and self-repair | `deploy_to_staging`, `publish`, `create_preview`, `read_build_logs`, `read_runtime_errors`; feed failed log tails back into the agent. |
+| **UI** | Nomi is the interface | Deploy / publish buttons, environment URLs and states (including sleeping), logs view (SSE), write-only variables editor, previews list, rollback, and an admin-only toggle for Shipyard dashboard access. |
+| **Preview trigger rule** | When a preview is created | Per branch, per change request, or manual; and the naming (`pr-42`, branch slug). |
+| **Plan mapping** | Nomi plan → Shipyard plan | Which Nomi tiers are "free" (sleeping) on Shipyard. |
+
+### Send to the Shipyard side before Phase 1 starts
+
+1. The apps domain name, once it is on Cloudflare, and the scoped API token.
+2. Nomi's dev-container egress IPs.
+3. Nomi's webhook URL.
+4. The plan limits table (free and paid).
 
 ## Out of scope
 
