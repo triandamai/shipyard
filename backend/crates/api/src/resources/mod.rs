@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::{ApiResponse, MqttPayload};
+use shipyard_db::events;
 use shipyard_db::models::{Domain, Network, Volume};
 
 use crate::auth::AuthUser;
@@ -549,18 +550,18 @@ async fn list_domains(
     Ok(Json(ApiResponse::ok(domains)))
 }
 
-/// POST /services/:service_id/domains
-async fn create_domain(
-    auth_user: AuthUser,
-    Path(service_id): Path<Uuid>,
-    State(state): State<AppState>,
-    Json(body): Json<CreateDomainRequest>,
-) -> Result<(StatusCode, Json<ApiResponse<Domain>>), ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
-    if body.hostname.is_empty() {
-        return Err(ApiAppError(AppError::BadRequest("hostname is required".to_string())));
-    }
-
+/// Attach a hostname to a service: domain row, Cloudflare DNS record when a
+/// connection covers the zone, Traefik route, static-site server name,
+/// topology and `domain.attached` events. Used by the dashboard and by
+/// integration publish.
+pub(crate) async fn attach_domain(
+    state: &AppState,
+    service_id: Uuid,
+    hostname: &str,
+    tls_enabled: bool,
+    cert_provider: &str,
+    port: Option<i32>,
+) -> Result<Domain, ApiAppError> {
     // Verify service exists
     let service_exists: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
         "SELECT TRUE FROM services WHERE id = $1",
@@ -580,10 +581,10 @@ async fn create_domain(
     let domain_id = Uuid::now_v7();
     // Router name is hostname-derived (unique per domain) so multiple domains on
     // the same service never collide in the Traefik YAML file.
-    let traefik_router_name = hostname_to_router_name(&body.hostname);
+    let traefik_router_name = hostname_to_router_name(&hostname);
 
     // Convenience wildcard-DNS domains must never request LE certs.
-    let tls_enabled = body.tls_enabled && !is_convenience_domain(&body.hostname);
+    let tls_enabled = tls_enabled && !is_convenience_domain(&hostname);
 
     let mut domain = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, service_id, hostname, tls_enabled, traefik_router_name, cert_provider, port, created_at)
@@ -592,11 +593,11 @@ async fn create_domain(
     )
     .bind(domain_id)
     .bind(service_id)
-    .bind(&body.hostname)
+    .bind(&hostname)
     .bind(tls_enabled)
     .bind(&traefik_router_name)
-    .bind(&body.cert_provider)
-    .bind(body.port)
+    .bind(cert_provider)
+    .bind(port)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -604,7 +605,7 @@ async fn create_domain(
         if msg.contains("unique") || msg.contains("duplicate") {
             ApiAppError(AppError::Conflict(format!(
                 "Domain '{}' already exists",
-                body.hostname
+                hostname
             )))
         } else {
             ApiAppError(AppError::Database(msg))
@@ -612,7 +613,7 @@ async fn create_domain(
     })?;
 
     // Best-effort Cloudflare DNS record — never blocks domain creation on failure.
-    if let Some((zone_id, record_id)) = try_create_cloudflare_record(&state.db, service_id, &body.hostname).await {
+    if let Some((zone_id, record_id)) = try_create_cloudflare_record(&state.db, service_id, &hostname).await {
         if let Err(e) = sqlx::query("UPDATE domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3")
             .bind(&zone_id)
             .bind(&record_id)
@@ -621,7 +622,7 @@ async fn create_domain(
             .await
         {
             tracing::warn!(
-                hostname = %body.hostname,
+                hostname = %hostname,
                 %zone_id,
                 %record_id,
                 "created Cloudflare DNS record but failed to persist its ids: {e}"
@@ -666,6 +667,30 @@ async fn create_domain(
             .with_meta(serde_json::json!({ "resource": "domain", "domain_id": domain.id }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
     }
+    events::emit_for_service(
+        &state.db,
+        service_id,
+        "domain.attached",
+        serde_json::json!({ "domain_id": domain.id, "hostname": domain.hostname, "tls": domain.tls_enabled }),
+    )
+    .await;
+
+    Ok(domain)
+}
+
+/// POST /services/:service_id/domains
+async fn create_domain(
+    auth_user: AuthUser,
+    Path(service_id): Path<Uuid>,
+    State(state): State<AppState>,
+    Json(body): Json<CreateDomainRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Domain>>), ApiAppError> {
+    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
+    if body.hostname.is_empty() {
+        return Err(ApiAppError(AppError::BadRequest("hostname is required".to_string())));
+    }
+
+    let domain = attach_domain(&state, service_id, &body.hostname, body.tls_enabled, &body.cert_provider, body.port).await?;
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(domain))))
 }
@@ -725,6 +750,7 @@ async fn delete_domain(
             .with_meta(serde_json::json!({ "resource": "domain", "domain_id": domain_id, "reason": "deleted" }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
     }
+    events::emit_for_service(&state.db, service_id, "domain.removed", serde_json::json!({ "domain_id": domain_id })).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Domain deleted successfully"
@@ -869,6 +895,14 @@ async fn create_volume(
         ApiAppError(AppError::Database(e.to_string()))
     })?;
 
+    events::emit_for_service(
+        &state.db,
+        service_id,
+        "volume.created",
+        serde_json::json!({ "volume_id": volume.id, "volume": volume.name, "mount_path": volume.mount_path }),
+    )
+    .await;
+
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(volume))))
 }
 
@@ -908,6 +942,14 @@ async fn delete_volume(
         .execute(&state.db)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    events::emit_for_service(
+        &state.db,
+        service_id,
+        "volume.deleted",
+        serde_json::json!({ "volume_id": volume_id, "volume": volume_name }),
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Volume deleted successfully" }))))
 }
@@ -963,6 +1005,8 @@ async fn attach_volume_to_service(
             format!("Volume '{volume_id}' not found or already attached to a service"),
         )));
     }
+
+    events::emit_for_service(&state.db, service_id, "volume.attached", serde_json::json!({ "volume_id": volume_id })).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Volume attached to service" }))))
 }
@@ -1053,6 +1097,13 @@ async fn create_project_volume(
     let payload = MqttPayload::new("topology.changed")
         .with_meta(serde_json::json!({ "resource": "volume", "volume_id": volume.id }));
     state.mqtt.publish_status(&topic, &payload).await.ok();
+    events::emit(
+        &state.db,
+        events::Scope::project(org_id, project_id),
+        "volume.created",
+        serde_json::json!({ "volume_id": volume.id, "volume": volume.name, "mount_path": volume.mount_path }),
+    )
+    .await;
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(volume))))
 }
@@ -1099,6 +1150,13 @@ async fn delete_project_volume(
     let payload = MqttPayload::new("topology.changed")
         .with_meta(serde_json::json!({ "resource": "volume", "action": "deleted", "volume_id": volume_id }));
     state.mqtt.publish_status(&topic, &payload).await.ok();
+    events::emit(
+        &state.db,
+        events::Scope::project(org_id, project_id),
+        "volume.deleted",
+        serde_json::json!({ "volume_id": volume_id, "volume": volume_name }),
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Volume deleted successfully" }))))
 }
@@ -1216,6 +1274,13 @@ async fn create_network(
     let payload = MqttPayload::new("topology.changed")
         .with_meta(serde_json::json!({ "resource": "network", "network_id": network.id }));
     state.mqtt.publish_status(&topic, &payload).await.ok();
+    events::emit(
+        &state.db,
+        events::Scope::project(org_id, project_id),
+        "network.created",
+        serde_json::json!({ "network_id": network.id, "network": network.name }),
+    )
+    .await;
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(network))))
 }
@@ -1270,6 +1335,8 @@ async fn attach_service(
     .execute(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    events::emit_for_service(&state.db, body.service_id, "network.attached", serde_json::json!({ "network_id": network_id })).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Service attached to network successfully",
@@ -1326,6 +1393,8 @@ async fn detach_service(
         ))));
     }
 
+    events::emit_for_service(&state.db, service_id, "network.detached", serde_json::json!({ "network_id": network_id })).await;
+
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Service detached from network",
         "service_id": service_id,
@@ -1372,6 +1441,20 @@ async fn delete_network(
         .execute(&state.db)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Ok(Some(org_id)) = sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await
+    {
+        events::emit(
+            &state.db,
+            events::Scope::project(org_id, project_id),
+            "network.deleted",
+            serde_json::json!({ "network_id": network_id }),
+        )
+        .await;
+    }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Network deleted successfully" }))))
 }

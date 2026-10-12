@@ -813,6 +813,14 @@ async fn publish_env_changed(state: &AppState, service_id: Uuid) {
         &state.db, service_id, project_id, &state.config.auth.secret_key,
     ).await;
 
+    shipyard_db::events::emit(
+        &state.db,
+        shipyard_db::events::Scope::service(org_id, project_id, service_id),
+        "service.env_changed",
+        serde_json::json!({}),
+    )
+    .await;
+
     let topic = shipyard_mqtt::topics::topology(org_id, project_id);
     state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
         .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -823,7 +831,7 @@ async fn publish_env_changed(state: &AppState, service_id: Uuid) {
 // ─── Container stats types ───────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-struct ContainerStatsSnapshot {
+pub(crate) struct ContainerStatsSnapshot {
     cpu_percent: f64,
     memory_usage_bytes: u64,
     memory_limit_bytes: u64,
@@ -836,7 +844,7 @@ struct ContainerStatsSnapshot {
     timestamp: String,
 }
 
-fn parse_stats_snapshot(v: &serde_json::Value) -> ContainerStatsSnapshot {
+pub(crate) fn parse_stats_snapshot(v: &serde_json::Value) -> ContainerStatsSnapshot {
     // CPU % — Docker provides cpu_stats (current) and precpu_stats (previous 1s sample)
     let cpu_total    = v["cpu_stats"]["cpu_usage"]["total_usage"].as_u64().unwrap_or(0);
     let precpu_total = v["precpu_stats"]["cpu_usage"]["total_usage"].as_u64().unwrap_or(0);

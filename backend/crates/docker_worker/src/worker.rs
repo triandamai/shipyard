@@ -478,6 +478,19 @@ impl DockerEventWorker {
                 .execute(&self.db)
                 .await
                 .ok();
+                if action == "die" && is_crash_exit(exit_code) {
+                    shipyard_db::events::emit_for_service(
+                        &self.db,
+                        service_id,
+                        "service.crashed",
+                        serde_json::json!({
+                            "container_id": container_id,
+                            "replica": replica_index,
+                            "exit_code": exit_code,
+                        }),
+                    )
+                    .await;
+                }
             }
             "stop" => {
                 sqlx::query(
@@ -1189,5 +1202,27 @@ fn map_swarm_task_status(state: &str) -> &'static str {
         "shutdown" => "shutdown",
         "preparing" | "assigned" | "accepted" | "ready" | "starting" => "preparing",
         _ => "pending",
+    }
+}
+
+/// A container exit worth reporting as a crash. 0 is a clean exit; 143
+/// (SIGTERM) and 137 (SIGKILL after the stop grace period) are how Swarm stops
+/// tasks during updates and scale-downs, so they'd fire on every deploy.
+fn is_crash_exit(exit_code: Option<i32>) -> bool {
+    !matches!(exit_code, None | Some(0) | Some(137) | Some(143))
+}
+
+#[cfg(test)]
+mod crash_exit_tests {
+    use super::is_crash_exit;
+
+    #[test]
+    fn only_unexpected_exits_are_crashes() {
+        assert!(is_crash_exit(Some(1)));
+        assert!(is_crash_exit(Some(139)));
+        assert!(!is_crash_exit(Some(0)));
+        assert!(!is_crash_exit(Some(143)));
+        assert!(!is_crash_exit(Some(137)));
+        assert!(!is_crash_exit(None));
     }
 }

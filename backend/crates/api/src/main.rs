@@ -38,7 +38,7 @@ use shipyard_api::{
     admin, alerts, auth, cache, compose, email, error, routes, setup, orgs, projects, services,
     resources, containers, deployments, topology, logs, middleware, templates, webhooks, settings,
     shorthand, dbclient, static_site, git_providers, billing, nodes, plans, provisioning, compute,
-    edge_functions, artifactory, artifact_source, sandbox_runtime,
+    edge_functions, artifactory, artifact_source, sandbox_runtime, integration,
     AppState, OAuthStates,
 };
 
@@ -580,6 +580,14 @@ async fn async_main() {
         });
     }
 
+    // Outbound webhooks for platform events.
+    {
+        let webhook_state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            integration::webhooks::run_dispatcher(webhook_state).await;
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(
@@ -671,6 +679,8 @@ async fn async_main() {
         // registry-domain.com/* → backend:3001/registry/* with addPrefix middleware.
         // RegistryState is extracted from AppState via FromRef.
         .nest("/registry", registry_router::<AppState>())
+        // Platform integrations (ship_int_ keys) — shares AppState with the dashboard API.
+        .nest("/openapi/v1/integration", integration::routes())
         // Public Open API — mounted separately so it can use its own state/auth.
         .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))

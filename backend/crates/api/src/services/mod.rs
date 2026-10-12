@@ -386,6 +386,13 @@ async fn create_service(
                 "service_type": service.service_type,
             }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service.id),
+            "service.created",
+            serde_json::json!({ "name": service.name, "slug": service.slug, "type": service.service_type }),
+        )
+        .await;
     }
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(service))))
@@ -556,27 +563,19 @@ async fn update_service(
     Ok(Json(ApiResponse::ok(service)))
 }
 
-/// DELETE /projects/:project_id/services/:service_id
-async fn delete_service(
-    auth_user: AuthUser,
-    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:delete").await.map_err(ApiAppError)?;
-
-    // Fetch service info before deleting.
-    let svc_info: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT type::text, slug, COALESCE(directory_path, '') FROM services WHERE id = $1 AND project_id = $2",
-    )
-    .bind(service_id)
-    .bind(project_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    let (svc_type, service_slug, directory_path) = svc_info
-        .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
-
+/// Stop and remove everything a service runs and stores on disk: Swarm
+/// service or compose stack (and its child services), static site files,
+/// sandbox container, build directory. Does not delete the service row,
+/// volumes, domains or DNS records. Used by service delete and project
+/// teardown.
+pub(crate) async fn teardown_service_runtime(
+    state: &AppState,
+    project_id: Uuid,
+    service_id: Uuid,
+    svc_type: &str,
+    service_slug: &str,
+    directory_path: &str,
+) -> Result<(), ApiAppError> {
     if svc_type == "docker_compose" {
         // --- Run `docker compose down` to stop containers and remove compose networks ---
         // Find compose file (best effort — if directory doesn't exist, skip).
@@ -710,7 +709,7 @@ async fn delete_service(
         // catch-all branch below would be a no-op for them — they need their
         // own teardown: container, dedicated volume, preview domain (with
         // Cloudflare DNS cleanup), and Traefik route file.
-        crate::sandbox_runtime::manager::teardown_sandbox(&state, service_id).await;
+        crate::sandbox_runtime::manager::teardown_sandbox(state, service_id).await;
     } else {
         // Non-compose, non-static: remove Docker Swarm service
         let docker_svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
@@ -728,6 +727,32 @@ async fn delete_service(
             }
         }
     }
+
+    Ok(())
+}
+
+/// DELETE /projects/:project_id/services/:service_id
+async fn delete_service(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:delete").await.map_err(ApiAppError)?;
+
+    // Fetch service info before deleting.
+    let svc_info: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT type::text, slug, COALESCE(directory_path, '') FROM services WHERE id = $1 AND project_id = $2",
+    )
+    .bind(service_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (svc_type, service_slug, directory_path) = svc_info
+        .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
+
+    teardown_service_runtime(&state, project_id, service_id, &svc_type, &service_slug, &directory_path).await?;
 
     let rows_affected = sqlx::query(
         "DELETE FROM services WHERE id = $1 AND project_id = $2",
@@ -778,6 +803,14 @@ async fn delete_service(
         let payload = MqttPayload::new("service.deleted")
             .with_meta(serde_json::json!({ "service_id": service_id }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+        // The service row is gone; record the event at project scope with the id in data.
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::project(org_id, project_id),
+            "service.deleted",
+            serde_json::json!({ "service_id": service_id, "slug": service_slug }),
+        )
+        .await;
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
@@ -876,6 +909,13 @@ async fn bulk_update_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -930,6 +970,13 @@ async fn add_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -975,6 +1022,13 @@ async fn delete_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();

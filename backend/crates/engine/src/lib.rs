@@ -16,6 +16,7 @@ use shipyard_common::error::{AppError, AppResult};
 use shipyard_common::types::{LogLevel, MqttPayload};
 use shipyard_docker::engine::DockerEngine;
 use shipyard_docker::types::{MountSpec, MountType, PortSpec, ResourceSpec, ServiceSpec};
+use shipyard_db::events;
 use shipyard_docker::isolation;
 use shipyard_docker::BollardDockerEngine;
 use shipyard_git::GitService;
@@ -305,6 +306,17 @@ impl DeploymentEngine {
                     "image_ref": image_ref,
                 })),
         ).await;
+        events::emit(
+            &self.db,
+            events::Scope::service(org_id, project_id, service_id),
+            "deployment.started",
+            serde_json::json!({
+                "deployment_id": deployment_id,
+                "triggered_by": triggered_by,
+                "rollback_to": image_ref,
+            }),
+        )
+        .await;
 
         // Pre-insert steps — steps 0+1 are immediately marked skipped.
         for (order_index, name) in &STEPS {
@@ -375,6 +387,10 @@ impl DeploymentEngine {
                 )
                 .with_meta(serde_json::json!({ "deployment_id": deployment_id, "status": final_status })),
         ).await;
+        self.emit_deployment_finished(
+            org_id, project_id, service_id, deployment_id, result.as_ref().err().map(|e| e.to_string()),
+        )
+        .await;
 
         result?;
         Ok(())
@@ -1395,6 +1411,17 @@ impl DeploymentEngine {
                     })),
             )
             .await;
+        events::emit(
+            &self.db,
+            events::Scope::service(org_id, project_id, service_id),
+            "deployment.started",
+            serde_json::json!({
+                "deployment_id": deployment_id,
+                "triggered_by": triggered_by,
+                "source_ref": source_ref,
+            }),
+        )
+        .await;
 
         // ── Run all steps ────────────────────────────────────────────────────
         let result = if svc_type == "docker_compose" {
@@ -1457,6 +1484,10 @@ impl DeploymentEngine {
                     })),
             )
             .await;
+        self.emit_deployment_finished(
+            org_id, project_id, service_id, deployment_id, result.as_ref().err().map(|e| e.to_string()),
+        )
+        .await;
 
         let topology_topic = topics::topology(org_id, project_id);
         let _ = self
@@ -1702,11 +1733,11 @@ impl DeploymentEngine {
         deployment_id: Uuid,
         order_index: i32,
     ) -> AppResult<(Uuid, i32)> {
-        let row = sqlx::query_as::<_, (Uuid,)>(
+        let row = sqlx::query_as::<_, (Uuid, String)>(
             "UPDATE deployment_steps
              SET status = 'running', started_at = NOW()
              WHERE deployment_id = $1 AND order_index = $2
-             RETURNING id",
+             RETURNING id, name",
         )
         .bind(deployment_id)
         .bind(order_index)
@@ -1714,7 +1745,14 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let step_id = row.0;
+        let (step_id, step_name) = row;
+        events::emit(
+            &self.db,
+            events::Scope::service(org_id, project_id, service_id),
+            "deployment.step_started",
+            serde_json::json!({ "deployment_id": deployment_id, "step": step_name, "order_index": order_index }),
+        )
+        .await;
         let topic = topics::deployment_step_status(org_id, project_id, service_id, deployment_id, step_id);
         let _ = self.mqtt.publish_status(
             &topic,
@@ -1743,15 +1781,23 @@ impl DeploymentEngine {
     ) -> AppResult<Option<T>> {
         match result {
             Ok(val) => {
-                sqlx::query(
+                let step_name: Option<String> = sqlx::query_scalar(
                     "UPDATE deployment_steps
                      SET status = 'success', finished_at = NOW()
-                     WHERE id = $1",
+                     WHERE id = $1
+                     RETURNING name",
                 )
                 .bind(step_id)
-                .execute(&self.db)
+                .fetch_optional(&self.db)
                 .await
                 .map_err(|e| AppError::Database(e.to_string()))?;
+                events::emit(
+                    &self.db,
+                    events::Scope::service(org_id, project_id, service_id),
+                    "deployment.step_succeeded",
+                    serde_json::json!({ "deployment_id": deployment_id, "step": step_name }),
+                )
+                .await;
 
                 self.insert_log(deployment_id, Some(step_id), "info", "Step completed successfully")
                     .await;
@@ -1778,15 +1824,24 @@ impl DeploymentEngine {
             Err(e) => {
                 let msg = e.to_string();
 
-                sqlx::query(
+                let step_name: Option<String> = sqlx::query_scalar(
                     "UPDATE deployment_steps
                      SET status = 'failed', finished_at = NOW()
-                     WHERE id = $1",
+                     WHERE id = $1
+                     RETURNING name",
                 )
                 .bind(step_id)
-                .execute(&self.db)
+                .fetch_optional(&self.db)
                 .await
-                .ok();
+                .ok()
+                .flatten();
+                events::emit(
+                    &self.db,
+                    events::Scope::service(org_id, project_id, service_id),
+                    "deployment.step_failed",
+                    serde_json::json!({ "deployment_id": deployment_id, "step": step_name, "error": msg }),
+                )
+                .await;
 
                 self.insert_log(deployment_id, Some(step_id), "error", &msg)
                     .await;
@@ -1811,6 +1866,47 @@ impl DeploymentEngine {
                 Err(e)
             }
         }
+    }
+
+    /// Emit `deployment.succeeded` (with the service's public URLs) or
+    /// `deployment.failed` (with the error).
+    async fn emit_deployment_finished(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        deployment_id: Uuid,
+        error: Option<String>,
+    ) {
+        let urls: Vec<String> = sqlx::query_as::<_, (String, bool)>(
+            "SELECT hostname, tls_enabled FROM domains WHERE service_id = $1 ORDER BY created_at",
+        )
+        .bind(service_id)
+        .fetch_all(&self.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(host, tls)| format!("{}://{host}", if tls { "https" } else { "http" }))
+        .collect();
+        let image: Option<String> = sqlx::query_scalar("SELECT deployed_image FROM deployments WHERE id = $1")
+            .bind(deployment_id)
+            .fetch_optional(&self.db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+
+        let (event_type, data) = match error {
+            None => (
+                "deployment.succeeded",
+                serde_json::json!({ "deployment_id": deployment_id, "urls": urls, "image": image }),
+            ),
+            Some(error) => (
+                "deployment.failed",
+                serde_json::json!({ "deployment_id": deployment_id, "error": error, "urls": urls }),
+            ),
+        };
+        events::emit(&self.db, events::Scope::service(org_id, project_id, service_id), event_type, data).await;
     }
 
     // ── MQTT helpers ──────────────────────────────────────────────────────────
@@ -3124,6 +3220,13 @@ impl DeploymentEngine {
         target_ref: &str,
         repo_path: &str,
     ) -> AppResult<()> {
+        // A local path would read the Shipyard host's filesystem (including
+        // other tenants' sources). Only a service's own managed repo is allowed.
+        if !is_remote_git_url(repo_url) && repo_url != managed_source_repo(&self.data_dir, service_id) {
+            return Err(AppError::BadRequest(
+                "Git repository must be a remote URL (https://, ssh:// or git@host:path)".to_string(),
+            ));
+        }
         let repo_path = repo_path.to_string();
         let repo_url = repo_url.to_string();
         let default_branch = default_branch.to_string();
@@ -3496,6 +3599,13 @@ impl DeploymentEngine {
                 // Still mount it — persistence matters more than the UI row.
                 tracing::warn!(%service_id, "failed to record auto volume {source}: {e}");
             }
+            events::emit_for_service(
+                &self.db,
+                service_id,
+                "volume.attached",
+                serde_json::json!({ "volume": source, "mount_path": target, "automatic": true }),
+            )
+            .await;
 
             added.push(MountSpec {
                 source,
@@ -4366,6 +4476,26 @@ fn isolate_compose_networks(
     Ok(changed)
 }
 
+/// URLs git fetches over the network. Anything else (a path, `file://`) reads
+/// the Shipyard host's filesystem.
+fn is_remote_git_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("ssh://") || lower.starts_with("git://") {
+        return true;
+    }
+    // scp-style `user@host:path`, but not a Windows-ish or local path.
+    match url.split_once(':') {
+        Some((host, _)) => host.contains('@') && !host.contains('/'),
+        None => false,
+    }
+}
+
+/// The only local repository a service may build from: the one integration
+/// publish writes for it.
+pub fn managed_source_repo(data_dir: &str, service_id: Uuid) -> String {
+    format!("{data_dir}/sources/{service_id}.git")
+}
+
 /// Combine the data-volume node pin with the app node pool. A pinned service
 /// keeps only its pin: its volumes live on that node, and adding a pool
 /// constraint the node may not match would leave it unschedulable. It moves
@@ -4447,6 +4577,18 @@ mod persistent_volume_tests {
         )
         .unwrap();
         assert!(!isolate_compose_networks(&mut doc, &iso_on(), org).unwrap());
+    }
+
+    #[test]
+    fn only_remote_or_own_managed_repos_are_buildable() {
+        assert!(is_remote_git_url("https://github.com/a/b.git"));
+        assert!(is_remote_git_url("git@github.com:a/b.git"));
+        assert!(is_remote_git_url("ssh://git@host/a.git"));
+        assert!(!is_remote_git_url("/opt/shipyard/data/sources/x.git"));
+        assert!(!is_remote_git_url("file:///etc"));
+        assert!(!is_remote_git_url("../other"));
+        let id = Uuid::now_v7();
+        assert_eq!(managed_source_repo("/d", id), format!("/d/sources/{id}.git"));
     }
 
     #[test]
