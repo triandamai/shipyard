@@ -1238,8 +1238,12 @@ impl DockerEngine for BollardDockerEngine {
 
         match result {
             Ok(()) => Ok(()),
-            Err(BollardError::DockerResponseServerError { message, .. })
-                if message.contains("already exists") =>
+            // Already connected: older Docker says "already exists", newer
+            // versions return 409 "is already attached to network".
+            Err(BollardError::DockerResponseServerError { status_code, message })
+                if status_code == 409
+                    || message.contains("already exists")
+                    || message.contains("already attached") =>
             {
                 Ok(())
             }
