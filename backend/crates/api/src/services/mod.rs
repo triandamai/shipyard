@@ -153,6 +153,10 @@ pub fn routes() -> Router<AppState> {
             get(get_service).put(update_service).delete(delete_service),
         )
         .route(
+            "/projects/:project_id/services/:service_id/duplicate",
+            axum::routing::post(duplicate_service),
+        )
+        .route(
             "/projects/:project_id/services/:service_id/env",
             get(list_env).put(bulk_update_env).post(add_env),
         )
@@ -386,6 +390,13 @@ async fn create_service(
                 "service_type": service.service_type,
             }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service.id),
+            "service.created",
+            serde_json::json!({ "name": service.name, "slug": service.slug, "type": service.service_type }),
+        )
+        .await;
     }
 
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(service))))
@@ -556,27 +567,19 @@ async fn update_service(
     Ok(Json(ApiResponse::ok(service)))
 }
 
-/// DELETE /projects/:project_id/services/:service_id
-async fn delete_service(
-    auth_user: AuthUser,
-    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:delete").await.map_err(ApiAppError)?;
-
-    // Fetch service info before deleting.
-    let svc_info: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT type::text, slug, COALESCE(directory_path, '') FROM services WHERE id = $1 AND project_id = $2",
-    )
-    .bind(service_id)
-    .bind(project_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    let (svc_type, service_slug, directory_path) = svc_info
-        .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
-
+/// Stop and remove everything a service runs and stores on disk: Swarm
+/// service or compose stack (and its child services), static site files,
+/// sandbox container, build directory. Does not delete the service row,
+/// volumes, domains or DNS records. Used by service delete and project
+/// teardown.
+pub(crate) async fn teardown_service_runtime(
+    state: &AppState,
+    project_id: Uuid,
+    service_id: Uuid,
+    svc_type: &str,
+    service_slug: &str,
+    directory_path: &str,
+) -> Result<(), ApiAppError> {
     if svc_type == "docker_compose" {
         // --- Run `docker compose down` to stop containers and remove compose networks ---
         // Find compose file (best effort — if directory doesn't exist, skip).
@@ -710,7 +713,7 @@ async fn delete_service(
         // catch-all branch below would be a no-op for them — they need their
         // own teardown: container, dedicated volume, preview domain (with
         // Cloudflare DNS cleanup), and Traefik route file.
-        crate::sandbox_runtime::manager::teardown_sandbox(&state, service_id).await;
+        crate::sandbox_runtime::manager::teardown_sandbox(state, service_id).await;
     } else {
         // Non-compose, non-static: remove Docker Swarm service
         let docker_svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
@@ -728,6 +731,32 @@ async fn delete_service(
             }
         }
     }
+
+    Ok(())
+}
+
+/// DELETE /projects/:project_id/services/:service_id
+async fn delete_service(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:delete").await.map_err(ApiAppError)?;
+
+    // Fetch service info before deleting.
+    let svc_info: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT type::text, slug, COALESCE(directory_path, '') FROM services WHERE id = $1 AND project_id = $2",
+    )
+    .bind(service_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (svc_type, service_slug, directory_path) = svc_info
+        .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{}' not found", service_id))))?;
+
+    teardown_service_runtime(&state, project_id, service_id, &svc_type, &service_slug, &directory_path).await?;
 
     let rows_affected = sqlx::query(
         "DELETE FROM services WHERE id = $1 AND project_id = $2",
@@ -778,6 +807,14 @@ async fn delete_service(
         let payload = MqttPayload::new("service.deleted")
             .with_meta(serde_json::json!({ "service_id": service_id }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+        // The service row is gone; record the event at project scope with the id in data.
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::project(org_id, project_id),
+            "service.deleted",
+            serde_json::json!({ "service_id": service_id, "slug": service_slug }),
+        )
+        .await;
     }
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
@@ -876,6 +913,13 @@ async fn bulk_update_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -930,6 +974,13 @@ async fn add_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -975,6 +1026,13 @@ async fn delete_env(
     .fetch_optional(&state.db)
     .await
     {
+        shipyard_db::events::emit(
+            &state.db,
+            shipyard_db::events::Scope::service(org_id, project_id, service_id),
+            "service.env_changed",
+            serde_json::json!({}),
+        )
+        .await;
         let topic = topics::topology(org_id, project_id);
         state.mqtt.publish_status(&topic, &MqttPayload::new("service.env.changed")
             .with_meta(serde_json::json!({ "service_id": service_id }))).await.ok();
@@ -1993,4 +2051,120 @@ async fn proxy_exec_to_agent(
         _ = &mut to_agent   => { from_agent.abort(); }
         _ = &mut from_agent => { to_agent.abort(); }
     }
+}
+
+// ─── Duplicate ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct DuplicateServiceRequest {
+    pub name: String,
+    pub slug: String,
+    /// Copy into another project of the same org. Defaults to the same project.
+    pub target_project_id: Option<Uuid>,
+}
+
+/// POST /projects/:project_id/services/:service_id/duplicate — copy a service
+/// (config, image/git settings, ports, resources, env vars, volume
+/// definitions, networks) under a new name. The copy is stopped, its volumes
+/// start empty and it has no domains.
+async fn duplicate_service(
+    auth_user: AuthUser,
+    Path((project_id, service_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+    Json(body): Json<DuplicateServiceRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
+    rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write").await.map_err(ApiAppError)?;
+    let name = body.name.trim();
+    let slug = body.slug.trim();
+    let slug_ok = !slug.is_empty()
+        && slug.len() <= 63
+        && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !slug.starts_with('-');
+    if name.is_empty() || !slug_ok {
+        return Err(ApiAppError(AppError::BadRequest(
+            "name is required and slug must be lowercase letters, digits and '-'".to_string(),
+        )));
+    }
+
+    let src: Option<(String, Option<Uuid>, Uuid)> = sqlx::query_as(
+        "SELECT s.type::text, s.service_parent_id, p.org_id
+         FROM services s JOIN projects p ON p.id = s.project_id
+         WHERE s.id = $1 AND s.project_id = $2",
+    )
+    .bind(service_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let (svc_type, parent, org_id) =
+        src.ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{service_id}' not found"))))?;
+    match svc_type.as_str() {
+        "docker_compose" => {
+            return Err(ApiAppError(AppError::BadRequest(
+                "Compose stacks can't be duplicated one service at a time; duplicate the project instead".to_string(),
+            )))
+        }
+        "sandbox_app" => {
+            return Err(ApiAppError(AppError::BadRequest("Sandbox apps can't be duplicated".to_string())))
+        }
+        _ => {}
+    }
+    if parent.is_some() {
+        return Err(ApiAppError(AppError::BadRequest(
+            "This service belongs to a compose stack; duplicate the stack's project instead".to_string(),
+        )));
+    }
+
+    let target = body.target_project_id.unwrap_or(project_id);
+    let (target_org, target_dir): (Uuid, String) = sqlx::query_as("SELECT org_id, directory_path FROM projects WHERE id = $1")
+        .bind(target)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+        .ok_or_else(|| ApiAppError(AppError::NotFound("Target project not found".to_string())))?;
+    if target_org != org_id {
+        return Err(ApiAppError(AppError::BadRequest("The target project must be in the same organization".to_string())));
+    }
+    if target != project_id {
+        rbac::require_project_permission(&state.db, auth_user.user_id, target, "service:write").await.map_err(ApiAppError)?;
+    }
+
+    use crate::projects::duplicate::{copy_service, service_copy_sql, NetworkTarget};
+    let empty = std::collections::HashMap::new();
+    let networks = if target == project_id { NetworkTarget::Same } else { NetworkTarget::Map(&empty) };
+    let sql = service_copy_sql(&state.db).await?;
+    let copied = copy_service(&state, &sql, org_id, service_id, target, &target_dir, Some((name, slug)), &networks).await?;
+
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        &auth_user,
+        "duplicate_service",
+        Some("service"),
+        Some(copied.service_id),
+        None,
+        Some(serde_json::json!({ "from_service_id": service_id, "project_id": target })),
+    )
+    .await;
+
+    // The canvas listens for this to add the new node.
+    let topic = topics::topology(org_id, target);
+    let payload = MqttPayload::new("service.created").with_meta(serde_json::json!({
+        "service_id": copied.service_id,
+        "service_name": copied.name,
+        "service_type": svc_type,
+    }));
+    state.mqtt.publish_status(&topic, &payload).await.ok();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::ok(serde_json::json!({
+            "service_id": copied.service_id,
+            "project_id": target,
+            "name": copied.name,
+            "slug": copied.slug,
+            "volumes": copied.volumes,
+            "networks_dropped": copied.networks_dropped,
+            "domains_not_copied": copied.domains_not_copied,
+        }))),
+    ))
 }

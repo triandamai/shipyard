@@ -433,6 +433,68 @@ async fn list_orgs(
     )))
 }
 
+/// Billing row and quota snapshot for a new org on `plan_id`. Shared by the
+/// dashboard's create-org and integration org provisioning.
+pub(crate) async fn apply_plan(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: Uuid,
+    plan_id: Uuid,
+    plan_name: &str,
+) -> Result<(), sqlx::Error> {
+    // Determine tier enum value — map to subscription_tier or default 'free'.
+    let tier = match plan_name {
+        "pro" => "pro",
+        "max" => "max",
+        _ => "free",
+    };
+    sqlx::query(
+        "INSERT INTO org_billing (org_id, plan_id, tier, sub_status, updated_at)
+         VALUES ($1, $2, $3::subscription_tier, 'active', NOW())
+         ON CONFLICT (org_id) DO UPDATE
+           SET plan_id = EXCLUDED.plan_id, tier = EXCLUDED.tier, updated_at = NOW()",
+    )
+    .bind(org_id)
+    .bind(plan_id)
+    .bind(tier)
+    .execute(&mut **tx)
+    .await?;
+
+    // Snapshot plan limits into org_quota — frozen at this point in time.
+    // Future changes to the plan's limits do NOT affect this row.
+    sqlx::query(
+        r#"INSERT INTO org_quota (
+               org_id, plan_id,
+               max_projects, max_members, max_replicas, max_parallel_deployments,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
+               applied_at, updated_at
+           )
+           SELECT $1, id,
+               max_projects, max_members, max_replicas, max_parallel_deployments,
+               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
+               NOW(), NOW()
+           FROM plans WHERE id = $2
+           ON CONFLICT (org_id) DO UPDATE
+               SET plan_id = EXCLUDED.plan_id,
+                   max_projects = EXCLUDED.max_projects,
+                   max_members = EXCLUDED.max_members,
+                   max_replicas = EXCLUDED.max_replicas,
+                   max_parallel_deployments = EXCLUDED.max_parallel_deployments,
+                   max_git_providers = EXCLUDED.max_git_providers,
+                   max_orgs = EXCLUDED.max_orgs,
+                   node_count = EXCLUDED.node_count,
+                   cpu_cores = EXCLUDED.cpu_cores,
+                   memory_mb = EXCLUDED.memory_mb,
+                   applied_at = NOW(),
+                   updated_at = NOW()"#,
+    )
+    .bind(org_id)
+    .bind(plan_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 async fn create_org(
     auth: AuthUser,
     State(state): State<AppState>,
@@ -510,58 +572,9 @@ async fn create_org(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // Determine tier enum value — map to subscription_tier or default 'free'.
-    let tier = match plan_name.as_str() {
-        "pro" => "pro",
-        "max" => "max",
-        _ => "free",
-    };
-    sqlx::query(
-        "INSERT INTO org_billing (org_id, plan_id, tier, sub_status, updated_at)
-         VALUES ($1, $2, $3::subscription_tier, 'active', NOW())
-         ON CONFLICT (org_id) DO UPDATE
-           SET plan_id = EXCLUDED.plan_id, tier = EXCLUDED.tier, updated_at = NOW()",
-    )
-    .bind(org_id)
-    .bind(plan_id)
-    .bind(tier)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    // Snapshot plan limits into org_quota — frozen at this point in time.
-    // Future changes to the plan's limits do NOT affect this row.
-    sqlx::query(
-        r#"INSERT INTO org_quota (
-               org_id, plan_id,
-               max_projects, max_members, max_replicas, max_parallel_deployments,
-               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
-               applied_at, updated_at
-           )
-           SELECT $1, id,
-               max_projects, max_members, max_replicas, max_parallel_deployments,
-               max_git_providers, max_orgs, node_count, cpu_cores, memory_mb,
-               NOW(), NOW()
-           FROM plans WHERE id = $2
-           ON CONFLICT (org_id) DO UPDATE
-               SET plan_id = EXCLUDED.plan_id,
-                   max_projects = EXCLUDED.max_projects,
-                   max_members = EXCLUDED.max_members,
-                   max_replicas = EXCLUDED.max_replicas,
-                   max_parallel_deployments = EXCLUDED.max_parallel_deployments,
-                   max_git_providers = EXCLUDED.max_git_providers,
-                   max_orgs = EXCLUDED.max_orgs,
-                   node_count = EXCLUDED.node_count,
-                   cpu_cores = EXCLUDED.cpu_cores,
-                   memory_mb = EXCLUDED.memory_mb,
-                   applied_at = NOW(),
-                   updated_at = NOW()"#,
-    )
-    .bind(org_id)
-    .bind(plan_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    apply_plan(&mut tx, org_id, plan_id, &plan_name)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     tx.commit().await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;

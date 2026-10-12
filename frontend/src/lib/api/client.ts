@@ -358,6 +358,15 @@ class ApiClient {
 		return this.delete(`/projects/${projectId}/services/${serviceId}`);
 	}
 
+	/** Copy a service's configuration into a new, stopped service (same or another project). */
+	async duplicateService(
+		projectId: string,
+		serviceId: string,
+		data: { name: string; slug: string; target_project_id?: string }
+	): Promise<ApiResponse<DuplicateServiceResult>> {
+		return this.post(`/projects/${projectId}/services/${serviceId}/duplicate`, data);
+	}
+
 	async getWebhookToken(projectId: string, serviceId: string): Promise<ApiResponse<{ token: string }>> {
 		return this.get(`/projects/${projectId}/services/${serviceId}/webhook`);
 	}
@@ -921,3 +930,13 @@ class ApiClient {
 
 export const api = new ApiClient();
 export default api;
+
+export interface DuplicateServiceResult {
+	service_id: string;
+	project_id: string;
+	name: string;
+	slug: string;
+	volumes: number;
+	networks_dropped: number;
+	domains_not_copied: string[];
+}

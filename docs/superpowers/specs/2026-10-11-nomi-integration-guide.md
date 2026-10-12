@@ -1,3 +1,5 @@
+> Superseded by the published page `landing/src/content/docs/nomi.md` (/docs/nomi), which matches the implemented API.
+
 ---
 title: Nomi
 description: Deploy apps built by Nomi to Shipyard: development databases, staging and production environments, Drizzle migrations and logs.

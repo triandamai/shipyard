@@ -67,6 +67,8 @@ pub struct AppConfig {
     pub sandbox: SandboxConfig,
     #[serde(default)]
     pub registry: RegistryConfig,
+    #[serde(default)]
+    pub integration: IntegrationConfig,
     /// Shared secret for node agent authentication. Set via SHIPYARD__NODE_AGENT_TOKEN.
     #[serde(default)]
     pub node_agent_token: String,
@@ -327,6 +329,63 @@ impl Default for EdgeFunctionsConfig {
     }
 }
 
+/// Platform integrations (Nomi): app domains, the shared dev database server
+/// and published-source limits. Env prefix `SHIPYARD__INTEGRATION__`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IntegrationConfig {
+    /// Base domain published apps get hostnames under, e.g. "apps.example.dev"
+    /// gives "todo-staging.apps.example.dev". Needs a wildcard DNS record
+    /// pointing at Traefik. Unset = published apps get no generated domain.
+    #[serde(default)]
+    pub apps_base_domain: Option<String>,
+    /// Admin connection to the Postgres server that hosts development
+    /// databases, e.g. "postgres://devdb_admin:...@shipyard-devdb:5432/postgres".
+    /// Unset = dev databases are disabled.
+    #[serde(default)]
+    pub dev_db_admin_url: Option<String>,
+    /// Host and port dev containers use to reach that server (written into
+    /// connection strings). Defaults to the admin URL's host and port.
+    #[serde(default)]
+    pub dev_db_public_host: Option<String>,
+    #[serde(default)]
+    pub dev_db_public_port: Option<u16>,
+    /// `sslmode` written into dev connection strings.
+    #[serde(default = "default_dev_db_sslmode")]
+    pub dev_db_sslmode: String,
+    /// Largest accepted source upload for publish, in MB.
+    #[serde(default = "default_max_source_mb")]
+    pub max_source_mb: u64,
+    /// Image used for the database of a published app.
+    #[serde(default = "default_app_postgres_image")]
+    pub postgres_image: String,
+}
+
+impl Default for IntegrationConfig {
+    fn default() -> Self {
+        Self {
+            apps_base_domain: None,
+            dev_db_admin_url: None,
+            dev_db_public_host: None,
+            dev_db_public_port: None,
+            dev_db_sslmode: default_dev_db_sslmode(),
+            max_source_mb: default_max_source_mb(),
+            postgres_image: default_app_postgres_image(),
+        }
+    }
+}
+
+fn default_dev_db_sslmode() -> String {
+    "prefer".to_string()
+}
+
+fn default_max_source_mb() -> u64 {
+    200
+}
+
+fn default_app_postgres_image() -> String {
+    "postgres:16-alpine".to_string()
+}
+
 /// Sandbox runtime feature configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SandboxConfig {
@@ -533,6 +592,7 @@ impl Default for AppConfig {
             edge_functions: EdgeFunctionsConfig::default(),
             sandbox: SandboxConfig::default(),
             registry: RegistryConfig::default(),
+            integration: IntegrationConfig::default(),
             node_agent_token: String::new(),
             node_agent_port: default_node_agent_port(),
             node_agent_image: default_node_agent_image(),

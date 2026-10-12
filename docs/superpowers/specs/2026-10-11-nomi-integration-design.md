@@ -1,7 +1,7 @@
 # Nomi on Shipyard: first-class integration
 
 **Date:** 2026-10-11
-**Status:** Design agreed in review (see "Decisions"). Nomi runs on the same Shipyard, so Phase 0 (tenant isolation) comes first; "What to prepare" lists the inputs needed. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
+**Status:** Phase 0 shipped (tenant isolation). Phase 1 implemented 2026-10-12, see "Phase 1 as built"; the agent-facing reference is `landing/src/content/docs/nomi.md` (/docs/nomi). Nomi runs on the same Shipyard, so Phase 0 (tenant isolation) comes first; "What to prepare" lists the inputs needed. Supersedes Phase 1 of `2026-10-10-llm-support-design.md`.
 **Companion:** `2026-10-11-nomi-integration-guide.md` (the developer guide, published at `/docs/nomi` once the endpoints ship).
 
 ## What we're building
@@ -254,6 +254,22 @@ Each phase ends with an end-to-end test driven only through the Open API: a fixt
 2. How Nomi's dev containers are created (Shipyard sandboxes or Nomi's own containers).
 3. The list of Nomi's services, marked public or private, and its internal webhook URL.
 4. The plan limits table (free and paid).
+
+## Phase 1 as built (2026-10-12)
+
+The flow the user specified, and where each step lives:
+
+1. **Org created in Nomi → org in Shipyard.** `PUT /openapi/v1/integration/orgs/{external_id}` (`integration/orgs.rs`), idempotent on `(integration_id, external_id)`. A platform-level `ship_int_` key (`integration_keys`, scopes `manage` and `secrets:reveal`) minted by a superadmin at `/api/admin/integrations`.
+2. **Project + dev database, credentials never reach the agent.** `PUT .../apps/{app}` with `dev_database: true` (`integration/devdb.rs`): one database per app on a shared Postgres server, an app role (owns the DB, injected as `DATABASE_URL`) and an owner role for the user (member of the app role). `CONNECT` revoked from `PUBLIC`, connection limits per role. The admin role needs only CREATEDB/CREATEROLE; tested against Postgres 16 with a non-superuser admin.
+   **Vault:** a built-in secret store (`secrets`, AES-256-GCM with the platform key) rather than HashiCorp Vault: everything outside one endpoint uses refs (`sec_...`); values come back only from `POST /secrets/{ref}/reveal`, which needs `secrets:reveal` and is audit-logged. Nomi gives agent tools a `manage`-only key. `secret_bindings` push secret changes into the env vars that use them. Swapping the store for Vault later only touches `integration/secrets.rs`.
+3. **Publish: source + env, Shipyard generates secrets and provisions DB, domain, volumes.** `POST .../envs/{env}/publish`, multipart manifest + zip (`integration/publish.rs`). The zip is extracted safely (no traversal, symlinks or `.git`, size-capped) and committed to a Shipyard-managed git repo per service, then built by the existing git pipeline (Dockerfile or SSR auto-detect). The engine now refuses local repo paths other than a service's own managed repo. Env values: plain, `generate`, `secret` (user-entered) or `database` fields. Postgres per environment with a generated password and a persistent volume; hostname `<app>[-<env>].<apps_base_domain>` with a random-suffix fallback. Deploys run database first; `publish.succeeded` waits until tasks are actually running (crash loops fail fast).
+4. **Webhooks for progress and the result URL.** `platform_events` + `webhook_deliveries` (`shipyard_db::events::emit` writes the event and fans out in one statement); a dispatcher signs (`t=,v1=` HMAC-SHA256), retries ten times over ~a day, and prunes after 30 days. Events cover deployments and their steps, publishes, domains, volumes, networks, services (created, deleted, env changed, crashed, resource alerts), dev databases, secrets, orgs, apps and environments. `GET /orgs/{org}/events` is the pull fallback.
+5. **Terminate project → everything goes.** `DELETE .../apps/{app}` (`terminate_app`): every environment's workloads, volumes (removed once containers stop), networks, domains and DNS records, source repos, the dev database and roles, and secrets. `DELETE /orgs/{org}` does it for every app.
+6. **Duplicate to make another environment.** Integration: `POST .../envs/{env}/duplicate` replays the source environment's last manifest and source into a new environment with its own empty database, new generated secrets and URL. Dashboard: `POST /api/orgs/{org}/projects/{project}/duplicate` copies services (column-generic), env vars, networks (new Docker networks), artifact sources, node pins and volume definitions under new names; domains are not copied.
+
+Verified end to end on a local Swarm (Docker 29, Postgres 16): org → app with dev DB → reveal and log in → publish (build, Postgres, volume, domain) → masked runtime logs → secret rotation → duplicate to staging → usage → terminate (no services, volumes, repos, roles or rows left) → org delete; 126 signed webhooks delivered.
+
+Not yet: dashboard access for Nomi users (members, login links), release commands as a separate step, idle sleep for free/preview environments, per-plan egress rules, a dashboard UI for integration keys.
 
 ## Out of scope
 

@@ -11,7 +11,8 @@ export const PAGES = [
 	{ file: 'api', slug: 'api', label: 'API reference' },
 	{ file: 'edge-functions', slug: 'edge-functions', label: 'Edge functions' },
 	{ file: 'sandbox', slug: 'sandbox', label: 'Sandbox apps' },
-	{ file: 'registry', slug: 'registry', label: 'Container registry' }
+	{ file: 'registry', slug: 'registry', label: 'Container registry' },
+	{ file: 'nomi', slug: 'nomi', label: 'Nomi integration' }
 ] as const;
 
 export type PageMeta = (typeof PAGES)[number];

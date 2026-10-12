@@ -15,6 +15,13 @@ use crate::auth::AuthUser;
 use crate::error::ApiAppError;
 use crate::AppState;
 
+pub mod duplicate;
+pub mod teardown;
+
+pub(crate) fn db_error(e: sqlx::Error) -> ApiAppError {
+    ApiAppError(AppError::Database(e.to_string()))
+}
+
 // ─── Request / Response types ─────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +54,7 @@ pub fn routes() -> Router<AppState> {
             "/projects/:project_id/node-positions",
             patch(patch_node_positions),
         )
+        .route("/projects/:project_id/duplicate", axum::routing::post(duplicate_project_handler))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -300,52 +308,15 @@ async fn delete_project(
         ))));
     }
 
-    // Collect every service (id + slug + type) so we can tear down Docker + Traefik.
-    let services: Vec<(Uuid, String, String)> = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, slug, type::text FROM services WHERE project_id = $1",
+    let report = teardown::teardown_project(&state, project_id, teardown::TeardownOptions::default()).await?;
+    tracing::info!(project_id = %project_id, services_cleaned = report.services, "project deleted");
+    shipyard_db::events::emit(
+        &state.db,
+        shipyard_db::events::Scope::project(org_id, project_id),
+        "project.deleted",
+        serde_json::json!({ "services_removed": report.services }),
     )
-    .bind(project_id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
-
-    for (svc_id, svc_slug, svc_type) in &services {
-        if svc_type == "sandbox_app" {
-            // Sandbox apps run as a plain container under their own naming
-            // convention (not a Swarm service, not `{slug}.yml`) — the
-            // generic cleanup below would miss the container, its dedicated
-            // volume, and its Cloudflare-managed DNS record entirely.
-            crate::sandbox_runtime::manager::teardown_sandbox(&state, *svc_id).await;
-            continue;
-        }
-
-        // Remove Docker Swarm service (best-effort).
-        let docker_name = format!("{}-{}", state.config.docker.label_prefix, svc_id);
-        if let Err(e) = state.docker.remove_service(&docker_name).await {
-            tracing::debug!(project_id = %project_id, service_id = %svc_id, "swarm remove: {e}");
-        }
-
-        // Remove Traefik dynamic config (best-effort).
-        if let Some(dir) = state.config.traefik.dynamic_config_dir.as_deref() {
-            let path = std::path::Path::new(dir).join(format!("{svc_slug}.yml"));
-            let _ = tokio::fs::remove_file(&path).await;
-        }
-    }
-
-    tracing::info!(
-        project_id = %project_id,
-        services_cleaned = services.len(),
-        "Project Docker cleanup complete — deleting DB rows"
-    );
-
-    // Delete the project; FK CASCADE removes services, networks, volumes,
-    // domains, deployments, deployment_logs, deployment_steps, service_envs, etc.
-    sqlx::query("DELETE FROM projects WHERE id = $1 AND org_id = $2")
-        .bind(project_id)
-        .bind(org_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    .await;
 
     crate::middleware::audit::write_audit_log(
         &state.db,
@@ -354,10 +325,65 @@ async fn delete_project(
         Some("project"),
         Some(project_id),
         None,
-        Some(serde_json::json!({ "org_id": org_id, "services_removed": services.len() })),
+        Some(serde_json::json!({ "org_id": org_id, "services_removed": report.services })),
     ).await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Project deleted successfully"
     }))))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DuplicateProjectRequest {
+    pub name: String,
+    pub slug: String,
+}
+
+/// POST /orgs/:org_id/projects/:project_id/duplicate — copy a project's
+/// services, settings, env vars and networks into a new project (e.g. a
+/// staging copy of production). Data volumes start empty; domains are not
+/// copied.
+async fn duplicate_project_handler(
+    auth_user: AuthUser,
+    Path((org_id, project_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+    Json(body): Json<DuplicateProjectRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<duplicate::DuplicateReport>>), ApiAppError> {
+    if body.name.trim().is_empty() || body.slug.trim().is_empty() {
+        return Err(ApiAppError(AppError::BadRequest("name and slug are required".to_string())));
+    }
+    require_org_member(&state.db, auth_user.user_id, org_id).await?;
+    crate::middleware::rbac::require_project_permission(&state.db, auth_user.user_id, project_id, "service:write")
+        .await
+        .map_err(ApiAppError)?;
+    check_project_quota(&state.db, org_id).await?;
+    let belongs: Option<bool> = sqlx::query_scalar("SELECT TRUE FROM projects WHERE id = $1 AND org_id = $2")
+        .bind(project_id)
+        .bind(org_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_error)?;
+    if belongs.is_none() {
+        return Err(ApiAppError(AppError::NotFound(format!("Project '{project_id}' not found"))));
+    }
+
+    let report = duplicate::duplicate_project(
+        &state,
+        project_id,
+        duplicate::DuplicateTarget { name: body.name.trim().to_string(), slug: body.slug.trim().to_string(), ..Default::default() },
+    )
+    .await?;
+
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        &auth_user,
+        "duplicate_project",
+        Some("project"),
+        Some(report.project_id),
+        None,
+        Some(serde_json::json!({ "org_id": org_id, "from_project_id": project_id })),
+    )
+    .await;
+
+    Ok((StatusCode::CREATED, Json(ApiResponse::ok(report))))
 }

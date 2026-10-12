@@ -81,6 +81,31 @@ async fn receive_spike(
             "ts":           event.ts,
         }));
         state.mqtt.publish_status(SPIKE_TOPIC, &payload).await.ok();
+
+        // Container-level spikes belong to a service; tell its org.
+        if let Some(container_id) = event.container_id.as_deref() {
+            let service_id: Option<uuid::Uuid> = sqlx::query_scalar(
+                "SELECT service_id FROM containers WHERE docker_container_id = $1 OR docker_container_id LIKE $1 || '%' LIMIT 1",
+            )
+            .bind(container_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+            if let Some(service_id) = service_id {
+                shipyard_db::events::emit_for_service(
+                    &state.db,
+                    service_id,
+                    "service.resource_alert",
+                    serde_json::json!({
+                        "metric": event.metric,
+                        "value": event.value,
+                        "threshold": event.threshold,
+                    }),
+                )
+                .await;
+            }
+        }
     }
 
     StatusCode::OK

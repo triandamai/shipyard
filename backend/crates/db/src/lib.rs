@@ -1,3 +1,4 @@
+pub mod events;
 pub mod models;
 pub mod redis;
 pub mod repo;
