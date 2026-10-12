@@ -3,7 +3,7 @@
 	import {
 		Globe, RefreshCw, Upload, Settings2, Play,
 		ChevronRight, CheckCircle2, XCircle, Clock, AlertCircle,
-		Plus, Trash2, CheckCircle, AlertTriangle
+		Plus, Trash2, CheckCircle, AlertTriangle, Copy
 	} from '@lucide/svelte';
 	import {
 		Button, Badge, Card, ListRow, Tabs, KeyValueList, FormField, TextField, Select,
@@ -20,6 +20,10 @@
 	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
 	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
+	import DuplicateServiceDialog from '$lib/components/DuplicateServiceDialog.svelte';
+	import StaticSiteDetailPanel from './StaticSiteDetailPanel.svelte';
+	import { toastStore } from '$lib/stores/toast.store';
+	import type { DuplicateServiceResult } from '$lib/api/client';
 	import type { StaticSiteConfig, Service, Deployment, Domain } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
 
@@ -36,6 +40,29 @@
 	function portal(node: HTMLElement) {
 		document.body.appendChild(node);
 		return { destroy() { node.remove(); } };
+	}
+
+	// ── Duplicate ──────────────────────────────────────────────────────────────
+	let showDuplicate = $state(false);
+
+	function onDuplicated(result: DuplicateServiceResult) {
+		if (config?.source !== 'git') {
+			toastStore.add({
+				type: 'info',
+				title: 'Static site duplicated',
+				message: 'Uploaded files are not copied. Upload or deploy to the copy to publish it.'
+			});
+		}
+		if (result.project_id === projectId) {
+			uiStore.pushPanel({
+				key: `service:${result.service_id}`,
+				component: StaticSiteDetailPanel,
+				props: { serviceId: result.service_id, projectId, orgId, onDeployed, onDeleted },
+				title: result.name
+			});
+		} else {
+			toastStore.add({ type: 'success', title: 'Static site duplicated', message: `${result.name} was created in the other project.` });
+		}
 	}
 
 	// ── Core state ─────────────────────────────────────────────────────────────
@@ -567,6 +594,19 @@
 	onDestroy(() => {});
 </script>
 
+<!-- ─── Duplicate (portalled to body) ───────────────────────────────────────── -->
+{#if showDuplicate && service}
+	<div use:portal>
+		<DuplicateServiceDialog
+			bind:open={showDuplicate}
+			{orgId}
+			{projectId}
+			service={{ id: service.id, name: service.name, slug: service.slug }}
+			{onDuplicated}
+		/>
+	</div>
+{/if}
+
 <!-- ─── Delete confirmation (portalled to body) ──────────────────────────────── -->
 {#if showDeleteModal}
 	<div use:portal>
@@ -678,6 +718,11 @@
 							</Button>
 							<Button variant="secondary" size="sm" onclick={() => { monitorOpen = true; }}>Monitor</Button>
 							<Button variant="secondary" size="sm" onclick={() => { envOpen = true; }}>Env Vars</Button>
+							{#if service}
+								<Button variant="secondary" size="sm" onclick={() => { showDuplicate = true; }} title="Copy this site's configuration into a new static site">
+									<Copy size={12} /> Duplicate
+								</Button>
+							{/if}
 						</div>
 					</Card>
 				</section>

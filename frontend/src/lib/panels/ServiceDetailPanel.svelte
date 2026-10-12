@@ -10,6 +10,10 @@
 		Check, Minus, Circle, Undo2
 	} from '@lucide/svelte';
 	import DbClientModal from '$lib/components/DbClientModal.svelte';
+	import DuplicateServiceDialog from '$lib/components/DuplicateServiceDialog.svelte';
+	import ServiceDetailPanel from './ServiceDetailPanel.svelte';
+	import { toastStore } from '$lib/stores/toast.store';
+	import type { DuplicateServiceResult } from '$lib/api/client';
 	import DomainAddPanel from './resources/DomainAddPanel.svelte';
 	import NetworkPickerPanel from './resources/NetworkPickerPanel.svelte';
 	import VolumeMountList from '$lib/components/VolumeMountList.svelte';
@@ -173,6 +177,30 @@
 
 	// Anonymous-volume advice — image-declared VOLUME paths with no configured mount.
 	let volumeAdvice = $state<VolumeAdvice | null>(null);
+
+	// ── Duplicate ────────────────────────────────────────────────────
+	let showDuplicate = $state(false);
+	let canDuplicate = $derived(
+		canWrite && !!service && service.type !== 'docker_compose' && service.type !== 'sandbox_app' && !service.service_parent_id
+	);
+
+	function onDuplicated(result: DuplicateServiceResult) {
+		if (result.project_id === projectId) {
+			// Same project: the canvas adds the node via MQTT; open the copy.
+			uiStore.pushPanel({
+				key: `service:${result.service_id}`,
+				component: ServiceDetailPanel,
+				props: { serviceId: result.service_id, projectId, orgId, onDeleted },
+				title: result.name
+			});
+		} else {
+			toastStore.add({
+				type: 'success',
+				title: 'Service duplicated',
+				message: `${result.name} was created in the other project. It's stopped until you deploy it.`
+			});
+		}
+	}
 
 	// ── Danger zone / Delete ─────────────────────────────────────────
 	let showDeleteConfirm = $state(false);
@@ -1255,6 +1283,19 @@
 	</div>
 {/if}
 
+<!-- ─── Duplicate (portalled to body) ────────────────────────────────── -->
+{#if showDuplicate && service}
+	<div use:portal>
+		<DuplicateServiceDialog
+			bind:open={showDuplicate}
+			{orgId}
+			{projectId}
+			service={{ id: service.id, name: service.name, slug: service.slug }}
+			{onDuplicated}
+		/>
+	</div>
+{/if}
+
 <!-- ─── Delete Confirmation (portalled to body) ──────────────────────── -->
 {#if showDeleteConfirm && service}
 	<div use:portal>
@@ -1313,6 +1354,12 @@
 						<Database size={12} />
 						DB Client
 					</Button>
+					{#if canDuplicate}
+						<Button variant="secondary" size="sm" onclick={() => showDuplicate = true} title="Copy this service's configuration into a new service">
+							<Copy size={12} />
+							Duplicate
+						</Button>
+					{/if}
 				</div>
 			</Card>
 		</div>

@@ -76,18 +76,13 @@ fn copy_row_sql(table: &str, cols: &[String], overrides: &HashMap<&str, &str>) -
 
 /// New name for a copied Docker object: the source service id in auto-made
 /// volume names becomes the new id; anything else gets a short suffix from
-/// the new project.
-pub fn rename_for_copy(
-    name: &str,
-    old_service: Uuid,
-    new_service: Uuid,
-    new_project: Uuid,
-) -> String {
+/// the new service.
+pub fn rename_for_copy(name: &str, old_service: Uuid, new_service: Uuid) -> String {
     let old = old_service.to_string();
     if name.contains(&old) {
         name.replace(&old, &new_service.to_string())
     } else {
-        format!("{name}-{}", short_id(new_project))
+        format!("{name}-{}", short_id(new_service))
     }
 }
 
@@ -224,7 +219,6 @@ async fn copy_contents(
     }
 
     // ── Services ─────────────────────────────────────────────────────────────
-    let service_cols = columns(db, "services").await?;
     let services: Vec<(Uuid, String, String)> = sqlx::query_as(
         "SELECT id, slug, type::text FROM services
          WHERE project_id = $1 AND service_parent_id IS NULL ORDER BY created_at",
@@ -234,136 +228,229 @@ async fn copy_contents(
     .await
     .map_err(db_error)?;
 
-    let mut overrides: HashMap<&str, &str> = HashMap::new();
-    overrides.insert("id", "$2");
-    overrides.insert("project_id", "$3");
-    overrides.insert("directory_path", "$4");
-    overrides.insert("status", "'stopped'");
-    overrides.insert("service_parent_id", "NULL");
-    overrides.insert("created_at", "NOW()");
-    overrides.insert("updated_at", "NOW()");
-    let sql = copy_row_sql("services", &service_cols, &overrides);
-
+    let sql = service_copy_sql(db).await?;
     for (old_id, slug, svc_type) in services {
         if svc_type == "sandbox_app" {
             report.skipped_services.push(slug);
             continue;
         }
-        let new_id = Uuid::now_v7();
-        let dir = format!("{dst_dir}/{new_id}/{slug}");
-        sqlx::query(&sql)
+        let copied = copy_service(
+            state,
+            &sql,
+            org_id,
+            old_id,
+            dst,
+            dst_dir,
+            None,
+            &NetworkTarget::Map(&network_map),
+        )
+        .await?;
+        report.services.insert(old_id, copied.service_id);
+        report.volumes += copied.volumes;
+        report.domains_not_copied.extend(copied.domains_not_copied);
+    }
+
+    Ok(report)
+}
+
+/// Where a copied service's network memberships go.
+pub enum NetworkTarget<'a> {
+    /// Same project: keep the same networks.
+    Same,
+    /// Source network id → copy's network id; unmapped networks are dropped.
+    Map(&'a HashMap<Uuid, Uuid>),
+}
+
+pub struct CopiedService {
+    pub service_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub volumes: usize,
+    pub networks_dropped: usize,
+    pub domains_not_copied: Vec<String>,
+}
+
+/// INSERT ... SELECT copying one service row, with id, project, directory,
+/// name and slug supplied as $2..$6.
+pub async fn service_copy_sql(db: &sqlx::PgPool) -> Result<String, ApiAppError> {
+    let cols = columns(db, "services").await?;
+    let mut overrides: HashMap<&str, &str> = HashMap::new();
+    overrides.insert("id", "$2");
+    overrides.insert("project_id", "$3");
+    overrides.insert("directory_path", "$4");
+    overrides.insert("name", "$5");
+    overrides.insert("slug", "$6");
+    overrides.insert("status", "'stopped'");
+    overrides.insert("service_parent_id", "NULL");
+    overrides.insert("created_at", "NOW()");
+    overrides.insert("updated_at", "NOW()");
+    Ok(copy_row_sql("services", &cols, &overrides))
+}
+
+/// Copy one service into `dst` project: config, env vars and secret bindings,
+/// volumes under new names (empty data), network membership, artifact source
+/// and node pin. `rename` gives the copy a new name and slug; without it the
+/// source's are kept (only valid in another project).
+#[allow(clippy::too_many_arguments)]
+pub async fn copy_service(
+    state: &AppState,
+    sql: &str,
+    org_id: Uuid,
+    old_id: Uuid,
+    dst: Uuid,
+    dst_dir: &str,
+    rename: Option<(&str, &str)>,
+    networks: &NetworkTarget<'_>,
+) -> Result<CopiedService, ApiAppError> {
+    let db = &state.db;
+    let (src_name, src_slug, svc_type): (String, String, String) =
+        sqlx::query_as("SELECT name, slug, type::text FROM services WHERE id = $1")
             .bind(old_id)
-            .bind(new_id)
-            .bind(dst)
-            .bind(&dir)
-            .execute(db)
+            .fetch_one(db)
             .await
             .map_err(db_error)?;
-        report.services.insert(old_id, new_id);
+    let (name, slug) = match rename {
+        Some((n, s)) => (n.to_string(), s.to_string()),
+        None => (src_name, src_slug),
+    };
 
-        // Env vars (encrypted values copied as-is) and secret bindings.
-        sqlx::query(
-            "INSERT INTO service_envs (id, service_id, key, value_encrypted, is_secret, created_at)
-             SELECT gen_random_uuid(), $2, key, value_encrypted, is_secret, NOW()
-             FROM service_envs WHERE service_id = $1",
-        )
+    let new_id = Uuid::now_v7();
+    let dir = format!("{dst_dir}/{new_id}/{slug}");
+    sqlx::query(sql)
         .bind(old_id)
         .bind(new_id)
+        .bind(dst)
+        .bind(&dir)
+        .bind(&name)
+        .bind(&slug)
+        .execute(db)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("duplicate") {
+                ApiAppError(AppError::Conflict(format!(
+                    "A service with slug '{slug}' already exists in that project"
+                )))
+            } else {
+                db_error(e)
+            }
+        })?;
+
+    // Env vars (encrypted values copied as-is) and secret bindings.
+    sqlx::query(
+        "INSERT INTO service_envs (id, service_id, key, value_encrypted, is_secret, created_at)
+         SELECT gen_random_uuid(), $2, key, value_encrypted, is_secret, NOW()
+         FROM service_envs WHERE service_id = $1",
+    )
+    .bind(old_id)
+    .bind(new_id)
+    .execute(db)
+    .await
+    .map_err(db_error)?;
+    sqlx::query(
+        "INSERT INTO secret_bindings (service_id, env_key, secret_id)
+         SELECT $2, env_key, secret_id FROM secret_bindings WHERE service_id = $1",
+    )
+    .bind(old_id)
+    .bind(new_id)
+    .execute(db)
+    .await
+    .map_err(db_error)?;
+
+    // Volumes, renamed so the copy gets its own (empty) data.
+    let vols: Vec<(String, String, String, i32)> = sqlx::query_as(
+        "SELECT name, mount_path, driver, size_mb FROM volumes WHERE service_id = $1",
+    )
+    .bind(old_id)
+    .fetch_all(db)
+    .await
+    .map_err(db_error)?;
+    let volumes = vols.len();
+    for (vname, mount_path, driver, size_mb) in vols {
+        sqlx::query(
+            "INSERT INTO volumes (id, service_id, name, mount_path, driver, size_mb, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(new_id)
+        .bind(rename_for_copy(&vname, old_id, new_id))
+        .bind(&mount_path)
+        .bind(&driver)
+        .bind(size_mb)
         .execute(db)
         .await
         .map_err(db_error)?;
-        sqlx::query(
-            "INSERT INTO secret_bindings (service_id, env_key, secret_id)
-             SELECT $2, env_key, secret_id FROM secret_bindings WHERE service_id = $1",
-        )
-        .bind(old_id)
-        .bind(new_id)
-        .execute(db)
-        .await
-        .map_err(db_error)?;
+    }
 
-        // Volumes, renamed so the copy gets its own (empty) data.
-        let vols: Vec<(String, String, String, i32)> = sqlx::query_as(
-            "SELECT name, mount_path, driver, size_mb FROM volumes WHERE service_id = $1",
-        )
-        .bind(old_id)
-        .fetch_all(db)
-        .await
-        .map_err(db_error)?;
-        for (name, mount_path, driver, size_mb) in vols {
-            sqlx::query(
-                "INSERT INTO volumes (id, service_id, name, mount_path, driver, size_mb, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, NOW())",
-            )
-            .bind(Uuid::now_v7())
-            .bind(new_id)
-            .bind(rename_for_copy(&name, old_id, new_id, dst))
-            .bind(&mount_path)
-            .bind(&driver)
-            .bind(size_mb)
-            .execute(db)
+    // Network membership.
+    let memberships: Vec<Uuid> =
+        sqlx::query_scalar("SELECT network_id FROM service_networks WHERE service_id = $1")
+            .bind(old_id)
+            .fetch_all(db)
             .await
             .map_err(db_error)?;
-            report.volumes += 1;
-        }
-
-        // Network membership.
-        let memberships: Vec<Uuid> =
-            sqlx::query_scalar("SELECT network_id FROM service_networks WHERE service_id = $1")
-                .bind(old_id)
-                .fetch_all(db)
-                .await
-                .map_err(db_error)?;
-        for old_net in memberships {
-            if let Some(new_net) = network_map.get(&old_net) {
+    let mut networks_dropped = 0;
+    for old_net in memberships {
+        let target = match networks {
+            NetworkTarget::Same => Some(old_net),
+            NetworkTarget::Map(m) => m.get(&old_net).copied(),
+        };
+        match target {
+            Some(net) => {
                 sqlx::query("INSERT INTO service_networks (service_id, network_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
                     .bind(new_id)
-                    .bind(new_net)
+                    .bind(net)
                     .execute(db)
                     .await
                     .map_err(db_error)?;
             }
+            None => networks_dropped += 1,
         }
-
-        // Artifact source and node pin.
-        sqlx::query(
-            "INSERT INTO service_artifact_sources (service_id, namespace_id, repo, tag)
-             SELECT $2, namespace_id, repo, tag FROM service_artifact_sources WHERE service_id = $1",
-        )
-        .bind(old_id)
-        .bind(new_id)
-        .execute(db)
-        .await
-        .map_err(db_error)?;
-        sqlx::query(
-            "INSERT INTO service_node_assignments (service_id, node_id, assigned_at)
-             SELECT $2, node_id, NOW() FROM service_node_assignments WHERE service_id = $1
-             ON CONFLICT (service_id) DO NOTHING",
-        )
-        .bind(old_id)
-        .bind(new_id)
-        .execute(db)
-        .await
-        .map_err(db_error)?;
-
-        let hosts: Vec<String> =
-            sqlx::query_scalar("SELECT hostname FROM domains WHERE service_id = $1")
-                .bind(old_id)
-                .fetch_all(db)
-                .await
-                .map_err(db_error)?;
-        report.domains_not_copied.extend(hosts);
-
-        events::emit(
-            db,
-            Scope::service(org_id, dst, new_id),
-            "service.created",
-            serde_json::json!({ "slug": slug, "type": svc_type, "duplicated_from": old_id }),
-        )
-        .await;
     }
 
-    Ok(report)
+    // Artifact source and node pin.
+    sqlx::query(
+        "INSERT INTO service_artifact_sources (service_id, namespace_id, repo, tag)
+         SELECT $2, namespace_id, repo, tag FROM service_artifact_sources WHERE service_id = $1",
+    )
+    .bind(old_id)
+    .bind(new_id)
+    .execute(db)
+    .await
+    .map_err(db_error)?;
+    sqlx::query(
+        "INSERT INTO service_node_assignments (service_id, node_id, assigned_at)
+         SELECT $2, node_id, NOW() FROM service_node_assignments WHERE service_id = $1
+         ON CONFLICT (service_id) DO NOTHING",
+    )
+    .bind(old_id)
+    .bind(new_id)
+    .execute(db)
+    .await
+    .map_err(db_error)?;
+
+    let domains_not_copied: Vec<String> =
+        sqlx::query_scalar("SELECT hostname FROM domains WHERE service_id = $1")
+            .bind(old_id)
+            .fetch_all(db)
+            .await
+            .map_err(db_error)?;
+
+    events::emit(
+        db,
+        Scope::service(org_id, dst, new_id),
+        "service.created",
+        serde_json::json!({ "slug": slug, "type": svc_type, "duplicated_from": old_id }),
+    )
+    .await;
+
+    Ok(CopiedService {
+        service_id: new_id,
+        name,
+        slug,
+        volumes,
+        networks_dropped,
+        domains_not_copied,
+    })
 }
 
 #[cfg(test)]
@@ -390,11 +477,10 @@ mod tests {
     fn auto_volume_names_follow_the_new_service() {
         let old = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000001").unwrap();
         let new = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000002").unwrap();
-        let proj = Uuid::parse_str("0190a4b2-0000-7000-8000-0000000000ff").unwrap();
         assert_eq!(
-            rename_for_copy(&format!("platform-{old}-data"), old, new, proj),
+            rename_for_copy(&format!("platform-{old}-data"), old, new),
             format!("platform-{new}-data")
         );
-        assert_eq!(rename_for_copy("pgdata", old, new, proj), "pgdata-000000ff");
+        assert_eq!(rename_for_copy("pgdata", old, new), "pgdata-00000002");
     }
 }
