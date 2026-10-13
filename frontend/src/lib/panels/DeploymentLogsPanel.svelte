@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { ChevronRight } from '@lucide/svelte';
+	import { ChevronRight, ArrowDown } from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import { subscribeToDeploymentSteps } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Deployment, DeploymentStep, DeploymentLog, MqttPayload } from '$lib/api/types';
 	import { formatDistanceToNow } from 'date-fns';
-	import { StatusDot, Badge, Spinner } from '$lib/components/ui';
+	import { StatusDot, Badge, Spinner, Button } from '$lib/components/ui';
 	import type { DotStatus } from '$lib/utils/status';
 
 	interface Props {
@@ -101,11 +101,27 @@
 		expanded = next;
 	}
 
+	let userScrolledUp = $state(false);
+
 	function scrollBottom() {
-		requestAnimationFrame(() => { if (listEl) listEl.scrollTop = listEl.scrollHeight; });
+		requestAnimationFrame(() => {
+			if (listEl) {
+				listEl.scrollTop = listEl.scrollHeight;
+				userScrolledUp = false;
+			}
+		});
 	}
 
-	$effect(() => { logs.length; scrollBottom(); });
+	function handleListScroll() {
+		if (!listEl) return;
+		const { scrollTop, scrollHeight, clientHeight } = listEl;
+		userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
+	}
+
+	$effect(() => {
+		logs.length;
+		if (!userScrolledUp) scrollBottom();
+	});
 
 	// ── MQTT ─────────────────────────────────────────────────────────────────────
 	function finalize() {
@@ -209,7 +225,7 @@
 {:else if steps.length === 0 && globalLogs.length === 0}
 	<div class="state-row muted">No log entries recorded for this deployment.</div>
 {:else}
-	<div class="accordion-list" bind:this={listEl}>
+	<div class="accordion-list" bind:this={listEl} onscroll={handleListScroll}>
 		{#each steps as step (step.id)}
 			{@const stepLogs = stepLogsMap[step.id] ?? []}
 			{@const isExpanded = expanded.has(step.id)}
@@ -264,6 +280,15 @@
 						{/each}
 					</div>
 				{/if}
+			</div>
+		{/if}
+
+		{#if userScrolledUp && logs.length > 0}
+			<div class="scroll-to-bottom">
+				<Button variant="secondary" size="sm" onclick={scrollBottom}>
+					<ArrowDown size={12} />
+					Jump to latest
+				</Button>
 			</div>
 		{/if}
 	</div>
@@ -325,6 +350,16 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+		position: relative;
+	}
+
+	.scroll-to-bottom {
+		position: sticky;
+		bottom: 12px;
+		align-self: center;
+		z-index: 10;
+		box-shadow: var(--shadow-md);
+		border-radius: var(--radius-md);
 	}
 
 	.accordion-item {

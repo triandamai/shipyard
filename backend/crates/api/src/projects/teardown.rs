@@ -56,13 +56,19 @@ pub async fn teardown_project(
     .map_err(super::db_error)?;
 
     // Project networks (Docker ids), removed once their services are gone.
-    let networks: Vec<String> = sqlx::query_scalar(
+    let mut networks: Vec<String> = sqlx::query_scalar(
         "SELECT docker_network_id FROM networks WHERE project_id = $1 AND docker_network_id IS NOT NULL",
     )
     .bind(project_id)
     .fetch_all(&state.db)
     .await
     .map_err(super::db_error)?;
+    // The auto-created project network every service joins (see engine).
+    networks.push(format!(
+        "{}-proj-{}",
+        state.config.docker.label_prefix,
+        project_id.simple()
+    ));
 
     // DNS records we created for this project's domains.
     let dns: Vec<(Uuid, String, String)> = sqlx::query_as(

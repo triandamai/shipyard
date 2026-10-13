@@ -18,7 +18,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import type { Snippet } from 'svelte';
-	import { X, RefreshCw, Play, Square } from '@lucide/svelte';
+	import { X, RefreshCw, Play, Square, ArrowDown } from '@lucide/svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import Select from '$lib/components/ui/Select.svelte';
@@ -139,10 +139,21 @@
 
 	// ── Helpers ───────────────────────────────────────────────────────────────
 
+	let userScrolledUp = $state(false);
+
 	function scrollBottom() {
 		if (consoleEl) requestAnimationFrame(() => {
-			if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+			if (consoleEl) {
+				consoleEl.scrollTop = consoleEl.scrollHeight;
+				userScrolledUp = false;
+			}
 		});
+	}
+
+	function handleConsoleScroll() {
+		if (!consoleEl) return;
+		const { scrollTop, scrollHeight, clientHeight } = consoleEl;
+		userScrolledUp = scrollHeight - scrollTop - clientHeight > 40;
 	}
 
 	async function doFetch() {
@@ -185,7 +196,7 @@
 		es.onmessage = (e) => {
 			if (!e.data?.trim()) return;
 			liveLines = [...liveLines, e.data];
-			scrollBottom();
+			if (!userScrolledUp) scrollBottom();
 		};
 		es.addEventListener('error', (e: MessageEvent) => {
 			streamError = e.data ?? 'Stream error';
@@ -364,7 +375,7 @@
 					{:else if fetchError}
 						<div class="lvo-error">{fetchError}</div>
 					{:else}
-						<div class="lvo-console" bind:this={consoleEl}>
+						<div class="lvo-console" bind:this={consoleEl} onscroll={handleConsoleScroll}>
 							{#if filteredLines.length === 0}
 								<div class="lvo-empty">
 									{#if search}
@@ -406,6 +417,15 @@
 										{/if}
 									{/each}
 								{/if}
+							{/if}
+
+							{#if userScrolledUp && filteredLines.length > 0}
+								<div class="lvo-scroll-to-bottom">
+									<Button variant="secondary" size="sm" onclick={scrollBottom}>
+										<ArrowDown size={12} />
+										Jump to latest
+									</Button>
+								</div>
 							{/if}
 						</div>
 					{/if}
@@ -571,9 +591,20 @@
 	.lvo-console {
 		flex: 1; overflow-y: auto; padding: 10px 0;
 		scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+		position: relative;
 	}
 	.lvo-console::-webkit-scrollbar { width: 5px; }
 	.lvo-console::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+	.lvo-scroll-to-bottom {
+		position: sticky;
+		bottom: 12px;
+		margin: 0 auto;
+		width: fit-content;
+		z-index: 10;
+		box-shadow: var(--shadow-md);
+		border-radius: var(--radius-md);
+	}
 
 	.lvo-line {
 		font-family: var(--font-mono); font-size: 12px;

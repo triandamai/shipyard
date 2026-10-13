@@ -618,14 +618,21 @@ async fn run_mongodb_query(
         .as_str()
         .ok_or("Query must include a \"collection\" field")?;
 
-    let filter: Document = query
-        .get("filter")
-        .and_then(|f| mongodb::bson::from_bson::<Document>(to_bson(f)?).ok())
-        .unwrap_or_default();
+    let mut filter: Document = match query.get("filter") {
+        None | Some(serde_json::Value::Null) => Document::new(),
+        Some(f) => json_to_document(f).map_err(|e| format!("Invalid \"filter\": {e}"))?,
+    };
+    // Convenience: {"_id": "65ab…"} matches the ObjectId, like most GUIs do.
+    if let Some(mongodb::bson::Bson::String(s)) = filter.get("_id") {
+        if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(s) {
+            filter.insert("_id", oid);
+        }
+    }
 
-    let sort: Option<Document> = query
-        .get("sort")
-        .and_then(|s| mongodb::bson::from_bson::<Document>(to_bson(s)?).ok());
+    let sort: Option<Document> = match query.get("sort") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(s) => Some(json_to_document(s).map_err(|e| format!("Invalid \"sort\": {e}"))?),
+    };
 
     let limit = query["limit"].as_i64().unwrap_or(100).clamp(1, ROW_LIMIT as i64);
     let skip  = query["skip"].as_i64().unwrap_or(0).max(0) as u64;
@@ -678,8 +685,17 @@ async fn run_mongodb_query(
     Ok(DbQueryResponse { columns, rows, row_count, truncated: false, execution_time_ms: elapsed })
 }
 
-fn to_bson(v: &serde_json::Value) -> Option<mongodb::bson::Bson> {
-    mongodb::bson::to_bson(v).ok()
+/// Convert JSON to a BSON document, honouring MongoDB Extended JSON
+/// (`{"$oid": …}`, `{"$date": …}`, `{"$numberLong": …}`). Query operators
+/// like `$gt` / `$in` pass through unchanged.
+fn json_to_document(v: &serde_json::Value) -> Result<mongodb::bson::Document, String> {
+    if !v.is_object() {
+        return Err("must be a JSON object".into());
+    }
+    match mongodb::bson::Bson::try_from(v.clone()).map_err(|e| e.to_string())? {
+        mongodb::bson::Bson::Document(d) => Ok(d),
+        _ => Err("must be a JSON object".into()),
+    }
 }
 
 fn bson_to_json(val: Option<mongodb::bson::Bson>) -> serde_json::Value {

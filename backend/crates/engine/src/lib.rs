@@ -2172,6 +2172,7 @@ impl DeploymentEngine {
     async fn preprocess_compose_for_deploy(
         &self,
         org_id: Uuid,
+        project_id: Uuid,
         directory_path: &str,
         compose_file: &str,
     ) -> AppResult<String> {
@@ -2192,6 +2193,22 @@ impl DeploymentEngine {
         } else {
             false
         };
+
+        // Join the project network so compose services and regular services
+        // in the same project reach each other by service name.
+        let project_net = format!("{}-proj-{}", self.label_prefix, project_id.simple());
+        if attach_compose_project_network(&mut doc, &project_net) {
+            self.docker
+                .ensure_overlay_network(
+                    &project_net,
+                    HashMap::from([
+                        (format!("{}.managed", self.label_prefix), "true".to_string()),
+                        (format!("{}.project_id", self.label_prefix), project_id.to_string()),
+                    ]),
+                )
+                .await?;
+            modified = true;
+        }
 
         if let Some(networks) = doc.get_mut("networks").and_then(|v| v.as_mapping_mut()) {
             for (_, net_val) in networks.iter_mut() {
@@ -2550,7 +2567,7 @@ impl DeploymentEngine {
 
         // Preprocess: overlay networks need attachable:true for standalone compose containers.
         let effective_file = self
-            .preprocess_compose_for_deploy(org_id, directory_path, compose_file)
+            .preprocess_compose_for_deploy(org_id, project_id, directory_path, compose_file)
             .await?;
 
         let msg = format!("Running: docker compose -f {effective_file} up -d --remove-orphans");
@@ -4452,6 +4469,65 @@ async fn running_task(
 /// `node.id==<id>` for the node the service currently runs on, when the swarm
 /// has more than one node. `None` on single-node swarms (nothing to pin to)
 /// and for services that aren't running yet.
+///
+/// Add the external project network to a compose doc and attach every
+/// service to it. Services without an explicit `networks:` key also keep
+/// `default`, since declaring any network drops the implicit one. Services
+/// using `network_mode` are left alone. Returns whether anything changed.
+fn attach_compose_project_network(doc: &mut serde_yaml::Value, project_net: &str) -> bool {
+    use serde_yaml::{Mapping, Value};
+    const KEY: &str = "shipyard_project";
+
+    let Some(root) = doc.as_mapping_mut() else { return false };
+    let mut changed = false;
+
+    if let Some(services) = root.get_mut("services").and_then(|v| v.as_mapping_mut()) {
+        for (_, svc) in services.iter_mut() {
+            let Value::Mapping(svc) = svc else { continue };
+            if svc.contains_key("network_mode") {
+                continue;
+            }
+            match svc.get_mut("networks") {
+                Some(Value::Sequence(seq)) => {
+                    if !seq.iter().any(|v| v.as_str() == Some(KEY)) {
+                        seq.push(Value::String(KEY.into()));
+                        changed = true;
+                    }
+                }
+                Some(Value::Mapping(map)) => {
+                    if !map.contains_key(KEY) {
+                        map.insert(Value::String(KEY.into()), Value::Null);
+                        changed = true;
+                    }
+                }
+                _ => {
+                    svc.insert(
+                        Value::String("networks".into()),
+                        Value::Sequence(vec![Value::String("default".into()), Value::String(KEY.into())]),
+                    );
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    if changed {
+        let nets = root
+            .entry(Value::String("networks".into()))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        if !nets.is_mapping() {
+            *nets = Value::Mapping(Mapping::new());
+        }
+        if let Some(nets) = nets.as_mapping_mut() {
+            let mut def = Mapping::new();
+            def.insert(Value::String("external".into()), Value::Bool(true));
+            def.insert(Value::String("name".into()), Value::String(project_net.into()));
+            nets.insert(Value::String(KEY.into()), Value::Mapping(def));
+        }
+    }
+    changed
+}
+
 /// Apply tenant isolation to a compose file: references to the shared Traefik
 /// network are pointed at the org's edge network, and a stack may not join
 /// another org's edge network or use host / another container's networking.
