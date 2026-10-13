@@ -3868,13 +3868,16 @@ impl DeploymentEngine {
     ) -> AppResult<()> {
         let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
 
-        // Traefik's provider default network is the shared one (platform_proxy).
-        // Isolated services aren't on it, so Traefik would fall back to an
-        // arbitrary attached network, often the project network it isn't on,
-        // and routing breaks. Pin it to the org edge network Traefik shares.
+        // Services sit on several networks (project, edge, user-defined), and
+        // Traefik is only on the edge/shared one. Without an explicit network
+        // label Traefik may pick an IP it can't reach, so pin it.
         let mut traefik_labels = traefik_labels;
-        if isolation::settings().tenant_isolation && !traefik_labels.is_empty() {
-            let edge = isolation::settings().org_network(org_id);
+        if !traefik_labels.is_empty() {
+            let edge = if isolation::settings().tenant_isolation {
+                isolation::settings().org_network(org_id)
+            } else {
+                self.traefik_network.clone()
+            };
             traefik_labels.insert("traefik.swarm.network".to_string(), edge.clone());
             traefik_labels.insert("traefik.docker.network".to_string(), edge);
         }
@@ -3996,6 +3999,32 @@ impl DeploymentEngine {
         };
         let constraints = placement_constraints(node_pin, isolation::settings().pool_constraint());
 
+        // Project network: every service in the project joins it and is
+        // reachable there by its slug, e.g. http://backend:3000.
+        let mut networks = networks;
+        let project_net = format!("{}-proj-{}", self.label_prefix, project_id.simple());
+        self.docker
+            .ensure_overlay_network(
+                &project_net,
+                HashMap::from([
+                    (format!("{}.managed", self.label_prefix), "true".to_string()),
+                    (format!("{}.project_id", self.label_prefix), project_id.to_string()),
+                ]),
+            )
+            .await?;
+        if !networks.contains(&project_net) {
+            networks.push(project_net.clone());
+        }
+        let slug: Option<String> = sqlx::query_scalar("SELECT slug FROM services WHERE id = $1")
+            .bind(service_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mut network_aliases: HashMap<String, Vec<String>> = HashMap::new();
+        if let Some(slug) = slug.filter(|s| !s.is_empty()) {
+            network_aliases.insert(project_net, vec![slug]);
+        }
+
         let spec = ServiceSpec {
             name: docker_svc_name.clone(),
             image: image_ref.to_string(),
@@ -4007,6 +4036,7 @@ impl DeploymentEngine {
             ports: swarm_ports,
             resources,
             constraints,
+            network_aliases,
         };
 
         // Upsert: try update first; create when the service doesn't exist yet.

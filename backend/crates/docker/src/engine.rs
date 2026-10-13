@@ -377,7 +377,7 @@ impl BollardDockerEngine {
             .iter()
             .map(|n| NetworkAttachmentConfig {
                 target: Some(n.clone()),
-                aliases: None,
+                aliases: spec.network_aliases.get(n).filter(|a| !a.is_empty()).cloned(),
                 driver_opts: None,
             })
             .collect();

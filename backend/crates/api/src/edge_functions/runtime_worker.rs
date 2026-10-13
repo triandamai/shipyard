@@ -165,6 +165,7 @@ async fn create_runtime_service(
         networks: vec![network],
         ports: vec![],
         constraints,
+        network_aliases: Default::default(),
         resources: Some(ResourceSpec {
             memory_limit_mb: Some(memory_mb),
             cpu_limit: Some(cpu_limit),

@@ -21,6 +21,9 @@ pub struct ServiceSpec {
     /// service holding local volume data on the node where that data lives.
     #[serde(default)]
     pub constraints: Vec<String>,
+    /// Extra DNS aliases per network name (network -> aliases).
+    #[serde(default)]
+    pub network_aliases: HashMap<String, Vec<String>>,
 }
 
 /// Specification for creating a single plain (non-Swarm) container — used for
