@@ -3868,6 +3868,17 @@ impl DeploymentEngine {
     ) -> AppResult<()> {
         let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
 
+        // Traefik's provider default network is the shared one (platform_proxy).
+        // Isolated services aren't on it, so Traefik would fall back to an
+        // arbitrary attached network, often the project network it isn't on,
+        // and routing breaks. Pin it to the org edge network Traefik shares.
+        let mut traefik_labels = traefik_labels;
+        if isolation::settings().tenant_isolation && !traefik_labels.is_empty() {
+            let edge = isolation::settings().org_network(org_id);
+            traefik_labels.insert("traefik.swarm.network".to_string(), edge.clone());
+            traefik_labels.insert("traefik.docker.network".to_string(), edge);
+        }
+
         // Read the intended replica count, port config, and resource limits from the DB.
         let svc_row = sqlx::query_as::<_, (i32, Option<serde_json::Value>, Option<f64>, Option<i64>)>(
             "SELECT replicas, ports, cpu_limit, memory_limit_mb FROM services WHERE id = $1",
