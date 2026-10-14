@@ -218,7 +218,28 @@ async fn load_settings(state: &AppState) -> Result<PlatformSettings, ApiAppError
 }
 
 fn is_yaml(name: &str) -> bool {
-    name.ends_with(".yml") || name.ends_with(".yaml")
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".yml") || lower.ends_with(".yaml")
+}
+
+fn validate_traefik_dynamic_filename(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.starts_with('.') {
+        return Err("Invalid filename");
+    }
+    if !is_yaml(name) {
+        return Err("Only .yml and .yaml files are accessible");
+    }
+    Ok(())
+}
+
+fn validate_nginx_static_filename(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.starts_with('.') {
+        return Err("Invalid filename");
+    }
+    if !name.to_ascii_lowercase().ends_with(".conf") {
+        return Err("Only .conf files are accessible");
+    }
+    Ok(())
 }
 
 /// Run a command inside a named container via `docker exec`.
@@ -517,14 +538,8 @@ async fn get_traefik_dynamic_file(
     _state: State<AppState>,
     Path(filename): Path<String>,
 ) -> Result<Json<ApiResponse<TraefikFileResponse>>, ApiAppError> {
-    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
-        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
-    }
-    if !is_yaml(&filename) {
-        return Err(ApiAppError(AppError::BadRequest(
-            "Only .yml and .yaml files are accessible".to_string(),
-        )));
-    }
+    validate_traefik_dynamic_filename(&filename)
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
 
     let path = format!("{}/{}", TRAEFIK_DYNAMIC_DIR, filename);
 
@@ -581,14 +596,8 @@ async fn update_traefik_dynamic_file(
 ) -> Result<Json<ApiResponse<TraefikFileResponse>>, ApiAppError> {
     require_traefik_manage(&state.db, &auth).await?;
 
-    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
-        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
-    }
-    if !is_yaml(&filename) {
-        return Err(ApiAppError(AppError::BadRequest(
-            "Only .yml and .yaml files are accessible".to_string(),
-        )));
-    }
+    validate_traefik_dynamic_filename(&filename)
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
 
     // Validate YAML syntax before writing
     let _: serde_yaml::Value = serde_yaml::from_str(&body.content)
@@ -2825,12 +2834,8 @@ async fn get_nginx_static_conf(
 ) -> Result<Json<ApiResponse<NginxConfFile>>, ApiAppError> {
     require_static_read(&state.db, &auth, q.org_id).await?;
 
-    if name.contains('/') || name.contains('\\') || name.starts_with('.') {
-        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
-    }
-    if !name.ends_with(".conf") {
-        return Err(ApiAppError(AppError::BadRequest("Only .conf files are accessible".to_string())));
-    }
+    validate_nginx_static_filename(&name)
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
 
     let path = format!("{}/{}", NGINX_CONF_DIR, name);
     let resp = match docker_exec_container(NGINX_STATIC_CONTAINER, &["cat", &path]).await {
@@ -2852,12 +2857,8 @@ async fn update_nginx_static_conf(
 ) -> Result<Json<ApiResponse<NginxConfFile>>, ApiAppError> {
     require_static_manage(&state.db, &auth, q.org_id).await?;
 
-    if name.contains('/') || name.contains('\\') || name.starts_with('.') {
-        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
-    }
-    if !name.ends_with(".conf") {
-        return Err(ApiAppError(AppError::BadRequest("Only .conf files are accessible".to_string())));
-    }
+    validate_nginx_static_filename(&name)
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
 
     let path = format!("{}/{}", NGINX_CONF_DIR, name);
     docker_write_container_file(NGINX_STATIC_CONTAINER, &path, &body.content)
@@ -3003,6 +3004,53 @@ mod tests {
         // "BACKEND_IMAGE_EXTRA=foo" must not be picked up when looking for "BACKEND_IMAGE"
         let content = "BACKEND_IMAGE_EXTRA=foo\nBACKEND_IMAGE=real-value\n";
         assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "real-value");
+    }
+
+    #[test]
+    fn validate_traefik_dynamic_filename_accepts_valid_yaml() {
+        assert!(validate_traefik_dynamic_filename("dynamic.yml").is_ok());
+        assert!(validate_traefik_dynamic_filename("routes.yaml").is_ok());
+        assert!(validate_traefik_dynamic_filename("01-custom_router.yml").is_ok());
+    }
+
+    #[test]
+    fn validate_traefik_dynamic_filename_rejects_path_traversal_and_invalid_extensions() {
+        assert!(validate_traefik_dynamic_filename("").is_err());
+        assert!(validate_traefik_dynamic_filename("../traefik.yml").is_err());
+        assert!(validate_traefik_dynamic_filename("sub/routes.yaml").is_err());
+        assert!(validate_traefik_dynamic_filename("..\\routes.yml").is_err());
+        assert!(validate_traefik_dynamic_filename(".hidden.yml").is_err());
+        assert!(validate_traefik_dynamic_filename("traefik.toml").is_err());
+        assert!(validate_traefik_dynamic_filename("routes.json").is_err());
+        assert!(validate_traefik_dynamic_filename("dynamic.sh").is_err());
+    }
+
+    #[test]
+    fn validate_nginx_static_filename_accepts_valid_conf() {
+        assert!(validate_nginx_static_filename("default.conf").is_ok());
+        assert!(validate_nginx_static_filename("site-app.conf").is_ok());
+        assert!(validate_nginx_static_filename("001_domain.conf").is_ok());
+    }
+
+    #[test]
+    fn validate_nginx_static_filename_rejects_path_traversal_and_invalid_extensions() {
+        assert!(validate_nginx_static_filename("").is_err());
+        assert!(validate_nginx_static_filename("../site.conf").is_err());
+        assert!(validate_nginx_static_filename("dir/site.conf").is_err());
+        assert!(validate_nginx_static_filename("..\\site.conf").is_err());
+        assert!(validate_nginx_static_filename(".hidden.conf").is_err());
+        assert!(validate_nginx_static_filename("site.conf.bak").is_err());
+        assert!(validate_nginx_static_filename("site.yaml").is_err());
+        assert!(validate_nginx_static_filename("nginx.conf.old").is_err());
+    }
+
+    #[test]
+    fn traefik_config_yaml_syntax_validation() {
+        let valid_yaml = "http:\n  routers:\n    my-router:\n      rule: \"Host(`app.example.com`)\"\n      service: app-service\n";
+        assert!(serde_yaml::from_str::<serde_yaml::Value>(valid_yaml).is_ok());
+
+        let invalid_yaml = "http:\n  routers:\n    my-router:\n      - [unclosed bracket";
+        assert!(serde_yaml::from_str::<serde_yaml::Value>(invalid_yaml).is_err());
     }
 }
 

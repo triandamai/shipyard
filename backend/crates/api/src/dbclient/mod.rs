@@ -753,6 +753,68 @@ mod tests {
         assert_eq!(detect_database(&DbEngine::Postgres, &e), None);
     }
 
+    #[test]
+    fn json_to_document_parses_extended_json_and_operators() {
+        let json: serde_json::Value = serde_json::json!({
+            "_id": { "$oid": "507f1f77bcf86cd799439011" },
+            "age": { "$gt": 21, "$lte": 65 },
+            "tags": { "$in": ["admin", "dev"] },
+            "active": true
+        });
+        let doc = json_to_document(&json).expect("should parse valid extended json");
+
+        let oid = doc.get("_id").expect("_id present");
+        assert!(matches!(oid, mongodb::bson::Bson::ObjectId(_)));
+        if let mongodb::bson::Bson::ObjectId(parsed_oid) = oid {
+            assert_eq!(parsed_oid.to_hex(), "507f1f77bcf86cd799439011");
+        }
+
+        let age_doc = doc.get_document("age").expect("age is a document");
+        assert_eq!(age_doc.get_i32("$gt").ok(), Some(21));
+        assert_eq!(age_doc.get_i32("$lte").ok(), Some(65));
+
+        let tags_doc = doc.get_document("tags").expect("tags is a document");
+        let tags_arr = tags_doc.get_array("$in").expect("$in is an array");
+        assert_eq!(tags_arr.len(), 2);
+    }
+
+    #[test]
+    fn json_to_document_convenience_oid_string_parsing() {
+        let json: serde_json::Value = serde_json::json!({
+            "_id": "507f1f77bcf86cd799439011"
+        });
+        let mut doc = json_to_document(&json).unwrap();
+        if let Some(mongodb::bson::Bson::String(s)) = doc.get("_id") {
+            if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(s) {
+                doc.insert("_id", oid);
+            }
+        }
+        assert!(matches!(doc.get("_id"), Some(mongodb::bson::Bson::ObjectId(_))));
+
+        let non_hex_json: serde_json::Value = serde_json::json!({
+            "_id": "custom-uuid-string"
+        });
+        let mut doc2 = json_to_document(&non_hex_json).unwrap();
+        if let Some(mongodb::bson::Bson::String(s)) = doc2.get("_id") {
+            if let Ok(oid) = mongodb::bson::oid::ObjectId::parse_str(s) {
+                doc2.insert("_id", oid);
+            }
+        }
+        assert_eq!(doc2.get_str("_id").unwrap(), "custom-uuid-string");
+    }
+
+    #[test]
+    fn json_to_document_rejects_non_objects() {
+        let arr = serde_json::json!(["foo", "bar"]);
+        assert!(json_to_document(&arr).is_err());
+
+        let num = serde_json::json!(42);
+        assert!(json_to_document(&num).is_err());
+
+        let str_val = serde_json::json!("string");
+        assert!(json_to_document(&str_val).is_err());
+    }
+
     // ── Live Postgres value rendering ────────────────────────────────────────
     // `#[ignore]` so `cargo test` stays DB-free; CI runs it with
     // `--include-ignored` against its Postgres service container.

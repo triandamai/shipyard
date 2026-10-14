@@ -2196,7 +2196,7 @@ impl DeploymentEngine {
 
         // Join the project network so compose services and regular services
         // in the same project reach each other by service name.
-        let project_net = format!("{}-proj-{}", self.label_prefix, project_id.simple());
+        let project_net = shipyard_docker::isolation::project_network_name(&self.label_prefix, project_id);
         if attach_compose_project_network(&mut doc, &project_net) {
             self.docker
                 .ensure_overlay_network(
@@ -4019,7 +4019,7 @@ impl DeploymentEngine {
         // Project network: every service in the project joins it and is
         // reachable there by its slug, e.g. http://backend:3000.
         let mut networks = networks;
-        let project_net = format!("{}-proj-{}", self.label_prefix, project_id.simple());
+        let project_net = shipyard_docker::isolation::project_network_name(&self.label_prefix, project_id);
         self.docker
             .ensure_overlay_network(
                 &project_net,
@@ -4725,5 +4725,53 @@ mod persistent_volume_tests {
     fn mount_targets_compare_without_trailing_slash() {
         assert_eq!(normalize_mount_target("/data/"), "/data");
         assert_eq!(normalize_mount_target("/"), "/");
+    }
+
+    #[test]
+    fn attach_compose_project_network_injects_into_implicit_and_explicit_services() {
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(
+            "services:\n  web:\n    image: nginx\n  api:\n    image: node\n    networks:\n      - backend\n  db:\n    image: postgres\n    networks:\n      custom:\n        aliases: [db]\n  ignored:\n    image: agent\n    network_mode: host\n",
+        )
+        .unwrap();
+
+        let changed = attach_compose_project_network(&mut doc, "platform-proj-test123");
+        assert!(changed);
+
+        // web had no networks: -> gets ["default", "shipyard_project"]
+        let web_nets: Vec<String> = doc["services"]["web"]["networks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(web_nets, vec!["default", "shipyard_project"]);
+
+        // api had sequence networks: -> retains "backend" and adds "shipyard_project"
+        let api_nets: Vec<String> = doc["services"]["api"]["networks"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(api_nets, vec!["backend", "shipyard_project"]);
+
+        // db had map networks: -> adds "shipyard_project"
+        assert!(doc["services"]["db"]["networks"].as_mapping().unwrap().contains_key(&serde_yaml::Value::String("shipyard_project".into())));
+
+        // ignored had network_mode: -> completely untouched
+        assert!(doc["services"]["ignored"].get("networks").is_none());
+
+        // Top-level networks has shipyard_project pointing to external project network
+        assert_eq!(
+            doc["networks"]["shipyard_project"]["external"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            doc["networks"]["shipyard_project"]["name"].as_str(),
+            Some("platform-proj-test123")
+        );
+
+        // Calling it again should be idempotent and return false
+        assert!(!attach_compose_project_network(&mut doc, "platform-proj-test123"));
     }
 }

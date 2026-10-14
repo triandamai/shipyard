@@ -102,6 +102,10 @@ pub fn org_edge_network_name(label_prefix: &str, org_id: Uuid) -> String {
     format!("{label_prefix}-edge-{}", org_id.simple())
 }
 
+pub fn project_network_name(label_prefix: &str, project_id: Uuid) -> String {
+    format!("{label_prefix}-proj-{}", project_id.simple())
+}
+
 pub fn pool_constraint(pool: &str) -> String {
     format!("node.labels.pool=={pool}")
 }
@@ -174,6 +178,15 @@ mod tests {
         assert_eq!(
             org_edge_network_name("platform", org),
             "platform-edge-0190f2a41b2c7d3e8f40123456789abc"
+        );
+    }
+
+    #[test]
+    fn project_network_name_is_stable_and_short() {
+        let proj = Uuid::parse_str("0190f2a4-1b2c-7d3e-8f40-123456789abc").unwrap();
+        assert_eq!(
+            project_network_name("platform", proj),
+            "platform-proj-0190f2a41b2c7d3e8f40123456789abc"
         );
     }
 

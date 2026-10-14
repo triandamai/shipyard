@@ -64,10 +64,9 @@ pub async fn teardown_project(
     .await
     .map_err(super::db_error)?;
     // The auto-created project network every service joins (see engine).
-    networks.push(format!(
-        "{}-proj-{}",
-        state.config.docker.label_prefix,
-        project_id.simple()
+    networks.push(shipyard_docker::isolation::project_network_name(
+        &state.config.docker.label_prefix,
+        project_id,
     ));
 
     // DNS records we created for this project's domains.
