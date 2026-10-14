@@ -3562,16 +3562,20 @@ impl DeploymentEngine {
             .await;
         mounts.extend(added);
 
-        // Query the service record to get its configured image
-        let svc_image: Option<String> = sqlx::query_scalar("SELECT image FROM services WHERE id = $1")
-            .bind(service_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten();
+        // Query the service record to get its configured image and icon
+        let (svc_image, svc_icon): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT image, icon FROM services WHERE id = $1"
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(i, ic)| (i, ic))
+        .unwrap_or((None, None));
 
-        let db_default_path = default_database_volume_path(image_ref)
-            .or_else(|| svc_image.as_deref().and_then(default_database_volume_path));
+        let db_default_path = default_database_volume_path_with_icon(image_ref, svc_icon.as_deref())
+            .or_else(|| svc_image.as_deref().and_then(|img| default_database_volume_path_with_icon(img, svc_icon.as_deref())));
 
         // If a canonical database path is mounted (e.g. /var/lib/postgresql/data),
         // clean up any spurious auto-generated /data mount that was previously injected by mistake.
@@ -3711,23 +3715,23 @@ impl DeploymentEngine {
             }
         };
 
-        // Query the service record to get its configured image and type
-        let (svc_type, svc_image): (Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT type::text, image FROM services WHERE id = $1"
+        // Query the service record to get its configured image, icon, and type
+        let (svc_type, svc_image, svc_icon): (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT type::text, image, icon FROM services WHERE id = $1"
         )
         .bind(service_id)
         .fetch_optional(&self.db)
         .await
         .ok()
         .flatten()
-        .map(|(t, i)| (Some(t), i))
-        .unwrap_or((None, None));
+        .map(|(t, i, ic)| (Some(t), i, ic))
+        .unwrap_or((None, None, None));
 
         // Fallback for well-known database engines or database service types:
         // ensure their canonical persistent data path is included even if image inspection
         // failed (e.g. image wasn't pulled yet or digest reference lookup failed).
-        let db_default_path = default_database_volume_path(image_ref)
-            .or_else(|| svc_image.as_deref().and_then(default_database_volume_path));
+        let db_default_path = default_database_volume_path_with_icon(image_ref, svc_icon.as_deref())
+            .or_else(|| svc_image.as_deref().and_then(|img| default_database_volume_path_with_icon(img, svc_icon.as_deref())));
 
         if let Some(default_path) = db_default_path {
             if !declared.iter().any(|p| normalize_mount_target(p) == default_path) {
@@ -3809,8 +3813,8 @@ impl DeploymentEngine {
     ///
     /// Returns the number of mounts added (0 when already safe or not running).
     pub async fn secure_service_storage(&self, service_id: Uuid) -> AppResult<usize> {
-        let (project_id, db_image, _svc_type): (Uuid, Option<String>, String) = sqlx::query_as(
-            "SELECT project_id, image, type::text FROM services WHERE id = $1"
+        let (project_id, db_image, db_icon, _svc_type): (Uuid, Option<String>, Option<String>, String) = sqlx::query_as(
+            "SELECT project_id, image, icon, type::text FROM services WHERE id = $1"
         )
         .bind(service_id)
         .fetch_one(&self.db)
@@ -3835,8 +3839,8 @@ impl DeploymentEngine {
         let mut all_mounts = existing;
         all_mounts.extend(added.clone());
 
-        let db_default_path = default_database_volume_path(&image)
-            .or_else(|| db_image.as_deref().and_then(default_database_volume_path));
+        let db_default_path = default_database_volume_path_with_icon(&image, db_icon.as_deref())
+            .or_else(|| db_image.as_deref().and_then(|img| default_database_volume_path_with_icon(img, db_icon.as_deref())));
 
         if let Some(canonical) = db_default_path {
             if canonical != "/data" && all_mounts.iter().any(|m| normalize_mount_target(&m.target) == canonical) {
@@ -4675,16 +4679,37 @@ fn normalize_mount_target(t: &str) -> &str {
 /// Canonical data directory for standard database engines.
 pub fn default_database_volume_path(image_ref: &str) -> Option<&'static str> {
     let lower = image_ref.to_ascii_lowercase();
-    if lower.contains("postgres") || lower.contains("timescaledb") || lower.contains("postgis") {
+    if lower.contains("postgres")
+        || lower.contains("pgvector")
+        || lower.contains("timescale")
+        || lower.contains("postgis")
+        || lower.contains("citus")
+        || lower.contains("paradedb")
+        || lower.contains("supabase")
+    {
         Some("/var/lib/postgresql/data")
-    } else if lower.contains("mysql") || lower.contains("mariadb") {
+    } else if lower.contains("mysql") || lower.contains("mariadb") || lower.contains("percona") {
         Some("/var/lib/mysql")
-    } else if lower.contains("redis") || lower.contains("valkey") || lower.contains("keydb") {
+    } else if lower.contains("redis") || lower.contains("valkey") || lower.contains("keydb") || lower.contains("dragonfly") {
         Some("/data")
-    } else if lower.contains("mongo") {
+    } else if lower.contains("mongo") || lower.contains("ferretdb") {
         Some("/data/db")
     } else {
         None
+    }
+}
+
+/// Resolve canonical data path considering both image name and UI icon hint.
+pub fn default_database_volume_path_with_icon(image_ref: &str, icon: Option<&str>) -> Option<&'static str> {
+    if let Some(path) = default_database_volume_path(image_ref) {
+        return Some(path);
+    }
+    match icon {
+        Some("postgresql") | Some("postgres") => Some("/var/lib/postgresql/data"),
+        Some("mysql") | Some("mariadb") => Some("/var/lib/mysql"),
+        Some("redis") => Some("/data"),
+        Some("mongodb") | Some("mongo") => Some("/data/db"),
+        _ => None,
     }
 }
 
@@ -5066,6 +5091,10 @@ mod persistent_volume_tests {
         assert_eq!(default_database_volume_path("postgres:16"), Some("/var/lib/postgresql/data"));
         assert_eq!(default_database_volume_path("postgres:alpine"), Some("/var/lib/postgresql/data"));
         assert_eq!(default_database_volume_path("timescale/timescaledb:latest-pg15"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("pgvector/pgvector:pg16"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("ankane/pgvector:latest"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("citusdata/citus:12.1"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("paradedb/paradedb:latest"), Some("/var/lib/postgresql/data"));
         assert_eq!(default_database_volume_path("mysql:8.0"), Some("/var/lib/mysql"));
         assert_eq!(default_database_volume_path("mariadb:10.5"), Some("/var/lib/mysql"));
         assert_eq!(default_database_volume_path("redis:7-alpine"), Some("/data"));
@@ -5073,6 +5102,13 @@ mod persistent_volume_tests {
         assert_eq!(default_database_volume_path("mongo:7"), Some("/data/db"));
         assert_eq!(default_database_volume_path("node:20"), None);
         assert_eq!(default_database_volume_path("nginx:alpine"), None);
+
+        // Test icon fallback
+        assert_eq!(default_database_volume_path_with_icon("custom-image:latest", Some("postgresql")), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path_with_icon("custom-image:latest", Some("mysql")), Some("/var/lib/mysql"));
+        assert_eq!(default_database_volume_path_with_icon("custom-image:latest", Some("redis")), Some("/data"));
+        assert_eq!(default_database_volume_path_with_icon("custom-image:latest", Some("mongodb")), Some("/data/db"));
+        assert_eq!(default_database_volume_path_with_icon("custom-image:latest", None), None);
     }
 
     #[test]

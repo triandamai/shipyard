@@ -343,7 +343,7 @@ async fn create_service(
     upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &webhook_token).await.ok();
 
     // Ensure database services have a default persistent named volume record
-    let default_target = shipyard_engine::default_database_volume_path(&image)
+    let default_target = shipyard_engine::default_database_volume_path_with_icon(&image, body.icon.as_deref())
         .or_else(|| if body.service_type == "database" { Some("/data") } else { None });
 
     if let Some(target) = default_target {
