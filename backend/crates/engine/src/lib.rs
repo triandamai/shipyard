@@ -3001,6 +3001,39 @@ impl DeploymentEngine {
 
                 let dockerfile_path = format!("{repo_path}/Dockerfile");
                 let dockerfile = if std::path::Path::new(&dockerfile_path).exists() {
+                    // Check if service has ports configured, if not extract EXPOSE from Dockerfile
+                    if let Ok(df_content) = tokio::fs::read_to_string(&dockerfile_path).await {
+                        if let Some(port) = detect_dockerfile_port(&df_content) {
+                            let ports_json: serde_json::Value = sqlx::query_scalar(
+                                "SELECT ports FROM services WHERE id = $1"
+                            )
+                            .bind(service_id)
+                            .fetch_one(&self.db)
+                            .await
+                            .unwrap_or(serde_json::Value::Array(vec![]));
+
+                            let is_ports_empty = match &ports_json {
+                                serde_json::Value::Array(arr) => arr.is_empty(),
+                                _ => true,
+                            };
+
+                            if is_ports_empty {
+                                let default_ports = serde_json::json!([port.to_string()]);
+                                if let Err(e) = sqlx::query("UPDATE services SET ports = $1 WHERE id = $2")
+                                    .bind(default_ports)
+                                    .bind(service_id)
+                                    .execute(&self.db)
+                                    .await
+                                {
+                                    tracing::error!("Failed to update service default ports from Dockerfile EXPOSE: {e}");
+                                } else {
+                                    let port_log = format!("Detected port {port} from Dockerfile EXPOSE; set routing port.");
+                                    self.insert_log(deployment_id, Some(step_id), "info", &port_log).await;
+                                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &port_log).await;
+                                }
+                            }
+                        }
+                    }
                     "Dockerfile".to_string()
                 } else {
                     let search_path = std::path::Path::new(repo_path);
@@ -3098,15 +3131,8 @@ impl DeploymentEngine {
                     let sha_len = 7.min(commit_info.sha.len());
                     let tag = &commit_info.sha[..sha_len];
                     let repo = self.service_slug_or_id(service_id).await;
-                    let registry_tag = format!(
-                        "{}/{}/{}:{}",
-                        self.registry_hostname,
-                        org_id,
-                        service_id,
-                        tag,
-                    );
 
-                    let push_msg = format!("Saving and pushing Docker image to internal storage: {registry_tag}");
+                    let push_msg = format!("Saving and pushing Docker image to internal storage: {local_tag}");
                     self.insert_log(deployment_id, Some(step_id), "info", &push_msg).await;
                     self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &push_msg).await;
 
@@ -3123,10 +3149,62 @@ impl DeploymentEngine {
 
                     match push_result {
                         Ok(_) => {
-                            let pushed_msg = format!("Successfully pushed Docker image layers to internal registry storage");
+                            let pushed_msg = "Successfully pushed Docker image layers to internal registry storage".to_string();
                             self.insert_log(deployment_id, Some(step_id), "info", &pushed_msg).await;
                             self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &pushed_msg).await;
-                            registry_tag
+
+                            // Resolve namespace id and slug for this project
+                            let ns_row: Option<(Uuid, String)> = sqlx::query_as(
+                                "SELECT id, slug FROM registry_namespaces WHERE org_id = $1 AND project_id = $2",
+                            )
+                            .bind(org_id)
+                            .bind(project_id)
+                            .fetch_optional(&self.db)
+                            .await
+                            .map_err(|e| AppError::Database(e.to_string()))?;
+
+                            if let Some((ns_id, ns_slug)) = ns_row {
+                                let canonical_base = format!("{}/{}/{}", self.registry_hostname, ns_slug, repo);
+                                let canonical_ref = format!("{canonical_base}:{tag}");
+
+                                // Tag in local docker daemon so both canonical reference and latest are present locally
+                                if let Err(e) = self.docker.tag_image(&local_tag, &canonical_base, tag).await {
+                                    tracing::warn!("Failed to tag image as {canonical_ref}: {e}");
+                                }
+                                if let Err(e) = self.docker.tag_image(&local_tag, &canonical_base, "latest").await {
+                                    tracing::warn!("Failed to tag image as {canonical_base}:latest: {e}");
+                                }
+
+                                // Link service_artifact_sources so service source is set to registry
+                                sqlx::query(
+                                    "INSERT INTO service_artifact_sources (service_id, namespace_id, repo, tag, auto_deploy_on_push, updated_at)
+                                     VALUES ($1, $2, $3, $4, true, NOW())
+                                     ON CONFLICT (service_id) DO UPDATE
+                                        SET namespace_id = EXCLUDED.namespace_id,
+                                            repo = EXCLUDED.repo,
+                                            tag = EXCLUDED.tag,
+                                            auto_deploy_on_push = true,
+                                            updated_at = NOW()",
+                                )
+                                .bind(service_id)
+                                .bind(ns_id)
+                                .bind(&repo)
+                                .bind(tag)
+                                .execute(&self.db)
+                                .await
+                                .map_err(|e| AppError::Database(e.to_string()))?;
+
+                                // Switch service type to docker with registry image ref
+                                sqlx::query("UPDATE services SET type = 'docker'::service_type, image = $1 WHERE id = $2")
+                                    .bind(&canonical_ref)
+                                    .bind(service_id)
+                                    .execute(&self.db)
+                                    .await
+                                    .map_err(|e| AppError::Database(e.to_string()))?;
+                            }
+
+                            // Return local_tag so Docker Swarm runs it immediately from the local daemon without network pull failure
+                            local_tag
                         }
                         Err(e) => {
                             let err_msg = format!("Failed to push Docker image to internal registry storage: {e}");
@@ -4634,6 +4712,24 @@ async fn node_pin_constraint(docker: &dyn DockerEngine, docker_svc_name: &str) -
     node_id.filter(|n| !n.is_empty()).map(|n| format!("node.id=={n}"))
 }
 
+/// Parse an `EXPOSE <port>` instruction from a Dockerfile.
+/// Returns the first valid port found (1-65535).
+pub fn detect_dockerfile_port(content: &str) -> Option<u16> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.to_ascii_uppercase().starts_with("EXPOSE ") {
+            let part = trimmed["EXPOSE ".len()..].trim();
+            let port_str = part.split(|c: char| c == '/' || c.is_whitespace()).next()?;
+            if let Ok(p) = port_str.parse::<u16>() {
+                if p > 0 {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod persistent_volume_tests {
     use super::*;
@@ -4773,5 +4869,20 @@ mod persistent_volume_tests {
 
         // Calling it again should be idempotent and return false
         assert!(!attach_compose_project_network(&mut doc, "platform-proj-test123"));
+    }
+
+    #[test]
+    fn detect_dockerfile_port_works() {
+        let df1 = "FROM node:20-alpine\nWORKDIR /app\nEXPOSE 3000\nCMD [\"node\", \"build\"]";
+        assert_eq!(detect_dockerfile_port(df1), Some(3000));
+
+        let df2 = "FROM nginx:alpine\nexpose 8080/tcp\n";
+        assert_eq!(detect_dockerfile_port(df2), Some(8080));
+
+        let df3 = "FROM alpine\nEXPOSE 80 443\n";
+        assert_eq!(detect_dockerfile_port(df3), Some(80));
+
+        let df4 = "FROM python:3.11\nCMD [\"python\", \"app.py\"]";
+        assert_eq!(detect_dockerfile_port(df4), None);
     }
 }

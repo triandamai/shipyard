@@ -4,7 +4,7 @@ use bollard::container::{
     WaitContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults};
-use bollard::image::CreateImageOptions;
+use bollard::image::{CreateImageOptions, TagImageOptions};
 use bollard::models::{
     EndpointPortConfig, EndpointPortConfigProtocolEnum, EndpointPortConfigPublishModeEnum,
     EndpointSettings, EndpointSpec, EndpointSpecModeEnum, HostConfig, Limit, Mount, MountTypeEnum,
@@ -144,6 +144,14 @@ pub trait DockerEngine: Send + Sync {
         context_path: &str,
         dockerfile: &str,
     ) -> AppResult<Vec<String>>;
+
+    /// Tag an existing local image with a new repository and tag.
+    async fn tag_image(
+        &self,
+        source_image: &str,
+        target_repo: &str,
+        target_tag: &str,
+    ) -> AppResult<()>;
 
     /// Bootstrap a new swarm on this node.
     async fn init_swarm(&self, advertise_addr: &str) -> AppResult<()>;
@@ -1482,6 +1490,38 @@ impl DockerEngine for BollardDockerEngine {
 
         tracing::info!(%tag, "docker build completed ({} output lines)", lines.len());
         Ok(lines)
+    }
+
+    async fn tag_image(
+        &self,
+        source_image: &str,
+        target_repo: &str,
+        target_tag: &str,
+    ) -> AppResult<()> {
+        let full_target = format!("{target_repo}:{target_tag}");
+        let output = tokio::process::Command::new("docker")
+            .args(["tag", source_image, &full_target])
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                tracing::info!(%source_image, %full_target, "docker tag succeeded via CLI");
+                Ok(())
+            }
+            _ => {
+                self.client
+                    .tag_image(
+                        source_image,
+                        Some(TagImageOptions {
+                            repo: target_repo,
+                            tag: target_tag,
+                        }),
+                    )
+                    .await
+                    .map_err(|e| AppError::Docker(format!("docker tag failed for {source_image} -> {full_target}: {e}")))
+            }
+        }
     }
 
     // ── Swarm management ──────────────────────────────────────────────────────

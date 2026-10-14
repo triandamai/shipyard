@@ -75,6 +75,8 @@ pub enum ServiceKind {
     Web,
     /// Background process, no public URL.
     Worker,
+    /// Static site served by static nginx.
+    Static,
 }
 
 fn default_kind() -> ServiceKind {
@@ -209,7 +211,7 @@ pub fn validate_manifest(m: &Manifest) -> Result<(), ApiAppError> {
         if !seen.insert(&s.name) {
             return bad(format!("duplicate service name '{}'", s.name));
         }
-        if s.kind == ServiceKind::Web && s.port.is_none() {
+        if s.kind == ServiceKind::Web && s.port.is_none() && s.dockerfile.is_none() {
             return bad(format!("web service '{}' needs a port", s.name));
         }
         if !(1..=20).contains(&s.replicas) {
@@ -250,10 +252,10 @@ pub fn validate_manifest(m: &Manifest) -> Result<(), ApiAppError> {
         }
         if let Some(svc) = &d.service {
             match m.services.iter().find(|s| &s.name == svc) {
-                Some(s) if s.kind == ServiceKind::Web => {}
+                Some(s) if s.kind == ServiceKind::Web || s.kind == ServiceKind::Static => {}
                 _ => {
                     return bad(format!(
-                        "domain.service '{svc}' is not a web service in this manifest"
+                        "domain.service '{svc}' is not a web or static service in this manifest"
                     ))
                 }
             }
@@ -1065,17 +1067,92 @@ async fn configure(
     };
 
     let mut services = BTreeMap::new();
+    let mut detected_ports = HashMap::new();
+    let mut is_static_map = HashMap::new();
+
     for s in &manifest.services {
-        let ports = match s.port {
+        let maybe_src = match source {
+            Source::Upload(root) => {
+                let src = if s.path == "." {
+                    root.clone()
+                } else {
+                    root.join(&s.path)
+                };
+                if src.is_dir() {
+                    Some(src)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        // Static site detection: explicit kind or auto-detected as static site
+        let is_static = if s.kind == ServiceKind::Static {
+            true
+        } else if s.kind == ServiceKind::Worker {
+            false
+        } else if let Some(src) = &maybe_src {
+            let has_dockerfile = s
+                .dockerfile
+                .as_ref()
+                .map(|df| src.join(df).exists())
+                .unwrap_or_else(|| src.join("Dockerfile").exists());
+            if !has_dockerfile && shipyard_engine::ssr::detect_ssr_framework(src).is_none() {
+                src.join("index.html").exists()
+                    || shipyard_engine::static_site::detect_build_config(src).is_some()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        is_static_map.insert(s.name.clone(), is_static);
+
+        let svc_type = if is_static { "static" } else { "git" };
+
+        let detected_port = if is_static {
+            None
+        } else if let Some(p) = s.port {
+            Some(p)
+        } else if let Some(src) = &maybe_src {
+            let df_content = if let Some(df) = &s.dockerfile {
+                std::fs::read_to_string(src.join(df)).ok()
+            } else if src.join("Dockerfile").exists() {
+                std::fs::read_to_string(src.join("Dockerfile")).ok()
+            } else {
+                None
+            };
+            if let Some(content) = df_content {
+                shipyard_engine::detect_dockerfile_port(&content)
+            } else if let Some(ssr) = shipyard_engine::ssr::detect_ssr_framework(src) {
+                Some(ssr.default_port)
+            } else if s.kind == ServiceKind::Web {
+                Some(3000)
+            } else {
+                None
+            }
+        } else if s.kind == ServiceKind::Web {
+            Some(3000)
+        } else {
+            None
+        };
+
+        if let Some(p) = detected_port {
+            detected_ports.insert(s.name.clone(), p);
+        }
+
+        let ports = match detected_port {
             Some(p) => serde_json::json!([p.to_string()]),
             None => serde_json::json!([]),
         };
+
         let id = upsert_service(
             state,
             app.org_id,
             project_id,
             &s.name,
-            "git",
+            svc_type,
             "",
             None,
             ports,
@@ -1084,6 +1161,18 @@ async fn configure(
             s.memory_mb,
         )
         .await?;
+
+        if is_static {
+            let _ = sqlx::query(
+                "INSERT INTO static_site_configs (service_id, source, framework, build_command, output_dir, install_command, node_version)
+                 VALUES ($1, 'git', 'custom', 'bun run build', 'dist', 'bun install', '1')
+                 ON CONFLICT (service_id) DO NOTHING",
+            )
+            .bind(id)
+            .execute(&state.db)
+            .await;
+        }
+
         let repo = source_repo_dir(&state.config.data_dir, id);
         // Point the service at its managed repo (also fixes services created before).
         sqlx::query("UPDATE services SET git_repo_url = $2, git_branch = 'main' WHERE id = $1")
@@ -1235,7 +1324,7 @@ async fn configure(
         None => manifest
             .services
             .iter()
-            .find(|s| s.kind == ServiceKind::Web),
+            .find(|s| s.kind == ServiceKind::Web || s.kind == ServiceKind::Static),
     };
     let url = match web {
         Some(w) => {
@@ -1243,7 +1332,12 @@ async fn configure(
                 .subdomain
                 .clone()
                 .unwrap_or_else(|| default_subdomain(&app.app_key, environment));
-            let url = ensure_domain(state, services[&w.name], &sub, w.port.unwrap_or(3000)).await?;
+            let port = if w.kind == ServiceKind::Static || is_static_map.get(&w.name).copied().unwrap_or(false) {
+                80
+            } else {
+                detected_ports.get(&w.name).copied().or(w.port).unwrap_or(3000)
+            };
+            let url = ensure_domain(state, services[&w.name], &sub, port).await?;
             if url.is_none() {
                 warnings
                     .push("no apps base domain is configured, so the app has no public URL".into());
@@ -1320,17 +1414,27 @@ async fn run_deploys(
         }
         // A finished deployment means the spec was applied, not that the app
         // runs. Wait for it so `publish.succeeded` means the URL works.
-        let svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
-        if let Err(e) = wait_until_running(
-            &*state.docker,
-            &svc_name,
-            deploy_started,
-            std::time::Duration::from_secs(180),
-        )
-        .await
-        {
-            failure = Some(format!("{name}: {e}"));
-            break;
+        // Static sites run through shipyard-nginx-static without Swarm service tasks.
+        let svc_type: Option<String> = sqlx::query_scalar("SELECT type::text FROM services WHERE id = $1")
+            .bind(service_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+        if svc_type.as_deref() != Some("static") {
+            let svc_name = format!("{}-{}", state.config.docker.label_prefix, service_id);
+            if let Err(e) = wait_until_running(
+                &*state.docker,
+                &svc_name,
+                deploy_started,
+                std::time::Duration::from_secs(180),
+            )
+            .await
+            {
+                failure = Some(format!("{name}: {e}"));
+                break;
+            }
         }
     }
     let urls: Vec<String> = url.into_iter().collect();
@@ -1779,6 +1883,31 @@ mod tests {
         ));
         assert!(matches!(m.services[0].env["NODE_ENV"], EnvValue::Plain(_)));
         assert_eq!(m.services[1].kind, ServiceKind::Worker);
+    }
+
+    #[test]
+    fn static_manifest_parses_and_validates() {
+        let m: Manifest = serde_json::from_value(serde_json::json!({
+            "services": [{
+                "name": "landing",
+                "kind": "static",
+                "path": "frontend"
+            }],
+            "domain": { "subdomain": "landing", "service": "landing" }
+        }))
+        .unwrap();
+        assert!(validate_manifest(&m).is_ok());
+        assert_eq!(m.services[0].kind, ServiceKind::Static);
+
+        // Web service with dockerfile and no port is valid
+        let m2: Manifest = serde_json::from_value(serde_json::json!({
+            "services": [{
+                "name": "web",
+                "dockerfile": "Dockerfile"
+            }]
+        }))
+        .unwrap();
+        assert!(validate_manifest(&m2).is_ok());
     }
 
     #[test]
