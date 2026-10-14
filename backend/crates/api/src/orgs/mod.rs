@@ -287,7 +287,7 @@ pub async fn require_member(
     org_id: Uuid,
     user_id: Uuid,
 ) -> Result<OrgMember, ApiAppError> {
-    sqlx::query_as::<_, OrgMember>(
+    if let Some(m) = sqlx::query_as::<_, OrgMember>(
         "SELECT id, org_id, user_id, role::text AS role, created_at
          FROM org_members
          WHERE org_id = $1 AND user_id = $2",
@@ -296,8 +296,21 @@ pub async fn require_member(
     .bind(user_id)
     .fetch_optional(db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .ok_or_else(|| ApiAppError(AppError::Forbidden(
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))? {
+        return Ok(m);
+    }
+
+    if crate::admin::is_admin_or_superadmin(db, user_id).await {
+        return Ok(OrgMember {
+            id: Uuid::nil(),
+            org_id,
+            user_id,
+            role: "owner".to_string(),
+            created_at: Utc::now(),
+        });
+    }
+
+    Err(ApiAppError(AppError::Forbidden(
         "You are not a member of this organization".to_string(),
     )))
 }
@@ -416,17 +429,28 @@ async fn list_orgs(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<OrgResponse>>>, ApiAppError> {
-    let orgs: Vec<Organization> = sqlx::query_as::<_, Organization>(
-        "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
-         FROM organizations o
-         INNER JOIN org_members m ON m.org_id = o.id
-         WHERE m.user_id = $1
-         ORDER BY o.name ASC",
-    )
-    .bind(auth.user_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let orgs: Vec<Organization> = if crate::admin::is_admin_or_superadmin(&state.db, auth.user_id).await {
+        sqlx::query_as::<_, Organization>(
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
+             FROM organizations o
+             ORDER BY o.name ASC",
+        )
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        sqlx::query_as::<_, Organization>(
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
+             FROM organizations o
+             INNER JOIN org_members m ON m.org_id = o.id
+             WHERE m.user_id = $1
+             ORDER BY o.name ASC",
+        )
+        .bind(auth.user_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    };
 
     Ok(Json(ApiResponse::ok(
         orgs.into_iter().map(OrgResponse::from).collect(),
@@ -595,18 +619,28 @@ async fn create_org(
 async fn get_org(
     auth: AuthUser,
     State(state): State<AppState>,
-    Path(org_id): Path<Uuid>,
+    Path(id_or_slug): Path<String>,
 ) -> Result<Json<ApiResponse<OrgResponse>>, ApiAppError> {
-    require_member(&state.db, org_id, auth.user_id).await?;
-
-    let org: Organization = sqlx::query_as::<_, Organization>(
-        "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE id = $1",
-    )
-    .bind(org_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    let org: Organization = if let Ok(id) = Uuid::parse_str(&id_or_slug) {
+        sqlx::query_as::<_, Organization>(
+            "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    } else {
+        sqlx::query_as::<_, Organization>(
+            "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE slug = $1",
+        )
+        .bind(&id_or_slug)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+    }
     .ok_or_else(|| ApiAppError(AppError::NotFound("Organization not found".to_string())))?;
+
+    require_member(&state.db, org.id, auth.user_id).await?;
 
     Ok(Json(ApiResponse::ok(OrgResponse::from(org))))
 }
@@ -701,18 +735,40 @@ async fn get_my_membership(
     .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .ok_or_else(|| ApiAppError(AppError::Forbidden("Not a member of this organization".to_string())))?;
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    Ok(Json(ApiResponse::ok(MemberResponse {
-        id: row.id,
-        org_id: row.org_id,
-        user_id: row.user_id,
-        email: row.email,
-        role: row.role,
-        permissions: row.permissions,
-        created_at: row.created_at,
-    })))
+    if let Some(row) = row {
+        return Ok(Json(ApiResponse::ok(MemberResponse {
+            id: row.id,
+            org_id: row.org_id,
+            user_id: row.user_id,
+            email: row.email,
+            role: row.role,
+            permissions: row.permissions,
+            created_at: row.created_at,
+        })));
+    }
+
+    if crate::admin::is_admin_or_superadmin(&state.db, auth.user_id).await {
+        let user_email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(auth.user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+        return Ok(Json(ApiResponse::ok(MemberResponse {
+            id: Uuid::nil(),
+            org_id,
+            user_id: auth.user_id,
+            email: user_email.unwrap_or_default(),
+            role: "owner".to_string(),
+            permissions: vec!["*".to_string()],
+            created_at: Utc::now(),
+        })));
+    }
+
+    Err(ApiAppError(AppError::Forbidden("Not a member of this organization".to_string())))
 }
 
 async fn list_members(

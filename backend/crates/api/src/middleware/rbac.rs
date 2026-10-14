@@ -11,7 +11,7 @@ pub async fn get_user_org_role(
     user_id: Uuid,
     org_id: Uuid,
 ) -> Option<String> {
-    sqlx::query_as::<_, (String,)>(
+    if let Some((role,)) = sqlx::query_as::<_, (String,)>(
         "SELECT role::text FROM org_members WHERE user_id = $1 AND org_id = $2",
     )
     .bind(user_id)
@@ -19,8 +19,15 @@ pub async fn get_user_org_role(
     .fetch_optional(db)
     .await
     .ok()
-    .flatten()
-    .map(|(role,)| role)
+    .flatten() {
+        return Some(role);
+    }
+
+    if crate::admin::is_admin_or_superadmin(db, user_id).await {
+        return Some("owner".to_string());
+    }
+
+    None
 }
 
 /// Require membership. Returns AppError::Forbidden if not a member.

@@ -56,6 +56,29 @@ pub async fn require_admin_access(
     }
 }
 
+/// Check if the user is a superadmin or has organization management staff permissions.
+pub async fn is_admin_or_superadmin(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+) -> bool {
+    let row: Option<(bool, Vec<String>)> = sqlx::query_as(
+        "SELECT is_superadmin, staff_permissions FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+
+    match row {
+        Some((true, _)) => true,
+        Some((false, perms)) => {
+            perms.iter().any(|p| p == "shipyard:admin:organization:manage" || p == "shipyard:admin:organization:view")
+        }
+        None => false,
+    }
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {

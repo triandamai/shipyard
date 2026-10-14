@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { orgStore } from '$lib/stores/org.store';
 	import type { AdminOrg, OrgQuota } from '$lib/api/types';
 	import {
 		DataTable,
@@ -77,7 +79,14 @@
 	}
 
 	function openOrg(org: AdminOrg) {
-		window.open(`/orgs/${org.slug}`, '_blank', 'noopener');
+		orgStore.setActiveOrg({
+			id: org.id,
+			name: org.name,
+			slug: org.slug,
+			plan_id: null,
+			created_at: org.created_at
+		});
+		goto(`/orgs/${org.slug}`);
 	}
 
 	async function openQuota(org: AdminOrg) {
@@ -261,7 +270,7 @@
 				<td class="og-date">{new Date(org.created_at).toLocaleDateString()}</td>
 				<td>
 					<div class="og-actions">
-						<Button variant="secondary" size="sm" onclick={() => openOrg(org)}>Open</Button>
+						<Button variant="secondary" size="sm" href="/orgs/{org.slug}" onclick={(e) => { e?.preventDefault?.(); openOrg(org); }}>Open</Button>
 						<Button variant="secondary" size="sm" onclick={() => openQuota(org)}>Quota</Button>
 						<Button
 							variant={org.sub_status === 'suspended' ? 'secondary' : 'danger-outline'}

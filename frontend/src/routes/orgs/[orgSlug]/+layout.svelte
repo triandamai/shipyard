@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
@@ -16,14 +15,31 @@
 	let orgSlug = $derived(page.params.orgSlug ?? '');
 
 	let unsubscribeOrgEvents: (() => void) | null = null;
+	let lastLoadedSlug = '';
 
-	onMount(async () => {
-		if (!orgSlug) return;
+	$effect(() => {
+		const currentSlug = orgSlug;
+		if (!currentSlug || currentSlug === lastLoadedSlug) return;
+		lastLoadedSlug = currentSlug;
 
-		const orgsRes = await api.getOrgs();
-		if (orgsRes.data) {
-			orgStore.setOrganizations(orgsRes.data);
-			const found = orgsRes.data.find((o) => o.slug === orgSlug || o.id === orgSlug);
+		let isCancelled = false;
+
+		(async () => {
+			unsubscribeOrgEvents?.();
+			unsubscribeOrgEvents = null;
+
+			const orgsRes = await api.getOrgs();
+			if (isCancelled) return;
+
+			let found = orgsRes.data?.find((o) => o.slug === currentSlug || o.id === currentSlug);
+
+			if (!found) {
+				const singleRes = await api.getOrg(currentSlug);
+				if (isCancelled) return;
+				if (singleRes.data) {
+					found = singleRes.data;
+				}
+			}
 
 			if (!found) {
 				// User no longer has access to this org (e.g. membership revoked).
@@ -34,6 +50,14 @@
 				return;
 			}
 
+			if (orgsRes.data) {
+				if (!orgsRes.data.some((o) => o.id === found!.id)) {
+					orgStore.setOrganizations([...orgsRes.data, found]);
+				} else {
+					orgStore.setOrganizations(orgsRes.data);
+				}
+			}
+
 			orgStore.setActiveOrg(found);
 			projectStore.setLoading(true);
 
@@ -41,6 +65,8 @@
 				api.getProjects(found.id),
 				api.getMyMembership(found.id)
 			]);
+			if (isCancelled) return;
+
 			if (projectsRes.data) projectStore.setProjects(projectsRes.data);
 			// Always call setMyMembership (even on error) to mark membershipLoaded = true
 			// so permission guards in child layouts don't block indefinitely.
@@ -51,12 +77,14 @@
 
 			// Check for updates once per org load (non-blocking).
 			api.checkVersion().then((res) => {
-				if (res.data) versionStore.setInfo(res.data);
+				if (!isCancelled && res.data) versionStore.setInfo(res.data);
 			});
-		}
+		})();
 
 		return () => {
+			isCancelled = true;
 			unsubscribeOrgEvents?.();
+			unsubscribeOrgEvents = null;
 		};
 	});
 </script>

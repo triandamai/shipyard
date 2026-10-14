@@ -681,7 +681,7 @@ async fn check_org_access(state: &AppState, user_id: Uuid, org_id: Uuid) -> Resu
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if !row.0 {
+    if !row.0 && !crate::admin::is_admin_or_superadmin(&state.db, user_id).await {
         return Err(ApiAppError(AppError::Forbidden("not a member of this org".into())));
     }
     Ok(())

@@ -110,7 +110,7 @@ async fn import_compose(
             .await
             .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if member_count.0 == 0 {
+    if member_count.0 == 0 && !crate::admin::is_admin_or_superadmin(&state.db, auth.user_id).await {
         return Err(ApiAppError(AppError::Forbidden(
             "Not a member of this organization".to_string(),
         )));

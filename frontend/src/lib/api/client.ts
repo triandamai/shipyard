@@ -270,6 +270,10 @@ class ApiClient {
 		return this.get('/orgs');
 	}
 
+	async getOrg(idOrSlug: string): Promise<ApiResponse<Organization>> {
+		return this.get(`/orgs/${idOrSlug}`);
+	}
+
 	async createOrg(name: string, slug: string, planId?: string): Promise<ApiResponse<Organization>> {
 		return this.post('/orgs', { name, slug, ...(planId ? { plan_id: planId } : {}) });
 	}

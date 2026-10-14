@@ -75,6 +75,9 @@ async fn require_org_member(
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
     if exists.is_none() {
+        if crate::admin::is_admin_or_superadmin(db, user_id).await {
+            return Ok(());
+        }
         return Err(ApiAppError(AppError::Forbidden(
             "You are not a member of this organization".to_string(),
         )));
