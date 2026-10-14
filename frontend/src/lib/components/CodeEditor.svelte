@@ -6,7 +6,8 @@
 	import { json } from '@codemirror/lang-json';
 	import { sql, PostgreSQL, MySQL, MariaSQL, StandardSQL } from '@codemirror/lang-sql';
 	import { EditorState, Compartment } from '@codemirror/state';
-	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+	import { HighlightStyle, syntaxHighlighting, StreamLanguage } from '@codemirror/language';
+	import { nginx } from '@codemirror/legacy-modes/mode/nginx';
 	import { keymap } from '@codemirror/view';
 	import { tags as t } from '@lezer/highlight';
 
@@ -18,7 +19,8 @@
 		| 'sql'
 		| 'postgres'
 		| 'mysql'
-		| 'mariadb';
+		| 'mariadb'
+		| 'nginx';
 
 	interface Props {
 		value?: string;
@@ -52,6 +54,7 @@
 			case 'mysql': return sql({ dialect: MySQL });
 			case 'mariadb': return sql({ dialect: MariaSQL });
 			case 'sql': return sql({ dialect: StandardSQL });
+			case 'nginx': return StreamLanguage.define(nginx);
 			default: return [];
 		}
 	}

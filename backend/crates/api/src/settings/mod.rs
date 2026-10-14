@@ -136,9 +136,9 @@ pub fn routes() -> Router<AppState> {
         .route("/settings", get(get_settings).put(update_settings))
         .route("/settings/smtp", get(get_smtp_settings).put(update_smtp_settings))
         .route("/settings/deployments", get(get_deployments_settings).put(update_deployments_settings))
-        .route("/settings/traefik/static", get(get_traefik_static))
+        .route("/settings/traefik/static", get(get_traefik_static).put(update_traefik_static))
         .route("/settings/traefik/dynamic", get(list_traefik_dynamic))
-        .route("/settings/traefik/dynamic/:filename", get(get_traefik_dynamic_file))
+        .route("/settings/traefik/dynamic/:filename", get(get_traefik_dynamic_file).put(update_traefik_dynamic_file))
         .route("/settings/traefik/logs/stream", get(traefik_log_stream))
         .route("/admin/version", get(get_version))
         .route("/admin/update", post(trigger_update))
@@ -160,7 +160,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/docker/nodes", get(docker_nodes))
         .route("/admin/docker/swarm/join-tokens", get(docker_swarm_join_tokens))
         .route("/admin/nginx-static/confs", get(list_nginx_static_confs))
-        .route("/admin/nginx-static/confs/:name", get(get_nginx_static_conf))
+        .route("/admin/nginx-static/confs/:name", get(get_nginx_static_conf).put(update_nginx_static_conf))
         .route("/admin/nginx-static/logs/stream", get(nginx_static_log_stream))
         .route("/admin/host-ip", get(get_host_ip))
         .route("/admin/api-keys", get(list_api_keys).post(create_api_key))
@@ -234,6 +234,42 @@ async fn docker_exec_container(container: &str, args: &[&str]) -> Result<String,
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Write data into a file inside a named container via `docker exec -i <container> sh -c "cat > <path>"`.
+async fn docker_write_container_file(container: &str, path: &str, content: &str) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let sh_cmd = format!("cat > '{}'", path.replace('\'', "'\\''"));
+    let mut child = tokio::process::Command::new("docker")
+        .args(["exec", "-i", container, "sh", "-c", &sh_cmd])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn docker: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(content.as_bytes())
+            .await
+            .map_err(|e| format!("failed to write stdin to docker: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("failed to flush stdin to docker: {e}"))?;
+    }
+
+    let out = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("docker exec wait failed: {e}"))?;
+
+    if out.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(stderr.trim().to_string())
     }
 }
 
@@ -505,6 +541,71 @@ async fn get_traefik_dynamic_file(
         }
     };
     Ok(Json(ApiResponse::ok(resp)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateConfigFileRequest {
+    pub content: String,
+}
+
+/// PUT /settings/traefik/static
+async fn update_traefik_static(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<UpdateConfigFileRequest>,
+) -> Result<Json<ApiResponse<TraefikFileResponse>>, ApiAppError> {
+    require_traefik_manage(&state.db, &auth).await?;
+
+    // Validate YAML syntax before writing
+    let _: serde_yaml::Value = serde_yaml::from_str(&body.content)
+        .map_err(|e| ApiAppError(AppError::BadRequest(format!("Invalid YAML syntax: {e}"))))?;
+
+    docker_write_container_file(TRAEFIK_CONTAINER, TRAEFIK_STATIC_PATH, &body.content)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to write {TRAEFIK_STATIC_PATH}: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(TraefikFileResponse {
+        path: TRAEFIK_STATIC_PATH.to_string(),
+        content: Some(body.content),
+        exists: true,
+        error: None,
+    })))
+}
+
+/// PUT /settings/traefik/dynamic/:filename
+async fn update_traefik_dynamic_file(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+    Json(body): Json<UpdateConfigFileRequest>,
+) -> Result<Json<ApiResponse<TraefikFileResponse>>, ApiAppError> {
+    require_traefik_manage(&state.db, &auth).await?;
+
+    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
+        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
+    }
+    if !is_yaml(&filename) {
+        return Err(ApiAppError(AppError::BadRequest(
+            "Only .yml and .yaml files are accessible".to_string(),
+        )));
+    }
+
+    // Validate YAML syntax before writing
+    let _: serde_yaml::Value = serde_yaml::from_str(&body.content)
+        .map_err(|e| ApiAppError(AppError::BadRequest(format!("Invalid YAML syntax: {e}"))))?;
+
+    let path = format!("{}/{}", TRAEFIK_DYNAMIC_DIR, filename);
+
+    docker_write_container_file(TRAEFIK_CONTAINER, &path, &body.content)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to write {path}: {e}"))))?;
+
+    Ok(Json(ApiResponse::ok(TraefikFileResponse {
+        path,
+        content: Some(body.content),
+        exists: true,
+        error: None,
+    })))
 }
 
 /// GET /settings/traefik/logs/stream — real-time SSE stream of Traefik container logs
@@ -1325,6 +1426,9 @@ async fn require_infra_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<u
 /// Accepts `static:read` (dedicated permission) or falls back to `infra:read`.
 async fn require_static_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
     if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
+    if crate::admin::require_admin_access(db, auth.user_id, "shipyard:admin:infra:static:view").await.is_ok() {
+        return Ok(());
+    }
     let org_id = org_id.ok_or_else(|| ApiAppError(AppError::BadRequest("org_id query parameter is required".to_string())))?;
     let static_perm = format!("shipyard:{org_id}:static:read");
     if crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &static_perm).await.is_ok() {
@@ -1334,6 +1438,31 @@ async fn require_static_read(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<
     crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &infra_perm)
         .await
         .map_err(ApiAppError)
+}
+
+/// Requires `shipyard:admin:infra:static:manage` or org `static:write`/`infra:write` or superadmin.
+async fn require_static_manage(db: &sqlx::PgPool, auth: &AuthUser, org_id: Option<uuid::Uuid>) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
+    if crate::admin::require_admin_access(db, auth.user_id, "shipyard:admin:infra:static:manage").await.is_ok() {
+        return Ok(());
+    }
+    if let Some(org_id) = org_id {
+        let static_perm = format!("shipyard:{org_id}:static:write");
+        if crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &static_perm).await.is_ok() {
+            return Ok(());
+        }
+        let infra_perm = format!("shipyard:{org_id}:infra:write");
+        if crate::middleware::rbac::require_permission(db, auth.user_id, org_id, &infra_perm).await.is_ok() {
+            return Ok(());
+        }
+    }
+    Err(ApiAppError(AppError::Forbidden("Permission denied: cannot manage static config".to_string())))
+}
+
+/// Requires `shipyard:admin:infra:traefik:manage` or superadmin.
+async fn require_traefik_manage(db: &sqlx::PgPool, auth: &AuthUser) -> Result<(), ApiAppError> {
+    if superadmin_bypass(db, auth.user_id).await { return Ok(()); }
+    crate::admin::require_admin_access(db, auth.user_id, "shipyard:admin:infra:traefik:manage").await
 }
 
 async fn docker_containers(
@@ -2712,6 +2841,38 @@ async fn get_nginx_static_conf(
         }
     };
     Ok(Json(ApiResponse::ok(resp)))
+}
+
+async fn update_nginx_static_conf(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Query(q): Query<OrgPermQuery>,
+    Path(name): Path<String>,
+    Json(body): Json<UpdateConfigFileRequest>,
+) -> Result<Json<ApiResponse<NginxConfFile>>, ApiAppError> {
+    require_static_manage(&state.db, &auth, q.org_id).await?;
+
+    if name.contains('/') || name.contains('\\') || name.starts_with('.') {
+        return Err(ApiAppError(AppError::BadRequest("Invalid filename".to_string())));
+    }
+    if !name.ends_with(".conf") {
+        return Err(ApiAppError(AppError::BadRequest("Only .conf files are accessible".to_string())));
+    }
+
+    let path = format!("{}/{}", NGINX_CONF_DIR, name);
+    docker_write_container_file(NGINX_STATIC_CONTAINER, &path, &body.content)
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to write {path}: {e}"))))?;
+
+    // Reload nginx inside the container so configuration changes take effect
+    let _ = docker_exec_container(NGINX_STATIC_CONTAINER, &["nginx", "-s", "reload"]).await;
+
+    Ok(Json(ApiResponse::ok(NginxConfFile {
+        name,
+        content: Some(body.content),
+        exists: true,
+        error: None,
+    })))
 }
 
 async fn nginx_static_log_stream(

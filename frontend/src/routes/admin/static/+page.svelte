@@ -3,6 +3,7 @@
 	import { api } from '$lib/api/client';
 	import LogViewerOverlay from '$lib/components/LogViewerOverlay.svelte';
 	import { FileText, RefreshCw, ScrollText } from '@lucide/svelte';
+
 	import {
 		PageHeader,
 		SearchInput,
@@ -15,19 +16,34 @@
 		Skeleton,
 		Spinner
 	} from '$lib/components/ui';
+	import CodeEditor from '$lib/components/CodeEditor.svelte';
+	import { authStore } from '$lib/stores/auth.store';
 
 	interface NginxConfEntry { name: string }
 	interface NginxConfList { dir: string; files: NginxConfEntry[]; error?: string; }
 	interface NginxConfFile { name: string; content?: string; exists: boolean; error?: string; }
 
-	let confList    = $state<NginxConfList | null>(null);
-	let loading     = $state(true);
-	let listError   = $state('');
-	let selected    = $state<string | null>(null);
-	let fileContent = $state<NginxConfFile | null>(null);
-	let loadingFile = $state(false);
-	let copied      = $state(false);
-	let search      = $state('');
+	let confList      = $state<NginxConfList | null>(null);
+	let loading       = $state(true);
+	let listError     = $state('');
+	let selected      = $state<string | null>(null);
+	let fileContent   = $state<NginxConfFile | null>(null);
+	let editorContent = $state('');
+	let loadingFile   = $state(false);
+	let saving        = $state(false);
+	let fileError     = $state('');
+	let successMsg    = $state('');
+	let copied        = $state(false);
+	let search        = $state('');
+
+	const canManage = $derived(
+		$authStore.user?.is_superadmin === true ||
+		($authStore.user?.staff_permissions ?? []).includes('shipyard:admin:infra:static:manage')
+	);
+
+	let hasChanges = $derived(
+		fileContent?.content !== undefined && editorContent !== fileContent.content
+	);
 
 	async function loadList() {
 		loading = true;
@@ -45,15 +61,44 @@
 	async function openFile(name: string) {
 		selected = name;
 		fileContent = null;
+		editorContent = '';
 		loadingFile = true;
+		fileError = '';
+		successMsg = '';
 		const res = await api.get<NginxConfFile>(`/admin/nginx-static/confs/${encodeURIComponent(name)}`);
-		if (res.data) fileContent = res.data;
+		if (res.data) {
+			fileContent = res.data;
+			editorContent = res.data.content ?? '';
+			if (res.data.error) fileError = res.data.error;
+		} else {
+			fileError = res.error?.message ?? 'Failed to read file';
+		}
 		loadingFile = false;
 	}
 
+	async function saveFile() {
+		if (!canManage || !selected || saving) return;
+		saving = true;
+		fileError = '';
+		successMsg = '';
+		const res = await api.put<NginxConfFile>(
+			`/admin/nginx-static/confs/${encodeURIComponent(selected)}`,
+			{ content: editorContent }
+		);
+		if (res.data) {
+			fileContent = res.data;
+			editorContent = res.data.content ?? '';
+			successMsg = 'Nginx configuration saved and reloaded.';
+			setTimeout(() => { successMsg = ''; }, 3000);
+		} else {
+			fileError = res.error?.message ?? 'Failed to save configuration';
+		}
+		saving = false;
+	}
+
 	async function copyContent() {
-		if (!fileContent?.content) return;
-		await navigator.clipboard.writeText(fileContent.content);
+		if (!editorContent) return;
+		await navigator.clipboard.writeText(editorContent);
 		copied = true;
 		setTimeout(() => (copied = false), 2000);
 	}
@@ -122,20 +167,45 @@
 				{:else if loadingFile}
 					<div class="fc-placeholder"><Spinner size={20} /></div>
 				{:else if fileContent}
+					{#if fileError}
+						<div class="alert-row">
+							<InlineAlert tone="error">{fileError}</InlineAlert>
+						</div>
+					{/if}
+					{#if successMsg}
+						<div class="alert-row">
+							<InlineAlert tone="success">{successMsg}</InlineAlert>
+						</div>
+					{/if}
 					<div class="fc-hdr">
 						<span class="mono fc-name">{fileContent.name}</span>
-						{#if fileContent.content}
-							<Button variant="secondary" size="sm" onclick={copyContent}>
-								{copied ? 'Copied!' : 'Copy'}
-							</Button>
-						{/if}
+						<div class="fc-actions">
+							{#if fileContent.content !== undefined}
+								<Button variant="secondary" size="sm" onclick={copyContent}>
+									{copied ? 'Copied!' : 'Copy'}
+								</Button>
+								{#if canManage}
+									<Button
+										variant="primary"
+										size="sm"
+										onclick={saveFile}
+										disabled={saving || !hasChanges}
+									>
+										{saving ? 'Saving…' : 'Save & Reload'}
+									</Button>
+								{/if}
+							{/if}
+						</div>
 					</div>
-					{#if fileContent.error}
-						<InlineAlert tone="error">{fileContent.error}</InlineAlert>
-					{:else if fileContent.content}
-						<Card padding="0">
-							<pre class="code">{fileContent.content}</pre>
-						</Card>
+					{#if fileContent.content !== undefined}
+						<CodeEditor
+							value={editorContent}
+							onChange={(v) => { editorContent = v; }}
+							onRun={saveFile}
+							language="nginx"
+							readonly={!canManage}
+							height="420px"
+						/>
 					{:else}
 						<div class="fc-placeholder" style="padding:24px">File is empty.</div>
 					{/if}
@@ -173,8 +243,14 @@
 	.file-content { display:flex; flex-direction:column; min-width:0; padding:14px 16px; }
 	.fc-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 	.fc-name { font-size:12px; color:var(--text-secondary); }
+	.fc-actions { display:flex; align-items:center; gap:8px; }
+	.alert-row { margin-bottom:12px; }
 	.fc-placeholder { display:flex; align-items:center; justify-content:center; flex:1; color:var(--text-dim); font-size:12.5px; padding:60px; }
-	.code { margin:0; padding:16px; font-size:11.5px; line-height:1.65; color:var(--text-secondary); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-all; overflow-x:auto; }
 
 	.mono { font-family:var(--font-mono); }
+
+	@media (max-width: 640px) {
+		.shell { grid-template-columns: 1fr; }
+		.file-list { border-right: none; border-bottom: 1px solid var(--border); }
+	}
 </style>

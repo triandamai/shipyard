@@ -6,13 +6,14 @@
 		SearchInput,
 		ActivityList,
 		ListRow,
-		Card,
 		Button,
 		EmptyState,
 		InlineAlert,
 		Skeleton,
 		Spinner
 	} from '$lib/components/ui';
+	import CodeEditor from '$lib/components/CodeEditor.svelte';
+	import { authStore } from '$lib/stores/auth.store';
 
 	interface TraefikFileResponse { content: string; path: string }
 	interface TraefikDynamicResponse { dir: string; files: { name: string }[] }
@@ -20,11 +21,24 @@
 	let dynamicDir      = $state<TraefikDynamicResponse | null>(null);
 	let loading         = $state(true);
 	let error           = $state('');
+	let fileError       = $state('');
+	let successMsg      = $state('');
 	let selectedFile    = $state<string | null>(null);
 	let selectedContent = $state<TraefikFileResponse | null>(null);
+	let editorContent   = $state('');
 	let fileLoading     = $state(false);
+	let saving          = $state(false);
 	let copied          = $state(false);
 	let search          = $state('');
+
+	const canManage = $derived(
+		$authStore.user?.is_superadmin === true ||
+		($authStore.user?.staff_permissions ?? []).includes('shipyard:admin:infra:traefik:manage')
+	);
+
+	let hasChanges = $derived(
+		selectedContent?.content !== undefined && editorContent !== selectedContent.content
+	);
 
 	async function load() {
 		loading = true; error = '';
@@ -37,10 +51,35 @@
 	async function openFile(name: string) {
 		selectedFile = name;
 		fileLoading = true;
+		fileError = '';
+		successMsg = '';
 		selectedContent = null;
 		const r = await api.get<TraefikFileResponse>(`/settings/traefik/dynamic/${encodeURIComponent(name)}`);
-		if (r.data) selectedContent = r.data;
+		if (r.data) {
+			selectedContent = r.data;
+			editorContent = r.data.content ?? '';
+		} else {
+			fileError = r.error?.message ?? 'Failed to read file';
+		}
 		fileLoading = false;
+	}
+
+	async function saveFile() {
+		if (!canManage || !selectedFile || saving) return;
+		saving = true; fileError = ''; successMsg = '';
+		const r = await api.put<TraefikFileResponse>(
+			`/settings/traefik/dynamic/${encodeURIComponent(selectedFile)}`,
+			{ content: editorContent }
+		);
+		if (r.data) {
+			selectedContent = r.data;
+			editorContent = r.data.content ?? '';
+			successMsg = 'File saved successfully.';
+			setTimeout(() => { successMsg = ''; }, 3000);
+		} else {
+			fileError = r.error?.message ?? 'Failed to save file';
+		}
+		saving = false;
 	}
 
 	async function copyCode(text: string) {
@@ -97,21 +136,42 @@
 			{:else if fileLoading}
 				<div class="fc-placeholder"><Spinner size={20} /></div>
 			{:else if selectedContent}
+				{#if fileError}
+					<div class="alert-row">
+						<InlineAlert tone="error">{fileError}</InlineAlert>
+					</div>
+				{/if}
+				{#if successMsg}
+					<div class="alert-row">
+						<InlineAlert tone="success">{successMsg}</InlineAlert>
+					</div>
+				{/if}
 				<div class="fc-hdr">
 					<span class="mono fc-name">{selectedContent.path}</span>
-					{#if selectedContent.content}
-						<Button variant="secondary" size="sm" onclick={() => copyCode(selectedContent!.content)}>
+					<div class="fc-actions">
+						<Button variant="secondary" size="sm" onclick={() => copyCode(editorContent)}>
 							{copied ? 'Copied!' : 'Copy'}
 						</Button>
-					{/if}
+						{#if canManage}
+							<Button
+								variant="primary"
+								size="sm"
+								onclick={saveFile}
+								disabled={saving || !hasChanges}
+							>
+								{saving ? 'Saving…' : 'Save'}
+							</Button>
+						{/if}
+					</div>
 				</div>
-				{#if selectedContent.content}
-					<Card padding="0">
-						<pre class="code">{selectedContent.content}</pre>
-					</Card>
-				{:else}
-					<div class="fc-placeholder" style="padding:24px">File is empty.</div>
-				{/if}
+				<CodeEditor
+					value={editorContent}
+					onChange={(v) => { editorContent = v; }}
+					onRun={saveFile}
+					language="yaml"
+					readonly={!canManage}
+					height="420px"
+				/>
 			{/if}
 		</div>
 	</div>
@@ -137,7 +197,6 @@
 	.fc-hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
 	.fc-name { font-size:12px; color:var(--text-secondary); }
 	.fc-placeholder { display:flex; align-items:center; justify-content:center; flex:1; color:var(--text-dim); font-size:12.5px; padding:60px; }
-	.code { margin:0; padding:16px; font-size:11.5px; line-height:1.65; color:var(--text-secondary); font-family:var(--font-mono); white-space:pre-wrap; word-break:break-all; overflow-x:auto; }
 
 	.mono { font-family:var(--font-mono); }
 
