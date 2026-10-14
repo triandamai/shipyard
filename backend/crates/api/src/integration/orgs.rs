@@ -272,6 +272,10 @@ async fn delete_org(
         .await
         .map_err(db_err)?;
 
+    // Delete the organization's on-disk directory: <data_dir>/<org_id>
+    let org_dir = format!("{}/{}", state.config.data_dir, org_id);
+    let _ = tokio::fs::remove_dir_all(&org_dir).await;
+
     // The org's edge network (tenant isolation), once nothing uses it.
     let net = shipyard_docker::isolation::org_edge_network_name(
         &state.config.docker.label_prefix,

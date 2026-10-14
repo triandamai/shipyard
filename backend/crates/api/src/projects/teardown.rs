@@ -33,6 +33,15 @@ pub async fn teardown_project(
 ) -> Result<TeardownReport, ApiAppError> {
     let mut report = TeardownReport::default();
 
+    // Project info: org_id and directory_path for cleaning up on-disk files
+    let project_meta: Option<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT org_id, directory_path FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(super::db_error)?;
+
     // Root services only: compose stacks remove their own children.
     let services: Vec<(Uuid, String, String, String)> = sqlx::query_as(
         "SELECT id, slug, type::text, COALESCE(directory_path, '')
@@ -117,6 +126,25 @@ pub async fn teardown_project(
         .execute(&state.db)
         .await
         .map_err(super::db_error)?;
+
+    // Remove all on-disk directories for the project
+    if let Some((org_id, dir_path)) = project_meta {
+        // 1. Remove project's registered directory_path (e.g. <data_dir>/<org_id>/<project_id>)
+        if let Some(dir) = dir_path.filter(|d| !d.is_empty()) {
+            match tokio::fs::remove_dir_all(&dir).await {
+                Ok(()) => tracing::info!(%project_id, "Removed project dir: {dir}"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(%project_id, "Could not remove project dir: {e}"),
+            }
+        }
+        // 2. Standard location <data_dir>/<org_id>/<project_id>
+        let std_dir = format!("{}/{}/{}", state.config.data_dir, org_id, project_id);
+        let _ = tokio::fs::remove_dir_all(&std_dir).await;
+
+        // 3. Legacy location <data_dir>/<project_id>
+        let legacy_dir = format!("{}/{}", state.config.data_dir, project_id);
+        let _ = tokio::fs::remove_dir_all(&legacy_dir).await;
+    }
 
     let volumes = if opts.remove_volumes { volumes } else { vec![] };
     report.volumes = volumes.clone();

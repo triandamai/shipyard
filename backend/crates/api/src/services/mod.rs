@@ -291,10 +291,17 @@ async fn create_service(
     }
 
     let service_id = Uuid::now_v7();
-    let directory_path = format!(
-        "{}/{}/{}/{}",
-        state.config.data_dir, project_id, service_id, body.slug
-    );
+    let directory_path = if let Some(oid) = org_id {
+        format!(
+            "{}/{}/{}/{}/{}",
+            state.config.data_dir, oid, project_id, service_id, body.slug
+        )
+    } else {
+        format!(
+            "{}/{}/{}/{}",
+            state.config.data_dir, project_id, service_id, body.slug
+        )
+    };
 
     let image = body.image.clone().unwrap_or_default();
     let ports = serde_json::to_value(&body.ports).unwrap_or_default();

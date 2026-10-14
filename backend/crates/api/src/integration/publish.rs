@@ -641,7 +641,7 @@ async fn upsert_service(
     .bind(svc_type)
     .bind(image)
     .bind(&git_repo_url)
-    .bind(format!("{}/{}/{}/{}", state.config.data_dir, project_id, id, slug))
+    .bind(format!("{}/{}/{}/{}/{}", state.config.data_dir, org_id, project_id, id, slug))
     .bind(&ports)
     .bind(replicas)
     .bind(cpu)

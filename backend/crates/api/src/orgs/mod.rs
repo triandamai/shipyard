@@ -677,6 +677,43 @@ async fn delete_org(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_owner(&state.db, org_id, auth.user_id).await?;
 
+    // 1. Teardown all projects in the organization (services, workloads, networks, volumes, DNS, project dirs)
+    let project_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM projects WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    for pid in project_ids {
+        if let Err(e) = crate::projects::teardown::teardown_project(
+            &state,
+            pid,
+            crate::projects::teardown::TeardownOptions { remove_volumes: true },
+        )
+        .await {
+            tracing::warn!(%org_id, project_id = %pid, "failed to teardown project during org deletion: {}", e.0);
+        }
+    }
+
+    // 2. Remove the organization's on-disk directory: <data_dir>/<org_id>
+    let org_dir = format!("{}/{}", state.config.data_dir, org_id);
+    match tokio::fs::remove_dir_all(&org_dir).await {
+        Ok(()) => tracing::info!(%org_id, "Removed organization directory: {org_dir}"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(%org_id, "Could not remove organization directory: {e}"),
+    }
+
+    // 3. Remove org edge network if tenant isolation is active
+    let net = shipyard_docker::isolation::org_edge_network_name(
+        &state.config.docker.label_prefix,
+        org_id,
+    );
+    let docker = std::sync::Arc::clone(&state.docker);
+    tokio::spawn(async move {
+        let _ = docker.remove_network(&net).await;
+    });
+
+    // 4. Delete the organization from the DB (cascades to members, permissions, etc.)
     let result = sqlx::query("DELETE FROM organizations WHERE id = $1")
         .bind(org_id)
         .execute(&state.db)
