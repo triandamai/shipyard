@@ -4,19 +4,39 @@
 	import { yaml } from '@codemirror/lang-yaml';
 	import { javascript } from '@codemirror/lang-javascript';
 	import { json } from '@codemirror/lang-json';
+	import { sql, PostgreSQL, MySQL, MariaSQL, StandardSQL } from '@codemirror/lang-sql';
 	import { EditorState, Compartment } from '@codemirror/state';
 	import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+	import { keymap } from '@codemirror/view';
 	import { tags as t } from '@lezer/highlight';
+
+	export type EditorLanguage =
+		| 'yaml'
+		| 'javascript'
+		| 'json'
+		| 'plain'
+		| 'sql'
+		| 'postgres'
+		| 'mysql'
+		| 'mariadb';
 
 	interface Props {
 		value?: string;
 		onChange?: (val: string) => void;
+		onRun?: () => void;
 		height?: string;
 		readonly?: boolean;
-		language?: 'yaml' | 'javascript' | 'json' | 'plain';
+		language?: EditorLanguage;
 	}
 
-	let { value = '', onChange, height = '280px', readonly = false, language = 'yaml' }: Props = $props();
+	let {
+		value = '',
+		onChange,
+		onRun,
+		height = '280px',
+		readonly = false,
+		language = 'yaml',
+	}: Props = $props();
 
 	let container: HTMLDivElement | undefined = $state();
 	let view: EditorView | null = null;
@@ -28,6 +48,10 @@
 			case 'javascript': return javascript();
 			case 'json': return json();
 			case 'yaml': return yaml();
+			case 'postgres': return sql({ dialect: PostgreSQL });
+			case 'mysql': return sql({ dialect: MySQL });
+			case 'mariadb': return sql({ dialect: MariaSQL });
+			case 'sql': return sql({ dialect: StandardSQL });
 			default: return [];
 		}
 	}
@@ -105,6 +129,18 @@
 			theme,
 			syntaxHighlighting(syntaxTheme),
 			EditorView.lineWrapping,
+			keymap.of([
+				{
+					key: 'Mod-Enter',
+					run: () => {
+						if (onRun) {
+							onRun();
+							return true;
+						}
+						return false;
+					},
+				},
+			]),
 			EditorView.updateListener.of((update) => {
 				if (update.docChanged) onChange?.(update.state.doc.toString());
 			}),
@@ -121,6 +157,18 @@
 			view?.destroy();
 			view = null;
 		};
+	});
+
+	$effect(() => {
+		if (view && value !== view.state.doc.toString()) {
+			setValue(value);
+		}
+	});
+
+	$effect(() => {
+		if (view && language) {
+			setLanguage(language);
+		}
 	});
 </script>
 

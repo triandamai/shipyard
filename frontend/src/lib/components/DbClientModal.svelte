@@ -4,6 +4,8 @@
 	import { Button, Badge, Select, TextField, FormField, InlineAlert, Spinner, ConfirmDialog } from '$lib/components/ui';
 	import { api } from '$lib/api/client';
 	import type { DbEngine, DbMeta, DbQueryResult } from '$lib/api/types';
+	import CodeEditor from '$lib/components/CodeEditor.svelte';
+	import type { EditorLanguage } from '$lib/components/CodeEditor.svelte';
 
 	interface Props {
 		serviceId: string;
@@ -60,6 +62,18 @@
 	const isSqlEngine = $derived(engine === 'postgres' || engine === 'mysql' || engine === 'mariadb');
 	const isRedis    = $derived(engine === 'redis');
 	const isMongo    = $derived(engine === 'mongodb');
+
+	const editorLanguage = $derived<EditorLanguage>(
+		engine === 'postgres'
+			? 'postgres'
+			: engine === 'mysql'
+				? 'mysql'
+				: engine === 'mariadb'
+					? 'mariadb'
+					: engine === 'mongodb'
+						? 'json'
+						: 'plain'
+	);
 
 	// Label overrides per engine
 	const dbFieldLabel  = $derived(isRedis ? 'DB Index (0–15)' : 'Database');
@@ -432,15 +446,26 @@
 							<!-- Query editor -->
 							<div class="editor-wrap">
 								<div class="editor-label">{queryLabel}</div>
-								<textarea
-									class="sql-editor"
-									class:redis-editor={isRedis}
-									bind:value={sql}
-									onkeydown={handleKeydown}
-									placeholder={ENGINE_PLACEHOLDER[engine]}
-									spellcheck="false"
-									autocomplete="off"
-								></textarea>
+								{#if isRedis}
+									<textarea
+										class="sql-editor redis-editor"
+										bind:value={sql}
+										onkeydown={handleKeydown}
+										placeholder={ENGINE_PLACEHOLDER[engine]}
+										spellcheck="false"
+										autocomplete="off"
+									></textarea>
+								{:else}
+									<div class="cm-wrap">
+										<CodeEditor
+											value={sql}
+											onChange={(val) => { sql = val; }}
+											onRun={runQuery}
+											language={editorLanguage}
+											height="130px"
+										/>
+									</div>
+								{/if}
 								<div class="editor-actions">
 									<span class="editor-hint">{queryHint}</span>
 									<Button variant="primary" size="sm" onclick={runQuery} disabled={running || !sql.trim()}>
@@ -648,10 +673,18 @@
 	}
 
 	.editor-label {
-		padding: 6px 18px 0;
+		padding: 6px 18px 4px;
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--text-muted);
+	}
+
+	.cm-wrap {
+		padding: 0 14px 8px;
+	}
+
+	.cm-wrap :global(.editor-wrap) {
+		border-radius: var(--radius-sm);
 	}
 
 	.sql-editor {
