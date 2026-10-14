@@ -248,7 +248,15 @@ async fn run_db_query(
 
     result
         .map(|r| Json(ApiResponse::ok(r)))
-        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))
+        .map_err(|e| {
+            let msg = e.to_string();
+            let formatted_msg = if msg.contains("does not exist") && msg.contains("column \"") {
+                format!("{msg}\n\nHint: In PostgreSQL, string and UUID values must use single quotes ('...'). Double quotes (\"...\") are reserved for column or table names.")
+            } else {
+                msg
+            };
+            ApiAppError(AppError::BadRequest(formatted_msg))
+        })
 }
 
 // ─── PostgreSQL ───────────────────────────────────────────────────────────────
