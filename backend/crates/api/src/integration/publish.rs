@@ -719,6 +719,7 @@ async fn ensure_volume(
             suffix
         }
     );
+    let _ = state.docker.create_volume(&name, "local").await;
     sqlx::query(
         "INSERT INTO volumes (id, service_id, project_id, name, mount_path, driver, created_at)
          VALUES ($1, $2, $3, $4, $5, 'local', NOW())",

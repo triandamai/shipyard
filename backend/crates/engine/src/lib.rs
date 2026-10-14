@@ -3728,6 +3728,8 @@ impl DeploymentEngine {
                 None => persistent_volume_name(&self.label_prefix, service_id, &target),
             };
 
+            let _ = docker.create_volume(&source, "local").await;
+
             if let Err(e) = sqlx::query(
                 "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
                  VALUES ($1, $2, $3, $4, 'local')",

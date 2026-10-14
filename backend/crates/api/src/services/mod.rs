@@ -348,6 +348,7 @@ async fn create_service(
 
     if let Some(target) = default_target {
         let vol_name = shipyard_engine::persistent_volume_name(&state.config.docker.label_prefix, service_id, target);
+        let _ = state.docker.create_volume(&vol_name, "local").await;
         let _ = sqlx::query(
             "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
              VALUES ($1, $2, $3, $4, 'local')
