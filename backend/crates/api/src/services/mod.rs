@@ -342,6 +342,25 @@ async fn create_service(
     let webhook_token = Uuid::now_v7().to_string().replace('-', "");
     upsert_webhook_token(&state.db, &state.config.auth.secret_key, service_id, &webhook_token).await.ok();
 
+    // Ensure database services have a default persistent named volume record
+    let default_target = shipyard_engine::default_database_volume_path(&image)
+        .or_else(|| if body.service_type == "database" { Some("/data") } else { None });
+
+    if let Some(target) = default_target {
+        let vol_name = shipyard_engine::persistent_volume_name(&state.config.docker.label_prefix, service_id, target);
+        let _ = sqlx::query(
+            "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
+             VALUES ($1, $2, $3, $4, 'local')
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(service_id)
+        .bind(project_id)
+        .bind(&vol_name)
+        .bind(target)
+        .execute(&state.db)
+        .await;
+    }
+
     // Auto-assign to the org's active node if one exists.
     if let Ok(Some((_, node_id))) = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"SELECT p.org_id, cn.id

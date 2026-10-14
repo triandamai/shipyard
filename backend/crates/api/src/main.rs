@@ -259,6 +259,35 @@ async fn async_main() {
         });
     }
 
+    // Automatically ensure all database services have persistent volumes secured on startup.
+    // This retroactively attaches named volumes to existing databases so data survives VPS reboots.
+    {
+        let engine = shipyard_engine::DeploymentEngine::new(
+            Arc::clone(&docker_engine),
+            pool.clone(),
+            Arc::clone(&mqtt_publisher),
+            config.docker.label_prefix.clone(),
+            config.traefik.network.clone(),
+            config.auth.secret_key.clone(),
+            config.docker.port_proxy,
+            config.data_dir.clone(),
+            config.static_server.retention_versions,
+        );
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            match engine.secure_all_database_services().await {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!("Startup: secured persistent storage for {count} database service(s)");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Startup: failed to secure database storage: {e}");
+                }
+            }
+        });
+    }
+
 
     // Spawn edge function invocation log retention — purge logs older than 7 days, runs daily.
     {

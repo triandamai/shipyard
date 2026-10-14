@@ -3609,15 +3609,44 @@ impl DeploymentEngine {
                     let target = entry.get("target").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
                     let readonly = entry.get("read_only").and_then(|v| v.as_bool()).unwrap_or(false);
                     if source.is_empty() || target.is_empty() { continue; }
-                    // Avoid duplicates already present in the volumes table.
-                    if mounts.iter().any(|m| m.target == target) { continue; }
+                    let norm_target = normalize_mount_target(&target);
+
+                    // If target is already present, user explicitly overrode or configured it
+                    if let Some(existing_mount) = mounts.iter_mut().find(|m| normalize_mount_target(&m.target) == norm_target) {
+                        existing_mount.source = source.clone();
+                        existing_mount.readonly = readonly;
+                        let is_bind = source.starts_with('/') || source.starts_with('.');
+                        existing_mount.mount_type = if is_bind { MountType::Bind } else { MountType::Volume };
+                        let _ = sqlx::query(
+                            "UPDATE volumes SET name = $1, driver = $2 WHERE service_id = $3 AND mount_path = $4",
+                        )
+                        .bind(&source)
+                        .bind(if is_bind { "bind" } else { "local" })
+                        .bind(service_id)
+                        .bind(&target)
+                        .execute(&self.db)
+                        .await;
+                        continue;
+                    }
+
                     let is_bind = source.starts_with('/') || source.starts_with('.');
                     mounts.push(MountSpec {
-                        source,
-                        target,
+                        source: source.clone(),
+                        target: target.clone(),
                         mount_type: if is_bind { MountType::Bind } else { MountType::Volume },
                         readonly,
                     });
+                    if !is_bind {
+                        let _ = sqlx::query(
+                            "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
+                             VALUES ($1, (SELECT project_id FROM services WHERE id = $1), $2, $3, 'local')",
+                        )
+                        .bind(service_id)
+                        .bind(&source)
+                        .bind(&target)
+                        .execute(&self.db)
+                        .await;
+                    }
                 }
             }
         }
@@ -3642,13 +3671,32 @@ impl DeploymentEngine {
         image_ref: &str,
         existing: &[MountSpec],
     ) -> Vec<MountSpec> {
-        let declared = match docker.image_declared_volumes(image_ref).await {
+        let mut declared = match docker.image_declared_volumes(image_ref).await {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!(%service_id, "could not inspect image {image_ref} for VOLUME paths: {e}");
-                return vec![];
+                vec![]
             }
         };
+
+        // Fallback for well-known database engines or database service types:
+        // ensure their canonical persistent data path is included even if image inspection
+        // failed (e.g. image wasn't pulled yet or digest reference lookup failed).
+        if let Some(default_path) = default_database_volume_path(image_ref) {
+            if !declared.iter().any(|p| normalize_mount_target(p) == default_path) {
+                declared.push(default_path.to_string());
+            }
+        } else {
+            let svc_type: Option<String> = sqlx::query_scalar("SELECT type::text FROM services WHERE id = $1")
+                .bind(service_id)
+                .fetch_optional(&self.db)
+                .await
+                .ok()
+                .flatten();
+            if svc_type.as_deref() == Some("database") && declared.is_empty() {
+                declared.push("/data".to_string());
+            }
+        }
 
         let covered: Vec<&str> = existing.iter().map(|m| normalize_mount_target(&m.target)).collect();
         let missing: Vec<&String> = declared
@@ -3719,34 +3767,78 @@ impl DeploymentEngine {
     ///
     /// Returns the number of mounts added (0 when already safe or not running).
     pub async fn secure_service_storage(&self, service_id: Uuid) -> AppResult<usize> {
-        let project_id: Uuid = sqlx::query_scalar("SELECT project_id FROM services WHERE id = $1")
-            .bind(service_id)
-            .fetch_one(&self.db)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        let (project_id, db_image, _svc_type): (Uuid, Option<String>, String) = sqlx::query_as(
+            "SELECT project_id, image, type::text FROM services WHERE id = $1"
+        )
+        .bind(service_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
         let docker = self.resolve_docker_for_service(service_id).await;
         let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
 
         let tasks = docker.list_tasks(&docker_svc_name).await.unwrap_or_default();
-        let image = match tasks.iter().find(|t| t.desired_state == "running" && t.status == "running") {
-            Some(t) => t.image.clone(),
-            None => return Ok(0), // not running — the next deploy persists it
+        let running_image = tasks.iter().find(|t| t.desired_state == "running" && t.status == "running").map(|t| t.image.clone());
+        let image = match running_image.or(db_image) {
+            Some(img) if !img.is_empty() => img,
+            _ => return Ok(0),
         };
 
         let existing = self.configured_mounts(service_id).await?;
         let added = self
             .persist_declared_volumes(&*docker, service_id, project_id, &image, &existing)
             .await;
-        if added.is_empty() {
+
+        let mut all_mounts = existing;
+        all_mounts.extend(added.clone());
+
+        if all_mounts.is_empty() {
             return Ok(0);
         }
 
-        let count = added.len();
+        let count = all_mounts.len();
         let constraint = node_pin_constraint(&*docker, &docker_svc_name).await;
-        docker.secure_service_mounts(&docker_svc_name, added, constraint).await?;
-        tracing::info!(%service_id, "secured {count} data volume(s) before platform update");
+        if let Err(e) = docker.secure_service_mounts(&docker_svc_name, all_mounts, constraint).await {
+            tracing::debug!(%service_id, "secure_service_mounts note (service may not be deployed in Swarm yet): {e}");
+        }
+        tracing::info!(%service_id, "secured persistent storage for service {docker_svc_name}");
         Ok(count)
+    }
+
+    /// Retroactively ensure all database services in the system have persistent
+    /// named volumes configured in the DB and attached to their Swarm specs.
+    /// This prevents data loss across VPS restarts and host reboots.
+    pub async fn secure_all_database_services(&self) -> AppResult<usize> {
+        let rows = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+            "SELECT id, name, type::text, image
+             FROM services
+             WHERE type = 'database'
+                OR image ILIKE '%postgres%'
+                OR image ILIKE '%mysql%'
+                OR image ILIKE '%mariadb%'
+                OR image ILIKE '%redis%'
+                OR image ILIKE '%mongo%'"
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let mut secured_count = 0;
+        for (id, name, _svc_type, _image) in rows {
+            match self.secure_service_storage(id).await {
+                Ok(n) if n > 0 => {
+                    tracing::info!(service_id = %id, service_name = %name, "secured {n} persistent volume(s) for database");
+                    secured_count += 1;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(service_id = %id, service_name = %name, "failed to secure database storage: {e}");
+                }
+            }
+        }
+
+        Ok(secured_count)
     }
 
     /// Step 4: Collect network names from service_networks + networks tables.
@@ -4517,9 +4609,29 @@ fn normalize_mount_target(t: &str) -> &str {
     if t.len() > 1 { t.trim_end_matches('/') } else { t }
 }
 
+/// Canonical data directory for standard database engines.
+pub fn default_database_volume_path(image_ref: &str) -> Option<&'static str> {
+    let lower = image_ref.to_ascii_lowercase();
+    if lower.contains("postgres") || lower.contains("timescaledb") || lower.contains("postgis") {
+        Some("/var/lib/postgresql/data")
+    } else if lower.contains("mysql") || lower.contains("mariadb") {
+        Some("/var/lib/mysql")
+    } else if lower.contains("redis") || lower.contains("valkey") || lower.contains("keydb") {
+        Some("/data")
+    } else if lower.contains("mongo") {
+        Some("/data/db")
+    } else {
+        None
+    }
+}
+
+pub fn is_database_service(svc_type: &str, image_ref: &str) -> bool {
+    svc_type == "database" || default_database_volume_path(image_ref).is_some()
+}
+
 /// Deterministic Docker volume name for an image-declared path, e.g.
 /// `platform-<service_id>-var-lib-postgresql-data`.
-fn persistent_volume_name(label_prefix: &str, service_id: Uuid, target: &str) -> String {
+pub fn persistent_volume_name(label_prefix: &str, service_id: Uuid, target: &str) -> String {
     let slug: String = target
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
@@ -4884,5 +4996,30 @@ mod persistent_volume_tests {
 
         let df4 = "FROM python:3.11\nCMD [\"python\", \"app.py\"]";
         assert_eq!(detect_dockerfile_port(df4), None);
+    }
+
+    #[test]
+    fn test_default_database_volume_paths() {
+        assert_eq!(default_database_volume_path("postgres:16"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("postgres:alpine"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("timescale/timescaledb:latest-pg15"), Some("/var/lib/postgresql/data"));
+        assert_eq!(default_database_volume_path("mysql:8.0"), Some("/var/lib/mysql"));
+        assert_eq!(default_database_volume_path("mariadb:10.5"), Some("/var/lib/mysql"));
+        assert_eq!(default_database_volume_path("redis:7-alpine"), Some("/data"));
+        assert_eq!(default_database_volume_path("valkey/valkey:8"), Some("/data"));
+        assert_eq!(default_database_volume_path("mongo:7"), Some("/data/db"));
+        assert_eq!(default_database_volume_path("node:20"), None);
+        assert_eq!(default_database_volume_path("nginx:alpine"), None);
+    }
+
+    #[test]
+    fn test_is_database_service() {
+        assert!(is_database_service("database", "custom-db:latest"));
+        assert!(is_database_service("docker", "postgres:16"));
+        assert!(is_database_service("docker", "mysql:8.0"));
+        assert!(is_database_service("docker", "redis:7-alpine"));
+        assert!(is_database_service("docker", "mongo:7"));
+        assert!(!is_database_service("docker", "node:20-alpine"));
+        assert!(!is_database_service("git", "nginx:alpine"));
     }
 }

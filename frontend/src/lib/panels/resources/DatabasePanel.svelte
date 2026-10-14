@@ -19,11 +19,11 @@
 
 	let { projectId, orgId, onCreated, initialName = '' }: Props = $props();
 
-	const DB_DEFAULTS: Record<string, { image: string; defaultPort: string; userKey: string; passKey: string; dbKey: string }> = {
-		postgres: { image: 'postgres:16',    defaultPort: '5432',   userKey: 'POSTGRES_USER',              passKey: 'POSTGRES_PASSWORD',         dbKey: 'POSTGRES_DB' },
-		mysql:    { image: 'mysql:8.0',      defaultPort: '3306',   userKey: 'MYSQL_USER',                 passKey: 'MYSQL_PASSWORD',            dbKey: 'MYSQL_DATABASE' },
-		redis:    { image: 'redis:7-alpine', defaultPort: '6379',   userKey: '',                           passKey: 'REDIS_PASSWORD',            dbKey: '' },
-		mongodb:  { image: 'mongo:7',        defaultPort: '27017',  userKey: 'MONGO_INITDB_ROOT_USERNAME', passKey: 'MONGO_INITDB_ROOT_PASSWORD', dbKey: 'MONGO_INITDB_DATABASE' },
+	const DB_DEFAULTS: Record<string, { image: string; defaultPort: string; userKey: string; passKey: string; dbKey: string; defaultMountPath: string }> = {
+		postgres: { image: 'postgres:16',    defaultPort: '5432',   userKey: 'POSTGRES_USER',              passKey: 'POSTGRES_PASSWORD',         dbKey: 'POSTGRES_DB',        defaultMountPath: '/var/lib/postgresql/data' },
+		mysql:    { image: 'mysql:8.0',      defaultPort: '3306',   userKey: 'MYSQL_USER',                 passKey: 'MYSQL_PASSWORD',            dbKey: 'MYSQL_DATABASE',      defaultMountPath: '/var/lib/mysql' },
+		redis:    { image: 'redis:7-alpine', defaultPort: '6379',   userKey: '',                           passKey: 'REDIS_PASSWORD',            dbKey: '',                    defaultMountPath: '/data' },
+		mongodb:  { image: 'mongo:7',        defaultPort: '27017',  userKey: 'MONGO_INITDB_ROOT_USERNAME', passKey: 'MONGO_INITDB_ROOT_PASSWORD', dbKey: 'MONGO_INITDB_DATABASE', defaultMountPath: '/data/db' },
 	};
 
 	let name = $state(initialName);
@@ -36,7 +36,9 @@
 	let ports = $state<string[]>([DB_DEFAULTS.postgres.defaultPort]);
 
 	let selectedNetworks = $state<Network[]>([]);
-	let volumeMounts     = $state<VolumeMount[]>([]);
+	let volumeMounts     = $state<VolumeMount[]>([
+		{ source: `${deriveSlug(initialName) || 'db'}-data`, target: DB_DEFAULTS.postgres.defaultMountPath, read_only: false }
+	]);
 
 	let isSubmitting = $state(false);
 	let submitError  = $state('');
@@ -50,9 +52,23 @@
 		return n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 	}
 
+	function onNameInput() {
+		const currentSlug = deriveSlug(name);
+		slug = currentSlug;
+		if (volumeMounts.length === 1 && volumeMounts[0].source.endsWith('-data')) {
+			volumeMounts[0].source = `${currentSlug || 'db'}-data`;
+		}
+	}
+
 	function onEngineChange() {
 		const def = DB_DEFAULTS[engine];
-		if (def) { image = def.image; ports = [def.defaultPort]; }
+		if (def) {
+			image = def.image;
+			ports = [def.defaultPort];
+			if (volumeMounts.length === 1 && Object.values(DB_DEFAULTS).some(d => d.defaultMountPath === volumeMounts[0].target)) {
+				volumeMounts[0].target = def.defaultMountPath;
+			}
+		}
 	}
 
 	function removePort(i: number) { ports = ports.filter((_, idx) => idx !== i); }
@@ -143,7 +159,7 @@
 	<form class="form" onsubmit={handleSubmit}>
 		<FormField label="Name" for="db-name">
 			<TextField id="db-name" type="text" bind:value={name}
-				oninput={() => (slug = deriveSlug(name))} placeholder="my-database" required />
+				oninput={onNameInput} placeholder="my-database" required />
 		</FormField>
 		<FormField label="Slug" for="db-slug">
 			<div class="mono-field">
@@ -234,7 +250,7 @@
 
 		<!-- Volume Mounts -->
 		<FormField label="Volume Mounts">
-			<span class="form-hint">Bind named volumes or host paths into the container</span>
+			<span class="form-hint">Persistent volume attached by default to preserve data across restarts and shutdowns</span>
 			<VolumeMountList {projectId} bind:mounts={volumeMounts} />
 		</FormField>
 
