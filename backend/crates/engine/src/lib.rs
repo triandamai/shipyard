@@ -4763,6 +4763,12 @@ pub fn default_database_volume_path(image_ref: &str) -> Option<&'static str> {
         Some("/data")
     } else if lower.contains("mongo") || lower.contains("ferretdb") {
         Some("/data/db")
+    } else if lower.contains("clickhouse") {
+        Some("/var/lib/clickhouse")
+    } else if lower.contains("elasticsearch") || lower.contains("opensearch") {
+        Some("/usr/share/elasticsearch/data")
+    } else if lower.contains("cockroach") {
+        Some("/cockroach/cockroach-data")
     } else {
         None
     }
@@ -4778,6 +4784,8 @@ pub fn default_database_volume_path_with_icon(image_ref: &str, icon: Option<&str
         Some("mysql") | Some("mariadb") => Some("/var/lib/mysql"),
         Some("redis") => Some("/data"),
         Some("mongodb") | Some("mongo") => Some("/data/db"),
+        Some("clickhouse") => Some("/var/lib/clickhouse"),
+        Some("elasticsearch") => Some("/usr/share/elasticsearch/data"),
         _ => None,
     }
 }
@@ -5068,8 +5076,14 @@ async fn node_pin_constraint(docker: &dyn DockerEngine, docker_svc_name: &str) -
     if nodes <= 1 {
         return None;
     }
-    let (node_id, _) = running_task(docker, docker_svc_name).await?;
-    node_id.filter(|n| !n.is_empty()).map(|n| format!("node.id=={n}"))
+    if let Some((node_id, _)) = running_task(docker, docker_svc_name).await {
+        if let Some(nid) = node_id.filter(|n| !n.is_empty()) {
+            return Some(format!("node.id=={nid}"));
+        }
+    }
+    // For a brand new service with local storage in a multi-node cluster,
+    // schedule it on the manager node where Shipyard created the host directory.
+    Some("node.role==manager".to_string())
 }
 
 /// Parse an `EXPOSE <port>` instruction from a Dockerfile.
