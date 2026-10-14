@@ -3561,6 +3561,38 @@ impl DeploymentEngine {
             .persist_declared_volumes(&*self.docker, service_id, project_id, image_ref, &mounts)
             .await;
         mounts.extend(added);
+
+        // Query the service record to get its configured image
+        let svc_image: Option<String> = sqlx::query_scalar("SELECT image FROM services WHERE id = $1")
+            .bind(service_id)
+            .fetch_optional(&self.db)
+            .await
+            .ok()
+            .flatten();
+
+        let db_default_path = default_database_volume_path(image_ref)
+            .or_else(|| svc_image.as_deref().and_then(default_database_volume_path));
+
+        // If a canonical database path is mounted (e.g. /var/lib/postgresql/data),
+        // clean up any spurious auto-generated /data mount that was previously injected by mistake.
+        if let Some(canonical) = db_default_path {
+            if canonical != "/data" && mounts.iter().any(|m| normalize_mount_target(&m.target) == canonical) {
+                let spurious_prefix = format!("{}-", self.label_prefix);
+                if let Some(pos) = mounts.iter().position(|m| {
+                    normalize_mount_target(&m.target) == "/data"
+                        && m.source.starts_with(&spurious_prefix)
+                }) {
+                    let spurious = mounts.remove(pos);
+                    tracing::info!(%service_id, volume = %spurious.source, "pruning spurious /data volume for database");
+                    let _ = sqlx::query("DELETE FROM volumes WHERE service_id = $1 AND mount_path = '/data'")
+                        .bind(service_id)
+                        .execute(&self.db)
+                        .await;
+                    let _ = self.docker.remove_volume(&spurious.source).await;
+                }
+            }
+        }
+
         tracing::info!("Configured {} mounts", mounts.len());
         Ok(mounts)
     }
@@ -3679,23 +3711,31 @@ impl DeploymentEngine {
             }
         };
 
+        // Query the service record to get its configured image and type
+        let (svc_type, svc_image): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT type::text, image FROM services WHERE id = $1"
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(t, i)| (Some(t), i))
+        .unwrap_or((None, None));
+
         // Fallback for well-known database engines or database service types:
         // ensure their canonical persistent data path is included even if image inspection
         // failed (e.g. image wasn't pulled yet or digest reference lookup failed).
-        if let Some(default_path) = default_database_volume_path(image_ref) {
+        let db_default_path = default_database_volume_path(image_ref)
+            .or_else(|| svc_image.as_deref().and_then(default_database_volume_path));
+
+        if let Some(default_path) = db_default_path {
             if !declared.iter().any(|p| normalize_mount_target(p) == default_path) {
                 declared.push(default_path.to_string());
             }
-        } else {
-            let svc_type: Option<String> = sqlx::query_scalar("SELECT type::text FROM services WHERE id = $1")
-                .bind(service_id)
-                .fetch_optional(&self.db)
-                .await
-                .ok()
-                .flatten();
-            if svc_type.as_deref() == Some("database") && declared.is_empty() {
-                declared.push("/data".to_string());
-            }
+        } else if svc_type.as_deref() == Some("database") && declared.is_empty() && existing.is_empty() {
+            // Only fall back to generic /data if NO mounts are configured at all
+            declared.push("/data".to_string());
         }
 
         let covered: Vec<&str> = existing.iter().map(|m| normalize_mount_target(&m.target)).collect();
@@ -3782,7 +3822,7 @@ impl DeploymentEngine {
 
         let tasks = docker.list_tasks(&docker_svc_name).await.unwrap_or_default();
         let running_image = tasks.iter().find(|t| t.desired_state == "running" && t.status == "running").map(|t| t.image.clone());
-        let image = match running_image.or(db_image) {
+        let image = match running_image.or(db_image.clone()) {
             Some(img) if !img.is_empty() => img,
             _ => return Ok(0),
         };
@@ -3794,6 +3834,27 @@ impl DeploymentEngine {
 
         let mut all_mounts = existing;
         all_mounts.extend(added.clone());
+
+        let db_default_path = default_database_volume_path(&image)
+            .or_else(|| db_image.as_deref().and_then(default_database_volume_path));
+
+        if let Some(canonical) = db_default_path {
+            if canonical != "/data" && all_mounts.iter().any(|m| normalize_mount_target(&m.target) == canonical) {
+                let spurious_prefix = format!("{}-", self.label_prefix);
+                if let Some(pos) = all_mounts.iter().position(|m| {
+                    normalize_mount_target(&m.target) == "/data"
+                        && m.source.starts_with(&spurious_prefix)
+                }) {
+                    let spurious = all_mounts.remove(pos);
+                    tracing::info!(%service_id, volume = %spurious.source, "pruning spurious /data volume for database");
+                    let _ = sqlx::query("DELETE FROM volumes WHERE service_id = $1 AND mount_path = '/data'")
+                        .bind(service_id)
+                        .execute(&self.db)
+                        .await;
+                    let _ = docker.remove_volume(&spurious.source).await;
+                }
+            }
+        }
 
         if all_mounts.is_empty() {
             return Ok(0);
