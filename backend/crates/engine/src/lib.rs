@@ -1309,7 +1309,7 @@ impl DeploymentEngine {
         };
 
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
-        let vol_result = self.step_configure_volumes(service_id, project_id, image_ref).await;
+        let vol_result = self.step_configure_volumes(org_id, service_id, project_id, image_ref).await;
         let mounts = match self.finish_step(org_id, project_id, service_id, deployment_id, step_id, vol_result).await? {
             Some(v) => v,
             None => return Err(AppError::Internal("configure_volumes returned no value".into())),
@@ -1627,7 +1627,7 @@ impl DeploymentEngine {
         // Step 3: Configure volumes — returns Vec<MountSpec>
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 3).await?;
         let vol_result = self
-            .step_configure_volumes(service_id, project_id, &resolved_image_ref)
+            .step_configure_volumes(org_id, service_id, project_id, &resolved_image_ref)
             .await;
         let mounts = match self
             .finish_step(
@@ -3547,11 +3547,68 @@ impl DeploymentEngine {
     /// every `VOLUME` path the image declares that nothing else covers.
     ///
     /// Without the latter, Docker gives each new task container a fresh,
+    pub async fn finalize_host_mounts(
+        &self,
+        org_id: Uuid,
+        project_id: Uuid,
+        service_id: Uuid,
+        mounts: &mut [MountSpec],
+    ) {
+        for m in mounts.iter_mut() {
+            if m.source.starts_with('/') || m.source.starts_with('.') {
+                m.mount_type = MountType::Bind;
+                continue;
+            }
+
+            let host_dir = resolve_volume_host_path(
+                &self.data_dir,
+                org_id,
+                project_id,
+                service_id,
+                &m.source,
+            );
+
+            if let Err(e) = tokio::fs::create_dir_all(&host_dir).await {
+                tracing::error!(%service_id, path = %host_dir.display(), "failed to create volume directory: {e}");
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = tokio::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o777)).await;
+            }
+
+            // Best-effort data migration from old Docker local volume
+            let docker_vol_path = format!("/var/lib/docker/volumes/{}/_data", m.source);
+            let docker_path = std::path::Path::new(&docker_vol_path);
+            if docker_path.is_dir() {
+                if is_dir_empty(&host_dir).await {
+                    let src = docker_path.to_path_buf();
+                    let dst = host_dir.clone();
+                    tracing::info!(%service_id, from = %src.display(), to = %dst.display(), "migrating existing docker volume data to host directory");
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = copy_dir_all_sync(&src, &dst);
+                    }).await;
+                }
+            }
+
+            tracing::info!(%service_id, volume = %m.source, host_dir = %host_dir.display(), target = %m.target, "mapping named volume to host bind mount");
+            m.source = host_dir.to_string_lossy().to_string();
+            m.mount_type = MountType::Bind;
+        }
+    }
+
+    /// Step 3: Build MountSpec list from the volumes table, supplemented by any
+    /// `__VOLUME_MOUNTS__` env var that was stored during service creation.
+    /// Step 3: the service's configured mounts, plus a durable named volume for
+    /// every `VOLUME` path the image declares that nothing else covers.
+    ///
+    /// Without the latter, Docker gives each new task container a fresh,
     /// empty anonymous volume — so a database loses all its data whenever
     /// Swarm replaces its container (redeploy, daemon restart, platform
     /// update, OOM kill).
     async fn step_configure_volumes(
         &self,
+        org_id: Uuid,
         service_id: Uuid,
         project_id: Uuid,
         image_ref: &str,
@@ -3596,6 +3653,8 @@ impl DeploymentEngine {
                 }
             }
         }
+
+        self.finalize_host_mounts(org_id, project_id, service_id, &mut mounts).await;
 
         tracing::info!("Configured {} mounts", mounts.len());
         Ok(mounts)
@@ -3821,6 +3880,14 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        let org_id: Option<Uuid> = sqlx::query_scalar("SELECT org_id FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_optional(&self.db)
+            .await
+            .ok()
+            .flatten();
+        let org_id = org_id.unwrap_or(project_id);
+
         let docker = self.resolve_docker_for_service(service_id).await;
         let docker_svc_name = format!("{}-{}", self.label_prefix, service_id);
 
@@ -3859,6 +3926,8 @@ impl DeploymentEngine {
                 }
             }
         }
+
+        self.finalize_host_mounts(org_id, project_id, service_id, &mut all_mounts).await;
 
         if all_mounts.is_empty() {
             return Ok(0);
@@ -4732,6 +4801,97 @@ pub fn persistent_volume_name(label_prefix: &str, service_id: Uuid, target: &str
     format!("{label_prefix}-{service_id}-{slug}")
 }
 
+/// Derives a clean directory name for a service's volume under `<org_id>/<project_id>/`.
+/// The directory name format is: `<service_id>-<clean_volume_name>`.
+///
+/// If `volume_name` already starts with `<service_id>-` or `platform-<service_id>-`,
+/// the duplicated prefix is stripped to keep the path tidy.
+pub fn volume_unique_dir_name(service_id: Uuid, volume_name: &str) -> String {
+    let clean_name = volume_name
+        .trim()
+        .trim_start_matches('/')
+        .replace(['/', '\\', ' '], "-");
+
+    let sid_str = service_id.to_string();
+    let stripped = if let Some(idx) = clean_name.find(&sid_str) {
+        &clean_name[idx..]
+    } else {
+        &clean_name
+    };
+
+    if stripped.starts_with(&sid_str) {
+        stripped.to_string()
+    } else {
+        format!("{}-{}", service_id, stripped)
+    }
+}
+
+/// Resolves the absolute host directory for a volume.
+/// Returns `<data_dir>/<org_id>/<project_id>/<service_id>-<volume_name>`.
+pub fn resolve_volume_host_path(
+    data_dir: &str,
+    org_id: Uuid,
+    project_id: Uuid,
+    service_id: Uuid,
+    volume_name: &str,
+) -> std::path::PathBuf {
+    if volume_name.starts_with('/') || volume_name.starts_with('.') {
+        return std::path::PathBuf::from(volume_name);
+    }
+    let dir_name = volume_unique_dir_name(service_id, volume_name);
+    std::path::PathBuf::from(data_dir)
+        .join(org_id.to_string())
+        .join(project_id.to_string())
+        .join(dir_name)
+}
+
+/// Remove all volume directories on disk matching `<data_dir>/<org_id>/<project_id>/<service_id>-*`.
+pub async fn remove_service_volume_dirs(
+    data_dir: &str,
+    org_id: Uuid,
+    project_id: Uuid,
+    service_id: Uuid,
+) {
+    let project_dir = std::path::PathBuf::from(data_dir)
+        .join(org_id.to_string())
+        .join(project_id.to_string());
+    if let Ok(mut entries) = tokio::fs::read_dir(&project_dir).await {
+        let prefix = format!("{}-", service_id);
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(name) = entry.file_name().into_string() {
+                if name.starts_with(&prefix) {
+                    let path = entry.path();
+                    tracing::info!(%service_id, path = %path.display(), "removing service volume directory");
+                    let _ = tokio::fs::remove_dir_all(&path).await;
+                }
+            }
+        }
+    }
+}
+
+pub async fn is_dir_empty(path: &std::path::Path) -> bool {
+    if let Ok(mut entries) = tokio::fs::read_dir(path).await {
+        entries.next_entry().await.ok().flatten().is_none()
+    } else {
+        true
+    }
+}
+
+pub fn copy_dir_all_sync(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all_sync(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// The service's currently running task as `(node_id, container_id)`.
 async fn running_task(
     docker: &dyn DockerEngine,
@@ -4945,6 +5105,35 @@ mod persistent_volume_tests {
             persistent_volume_name("platform", id, "/"),
             "platform-0190a4b2-0000-7000-8000-000000000001-data"
         );
+    }
+
+    #[test]
+    fn volume_unique_dir_name_and_host_path_resolution() {
+        let sid = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000001").unwrap();
+        let pid = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000002").unwrap();
+        let oid = Uuid::parse_str("0190a4b2-0000-7000-8000-000000000003").unwrap();
+
+        // Standard custom-named volume
+        assert_eq!(
+            volume_unique_dir_name(sid, "mydb-data"),
+            "0190a4b2-0000-7000-8000-000000000001-mydb-data"
+        );
+        let path = resolve_volume_host_path("/data", oid, pid, sid, "mydb-data");
+        assert_eq!(
+            path.to_str().unwrap(),
+            "/data/0190a4b2-0000-7000-8000-000000000003/0190a4b2-0000-7000-8000-000000000002/0190a4b2-0000-7000-8000-000000000001-mydb-data"
+        );
+
+        // Auto-generated platform volume name strips duplicate prefix
+        let plat_name = format!("platform-{}-var-lib-postgresql-data", sid);
+        assert_eq!(
+            volume_unique_dir_name(sid, &plat_name),
+            "0190a4b2-0000-7000-8000-000000000001-var-lib-postgresql-data"
+        );
+
+        // Explicit host bind path is preserved as-is
+        let explicit = resolve_volume_host_path("/data", oid, pid, sid, "/var/run/docker.sock");
+        assert_eq!(explicit.to_str().unwrap(), "/var/run/docker.sock");
     }
 
     fn iso_on() -> isolation::IsolationSettings {

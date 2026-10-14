@@ -1037,12 +1037,9 @@ impl DockerEngine for BollardDockerEngine {
         let cs = tt.container_spec.get_or_insert_with(Default::default);
         let existing = cs.mounts.get_or_insert_with(Vec::new);
         for m in mounts {
-            if existing.iter().any(|e| e.target.as_deref() == Some(m.target.as_str())) {
-                continue;
-            }
-            existing.push(Mount {
+            let new_mount = Mount {
                 source: Some(m.source),
-                target: Some(m.target),
+                target: Some(m.target.clone()),
                 typ: Some(match m.mount_type {
                     MountType::Volume => MountTypeEnum::VOLUME,
                     MountType::Bind => MountTypeEnum::BIND,
@@ -1050,7 +1047,12 @@ impl DockerEngine for BollardDockerEngine {
                 }),
                 read_only: Some(m.readonly),
                 ..Default::default()
-            });
+            };
+            if let Some(pos) = existing.iter().position(|e| e.target.as_deref() == Some(m.target.as_str())) {
+                existing[pos] = new_mount;
+            } else {
+                existing.push(new_mount);
+            }
         }
 
         if let Some(c) = constraint {

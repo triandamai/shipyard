@@ -354,7 +354,24 @@ async fn create_service(
         .or_else(|| if body.service_type == "database" { Some("/data") } else { None });
 
     if let Some(target) = default_target {
-        let vol_name = shipyard_engine::persistent_volume_name(&state.config.docker.label_prefix, service_id, target);
+        let vol_name = format!("{}-data", body.slug);
+        if let Some(oid) = org_id {
+            let host_dir = shipyard_engine::resolve_volume_host_path(
+                &state.config.data_dir,
+                oid,
+                project_id,
+                service_id,
+                &vol_name,
+            );
+            if let Err(e) = tokio::fs::create_dir_all(&host_dir).await {
+                tracing::error!("Failed to create volume directory {}: {e}", host_dir.display());
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = tokio::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o777)).await;
+            }
+        }
         let _ = state.docker.create_volume(&vol_name, "local").await;
         let _ = sqlx::query(
             "INSERT INTO volumes (service_id, project_id, name, mount_path, driver)
@@ -758,6 +775,30 @@ pub(crate) async fn teardown_service_runtime(
                 Ok(()) => tracing::info!(%service_id, "Removed service dir: {directory_path}"),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => tracing::warn!(%service_id, "Could not remove service dir: {e}"),
+            }
+        }
+
+        // Remove all service volume directories on host: <data_dir>/<org_id>/<project_id>/<service_id>-*
+        if let Ok(Some((org_id,))) = sqlx::query_as::<_, (Uuid,)>(
+            "SELECT org_id FROM projects WHERE id = $1",
+        )
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            shipyard_engine::remove_service_volume_dirs(&state.config.data_dir, org_id, project_id, service_id).await;
+        }
+
+        // Best-effort cleanup of any Docker volumes recorded in DB for this service
+        if let Ok(vol_names) = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM volumes WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .fetch_all(&state.db)
+        .await
+        {
+            for vol_name in vol_names {
+                let _ = state.docker.remove_volume(&vol_name).await;
             }
         }
     }

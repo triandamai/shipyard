@@ -720,6 +720,28 @@ async fn ensure_volume(
         }
     );
     let _ = state.docker.create_volume(&name, "local").await;
+
+    let org_id: Option<Uuid> = sqlx::query_scalar("SELECT org_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if let Some(oid) = org_id {
+        let host_dir = shipyard_engine::resolve_volume_host_path(
+            &state.config.data_dir,
+            oid,
+            project_id,
+            service_id,
+            &name,
+        );
+        let _ = tokio::fs::create_dir_all(&host_dir).await;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o777)).await;
+        }
+    }
     sqlx::query(
         "INSERT INTO volumes (id, service_id, project_id, name, mount_path, driver, created_at)
          VALUES ($1, $2, $3, $4, $5, 'local', NOW())",

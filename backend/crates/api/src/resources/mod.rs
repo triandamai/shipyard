@@ -853,17 +853,36 @@ async fn create_volume(
         ))));
     }
 
-    let project_row: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT project_id FROM services WHERE id = $1",
+    let project_row: Option<(Uuid, Uuid)> = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT s.project_id, p.org_id FROM services s JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )
     .bind(service_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let project_id = project_row.map(|(pid,)| pid);
+    let (project_id, org_id) = match project_row {
+        Some((pid, oid)) => (Some(pid), Some(oid)),
+        None => (None, None),
+    };
     let driver = body.driver.unwrap_or_else(|| "local".to_string());
     let size_mb = body.size_mb.unwrap_or(1024);
+
+    if let (Some(pid), Some(oid)) = (project_id, org_id) {
+        let host_dir = shipyard_engine::resolve_volume_host_path(
+            &state.config.data_dir,
+            oid,
+            pid,
+            service_id,
+            &body.name,
+        );
+        let _ = tokio::fs::create_dir_all(&host_dir).await;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o777)).await;
+        }
+    }
 
     // Create Docker volume first; abort if Docker is unavailable.
     state.docker.create_volume(&body.name, &driver).await
@@ -914,8 +933,12 @@ async fn delete_volume(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_service_permission(&state.db, auth_user.user_id, service_id, "volume:write").await.map_err(ApiAppError)?;
     // Fetch first to get the volume name for Docker removal.
-    let row: Option<(String,)> = sqlx::query_as::<_, (String,)>(
-        "SELECT name FROM volumes WHERE id = $1 AND service_id = $2",
+    let row: Option<(String, Uuid, Uuid)> = sqlx::query_as::<_, (String, Uuid, Uuid)>(
+        "SELECT v.name, p.id, p.org_id
+         FROM volumes v
+         JOIN services s ON s.id = v.service_id
+         JOIN projects p ON p.id = s.project_id
+         WHERE v.id = $1 AND v.service_id = $2",
     )
     .bind(volume_id)
     .bind(service_id)
@@ -923,9 +946,18 @@ async fn delete_volume(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let (volume_name,) = row.ok_or_else(|| {
+    let (volume_name, project_id, org_id) = row.ok_or_else(|| {
         ApiAppError(AppError::NotFound(format!("Volume '{}' not found", volume_id)))
     })?;
+
+    let host_dir = shipyard_engine::resolve_volume_host_path(
+        &state.config.data_dir,
+        org_id,
+        project_id,
+        service_id,
+        &volume_name,
+    );
+    let _ = tokio::fs::remove_dir_all(&host_dir).await;
 
     // Remove from Docker. A 404 means it's already gone — skip and clean up DB.
     match state.docker.remove_volume(&volume_name).await {
@@ -1065,6 +1097,17 @@ async fn create_project_volume(
     let driver = body.driver.unwrap_or_else(|| "local".to_string());
     let size_mb = body.size_mb.unwrap_or(0);
 
+    let host_dir = std::path::PathBuf::from(&state.config.data_dir)
+        .join(org_id.to_string())
+        .join(project_id.to_string())
+        .join(&body.name);
+    let _ = tokio::fs::create_dir_all(&host_dir).await;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&host_dir, std::fs::Permissions::from_mode(0o777)).await;
+    }
+
     // Create the Docker volume before touching the DB.
     state.docker.create_volume(&body.name, &driver).await
         .map_err(|e| ApiAppError(AppError::Docker(e.to_string())))?;
@@ -1130,6 +1173,12 @@ async fn delete_project_volume(
     let (volume_name, org_id) = row.ok_or_else(|| {
         ApiAppError(AppError::NotFound(format!("Volume '{}' not found", volume_id)))
     })?;
+
+    let host_dir = std::path::PathBuf::from(&state.config.data_dir)
+        .join(org_id.to_string())
+        .join(project_id.to_string())
+        .join(&volume_name);
+    let _ = tokio::fs::remove_dir_all(&host_dir).await;
 
     match state.docker.remove_volume(&volume_name).await {
         Ok(_) => {}
