@@ -352,4 +352,124 @@ mod tests {
         assert_ne!(random_alnum(24), a);
         assert_eq!(random_hex(16).len(), 32);
     }
+
+    #[tokio::test]
+    async fn axum_nest_and_nest_service_precedence() {
+        use axum::routing::get;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let openapi: Router<()> = Router::new()
+            .route("/test", get(|| async { "from openapi" }));
+
+        let integration: Router<()> = Router::new()
+            .route("/test", get(|| async { "from integration" }));
+
+        let app: Router<()> = Router::new()
+            .nest("/openapi/v1/integration", integration)
+            .nest_service("/openapi/v1", openapi);
+
+        let req = Request::builder()
+            .uri("/openapi/v1/integration/test")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_str = String::from_utf8_lossy(&body);
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body_str, "from integration");
+    }
+
+    #[tokio::test]
+    async fn integration_endpoints_dispatch_without_404() {
+        use std::sync::Arc;
+        use dashmap::DashMap;
+        use shipyard_common::config::AppConfig;
+        use shipyard_docker::engine::BollardDockerEngine;
+        use axum::http::{Request, Method, StatusCode};
+        use tower::ServiceExt;
+
+        let config = Arc::new(AppConfig::default());
+        let db = sqlx::PgPool::connect_lazy("postgres://shipyard:shipyard@localhost/shipyard").unwrap();
+        let dummy_socket = tempfile::NamedTempFile::new().unwrap();
+        let docker = Arc::new(BollardDockerEngine::with_socket(dummy_socket.path().to_str().unwrap()).unwrap());
+        let (mqtt_pub, _, _) = shipyard_mqtt::create_mqtt_client("127.0.0.1", 1883, "test-client", None, None).unwrap();
+        let mqtt = Arc::new(mqtt_pub);
+        let oauth_states = Arc::new(DashMap::new());
+        let http_client = reqwest::Client::new();
+        let auth_limiter = crate::middleware::rate_limit::make_auth_rate_limiter();
+        let swarm_sync_trigger = Arc::new(tokio::sync::Notify::new());
+        let registry_storage = Arc::new(shipyard_registry::storage::local::LocalStorage::new("/tmp"));
+
+        let state = AppState {
+            config,
+            db,
+            docker,
+            mqtt,
+            oauth_states,
+            redis: None,
+            http_client,
+            auth_limiter,
+            swarm_sync_trigger,
+            registry_storage,
+        };
+
+        // Full application router configuration as in main.rs and routes.rs
+        let api = crate::routes::api_router();
+        let app = Router::new()
+            .nest("/api", api)
+            .nest("/openapi/v1/integration", routes())
+            .nest("/integration", routes())
+            .nest("/integrations", routes())
+            .with_state(state);
+
+        let test_cases = vec![
+            (Method::POST, "/openapi/v1/integration/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::GET, "/openapi/v1/integration/orgs/my-org"),
+            (Method::PUT, "/openapi/v1/integration/orgs/my-org"),
+            (Method::GET, "/openapi/v1/integration/orgs/my-org/apps/my-app"),
+            (Method::GET, "/openapi/v1/integration/orgs/my-org/apps/my-app/envs/production"),
+            (Method::GET, "/openapi/v1/integration/orgs/my-org/apps/my-app/dev-database"),
+            (Method::GET, "/openapi/v1/integration/orgs/my-org/apps/my-app/secrets"),
+            (Method::GET, "/openapi/v1/integration/webhooks"),
+            (Method::GET, "/openapi/v1/integration/event-types"),
+
+            // Shorthand aliases /integration and /integrations
+            (Method::POST, "/integration/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::POST, "/integrations/orgs/my-org/apps/my-app/envs/production/publish"),
+
+            // /api mounted endpoints
+            (Method::POST, "/api/openapi/v1/integration/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::POST, "/api/integration/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::POST, "/api/integrations/orgs/my-org/apps/my-app/envs/production/publish"),
+        ];
+
+        for (method, uri) in test_cases {
+            let req = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+
+            let res = app.clone().oneshot(req).await.unwrap();
+            // Should be 401 UNAUTHORIZED (integration auth triggered), NOT 404 NOT FOUND!
+            assert_eq!(
+                res.status(),
+                StatusCode::UNAUTHORIZED,
+                "Expected 401 Unauthorized for {uri}, got {}",
+                res.status()
+            );
+        }
+
+        // An endpoint that is truly nonexistent must still 404
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/openapi/v1/integration/definitely-not-a-route-xyz")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
 }

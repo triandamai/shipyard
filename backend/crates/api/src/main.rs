@@ -681,6 +681,8 @@ async fn async_main() {
         .nest("/registry", registry_router::<AppState>())
         // Platform integrations (ship_int_ keys) — shares AppState with the dashboard API.
         .nest("/openapi/v1/integration", integration::routes())
+        .nest("/integration", integration::routes())
+        .nest("/integrations", integration::routes())
         // Public Open API — mounted separately so it can use its own state/auth.
         .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
@@ -912,6 +914,13 @@ async fn write_shipyard_traefik_config(
 
     shipyard-fn-invoke:
       rule: "Host(`{domain}`) && PathPrefix(`/fn/`)"
+      entryPoints: [{entrypoint_https}]
+      service: shipyard-backend
+      tls:
+        certResolver: {cert_resolver}
+
+    shipyard-openapi:
+      rule: "Host(`{domain}`) && (PathPrefix(`/openapi`) || PathPrefix(`/integration`))"
       entryPoints: [{entrypoint_https}]
       service: shipyard-backend
       tls:

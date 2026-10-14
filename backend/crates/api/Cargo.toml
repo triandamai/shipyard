@@ -21,7 +21,7 @@ shipyard-git = { path = "../git" }
 shipyard-cloudflare = { path = "../cloudflare" }
 shipyard-registry = { path = "../registry" }
 axum = { workspace = true }
-tower = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }

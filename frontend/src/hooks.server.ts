@@ -75,9 +75,14 @@ async function serverRefresh(refreshToken: string): Promise<string | null> {
 // ── Handle ────────────────────────────────────────────────────────────────────
 
 export const handle: Handle = async ({ event, resolve }) => {
-    const isFnInvoke = event.url.pathname.startsWith('/fn/');
+    const pathname = event.url.pathname;
+    const isFnInvoke = pathname.startsWith('/fn/');
+    const isOpenApi = pathname.startsWith('/openapi');
+    const isIntegration = pathname.startsWith('/integration') || pathname.startsWith('/integrations');
+    const isAppsPreview = pathname.startsWith('/apps/preview/');
+    const isApi = pathname.startsWith('/api');
 
-    if (!event.url.pathname.startsWith('/api') && !isFnInvoke) {
+    if (!isApi && !isOpenApi && !isIntegration && !isFnInvoke && !isAppsPreview) {
         return resolve(event);
     }
 
@@ -109,9 +114,17 @@ export const handle: Handle = async ({ event, resolve }) => {
         }
     }
 
-    const method   = event.request.method;
-    const apiPath  = event.url.pathname.replace(/^\/api/, '') || '/';
-    const targetUrl = `${BACKEND_URL}/api${apiPath}${event.url.search}`;
+    const method = event.request.method;
+    let targetUrl: string;
+    let apiPath = '';
+
+    if (isOpenApi || isIntegration || isAppsPreview) {
+        targetUrl = `${BACKEND_URL}${pathname}${event.url.search}`;
+        apiPath = pathname;
+    } else {
+        apiPath = pathname.replace(/^\/api/, '') || '/';
+        targetUrl = `${BACKEND_URL}/api${apiPath}${event.url.search}`;
+    }
     console.log(`[proxy] ${method} ${event.url.pathname} → ${targetUrl}`);
 
     // ── Build forwarded request headers ─────────────────────────────────────
@@ -154,6 +167,9 @@ export const handle: Handle = async ({ event, resolve }) => {
         body = await event.request.arrayBuffer();
         if (body.byteLength === 0) body = undefined;
     }
+
+    // Strip content-length when forwarding a buffered body so node fetch calculates it
+    forwardHeaders.delete('content-length');
 
     // ── Forward request to backend ───────────────────────────────────────────
 

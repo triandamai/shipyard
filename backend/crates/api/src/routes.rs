@@ -113,6 +113,10 @@ pub fn api_router() -> Router<AppState> {
         .nest("/admin/registry", artifactory::admin_routes())
         // Admin integrations (Nomi keys) — /admin/integrations/...
         .nest("/admin/integrations", crate::integration::keys::admin_routes())
+        // Platform integrations (ship_int_ keys) — accessible via /api/...
+        .nest("/integration", crate::integration::routes())
+        .nest("/integrations", crate::integration::routes())
+        .nest("/openapi/v1/integration", crate::integration::routes())
         // Admin — /admin/...
         .nest("/admin", admin::routes())
 }
