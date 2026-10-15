@@ -31,7 +31,7 @@ Four built-in starting points beyond the framework gallery below. Each resolves 
 
 | Template | Base image | Install | Dev command | Port |
 |---|---|---|---|---|
-| **Node** | `node:20-alpine` | npm install | `npm run dev` | 3000 |
+| **Node** | `node:22-alpine` | npm install | `npm run dev` | 3000 |
 | **Python** | `python:3.12-slim` | pip install -r requirements.txt | `python app.py` | 8000 |
 | **Static** | `nginx:alpine` | — | `nginx (static)` | 8080 |
 | **Custom** | `node:22-alpine` | — | `sleep infinity (idle)` | — |

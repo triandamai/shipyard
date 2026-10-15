@@ -482,6 +482,15 @@ async fn commit_source(
             .await
             .map_err(internal)?;
     }
+    let df_path = FsPath::new(repo).join("Dockerfile");
+    if df_path.exists() {
+        if let Ok(content) = tokio::fs::read_to_string(&df_path).await {
+            let (upgraded, changed) = shipyard_engine::upgrade_dockerfile_node_version(&content);
+            if changed {
+                let _ = tokio::fs::write(&df_path, upgraded).await;
+            }
+        }
+    }
     git(repo, &["add", "-A"]).await?;
     git(repo, &["commit", "-q", "--allow-empty", "-m", message]).await?;
     git(repo, &["rev-parse", "HEAD"]).await

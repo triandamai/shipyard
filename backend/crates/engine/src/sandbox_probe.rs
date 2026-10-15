@@ -55,7 +55,7 @@ mod tests {
         let stack = detect_stack(&probe).expect("node should be detected");
         assert_eq!(stack.source, DetectionSource::Detected);
         assert_eq!(stack.runtime, "node");
-        assert_eq!(stack.base_image, "node:20-alpine");
+        assert_eq!(stack.base_image, "node:22-alpine");
         assert_eq!(stack.install_cmd.as_deref(), Some("npm install"));
         assert_eq!(stack.dev_cmd, "npm run dev");
         assert_eq!(stack.port, 3000);
@@ -141,7 +141,7 @@ pub fn detect_stack(probe: &ProbeResult) -> Result<DetectedStack, String> {
         if let Ok(config) = serde_json::from_str::<crate::edge_fn_config::ShipyardConfig>(sj) {
             if let Some(app) = config.app {
                 let base_image = match app.runtime.as_str() {
-                    "node" => "node:20-alpine",
+                    "node" => "node:22-alpine",
                     "python" => "python:3.12-slim",
                     "static" => "nginx:alpine",
                     other => return Err(format!("shipyard.json declares unknown runtime '{other}'")),
@@ -166,7 +166,7 @@ pub fn detect_stack(probe: &ProbeResult) -> Result<DetectedStack, String> {
             .unwrap_or_else(|| "npm start".to_string());
         return Ok(DetectedStack {
             runtime: "node".to_string(),
-            base_image: "node:20-alpine".to_string(),
+            base_image: "node:22-alpine".to_string(),
             install_cmd: Some("npm install".to_string()),
             dev_cmd,
             port: 3000,

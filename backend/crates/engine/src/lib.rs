@@ -3003,7 +3003,15 @@ impl DeploymentEngine {
                 let dockerfile = if std::path::Path::new(&dockerfile_path).exists() {
                     // Check if service has ports configured, if not extract EXPOSE from Dockerfile
                     if let Ok(df_content) = tokio::fs::read_to_string(&dockerfile_path).await {
-                        if let Some(port) = detect_dockerfile_port(&df_content) {
+                        let (upgraded_df, upgraded) = upgrade_dockerfile_node_version(&df_content);
+                        if upgraded {
+                            let upgrade_log = "Detected outdated Node base image in Dockerfile; automatically upgraded to node:22 for ES2024 / Promise.withResolvers compatibility.".to_string();
+                            self.insert_log(deployment_id, Some(step_id), "info", &upgrade_log).await;
+                            self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &upgrade_log).await;
+                            let _ = tokio::fs::write(&dockerfile_path, &upgraded_df).await;
+                        }
+                        let effective_df = if upgraded { &upgraded_df } else { &df_content };
+                        if let Some(port) = detect_dockerfile_port(effective_df) {
                             let ports_json: serde_json::Value = sqlx::query_scalar(
                                 "SELECT ports FROM services WHERE id = $1"
                             )
@@ -5104,6 +5112,55 @@ pub fn detect_dockerfile_port(content: &str) -> Option<u16> {
     None
 }
 
+/// Upgrades outdated Node.js base images (e.g. node:18, node:20) in a Dockerfile
+/// to node:22, ensuring compatibility with modern frameworks (SvelteKit 2, Vite 6,
+/// Rolldown) and ES2024 features like `Promise.withResolvers`.
+pub fn upgrade_dockerfile_node_version(content: &str) -> (String, bool) {
+    let mut modified = false;
+    let mut new_lines = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.to_ascii_uppercase().starts_with("FROM ") {
+            let words: Vec<&str> = trimmed.split_whitespace().collect();
+            let mut changed_line = false;
+            let mut rebuilt_words = Vec::new();
+
+            for word in words {
+                let lower = word.to_ascii_lowercase();
+                if let Some(rest) = lower.strip_prefix("node:") {
+                    let (version_str, flavor) = match rest.find('-') {
+                        Some(idx) => (&rest[..idx], &rest[idx..]),
+                        None => (rest, ""),
+                    };
+                    let major: Option<u32> = version_str.split('.').next().and_then(|v| v.parse().ok());
+                    if let Some(m) = major {
+                        if m > 0 && m <= 20 {
+                            rebuilt_words.push(format!("node:22{flavor}"));
+                            changed_line = true;
+                            modified = true;
+                            continue;
+                        }
+                    }
+                }
+                rebuilt_words.push(word.to_string());
+            }
+
+            if changed_line {
+                new_lines.push(rebuilt_words.join(" "));
+                continue;
+            }
+        }
+        new_lines.push(line.to_string());
+    }
+
+    let mut result = new_lines.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    (result, modified)
+}
+
 #[cfg(test)]
 mod persistent_volume_tests {
     use super::*;
@@ -5324,4 +5381,36 @@ mod persistent_volume_tests {
         assert!(!is_database_service("docker", "node:20-alpine"));
         assert!(!is_database_service("git", "nginx:alpine"));
     }
+
+    #[test]
+    fn test_upgrade_dockerfile_node_version() {
+        let df_node20 = "FROM node:20-alpine AS build\nWORKDIR /app\nRUN npm run build\nFROM node:20-alpine\nCMD [\"node\", \"build\"]";
+        let (upgraded, modified) = upgrade_dockerfile_node_version(df_node20);
+        assert!(modified);
+        assert_eq!(
+            upgraded,
+            "FROM node:22-alpine AS build\nWORKDIR /app\nRUN npm run build\nFROM node:22-alpine\nCMD [\"node\", \"build\"]"
+        );
+
+        let df_node18_slim = "FROM node:18-slim\nEXPOSE 3000\n";
+        let (upgraded, modified) = upgrade_dockerfile_node_version(df_node18_slim);
+        assert!(modified);
+        assert_eq!(upgraded, "FROM node:22-slim\nEXPOSE 3000\n");
+
+        let df_platform = "FROM --platform=linux/amd64 node:20.11-alpine AS builder\n";
+        let (upgraded, modified) = upgrade_dockerfile_node_version(df_platform);
+        assert!(modified);
+        assert_eq!(upgraded, "FROM --platform=linux/amd64 node:22-alpine AS builder\n");
+
+        let df_already_node22 = "FROM node:22-alpine\nEXPOSE 3000\n";
+        let (upgraded, modified) = upgrade_dockerfile_node_version(df_already_node22);
+        assert!(!modified);
+        assert_eq!(upgraded, df_already_node22);
+
+        let df_python = "FROM python:3.12-slim\n";
+        let (upgraded, modified) = upgrade_dockerfile_node_version(df_python);
+        assert!(!modified);
+        assert_eq!(upgraded, df_python);
+    }
 }
+

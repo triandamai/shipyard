@@ -56,7 +56,7 @@ mod tests {
     fn template_runtime_matches_stack_detector_conventions() {
         let (runtime, base_image, install, dev, port) = template_runtime(Template::Node);
         assert_eq!(runtime, "node");
-        assert_eq!(base_image, "node:20-alpine");
+        assert_eq!(base_image, "node:22-alpine");
         assert_eq!(install, Some("npm install"));
         assert_eq!(dev, "npm run dev");
         assert_eq!(port, 3000);
@@ -625,7 +625,7 @@ pub fn template_seed_script_b64(t: Template) -> String {
 /// probe-detected one on every start after the first.
 pub fn template_runtime(t: Template) -> (&'static str, &'static str, Option<&'static str>, &'static str, u16) {
     match t {
-        Template::Node => ("node", "node:20-alpine", Some("npm install"), "npm run dev", 3000),
+        Template::Node => ("node", "node:22-alpine", Some("npm install"), "npm run dev", 3000),
         Template::Python => ("python", "python:3.12-slim", Some("pip install -r requirements.txt"), "python app.py", 8000),
         Template::Static => (
             "static",
