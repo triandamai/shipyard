@@ -112,6 +112,8 @@ pub fn routes() -> Router<AppState> {
         .route("/storage/buckets", get(list_storage_buckets))
         .route("/storage/list", get(list_storage))
         .route("/storage/preview", get(preview_storage))
+        .route("/storage/download", get(download_storage))
+        .route("/storage/download-archive", get(download_storage))
         .route("/storage/test", get(test_storage))
 }
 
@@ -1634,6 +1636,143 @@ async fn preview_storage(
         .header("content-type", content_type)
         .header("content-length", bytes.len().to_string())
         .body(Body::from(bytes))
+        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+struct StorageDownloadQuery {
+    key: Option<String>,
+    prefix: Option<String>,
+    archive: Option<bool>,
+}
+
+async fn download_storage(
+    State(state): State<AppState>,
+    Query(query): Query<StorageDownloadQuery>,
+    auth: AuthUser,
+) -> Result<Response, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "infra:read").await?;
+
+    let is_archive_requested = query.archive.unwrap_or(false)
+        || query.prefix.is_some()
+        || query.key.as_ref().map_or(false, |k| k.ends_with('/'));
+
+    if is_archive_requested {
+        let prefix = query
+            .prefix
+            .or(query.key)
+            .unwrap_or_default();
+        return create_archive_response(&state, &prefix).await;
+    }
+
+    let key = query.key.ok_or_else(|| {
+        ApiAppError(AppError::BadRequest("Missing 'key' or 'prefix' query parameter".to_string()))
+    })?;
+
+    // Try downloading as a single file
+    match state.registry_storage.get_bytes(&key).await {
+        Ok(bytes) => {
+            let content_type = guess_content_type(&key);
+            let filename = key.split('/').last().unwrap_or("file");
+            let safe_filename = filename.replace('"', "").replace(['\r', '\n'], "");
+            let encoded_filename = urlencoding::encode(&safe_filename);
+
+            let response = Response::builder()
+                .header("content-type", content_type)
+                .header(
+                    "content-disposition",
+                    format!("attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{encoded_filename}"),
+                )
+                .header("content-length", bytes.len().to_string())
+                .body(Body::from(bytes))
+                .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+
+            Ok(response)
+        }
+        Err(e) => {
+            // If direct file get fails, check if it's a directory
+            let folder_prefix = if key.ends_with('/') { key.clone() } else { format!("{key}/") };
+            let list_res = state.registry_storage.list(&folder_prefix, "").await;
+            if let Ok(res) = list_res {
+                if !res.objects.is_empty() {
+                    return create_archive_response(&state, &folder_prefix).await;
+                }
+            }
+            Err(ApiAppError(AppError::NotFound(format!("Key not found: {e}"))))
+        }
+    }
+}
+
+async fn create_archive_response(
+    state: &AppState,
+    prefix: &str,
+) -> Result<Response, ApiAppError> {
+    let clean_prefix = if prefix.is_empty() || prefix.ends_with('/') {
+        prefix.to_string()
+    } else {
+        format!("{prefix}/")
+    };
+
+    let list_res = state
+        .registry_storage
+        .list(&clean_prefix, "")
+        .await
+        .map_err(|e| ApiAppError(AppError::Internal(format!("Storage list error: {e}"))))?;
+
+    let mut zip_buffer = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip_writer = zip::ZipWriter::new(&mut zip_buffer);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        for obj in &list_res.objects {
+            let rel_path = if !clean_prefix.is_empty() {
+                obj.key
+                    .strip_prefix(&clean_prefix)
+                    .or_else(|| obj.key.strip_prefix(clean_prefix.trim_end_matches('/')))
+                    .unwrap_or(&obj.key)
+                    .trim_start_matches('/')
+            } else {
+                obj.key.as_str()
+            };
+
+            if rel_path.is_empty() {
+                continue;
+            }
+
+            if let Ok(data) = state.registry_storage.get_bytes(&obj.key).await {
+                use std::io::Write;
+                if zip_writer.start_file(rel_path, options).is_ok() {
+                    let _ = zip_writer.write_all(&data);
+                }
+            }
+        }
+        zip_writer
+            .finish()
+            .map_err(|e| ApiAppError(AppError::Internal(format!("Failed to finalize zip archive: {e}"))))?;
+    }
+
+    let zip_bytes = zip_buffer.into_inner();
+    let folder_name = clean_prefix
+        .trim_matches('/')
+        .split('/')
+        .last()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("storage");
+    let filename = format!("{folder_name}.zip");
+    let safe_filename = filename.replace('"', "").replace(['\r', '\n'], "");
+    let encoded_filename = urlencoding::encode(&safe_filename);
+
+    let response = Response::builder()
+        .header("content-type", "application/zip")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{encoded_filename}"),
+        )
+        .header("content-length", zip_bytes.len().to_string())
+        .body(Body::from(zip_bytes))
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
 
     Ok(response)

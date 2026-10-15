@@ -78,38 +78,39 @@ impl StorageBackend for LocalStorage {
         let mut common_prefixes = Vec::new();
 
         if path.is_dir() {
-            let mut entries = tokio::fs::read_dir(&path).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let file_type = entry.file_type().await?;
-                let file_name = entry.file_name().to_string_lossy().to_string();
-                
-                // Construct the virtual key (relative path from root)
-                let relative_key = if prefix.is_empty() {
-                    file_name.clone()
-                } else if prefix.ends_with('/') {
-                    format!("{}{}", prefix, file_name)
-                } else {
-                    format!("{}/{}", prefix, file_name)
-                };
+            let mut dirs_to_visit = vec![(path.clone(), prefix.trim_end_matches('/').to_string())];
+            while let Some((curr_dir, curr_prefix)) = dirs_to_visit.pop() {
+                let mut entries = tokio::fs::read_dir(&curr_dir).await?;
+                while let Some(entry) = entries.next_entry().await? {
+                    let file_type = entry.file_type().await?;
+                    let file_name = entry.file_name().to_string_lossy().to_string();
 
-                if file_type.is_dir() {
-                    if delimiter == "/" {
-                        common_prefixes.push(format!("{}/", relative_key));
+                    // Construct the virtual key (relative path from root)
+                    let relative_key = if curr_prefix.is_empty() {
+                        file_name.clone()
                     } else {
-                        common_prefixes.push(format!("{}/", relative_key));
+                        format!("{}/{}", curr_prefix, file_name)
+                    };
+
+                    if file_type.is_dir() {
+                        if delimiter.is_empty() {
+                            dirs_to_visit.push((entry.path(), relative_key));
+                        } else {
+                            common_prefixes.push(format!("{}/", relative_key));
+                        }
+                    } else {
+                        let metadata = entry.metadata().await?;
+                        let size = metadata.len();
+                        let last_modified = metadata.modified().ok().map(|t| {
+                            let datetime: chrono::DateTime<chrono::Utc> = t.into();
+                            datetime.to_rfc3339()
+                        });
+                        objects.push(super::StorageObject {
+                            key: relative_key,
+                            size,
+                            last_modified,
+                        });
                     }
-                } else {
-                    let metadata = entry.metadata().await?;
-                    let size = metadata.len();
-                    let last_modified = metadata.modified().ok().map(|t| {
-                        let datetime: chrono::DateTime<chrono::Utc> = t.into();
-                        datetime.to_rfc3339()
-                    });
-                    objects.push(super::StorageObject {
-                        key: relative_key,
-                        size,
-                        last_modified,
-                    });
                 }
             }
         } else if path.is_file() {
@@ -126,9 +127,44 @@ impl StorageBackend for LocalStorage {
             });
         }
 
+        objects.sort_by(|a, b| a.key.cmp(&b.key));
+        common_prefixes.sort();
+
         Ok(super::StorageListResult {
             objects,
             common_prefixes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_local_storage_list_delimited_and_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+
+        storage.put("root.txt", Bytes::from("root")).await.unwrap();
+        storage.put("folder/a.txt", Bytes::from("a")).await.unwrap();
+        storage.put("folder/sub/b.txt", Bytes::from("b")).await.unwrap();
+
+        // Delimited list at root: should see root.txt in objects and folder/ in common_prefixes
+        let res_delimited = storage.list("", "/").await.unwrap();
+        assert_eq!(res_delimited.objects.len(), 1);
+        assert_eq!(res_delimited.objects[0].key, "root.txt");
+        assert_eq!(res_delimited.common_prefixes, vec!["folder/"]);
+
+        // Recursive list at root: should see all 3 files and 0 common_prefixes
+        let res_recursive = storage.list("", "").await.unwrap();
+        let keys: Vec<_> = res_recursive.objects.into_iter().map(|o| o.key).collect();
+        assert_eq!(keys, vec!["folder/a.txt", "folder/sub/b.txt", "root.txt"]);
+        assert!(res_recursive.common_prefixes.is_empty());
+
+        // Recursive list under "folder/": should see both files under folder
+        let res_folder = storage.list("folder/", "").await.unwrap();
+        let folder_keys: Vec<_> = res_folder.objects.into_iter().map(|o| o.key).collect();
+        assert_eq!(folder_keys, vec!["folder/a.txt", "folder/sub/b.txt"]);
     }
 }

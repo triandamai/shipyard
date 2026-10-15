@@ -77,7 +77,7 @@
 			{/if}
 			<a
 				class="dl-link dl-link--secondary"
-				href={`/api/admin/storage/preview?key=${encodeURIComponent(fileKey)}`}
+				href={`/api/admin/storage/download?key=${encodeURIComponent(fileKey)}`}
 				download={fileKey.split('/').pop()}
 				target="_blank"
 			>
@@ -119,7 +119,7 @@
 					<p>Previews are not supported for this file type.</p>
 					<a
 						class="dl-link dl-link--primary"
-						href={`/api/admin/storage/preview?key=${encodeURIComponent(fileKey)}`}
+						href={`/api/admin/storage/download?key=${encodeURIComponent(fileKey)}`}
 						download={fileKey.split('/').pop()}
 						target="_blank"
 					>

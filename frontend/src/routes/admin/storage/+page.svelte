@@ -19,6 +19,8 @@
 		FlaskConical,
 		CheckCircle2,
 		XCircle,
+		Download,
+		Archive,
 	} from '@lucide/svelte';
 
 	interface StorageObject {
@@ -51,6 +53,49 @@
 	let commonPrefixes = $state<string[]>([]);
 	let loading = $state(false);
 	let error = $state('');
+	let downloadingKey = $state<string | null>(null);
+	let downloadError = $state('');
+
+	async function downloadItem(e: MouseEvent | undefined, path: string, isFolder: boolean) {
+		if (e) e.stopPropagation();
+		downloadingKey = path || '__current__';
+		downloadError = '';
+		try {
+			const token = localStorage.getItem('shipyard_token');
+			const url = isFolder
+				? `/api/admin/storage/download?prefix=${encodeURIComponent(path)}`
+				: `/api/admin/storage/download?key=${encodeURIComponent(path)}`;
+
+			const res = await fetch(url, {
+				headers: token ? { Authorization: `Bearer ${token}` } : {}
+			});
+			if (!res.ok) {
+				throw new Error(`Download failed with HTTP ${res.status}`);
+			}
+			const blob = await res.blob();
+			const downloadUrl = window.URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = downloadUrl;
+
+			const disposition = res.headers.get('content-disposition');
+			let filename = isFolder
+				? (path.replace(/\/$/, '').split('/').pop() || selectedBucket || 'storage') + '.zip'
+				: (path.split('/').pop() || 'file');
+			if (disposition && disposition.includes('filename=')) {
+				const match = disposition.match(/filename="?([^";]+)"?/);
+				if (match && match[1]) filename = match[1];
+			}
+			a.download = filename;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			window.URL.revokeObjectURL(downloadUrl);
+		} catch (err: any) {
+			downloadError = err?.message ?? 'Failed to download item';
+		} finally {
+			downloadingKey = null;
+		}
+	}
 
 	// Diagnostics
 	interface DiagResult {
@@ -351,13 +396,35 @@
 				{/each}
 			</div>
 
-			{#if currentPrefix}
-				<Button variant="secondary" size="sm" onclick={goUp}>
-					<ArrowLeft size={12} />
-					Go Up
+			<div class="nav-actions">
+				<Button
+					variant="secondary"
+					size="sm"
+					onclick={(e) => downloadItem(e, currentPrefix, true)}
+					disabled={downloadingKey !== null}
+					title="Download current folder as zip archive"
+				>
+					{#if downloadingKey === (currentPrefix || '__current__')}
+						<Spinner size={12} />
+					{:else}
+						<Archive size={13} />
+					{/if}
+					Download {currentPrefix ? 'Folder' : 'Bucket'}
 				</Button>
-			{/if}
+				{#if currentPrefix}
+					<Button variant="secondary" size="sm" onclick={goUp}>
+						<ArrowLeft size={12} />
+						Go Up
+					</Button>
+				{/if}
+			</div>
 		</div>
+
+		{#if downloadError}
+			<div style="margin-bottom: 12px;">
+				<InlineAlert tone="error">{downloadError}</InlineAlert>
+			</div>
+		{/if}
 
 		{#if error}
 			<InlineAlert tone="error">{error}</InlineAlert>
@@ -367,9 +434,10 @@
 				rowKey={(r) => `${r.type}:${r.path}`}
 				searchFields={['name']}
 				columns={[
-					{ key: 'name', label: 'Name', width: '55%' },
-					{ key: 'size', label: 'Size', width: '20%' },
-					{ key: 'lastModified', label: 'Last Modified', width: '25%' }
+					{ key: 'name', label: 'Name', width: '50%' },
+					{ key: 'size', label: 'Size', width: '15%' },
+					{ key: 'lastModified', label: 'Last Modified', width: '20%' },
+					{ key: 'actions', label: '', width: '15%' }
 				]}
 				emptyMessage="No files or folders found here."
 			>
@@ -392,6 +460,39 @@
 								{new Date(item.lastModified).toLocaleString()}
 							{:else}
 								—
+							{/if}
+						</td>
+						<td class="browser-actions" onclick={(e) => e.stopPropagation()}>
+							{#if item.type === 'folder'}
+								<Button
+									variant="ghost"
+									size="sm"
+									title="Download folder as archive"
+									disabled={downloadingKey === item.path}
+									onclick={(e) => downloadItem(e, item.path, true)}
+								>
+									{#if downloadingKey === item.path}
+										<Spinner size={12} />
+									{:else}
+										<Archive size={13} />
+									{/if}
+									<span class="btn-text">Archive</span>
+								</Button>
+							{:else}
+								<Button
+									variant="ghost"
+									size="sm"
+									title="Download file"
+									disabled={downloadingKey === item.path}
+									onclick={(e) => downloadItem(e, item.path, false)}
+								>
+									{#if downloadingKey === item.path}
+										<Spinner size={12} />
+									{:else}
+										<Download size={13} />
+									{/if}
+									<span class="btn-text">Download</span>
+								</Button>
 							{/if}
 						</td>
 					</tr>
@@ -477,11 +578,12 @@
 
 	:global(.bucket-chevron) { color: var(--text-dim); flex-shrink: 0; }
 	/* Navigation and Breadcrumbs */
-	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; }
+	.nav-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 16px; min-height: 42px; box-sizing: border-box; gap: 12px; }
 	.breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13px; color: var(--text-secondary); }
 	.crumb-btn { display: inline-flex; align-items: center; background: transparent; border: none; padding: 2px 6px; border-radius: 4px; color: var(--text-secondary); font-weight: 500; cursor: pointer; font-family: var(--font-sans); font-size: 13px; transition: color var(--transition-fast), background var(--transition-fast); }
 	.crumb-btn:hover { color: var(--accent); background: var(--bg-hover); }
 	:global(.crumb-sep) { color: var(--text-dim); flex-shrink: 0; }
+	.nav-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
 	/* Browser DataTable rows */
 	.browser-row { cursor: pointer; }
@@ -489,9 +591,17 @@
 	:global(.browser-icon-folder) { color: var(--accent); flex-shrink: 0; }
 	:global(.browser-icon-file) { color: var(--text-dim); flex-shrink: 0; }
 	.browser-dim { color: var(--text-muted); font-size: 12px; }
+	.browser-actions { text-align: right; white-space: nowrap; }
+	.btn-text { margin-left: 5px; }
 
 	.mono { font-family: var(--font-mono); }
 	.trunc { text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+
+	@media (max-width: 640px) {
+		.btn-text { display: none; }
+		.nav-bar { flex-direction: column; align-items: stretch; }
+		.nav-actions { justify-content: flex-end; }
+	}
 
 	/* Diagnostics panel */
 	.diag-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); }
