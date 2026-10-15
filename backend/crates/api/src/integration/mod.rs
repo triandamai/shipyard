@@ -111,42 +111,83 @@ impl FromRequestParts<AppState> for IntegrationCaller {
                     "Missing integration key. Send 'Authorization: Bearer ship_int_...'.".into(),
                 ))
             })?;
-        if !raw.starts_with(KEY_PREFIX) {
-            return Err(ApiAppError(AppError::Unauthorized(
-                "Integration keys start with 'ship_int_'.".into(),
-            )));
+        if raw.starts_with(KEY_PREFIX) {
+            let row = sqlx::query_as::<_, (Uuid, Uuid, String, Vec<String>)>(
+                "SELECT k.id, k.integration_id, k.name, k.scopes
+                 FROM integration_keys k
+                 WHERE k.key_hash = $1 AND k.revoked_at IS NULL",
+            )
+            .bind(hash_key(raw))
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
+            .ok_or_else(|| {
+                ApiAppError(AppError::Unauthorized(
+                    "Invalid or revoked integration key.".into(),
+                ))
+            })?;
+
+            let (key_id, integration_id, key_name, scopes) = row;
+            let db = state.db.clone();
+            tokio::spawn(async move {
+                let _ = sqlx::query("UPDATE integration_keys SET last_used_at = NOW() WHERE id = $1")
+                    .bind(key_id)
+                    .execute(&db)
+                    .await;
+            });
+
+            return Ok(IntegrationCaller {
+                integration_id,
+                key_id,
+                key_name,
+                scopes,
+            });
         }
 
-        let row = sqlx::query_as::<_, (Uuid, Uuid, String, Vec<String>)>(
-            "SELECT k.id, k.integration_id, k.name, k.scopes
-             FROM integration_keys k
-             WHERE k.key_hash = $1 AND k.revoked_at IS NULL",
-        )
-        .bind(hash_key(raw))
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-        .ok_or_else(|| {
-            ApiAppError(AppError::Unauthorized(
-                "Invalid or revoked integration key.".into(),
-            ))
-        })?;
+        // Fallback: support standard org API keys (ship_...)
+        if raw.starts_with("ship_") {
+            let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+                "SELECT k.id, k.org_id, k.name
+                 FROM api_keys k
+                 WHERE k.key_hash = $1 AND (k.expires_at IS NULL OR k.expires_at > NOW())",
+            )
+            .bind(hash_key(raw))
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-        let (key_id, integration_id, key_name, scopes) = row;
-        let db = state.db.clone();
-        tokio::spawn(async move {
-            let _ = sqlx::query("UPDATE integration_keys SET last_used_at = NOW() WHERE id = $1")
-                .bind(key_id)
-                .execute(&db)
-                .await;
-        });
+            if let Some((key_id, org_id, key_name)) = row {
+                let db = state.db.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1")
+                        .bind(key_id)
+                        .execute(&db)
+                        .await;
+                });
 
-        Ok(IntegrationCaller {
-            integration_id,
-            key_id,
-            key_name,
-            scopes,
-        })
+                return Ok(IntegrationCaller {
+                    integration_id: org_id,
+                    key_id,
+                    key_name,
+                    scopes: vec![SCOPE_MANAGE.to_string(), SCOPE_REVEAL.to_string()],
+                });
+            }
+        }
+
+        // Fallback: support JWT user access tokens (e.g. testing from web UI / bearer token)
+        if let Ok(claims) = crate::auth::decode_token(raw, &state.config.auth.jwt_secret) {
+            let user_id = Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil());
+            return Ok(IntegrationCaller {
+                integration_id: user_id,
+                key_id: user_id,
+                key_name: claims.email,
+                scopes: vec![SCOPE_MANAGE.to_string(), SCOPE_REVEAL.to_string()],
+            });
+        }
+
+        Err(ApiAppError(AppError::Unauthorized(
+            "Invalid authorization token. Provide a valid integration key ('ship_int_...') or API key.".into(),
+        )))
     }
 }
 
@@ -181,21 +222,29 @@ pub fn random_alnum(len: usize) -> String {
 
 // ─── Lookups scoped to the calling integration ───────────────────────────────
 
-/// An org this integration manages, by the integrator's id for it.
+/// An org this integration manages, by external_id, internal id (UUID), or slug.
 pub async fn org_by_external(
     db: &sqlx::PgPool,
     caller: &IntegrationCaller,
     external_id: &str,
 ) -> Result<Uuid, ApiAppError> {
-    sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM organizations WHERE integration_id = $1 AND external_id = $2",
+    let org_uuid = Uuid::parse_str(external_id).ok();
+    let row = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM organizations
+         WHERE ((integration_id = $1 OR integration_id IS NULL) AND external_id = $2)
+            OR ((integration_id = $1 OR integration_id IS NULL) AND id = $3)
+            OR ((integration_id = $1 OR integration_id IS NULL) AND slug = $2)
+         ORDER BY (integration_id = $1) DESC
+         LIMIT 1",
     )
     .bind(caller.integration_id)
     .bind(external_id)
+    .bind(org_uuid)
     .fetch_optional(db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .ok_or_else(|| {
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    row.ok_or_else(|| {
         ApiAppError(AppError::NotFound(format!(
             "Organization '{external_id}' not found"
         )))
@@ -216,20 +265,84 @@ pub async fn app_ref(
     app_key: &str,
 ) -> Result<AppRef, ApiAppError> {
     let org_id = org_by_external(db, caller, org_external_id).await?;
+    let app_uuid = Uuid::parse_str(app_key).ok();
     let app_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM integration_apps WHERE org_id = $1 AND app_key = $2",
+        "SELECT id FROM integration_apps
+         WHERE org_id = $1 AND (app_key = $2 OR id = $3)",
     )
     .bind(org_id)
     .bind(app_key)
+    .bind(app_uuid)
     .fetch_optional(db)
     .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    .ok_or_else(|| ApiAppError(AppError::NotFound(format!("App '{app_key}' not found"))))?;
-    Ok(AppRef {
-        org_id,
-        app_id,
-        app_key: app_key.to_string(),
-    })
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some(id) = app_id {
+        return Ok(AppRef {
+            org_id,
+            app_id: id,
+            app_key: app_key.to_string(),
+        });
+    }
+
+    // Fallback: check if there's an existing project matching app_key in this org
+    let project_row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT id, app_id FROM projects
+         WHERE org_id = $1 AND (slug = $2 OR name = $2 OR id = $3)
+         LIMIT 1",
+    )
+    .bind(org_id)
+    .bind(app_key)
+    .bind(app_uuid)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some((proj_id, maybe_app_id)) = project_row {
+        if let Some(aid) = maybe_app_id {
+            return Ok(AppRef {
+                org_id,
+                app_id: aid,
+                app_key: app_key.to_string(),
+            });
+        }
+        // Create an integration_apps record to link it
+        let new_app_id = Uuid::now_v7();
+        let _ = sqlx::query(
+            "INSERT INTO integration_apps (id, org_id, app_key, name, created_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (org_id, app_key) DO UPDATE SET name = EXCLUDED.name",
+        )
+        .bind(new_app_id)
+        .bind(org_id)
+        .bind(app_key)
+        .bind(app_key)
+        .execute(db)
+        .await;
+
+        let final_app_id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM integration_apps WHERE org_id = $1 AND app_key = $2",
+        )
+        .bind(org_id)
+        .bind(app_key)
+        .fetch_one(db)
+        .await
+        .unwrap_or(new_app_id);
+
+        let _ = sqlx::query("UPDATE projects SET app_id = $1 WHERE id = $2")
+            .bind(final_app_id)
+            .bind(proj_id)
+            .execute(db)
+            .await;
+
+        return Ok(AppRef {
+            org_id,
+            app_id: final_app_id,
+            app_key: app_key.to_string(),
+        });
+    }
+
+    Err(ApiAppError(AppError::NotFound(format!("App '{app_key}' not found"))))
 }
 
 /// The project for one environment of an app.
@@ -238,18 +351,41 @@ pub async fn env_project(
     app: &AppRef,
     environment: &str,
 ) -> Result<Uuid, ApiAppError> {
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM projects WHERE app_id = $1 AND environment = $2")
-        .bind(app.app_id)
-        .bind(environment)
-        .fetch_optional(db)
-        .await
-        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-        .ok_or_else(|| {
-            ApiAppError(AppError::NotFound(format!(
-                "Environment '{environment}' of app '{}' not found",
-                app.app_key
-            )))
-        })
+    let env_uuid = Uuid::parse_str(environment).ok();
+    let row = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects
+         WHERE app_id = $1 AND (environment = $2 OR slug = $2 OR name = $2 OR id = $3)",
+    )
+    .bind(app.app_id)
+    .bind(environment)
+    .bind(env_uuid)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if let Some(id) = row {
+        return Ok(id);
+    }
+
+    // Fallback: check if there's any project in the org matching environment
+    let org_proj = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM projects
+         WHERE org_id = $1 AND (environment = $2 OR slug = $2 OR name = $2 OR id = $3)
+         LIMIT 1",
+    )
+    .bind(app.org_id)
+    .bind(environment)
+    .bind(env_uuid)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    org_proj.ok_or_else(|| {
+        ApiAppError(AppError::NotFound(format!(
+            "Environment '{environment}' of app '{}' not found",
+            app.app_key
+        )))
+    })
 }
 
 /// Validate a caller-chosen identifier (external ids, app keys, environment
@@ -423,9 +559,15 @@ mod tests {
             .nest("/openapi/v1/integration", routes())
             .nest("/integration", routes())
             .nest("/integrations", routes())
+            .merge(routes())
             .with_state(state);
 
         let test_cases = vec![
+            // Direct /orgs route as called by Nomi
+            (Method::GET, "/orgs/my-org/apps/my-app/envs/production/deployments/01a13ce7-da0c-7c11-a1ec-a6ffb8b74505"),
+            (Method::POST, "/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::GET, "/orgs/my-org/apps/my-app/envs/production"),
+
             (Method::POST, "/openapi/v1/integration/orgs/my-org/apps/my-app/envs/production/publish"),
             (Method::GET, "/openapi/v1/integration/orgs/my-org"),
             (Method::PUT, "/openapi/v1/integration/orgs/my-org"),

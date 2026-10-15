@@ -78,9 +78,19 @@ export const handle: Handle = async ({ event, resolve }) => {
     const pathname = event.url.pathname;
     const isFnInvoke = pathname.startsWith('/fn/');
     const isOpenApi = pathname.startsWith('/openapi');
-    const isIntegration = pathname.startsWith('/integration') || pathname.startsWith('/integrations');
     const isAppsPreview = pathname.startsWith('/apps/preview/');
     const isApi = pathname.startsWith('/api');
+
+    const authHeader = event.request.headers.get('authorization') || '';
+    const hasBearerAuth = authHeader.toLowerCase().startsWith('bearer ');
+    const isIntegrationPath =
+        pathname.startsWith('/integration') ||
+        pathname.startsWith('/integrations') ||
+        (pathname.startsWith('/orgs/') && (pathname.includes('/apps') || pathname.endsWith('/events'))) ||
+        (pathname.startsWith('/secrets/') && pathname.endsWith('/reveal')) ||
+        (hasBearerAuth && (pathname.startsWith('/orgs/') || pathname.startsWith('/webhooks') || pathname.startsWith('/deliveries') || pathname === '/event-types'));
+
+    const isIntegration = isIntegrationPath;
 
     if (!isApi && !isOpenApi && !isIntegration && !isFnInvoke && !isAppsPreview) {
         return resolve(event);

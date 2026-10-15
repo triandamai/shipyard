@@ -359,6 +359,25 @@ async fn get_deployment(
     .fetch_optional(&state.db)
     .await
     .map_err(db_err)?;
+
+    let dep = if let Some(d) = dep {
+        Some(d)
+    } else {
+        // Fallback: check if the deployment belongs to any service under this org
+        sqlx::query_as(
+            "SELECT d.service_id, s.slug, d.status::text, d.created_at, d.finished_at, d.deployed_image
+             FROM deployments d
+             JOIN services s ON s.id = d.service_id
+             JOIN projects p ON p.id = s.project_id
+             WHERE d.id = $1 AND p.org_id = $2",
+        )
+        .bind(deployment_id)
+        .bind(app.org_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_err)?
+    };
+
     let (service_id, service, status, created_at, finished_at, image) =
         dep.ok_or_else(|| ApiAppError(AppError::NotFound("Deployment not found".into())))?;
     #[allow(clippy::type_complexity)]
@@ -377,14 +396,38 @@ async fn get_deployment(
     .await
     .map_err(db_err)?;
     let secrets = secret_values(&state, service_id).await;
+
+    let status_str = match status.as_str() {
+        "success" | "succeeded" => "succeeded",
+        "failed" | "error" | "cancelled" => "failed",
+        _ => "running",
+    };
+
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "id": deployment_id, "service": service, "status": status, "image": image,
-        "created_at": created_at, "finished_at": finished_at,
-        "steps": steps.into_iter().map(|(name, status, started, finished)| serde_json::json!({
-            "name": name, "status": status, "started_at": started, "finished_at": finished,
-        })).collect::<Vec<_>>(),
+        "id": deployment_id,
+        "service": service,
+        "status": status_str,
+        "image": image,
+        "created_at": created_at,
+        "finished_at": finished_at,
+        "steps": steps.into_iter().map(|(name, status, started, finished)| {
+            let step_status = match status.as_str() {
+                "success" | "succeeded" => "succeeded",
+                "failed" | "error" => "failed",
+                "running" | "pending" => "running",
+                other => other,
+            };
+            serde_json::json!({
+                "name": name,
+                "status": step_status,
+                "started_at": started,
+                "finished_at": finished,
+            })
+        }).collect::<Vec<_>>(),
         "logs": logs.into_iter().map(|(level, message, at)| serde_json::json!({
-            "level": level, "message": mask(&message, &secrets), "at": at,
+            "level": level,
+            "message": mask(&message, &secrets),
+            "at": at,
         })).collect::<Vec<_>>(),
     }))))
 }

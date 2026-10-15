@@ -712,6 +712,8 @@ async fn async_main() {
         .nest("/openapi/v1/integration", integration::routes())
         .nest("/integration", integration::routes())
         .nest("/integrations", integration::routes())
+        // Merge at root for direct calls like /orgs/:org/apps/...
+        .merge(integration::routes())
         // Public Open API — mounted separately so it can use its own state/auth.
         .nest_service("/openapi/v1", openapi)
         .layer(axum_middleware::from_fn(middleware::rate_limit::rate_limit))
@@ -949,7 +951,7 @@ async fn write_shipyard_traefik_config(
         certResolver: {cert_resolver}
 
     shipyard-openapi:
-      rule: "Host(`{domain}`) && (PathPrefix(`/openapi`) || PathPrefix(`/integration`))"
+      rule: "Host(`{domain}`) && (PathPrefix(`/openapi`) || PathPrefix(`/integration`) || PathPrefix(`/integrations`) || (PathPrefix(`/orgs`) && PathRegexp(`/orgs/[^/]+/apps`)) || HeadersRegexp(`Authorization`, `(?i)^Bearer ship_int_`))"
       entryPoints: [{entrypoint_https}]
       service: shipyard-backend
       tls:

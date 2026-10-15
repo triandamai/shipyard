@@ -690,6 +690,14 @@ http:
       tls:
         certResolver: letsencrypt
 
+    shipyard-integration:
+      rule: "Host(\`${DOMAIN}\`) && (PathPrefix(\`/openapi\`) || PathPrefix(\`/integration\`) || PathPrefix(\`/integrations\`) || (PathPrefix(\`/orgs\`) && PathRegexp(\`/orgs/[^/]+/apps\`)) || HeadersRegexp(\`Authorization\`, \`(?i)^Bearer ship_int_\`))"
+      priority: 90
+      entryPoints: [websecure]
+      service: shipyard-backend
+      tls:
+        certResolver: letsencrypt
+
     shipyard-backend:
       rule: "Host(\`api-${DOMAIN}\`)"
       entryPoints: [websecure]
