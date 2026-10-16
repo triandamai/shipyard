@@ -33,48 +33,7 @@ success "Directories ready: ${SITES_DIR}/conf.d"
 
 step "Writing custom 404 page and default nginx conf"
 
-cat > "${SITES_DIR}/_errors/404.html" <<'HTML404'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>404 – Not Found</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a; color: #e2e8f0;
-      min-height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      padding: 2rem;
-    }
-    .num {
-      font-size: 6.5rem; font-weight: 800; line-height: 1;
-      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      background-clip: text; margin-bottom: 1.25rem;
-    }
-    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
-    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
-    .badge {
-      display: inline-flex; align-items: center; gap: 0.45rem;
-      font-size: 0.73rem; color: #475569;
-      border: 1px solid #1e293b; border-radius: 9999px;
-      padding: 0.35rem 0.9rem;
-    }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
-  </style>
-</head>
-<body>
-  <div class="num">404</div>
-  <h1>Page Not Found</h1>
-  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
-  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
-</body>
-</html>
-HTML404
+# Error pages (_errors/*.html) are written by the Shipyard backend on startup.
 
 # _default.conf: /_errors/ has no 'internal' so Traefik errors middleware can
 # also fetch /_errors/404.html directly for non-static-site requests.
@@ -164,12 +123,19 @@ if grep -q "nginx-static" "${DYNAMIC}" 2>/dev/null; then
     cat > "${ERRORS_CONFIG}" <<ERRORS_CONF
 # Written by patch-nginx-static.sh — safe to re-run (idempotent).
 http:
+  services:
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-error-pages:
       errors:
         status:
           - "404"
-        service: nginx-static
+          - "502-504"
+        service: shipyard-error-backend
         query: "/_errors/{status}.html"
 ERRORS_CONF
 else
@@ -193,12 +159,19 @@ http:
         servers:
           - url: "http://shipyard-nginx-static:80"
 
+    # Serves the branded error pages even when nginx-static is down.
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-error-pages:
       errors:
         status:
           - "404"
-        service: nginx-static
+          - "502-504"
+        service: shipyard-error-backend
         query: "/_errors/{status}.html"
 ERRORS_CONF
 fi

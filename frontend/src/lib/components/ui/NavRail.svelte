@@ -96,6 +96,7 @@
 		padding: 14px 0;
 		gap: 4px;
 		height: 100vh;
+		height: 100dvh;
 		position: relative;
 		z-index: 5;
 	}

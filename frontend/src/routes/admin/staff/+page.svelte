@@ -9,12 +9,13 @@
 		BottomSheet,
 		FormField,
 		Autocomplete,
-		Checkbox,
 		PageHeader,
 		InlineAlert,
 		ConfirmDialog
 	} from '$lib/components/ui';
 	import type { AutocompleteOption } from '$lib/components/ui';
+	import PermissionPicker from '$lib/components/PermissionPicker.svelte';
+	import { catalogFromIds, permissionLabel } from '$lib/auth/permissionCatalog';
 
 	interface StaffUser { id: string; email: string; staff_permissions: string[]; created_at: string; }
 
@@ -150,6 +151,8 @@
 		]},
 	];
 
+	const permCatalog = catalogFromIds(PERM_GROUPS.map((g) => ({ label: g.label, perms: g.perms.map((p) => ({ id: p.id })) })));
+
 	onMount(() => load());
 
 	async function load() {
@@ -197,18 +200,8 @@
 		granting = false;
 	}
 
-	function togglePerm(id: string) {
-		if (grantPerms.includes(id)) grantPerms = grantPerms.filter(p => p !== id);
-		else grantPerms = [...grantPerms, id];
-	}
-
 	function permLabel(id: string): string {
-		for (const g of PERM_GROUPS) {
-			for (const p of g.perms) {
-				if (p.id === id) return `${g.label}: ${p.label}`;
-			}
-		}
-		return id;
+		return permissionLabel(permCatalog, id);
 	}
 
 	// Same deterministic index pattern as the Users page (Task 40): email
@@ -302,21 +295,9 @@
 				emptyText="No matching users."
 			/>
 		</FormField>
-		<div class="st-perm-groups">
-			{#each PERM_GROUPS as group}
-				<div class="st-perm-group">
-					<span class="st-perm-group-label">{group.label}</span>
-					<div class="st-perm-row">
-						{#each group.perms as p}
-							<Checkbox
-								label={p.label}
-								bind:checked={() => grantPerms.includes(p.id), () => togglePerm(p.id)}
-							/>
-						{/each}
-					</div>
-				</div>
-			{/each}
-		</div>
+		<FormField label="Permissions" hint="Search for an admin-panel area, add it, then tick View and/or Manage.">
+			<PermissionPicker catalog={permCatalog} bind:value={grantPerms} placeholder="Search admin permissions…" />
+		</FormField>
 		{#if grantError}
 			<InlineAlert tone="error">{grantError}</InlineAlert>
 		{/if}
@@ -341,11 +322,5 @@
 	.st-perms { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 	.st-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
-	/* Add-staff sheet: one heading per permission category, two Checkboxes
-	   per group; groups flow into a grid since the sheet body scrolls. */
-	.st-perm-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px 16px; }
-	.st-perm-group { display: flex; flex-direction: column; gap: 6px; }
-	.st-perm-group-label { font-size: 10.5px; font-weight: 700; color: var(--text-dim); }
-	.st-perm-row { display: flex; gap: 16px; }
 	.st-perm-hint { font-size: 11px; color: var(--text-dim); flex: 1; display: flex; align-items: center; }
 </style>

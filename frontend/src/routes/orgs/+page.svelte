@@ -345,7 +345,7 @@
 	.paid-note { font-size: 12px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; margin: 4px 0 0; }
 
 	/* ── Orgs list ── */
-	.orgs-container { min-height: 100vh; background: var(--bg-base); padding: 40px 32px; }
+	.orgs-container { min-height: 100vh; min-height: 100dvh; background: var(--bg-base); padding: 40px 32px; }
 	.orgs-inner { max-width: 960px; margin: 0 auto; }
 
 	.orgs-loading-wrap { display: flex; align-items: center; justify-content: center; padding: 80px 0; gap: 12px; color: var(--text-muted); font-size: 14px; }

@@ -1,14 +1,49 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import { Home, ArrowLeft } from '@lucide/svelte';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { Home, ArrowLeft, RefreshCw, LogIn } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui';
 
 	let status = $derived(page.status ?? 404);
-	let message = $derived(page.error?.message ?? 'Page not found');
+	let message = $derived(page.error?.message ?? '');
+
+	interface Copy {
+		title: string;
+		desc: string;
+		retry?: boolean;
+		signIn?: boolean;
+	}
+
+	// One entry per status the dashboard can realistically surface. Anything
+	// else falls back on the 4xx/5xx defaults below.
+	const COPY: Record<number, Copy> = {
+		400: { title: 'That request was not valid', desc: 'Something in the address or the data sent was malformed. Go back and try again.' },
+		401: { title: 'Please sign in', desc: 'Your session has ended or you are not signed in yet.', signIn: true },
+		403: { title: "You don't have access to this page", desc: 'Ask an owner of this organization to give you access, or sign in with a different account.' },
+		404: { title: "This page doesn't exist", desc: 'Check the address, or go back to your projects. Links to deleted services and projects end up here.' },
+		408: { title: 'The request timed out', desc: 'The connection was idle for too long. Try again.', retry: true },
+		409: { title: 'That conflicts with the current state', desc: 'Something changed while you were working. Reload to see the latest, then try again.', retry: true },
+		429: { title: 'Too many requests', desc: 'You are going faster than the server allows. Wait a few seconds, then try again.', retry: true },
+		500: { title: 'Something went wrong on our side', desc: 'The server hit an error handling this request. The message below helps your administrator find the cause.', retry: true },
+		502: { title: "Can't reach the Shipyard backend", desc: 'The API is not answering. It may be restarting after an update; this usually clears within a minute.', retry: true },
+		503: { title: 'Shipyard is temporarily unavailable', desc: 'The server is starting up or under maintenance. Try again shortly.', retry: true },
+		504: { title: 'The server took too long to respond', desc: 'The request did not finish in time. Try again; if it keeps happening, check the backend logs.', retry: true }
+	};
+
+	let copy = $derived<Copy>(
+		COPY[status] ??
+			(status >= 500
+				? { title: 'Something went wrong on our side', desc: `The request failed with status ${status}. Try again.`, retry: true }
+				: { title: 'That did not work', desc: `The request failed with status ${status}.` })
+	);
+
+	// Reloading re-runs the load that failed; invalidating alone keeps the error page.
+	function retry() {
+		location.reload();
+	}
 
 	function goBack() {
-		if (typeof history !== 'undefined') {
+		if (typeof history !== 'undefined' && history.length > 1) {
 			history.back();
 		} else {
 			goto('/orgs');
@@ -17,33 +52,29 @@
 </script>
 
 <svelte:head>
-	<title>{status} Error — Shipyard</title>
+	<title>{status} {copy.title} — Shipyard</title>
 </svelte:head>
 
 <main class="err-page">
 	<div class="err-body">
 		<p class="code" aria-hidden="true">{status}</p>
-		<h1 class="title">
-			{#if status === 404}
-				This page doesn't exist
-			{:else if status === 403}
-				You don't have access to this page
-			{:else}
-				Something went wrong on our side
-			{/if}
-		</h1>
-		<p class="desc">
-			{#if status === 404}
-				Check the address, or go back to your projects. Links to deleted services and projects end up here.
-			{:else if status === 403}
-				Ask an owner of this organization to give you access, or sign in with a different account.
-			{:else}
-				The request failed with status {status}. Try again; if it keeps failing, the message below helps your administrator find the cause.
-			{/if}
-		</p>
-		<code class="detail">{message}</code>
+		<hr class="rule" />
+		<h1 class="title">{copy.title}</h1>
+		<p class="desc">{copy.desc}</p>
+		{#if message && message !== copy.title}
+			<code class="detail">{message}</code>
+		{/if}
 		<div class="actions">
-			<Button href="/orgs"><Home size={14} /> Go to projects</Button>
+			{#if copy.signIn}
+				<Button href="/login"><LogIn size={14} /> Sign in</Button>
+			{:else if copy.retry}
+				<Button onclick={retry}><RefreshCw size={14} /> Try again</Button>
+			{:else}
+				<Button href="/orgs"><Home size={14} /> Go to projects</Button>
+			{/if}
+			{#if copy.retry}
+				<Button variant="secondary" href="/orgs"><Home size={14} /> Go to projects</Button>
+			{/if}
 			<Button variant="secondary" onclick={goBack}><ArrowLeft size={14} /> Go back</Button>
 		</div>
 	</div>
@@ -74,6 +105,13 @@
 		line-height: 0.9;
 		letter-spacing: -0.04em;
 		color: var(--text-primary);
+	}
+	.rule {
+		width: 48px;
+		height: 3px;
+		margin: 4px 0;
+		border: 0;
+		background: var(--accent);
 	}
 	.title {
 		font-size: 24px;

@@ -6,6 +6,8 @@
 		Mail, Lock, Folder, FolderOpen,
 		Search, X, UserPlus, ChevronRight
 	} from '@lucide/svelte';
+	import PermissionField from '$lib/components/PermissionField.svelte';
+	import { orgPermissionCatalog } from '$lib/auth/permissionCatalog';
 	import { Button, Badge, Checkbox, FormField, InlineAlert, SectionLabel, Select, Spinner, TextField } from '$lib/components/ui';
 
 	const ROLES: { value: MemberRole; label: string; desc: string }[] = [
@@ -28,6 +30,7 @@
 	// ── Form state ────────────────────────────────────────────────────
 	let email       = $state('');
 	let role        = $state<MemberRole>('member');
+	const orgCatalog = orgPermissionCatalog();
 	let permissions = $state<Set<string>>(new Set());
 
 	// Project assignment
@@ -169,20 +172,14 @@
 			</span>
 		</SectionLabel>
 
-		<div class="section-body perm-groups">
-			{#each PERMISSION_GROUPS as group}
-				<div class="perm-group">
-					<div class="group-name">{group.group}</div>
-					<div class="perm-grid">
-						{#each group.permissions as perm}
-							{@const active = permissions.has(perm.id)}
-							<div class="perm-row" class:active title={perm.description}>
-								<Checkbox checked={active} label={perm.label} onchange={() => togglePerm(perm.id)} />
-							</div>
-						{/each}
-					</div>
-				</div>
-			{/each}
+		<div class="section-body">
+			<PermissionField
+				catalog={orgCatalog}
+				value={[...permissions]}
+				onchange={(next) => (permissions = new Set(next))}
+				title="Organization permissions"
+				emptyText="No extra organization permissions."
+			/>
 		</div>
 	</section>
 
@@ -332,12 +329,6 @@
 	}
 
 	/* ── Permission groups ── */
-	.perm-groups { gap: 12px; }
-	.perm-group  { display: flex; flex-direction: column; gap: 6px; }
-	.group-name  {
-		font-size: 10px; font-weight: 700; color: var(--text-dim);
-	}
-	.perm-grid { display: flex; flex-direction: column; gap: 2px; }
 
 	.perm-row {
 		display: flex;

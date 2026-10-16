@@ -40,6 +40,7 @@
 		top: 0;
 		width: var(--slide-panel-width);
 		height: 100vh;
+		height: 100dvh;
 		background: var(--bg-surface);
 		border-left: 1px solid var(--border);
 		display: flex;
