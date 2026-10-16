@@ -4,7 +4,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -25,6 +25,10 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/", get(list_integrations).post(create_integration))
         .route("/:integration_id/keys", post(create_key))
         .route("/:integration_id/keys/:key_id", delete(revoke_key))
+        .route(
+            "/:integration_id/orgs/:org_id",
+            put(claim_org).delete(release_org),
+        )
 }
 
 #[derive(Serialize)]
@@ -262,4 +266,108 @@ async fn revoke_key(
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "revoked": key_id }),
     )))
+}
+
+#[derive(Deserialize)]
+struct ClaimOrg {
+    /// The id the integrator uses for this org. Defaults to the org's slug.
+    external_id: Option<String>,
+}
+
+/// PUT /api/admin/integrations/:integration/orgs/:org — link an existing
+/// organization (one created in the dashboard, say) to an integration, so its
+/// keys can manage it. Integration keys never reach unlinked orgs.
+async fn claim_org(
+    auth: AuthUser,
+    Path((integration_id, org_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+    Json(body): Json<ClaimOrg>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_superadmin(&state.db, auth.user_id).await?;
+    if let Some(ext) = &body.external_id {
+        super::validate_external_id(ext)?;
+    }
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM integrations WHERE id = $1)")
+            .bind(integration_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(db_err)?;
+    if !exists {
+        return Err(ApiAppError(AppError::NotFound("Integration not found".into())));
+    }
+    let row: Option<String> = sqlx::query_scalar(
+        "UPDATE organizations
+         SET integration_id = $1, external_id = COALESCE($3, external_id, slug)
+         WHERE id = $2 AND (integration_id IS NULL OR integration_id = $1)
+         RETURNING external_id",
+    )
+    .bind(integration_id)
+    .bind(org_id)
+    .bind(&body.external_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("duplicate") {
+            ApiAppError(AppError::Conflict(
+                "This integration already has an organization with that external id".into(),
+            ))
+        } else {
+            db_err(e)
+        }
+    })?;
+    let Some(external_id) = row else {
+        return Err(ApiAppError(AppError::Conflict(
+            "Organization not found, or it already belongs to another integration".into(),
+        )));
+    };
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        &auth,
+        "claim_org_for_integration",
+        Some("organization"),
+        Some(org_id),
+        None,
+        Some(serde_json::json!({ "integration_id": integration_id, "external_id": external_id })),
+    )
+    .await;
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "org_id": org_id, "external_id": external_id }),
+    )))
+}
+
+/// DELETE /api/admin/integrations/:integration/orgs/:org — unlink an org. It
+/// and its data stay; the integration's keys can no longer reach it.
+async fn release_org(
+    auth: AuthUser,
+    Path((integration_id, org_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_superadmin(&state.db, auth.user_id).await?;
+    let n = sqlx::query(
+        "UPDATE organizations SET integration_id = NULL, external_id = NULL
+         WHERE id = $2 AND integration_id = $1",
+    )
+    .bind(integration_id)
+    .bind(org_id)
+    .execute(&state.db)
+    .await
+    .map_err(db_err)?
+    .rows_affected();
+    if n == 0 {
+        return Err(ApiAppError(AppError::NotFound(
+            "That organization is not linked to this integration".into(),
+        )));
+    }
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        &auth,
+        "release_org_from_integration",
+        Some("organization"),
+        Some(org_id),
+        None,
+        Some(serde_json::json!({ "integration_id": integration_id })),
+    )
+    .await;
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "released": org_id }))))
 }

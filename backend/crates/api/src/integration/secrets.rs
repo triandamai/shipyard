@@ -422,18 +422,19 @@ async fn reveal_secret(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     caller.require(SCOPE_REVEAL)?;
     let row: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT s.id, s.org_id, s.name, s.value_encrypted
-         FROM secrets s JOIN organizations o ON o.id = s.org_id
-         WHERE s.ref = $1 AND o.integration_id = $2",
+        "SELECT s.id, s.org_id, s.name, s.value_encrypted FROM secrets s WHERE s.ref = $1",
     )
     .bind(&secret_ref)
-    .bind(caller.integration_id)
     .fetch_optional(&state.db)
     .await
     .map_err(db_err)?;
+    // A secret in an org the caller can't reach looks the same as no secret.
     let Some((id, org_id, name, enc)) = row else {
         return Err(ApiAppError(AppError::NotFound("Secret not found".into())));
     };
+    if !super::can_access_org(&state.db, &caller, org_id).await? {
+        return Err(ApiAppError(AppError::NotFound("Secret not found".into())));
+    }
     let value = crypto::decrypt(&state.config.auth.secret_key, &enc).map_err(ApiAppError)?;
     sqlx::query("UPDATE secrets SET last_revealed_at = NOW() WHERE id = $1")
         .bind(id)
