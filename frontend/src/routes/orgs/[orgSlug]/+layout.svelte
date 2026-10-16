@@ -102,6 +102,7 @@
 	.app-shell {
 		display: flex;
 		height: 100vh;
+		height: 100dvh;
 		overflow: hidden;
 		background: var(--bg-base);
 	}
@@ -109,6 +110,7 @@
 		flex: 1;
 		min-width: 0;
 		height: 100vh;
+		height: 100dvh;
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;

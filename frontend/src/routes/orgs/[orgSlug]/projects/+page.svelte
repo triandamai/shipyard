@@ -209,6 +209,10 @@
 	.projects-scroll {
 		padding: 32px;
 		overflow-y: auto;
+		-webkit-overflow-scrolling: touch;
+		overscroll-behavior: contain;
+		flex: 1;
+		min-height: 0;
 		height: 100%;
 	}
 	.projects-inner {

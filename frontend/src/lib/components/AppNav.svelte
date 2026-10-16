@@ -93,9 +93,11 @@
 				<Command size={16} />
 			</Button>
 		</span>
-		<Button variant="ghost" size="icon" aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'} onclick={toggleTheme}>
-			{#if isDark}<Sun size={16} />{:else}<Moon size={16} />{/if}
-		</Button>
+		<span class="app-nav-hide-phone">
+			<Button variant="ghost" size="icon" aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'} onclick={toggleTheme}>
+				{#if isDark}<Sun size={16} />{:else}<Moon size={16} />{/if}
+			</Button>
+		</span>
 		<span class="app-nav-hide-phone">
 			<Button variant="ghost" size="icon" aria-label={collapsed ? 'Show panel' : 'Hide panel'} onclick={() => uiStore.toggleSidebar()}>
 				{#if collapsed}<PanelLeftOpen size={18} />{:else}<PanelLeftClose size={18} />{/if}
@@ -146,6 +148,9 @@
 					<button class="ui-dropdown-item" role="menuitem" onclick={() => { close(); goto(`/orgs/${orgSlug}/billing`); }}>
 						<CreditCard size={13} /> Billing & Plan
 					</button>
+					<button class="ui-dropdown-item app-nav-phone-only" role="menuitem" onclick={() => { close(); toggleTheme(); }}>
+						{#if isDark}<Sun size={13} /> Light mode{:else}<Moon size={13} /> Dark mode{/if}
+					</button>
 					<div class="ui-dropdown-sep"></div>
 					{#if isSuperadmin}
 						<a class="ui-dropdown-item" role="menuitem" href="/admin" onclick={close}>
@@ -164,6 +169,7 @@
 
 <style>
 	.app-nav-account { margin-top: 6px; }
+	.app-nav-phone-only { display: none; }
 	.app-nav-avatar {
 		position: relative;
 		width: 32px;
@@ -199,6 +205,7 @@
 
 	@media (max-width: 639px) {
 		.app-nav-hide-phone { display: none; }
+		.app-nav-phone-only { display: flex; }
 		.app-nav-account { margin-top: 0; }
 		.app-nav-account :global(.ui-dropdown-menu) {
 			left: auto;

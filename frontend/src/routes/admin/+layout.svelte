@@ -159,6 +159,7 @@
 	.shell {
 		display:flex;
 		height:100vh;
+		height:100dvh;
 		overflow:hidden;
 		font-family:var(--font-sans);
 		font-size:13px;
@@ -180,7 +181,6 @@
 	/* NavRail turns into a fixed 56px bottom bar at ≤639px, so the page needs
 	   room beneath it and tighter side padding. */
 	@media (max-width: 639px) {
-		.shell { height: 100dvh; }
 		.main { padding: 16px 14px calc(56px + 20px); }
 	}
 </style>

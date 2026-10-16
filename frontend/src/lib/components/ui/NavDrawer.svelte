@@ -106,6 +106,7 @@
 		position: relative;
 		left: auto;
 		height: 100vh;
+		height: 100dvh;
 		flex-shrink: 0;
 		box-shadow: none;
 		z-index: auto;
