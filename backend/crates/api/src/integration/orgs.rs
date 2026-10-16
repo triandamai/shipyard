@@ -14,7 +14,7 @@ use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::events::{self, Scope};
 
-use super::{
+use super::{can_delete_org, Access, 
     db_err, org_by_external, random_alnum, validate_external_id, IntegrationCaller, SCOPE_MANAGE,
 };
 use crate::error::ApiAppError;
@@ -62,6 +62,20 @@ pub fn org_slug(name: &str) -> String {
     let base = if base.is_empty() { "org" } else { base };
     let base: String = base.chars().take(40).collect();
     format!("{}-{}", base.trim_end_matches('-'), random_alnum(6))
+}
+
+/// Whether a dashboard-token caller is a platform superadmin.
+async fn is_superadmin(db: &sqlx::PgPool, caller: &IntegrationCaller) -> Result<bool, ApiAppError> {
+    match &caller.access {
+        Access::User { user_id } => sqlx::query_scalar::<_, bool>(
+            "SELECT COALESCE((SELECT is_superadmin FROM users WHERE id = $1), FALSE)",
+        )
+        .bind(user_id)
+        .fetch_one(db)
+        .await
+        .map_err(db_err),
+        _ => Ok(false),
+    }
 }
 
 async fn plan_by_name(db: &sqlx::PgPool, name: &str) -> Result<(Uuid, String), ApiAppError> {
@@ -124,6 +138,13 @@ async fn upsert_org(
             .await
             .map_err(db_err)?;
         if let Some(plan) = &body.plan {
+            // Plans decide quotas and billing: only the integration that owns
+            // the org (or a superadmin) may change one, never the org itself.
+            if !caller.is_integration() && !is_superadmin(&state.db, &caller).await? {
+                return Err(ApiAppError(AppError::Forbidden(
+                    "Only the integration that owns this organization can change its plan".into(),
+                )));
+            }
             let (plan_id, plan_name) = plan_by_name(&state.db, plan).await?;
             let mut tx = state.db.begin().await.map_err(db_err)?;
             sqlx::query("UPDATE organizations SET plan_id = $2 WHERE id = $1")
@@ -143,6 +164,12 @@ async fn upsert_org(
         ));
     }
 
+    // Not found among the caller's orgs: creating one is a platform-level act.
+    let integration_id = caller.integration_id().map_err(|_| {
+        ApiAppError(AppError::Forbidden(
+            "Only an integration key ('ship_int_...') can create organizations".into(),
+        ))
+    })?;
     let (plan_id, plan_name) =
         plan_by_name(&state.db, body.plan.as_deref().unwrap_or("free")).await?;
     let org_id = Uuid::now_v7();
@@ -156,7 +183,7 @@ async fn upsert_org(
     .bind(name)
     .bind(org_slug(name))
     .bind(plan_id)
-    .bind(caller.integration_id)
+    .bind(integration_id)
     .bind(&external_id)
     .execute(&mut *tx)
     .await
@@ -230,6 +257,11 @@ async fn delete_org(
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     let org_id = org_by_external(&state.db, &caller, &external_id).await?;
+    if !can_delete_org(&state.db, &caller, org_id).await? {
+        return Err(ApiAppError(AppError::Forbidden(
+            "Deleting an organization needs its integration key or an organization owner".into(),
+        )));
+    }
 
     let app_keys: Vec<String> =
         sqlx::query_scalar("SELECT app_key FROM integration_apps WHERE org_id = $1")

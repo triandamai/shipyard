@@ -483,35 +483,7 @@ async fn restart_service(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
         Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted" }))))
     } else {
-        let svc_name = docker_service_name(&state, service_id);
-
-        // Load current env vars from DB and apply them to the running service
-        // so that any vars added/changed since the last deploy take effect.
-        let env_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT key, value_encrypted
-             FROM service_envs
-             WHERE service_id = $1
-               AND key NOT LIKE '\\_\\_%' ESCAPE '\\'
-             ORDER BY key ASC",
-        )
-        .bind(service_id)
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
-
-        let env_vars: Vec<String> = env_rows
-            .into_iter()
-            .map(|(k, v)| {
-                let plain = shipyard_common::crypto::decrypt_or_passthrough(
-                    &state.config.auth.secret_key, &v,
-                );
-                format!("{k}={plain}")
-            })
-            .collect();
-
-        // Update the service spec with fresh env vars; this also bumps force_update
-        // so Docker Swarm replaces the running tasks even when the image is unchanged.
-        state.docker.apply_envs_to_service(&svc_name, env_vars).await.map_err(ApiAppError)?;
+        apply_current_env(&state, service_id).await?;
 
         sqlx::query(
             "UPDATE services SET status = 'running', replicas = 1, updated_at = NOW() WHERE id = $1",
@@ -522,6 +494,37 @@ async fn restart_service(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
         Ok(Json(ApiResponse::ok(serde_json::json!({ "message": "Service restarted", "replicas": 1 }))))
     }
+}
+
+/// Re-apply a service's current env vars to its running Swarm service. This
+/// also bumps `force_update`, so tasks restart even when the image is
+/// unchanged, which is how env changes take effect without a rebuild.
+pub(crate) async fn apply_current_env(state: &AppState, service_id: Uuid) -> Result<(), ApiAppError> {
+    let svc_name = docker_service_name(state, service_id);
+
+    let env_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value_encrypted
+         FROM service_envs
+         WHERE service_id = $1
+           AND key NOT LIKE '\\_\\_%' ESCAPE '\\'
+         ORDER BY key ASC",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let env_vars: Vec<String> = env_rows
+        .into_iter()
+        .map(|(k, v)| {
+            let plain = shipyard_common::crypto::decrypt_or_passthrough(
+                &state.config.auth.secret_key, &v,
+            );
+            format!("{k}={plain}")
+        })
+        .collect();
+
+    state.docker.apply_envs_to_service(&svc_name, env_vars).await.map_err(ApiAppError)
 }
 
 /// Run `docker compose stop` for a compose-type service (best-effort).

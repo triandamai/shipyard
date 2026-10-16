@@ -88,7 +88,7 @@ export const handle: Handle = async ({ event, resolve }) => {
         pathname.startsWith('/integrations') ||
         (pathname.startsWith('/orgs/') && (pathname.includes('/apps') || pathname.endsWith('/events'))) ||
         (pathname.startsWith('/secrets/') && pathname.endsWith('/reveal')) ||
-        (hasBearerAuth && (pathname.startsWith('/orgs/') || pathname.startsWith('/webhooks') || pathname.startsWith('/deliveries') || pathname === '/event-types'));
+        (hasBearerAuth && (pathname.startsWith('/orgs/') || pathname.startsWith('/webhooks') || pathname.startsWith('/deliveries') || pathname.startsWith('/deployments/') || pathname === '/event-types'));
 
     const isIntegration = isIntegrationPath;
 

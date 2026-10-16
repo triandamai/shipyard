@@ -4,7 +4,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -35,8 +35,24 @@ pub fn routes() -> Router<AppState> {
             get(get_env).delete(delete_env),
         )
         .route(
+            "/orgs/:org/apps/:app/envs/:env/deployments",
+            get(list_deployments),
+        )
+        .route(
             "/orgs/:org/apps/:app/envs/:env/deployments/:deployment_id",
             get(get_deployment),
+        )
+        // Check a deployment knowing only its id (and org, or not even that).
+        .route("/orgs/:org/deployments/:deployment_id", get(get_org_deployment))
+        .route("/deployments/:deployment_id", get(get_any_deployment))
+        .route(
+            "/orgs/:org/apps/:app/envs/:env/services/:service/rollback",
+            post(rollback_service),
+        )
+        .route("/orgs/:org/apps/:app/envs/:env/restart", post(restart_env))
+        .route(
+            "/orgs/:org/apps/:app/envs/:env/services/:service/env",
+            get(list_service_env),
         )
         .route(
             "/orgs/:org/apps/:app/envs/:env/services/:service/logs",
@@ -187,10 +203,22 @@ async fn env_summary(
         .fetch_one(&state.db)
         .await
         .map_err(db_err)?;
+        // Live means the last deployment succeeded and something is serving:
+        // running containers, or the shared nginx for a static site.
+        let live = is_live(
+            dep_status.as_deref(),
+            svc_type == "static",
+            running,
+        );
         items.push(serde_json::json!({
             "name": slug, "service_id": id, "type": svc_type, "status": status,
-            "replicas": replicas, "running": running, "urls": urls,
-            "last_deployment": dep_id.map(|d| serde_json::json!({ "id": d, "status": dep_status, "created_at": dep_at })),
+            "replicas": replicas, "running": running, "urls": urls, "live": live,
+            "last_deployment": dep_id.map(|d| serde_json::json!({
+                "id": d,
+                "status": dep_status.as_deref().map(super::normalize_deploy_status),
+                "raw_status": dep_status,
+                "created_at": dep_at,
+            })),
         }));
     }
     #[allow(clippy::type_complexity)]
@@ -209,6 +237,14 @@ async fn env_summary(
             "id": id, "status": status, "urls": urls, "error": error, "created_at": at,
         })),
     }))
+}
+
+/// A service is live when its latest deployment succeeded and it is serving
+/// traffic: at least one running container, or any static site (served by the
+/// shared nginx, with no container of its own).
+pub fn is_live(last_deployment_raw: Option<&str>, is_static: bool, running_containers: i64) -> bool {
+    matches!(last_deployment_raw, Some("success") | Some("succeeded"))
+        && (is_static || running_containers > 0)
 }
 
 async fn get_env(
@@ -332,15 +368,90 @@ async fn delete_app(
     Ok(Json(ApiResponse::ok(report)))
 }
 
-/// GET .../envs/:env/deployments/:id — status, steps and build log.
+#[derive(Deserialize)]
+struct DeploymentQuery {
+    /// `false` returns status and steps only. Default `true`.
+    logs: Option<bool>,
+    /// Only logs after this timestamp (the `next_after` of the previous call).
+    after: Option<DateTime<Utc>>,
+    /// Most log lines to return (default 2000, at most 5000).
+    logs_limit: Option<i64>,
+}
+
+/// GET .../envs/:env/deployments/:id: status, steps, failure summary and
+/// build log.
 async fn get_deployment(
     caller: IntegrationCaller,
-    Path((org, app_key, env, deployment_id)): Path<(String, String, String, Uuid)>,
+    Path((org, app_key, _env, deployment_id)): Path<(String, String, String, Uuid)>,
+    Query(q): Query<DeploymentQuery>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
+    // The environment in the path is for symmetry with the other routes; a
+    // deployment is found by id within the org, so an agent that remembers
+    // the wrong environment still gets its answer.
     let app = app_ref(&state.db, &caller, &org, &app_key).await?;
-    let project_id = env_project(&state.db, &app, &env).await?;
+    Ok(Json(ApiResponse::ok(
+        deployment_json(&state, app.org_id, deployment_id, &q).await?,
+    )))
+}
+
+/// GET /orgs/:org/deployments/:id: no app or environment needed.
+async fn get_org_deployment(
+    caller: IntegrationCaller,
+    Path((org, deployment_id)): Path<(String, Uuid)>,
+    Query(q): Query<DeploymentQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let org_id = org_by_external(&state.db, &caller, &org).await?;
+    Ok(Json(ApiResponse::ok(
+        deployment_json(&state, org_id, deployment_id, &q).await?,
+    )))
+}
+
+/// GET /deployments/:id: just the id. The org is looked up from the
+/// deployment, then checked against what the credential may reach (an
+/// unreachable deployment is reported as not found).
+async fn get_any_deployment(
+    caller: IntegrationCaller,
+    Path(deployment_id): Path<Uuid>,
+    Query(q): Query<DeploymentQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let org_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT p.org_id FROM deployments d
+         JOIN services s ON s.id = d.service_id JOIN projects p ON p.id = s.project_id
+         WHERE d.id = $1",
+    )
+    .bind(deployment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_err)?;
+    let not_found = || ApiAppError(AppError::NotFound("Deployment not found".into()));
+    let org_id = org_id.ok_or_else(not_found)?;
+    if !super::can_access_org(&state.db, &caller, org_id).await? {
+        return Err(not_found());
+    }
+    Ok(Json(ApiResponse::ok(
+        deployment_json(&state, org_id, deployment_id, &q).await?,
+    )))
+}
+
+/// The deployment view shared by every route above.
+///
+/// `status` is `running`, `succeeded` or `failed` (`raw_status` has Shipyard's
+/// own value). `urls` is only filled once the deployment succeeded, so a
+/// client never links to an app that would still answer 502. For a failed
+/// deployment, `failure` names the step, the error and the last log lines, so
+/// an agent can fix the code without fetching the whole log.
+async fn deployment_json(
+    state: &AppState,
+    org_id: Uuid,
+    deployment_id: Uuid,
+    q: &DeploymentQuery,
+) -> Result<serde_json::Value, ApiAppError> {
     #[allow(clippy::type_complexity)]
     let dep: Option<(
         Uuid,
@@ -349,77 +460,140 @@ async fn get_deployment(
         DateTime<Utc>,
         Option<DateTime<Utc>>,
         Option<String>,
+        String,
+        String,
+        Uuid,
+        Option<String>,
+        Option<String>,
     )> = sqlx::query_as(
-        "SELECT d.service_id, s.slug, d.status::text, d.created_at, d.finished_at, d.deployed_image
-         FROM deployments d JOIN services s ON s.id = d.service_id
-         WHERE d.id = $1 AND s.project_id = $2",
+        "SELECT d.service_id, s.slug, d.status::text, d.created_at, d.finished_at, d.deployed_image,
+                d.triggered_by, d.source_ref, p.id, p.environment, a.app_key
+         FROM deployments d
+         JOIN services s ON s.id = d.service_id
+         JOIN projects p ON p.id = s.project_id
+         LEFT JOIN integration_apps a ON a.id = p.app_id
+         WHERE d.id = $1 AND p.org_id = $2",
     )
     .bind(deployment_id)
-    .bind(project_id)
+    .bind(org_id)
     .fetch_optional(&state.db)
     .await
     .map_err(db_err)?;
+    let (
+        service_id,
+        service,
+        raw_status,
+        created_at,
+        finished_at,
+        image,
+        triggered_by,
+        source_ref,
+        project_id,
+        environment,
+        app_key,
+    ) = dep.ok_or_else(|| ApiAppError(AppError::NotFound("Deployment not found".into())))?;
+    let status = super::normalize_deploy_status(&raw_status);
+    let status_name = status;
 
-    let dep = if let Some(d) = dep {
-        Some(d)
-    } else {
-        // Fallback: check if the deployment belongs to any service under this org
-        sqlx::query_as(
-            "SELECT d.service_id, s.slug, d.status::text, d.created_at, d.finished_at, d.deployed_image
-             FROM deployments d
-             JOIN services s ON s.id = d.service_id
-             JOIN projects p ON p.id = s.project_id
-             WHERE d.id = $1 AND p.org_id = $2",
-        )
-        .bind(deployment_id)
-        .bind(app.org_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(db_err)?
-    };
-
-    let (service_id, service, status, created_at, finished_at, image) =
-        dep.ok_or_else(|| ApiAppError(AppError::NotFound("Deployment not found".into())))?;
     #[allow(clippy::type_complexity)]
     let steps: Vec<(String, String, Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT name, status::text, started_at, finished_at FROM deployment_steps WHERE deployment_id = $1 ORDER BY order_index",
+        "SELECT name, status::text, started_at, finished_at FROM deployment_steps
+         WHERE deployment_id = $1 ORDER BY order_index",
     )
     .bind(deployment_id)
     .fetch_all(&state.db)
     .await
     .map_err(db_err)?;
-    let logs: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT level, message, created_at FROM deployment_logs WHERE deployment_id = $1 ORDER BY created_at LIMIT 5000",
-    )
-    .bind(deployment_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(db_err)?;
-    let secrets = secret_values(&state, service_id).await;
+    let secrets = secret_values(state, service_id).await;
 
-    let status_str = match status.as_str() {
-        "success" | "succeeded" => "succeeded",
-        "failed" | "error" | "cancelled" => "failed",
-        _ => "running",
+    let include_logs = q.logs.unwrap_or(true);
+    let logs: Vec<(String, String, DateTime<Utc>)> = if include_logs {
+        sqlx::query_as(
+            "SELECT level::text, message, timestamp FROM deployment_logs
+             WHERE deployment_id = $1 AND ($2::timestamptz IS NULL OR timestamp > $2)
+             ORDER BY timestamp LIMIT $3",
+        )
+        .bind(deployment_id)
+        .bind(q.after)
+        .bind(q.logs_limit.unwrap_or(2000).clamp(1, 5000))
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?
+    } else {
+        vec![]
+    };
+    let next_after = logs.last().map(|l| l.2).or(q.after);
+
+    let failure = if status == "failed" {
+        let step: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM deployment_steps WHERE deployment_id = $1 AND status::text = 'failed'
+             ORDER BY order_index LIMIT 1",
+        )
+        .bind(deployment_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_err)?;
+        let message: Option<String> = sqlx::query_scalar(
+            "SELECT message FROM deployment_logs WHERE deployment_id = $1 AND level::text = 'error'
+             ORDER BY timestamp DESC LIMIT 1",
+        )
+        .bind(deployment_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_err)?;
+        let mut tail: Vec<String> = sqlx::query_scalar(
+            "SELECT message FROM deployment_logs WHERE deployment_id = $1
+             ORDER BY timestamp DESC LIMIT 40",
+        )
+        .bind(deployment_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?;
+        tail.reverse();
+        Some(serde_json::json!({
+            "step": step,
+            "phase": step.as_deref().map(super::step_phase),
+            "message": message.map(|m| mask(&m, &secrets)),
+            "tail": tail.iter().map(|l| mask(l, &secrets)).collect::<Vec<_>>(),
+        }))
+    } else {
+        None
     };
 
-    Ok(Json(ApiResponse::ok(serde_json::json!({
+    let urls: Vec<String> = if status == "succeeded" {
+        sqlx::query_scalar(
+            "SELECT CASE WHEN tls_enabled THEN 'https://' ELSE 'http://' END || hostname
+             FROM domains WHERE service_id = $1 ORDER BY created_at",
+        )
+        .bind(service_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?
+    } else {
+        vec![]
+    };
+
+    Ok(serde_json::json!({
         "id": deployment_id,
+        "app": app_key,
+        "environment": environment,
+        "project_id": project_id,
         "service": service,
-        "status": status_str,
+        "service_id": service_id,
+        "status": status,
+        "raw_status": raw_status,
         "image": image,
+        "triggered_by": triggered_by,
+        "source_ref": source_ref,
+        "urls": urls,
         "created_at": created_at,
         "finished_at": finished_at,
+        "failure": failure,
         "steps": steps.into_iter().map(|(name, status, started, finished)| {
-            let step_status = match status.as_str() {
-                "success" | "succeeded" => "succeeded",
-                "failed" | "error" => "failed",
-                "running" | "pending" => "running",
-                other => other,
-            };
             serde_json::json!({
                 "name": name,
-                "status": step_status,
+                "phase": super::step_phase(&name),
+                "status": super::normalize_step_status(&status, status_name),
                 "started_at": started,
                 "finished_at": finished,
             })
@@ -429,7 +603,292 @@ async fn get_deployment(
             "message": mask(&message, &secrets),
             "at": at,
         })).collect::<Vec<_>>(),
-    }))))
+        "next_after": next_after,
+    }))
+}
+
+#[derive(Deserialize)]
+struct ListDeploymentsQuery {
+    service: Option<String>,
+    limit: Option<i64>,
+}
+
+/// GET .../envs/:env/deployments: recent deployments, newest first.
+async fn list_deployments(
+    caller: IntegrationCaller,
+    Path((org, app_key, env)): Path<(String, String, String)>,
+    Query(q): Query<ListDeploymentsQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    let project_id = env_project(&state.db, &app, &env).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(Uuid, String, String, String, String, Option<String>, DateTime<Utc>, Option<DateTime<Utc>>)> =
+        sqlx::query_as(
+            "SELECT d.id, s.slug, d.status::text, d.triggered_by, d.source_ref, d.deployed_image,
+                    d.created_at, d.finished_at
+             FROM deployments d JOIN services s ON s.id = d.service_id
+             WHERE s.project_id = $1 AND ($2::text IS NULL OR s.slug = $2)
+             ORDER BY d.created_at DESC LIMIT $3",
+        )
+        .bind(project_id)
+        .bind(&q.service)
+        .bind(q.limit.unwrap_or(20).clamp(1, 100))
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?;
+    Ok(Json(ApiResponse::ok(
+        rows.into_iter()
+            .map(|(id, service, raw, by, source_ref, image, created_at, finished_at)| {
+                serde_json::json!({
+                    "id": id,
+                    "service": service,
+                    "status": super::normalize_deploy_status(&raw),
+                    "raw_status": raw,
+                    "triggered_by": by,
+                    "source_ref": source_ref,
+                    "image": image,
+                    "created_at": created_at,
+                    "finished_at": finished_at,
+                })
+            })
+            .collect(),
+    )))
+}
+
+#[derive(Deserialize, Default)]
+struct RollbackBody {
+    /// Deployment to return to. Default: the last successful deployment
+    /// before the current one.
+    deployment_id: Option<Uuid>,
+}
+
+/// The image a rollback should return to: the requested deployment's, or the
+/// second most recent successful one (the most recent is what's running).
+pub fn pick_rollback_target(
+    successes_newest_first: &[(Uuid, String)],
+    requested: Option<Uuid>,
+) -> Result<(Uuid, String), String> {
+    match requested {
+        Some(id) => successes_newest_first
+            .iter()
+            .find(|(d, _)| *d == id)
+            .cloned()
+            .ok_or_else(|| {
+                "That deployment didn't succeed, has no recorded image, or belongs to another service".to_string()
+            }),
+        None => successes_newest_first
+            .get(1)
+            .cloned()
+            .ok_or_else(|| "There is no earlier successful deployment to return to".to_string()),
+    }
+}
+
+/// POST .../envs/:env/services/:service/rollback: redeploy the image of an
+/// earlier successful deployment. No rebuild, so it takes seconds. Database
+/// migrations are not undone.
+async fn rollback_service(
+    caller: IntegrationCaller,
+    Path((org, app_key, env, service)): Path<(String, String, String, String)>,
+    State(state): State<AppState>,
+    body: Option<Json<RollbackBody>>,
+) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let requested = body.and_then(|b| b.0.deployment_id);
+    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    let project_id = env_project(&state.db, &app, &env).await?;
+    crate::deployments::check_billing_for_org(&state.db, app.org_id).await?;
+
+    let (service_id, svc_type): (Uuid, String) = sqlx::query_as(
+        "SELECT id, type::text FROM services WHERE project_id = $1 AND slug = $2",
+    )
+    .bind(project_id)
+    .bind(&service)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{service}' not found"))))?;
+    if matches!(svc_type.as_str(), "static" | "docker_compose" | "sandbox_app") {
+        return Err(ApiAppError(AppError::BadRequest(
+            "Only container services can roll back; publish the earlier source again instead".into(),
+        )));
+    }
+
+    let busy: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM deployments WHERE service_id = $1 AND status::text IN ('running', 'pending', 'queued'))",
+    )
+    .bind(service_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(db_err)?;
+    if busy {
+        return Err(ApiAppError(AppError::Conflict(
+            "A deployment of this service is still in progress".into(),
+        )));
+    }
+
+    let successes: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, deployed_image FROM deployments
+         WHERE service_id = $1 AND status::text = 'success' AND deployed_image IS NOT NULL
+         ORDER BY created_at DESC LIMIT 20",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(db_err)?;
+    let (target_id, image) = pick_rollback_target(&successes, requested)
+        .map_err(|m| ApiAppError(AppError::Conflict(m)))?;
+
+    let deployment_id = Uuid::now_v7();
+    let triggered_by = format!("rollback by {}", caller.key_name);
+    sqlx::query(
+        "INSERT INTO deployments (id, service_id, triggered_by, source_ref, status, created_at)
+         VALUES ($1, $2, $3, $4, 'running'::deployment_status, NOW())",
+    )
+    .bind(deployment_id)
+    .bind(service_id)
+    .bind(&triggered_by)
+    .bind(format!("rollback:{target_id}"))
+    .execute(&state.db)
+    .await
+    .map_err(db_err)?;
+
+    let engine = super::publish::engine(&state);
+    let notify = std::sync::Arc::clone(&state.swarm_sync_trigger);
+    let (img, by) = (image.clone(), triggered_by.clone());
+    tokio::spawn(async move {
+        if let Err(e) = engine.rollback(deployment_id, service_id, &by, &img).await {
+            tracing::error!(%deployment_id, "integration rollback: {e}");
+        }
+        notify.notify_one();
+    });
+
+    caller
+        .audit(
+            &state.db,
+            "rollback",
+            "deployment",
+            Some(deployment_id),
+            serde_json::json!({ "service_id": service_id, "to": target_id, "image": image }),
+        )
+        .await;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ApiResponse::ok(serde_json::json!({
+            "deployment_id": deployment_id,
+            "rolled_back_to": target_id,
+            "image": image,
+            "status": "running",
+        }))),
+    ))
+}
+
+#[derive(Deserialize, Default)]
+struct RestartBody {
+    /// Restart only this service. Default: every container service.
+    service: Option<String>,
+}
+
+/// POST .../envs/:env/restart: apply the current env vars and secrets to the
+/// running services, replacing their tasks, with no rebuild. Use after
+/// changing a secret.
+async fn restart_env(
+    caller: IntegrationCaller,
+    Path((org, app_key, env)): Path<(String, String, String)>,
+    State(state): State<AppState>,
+    body: Option<Json<RestartBody>>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let only = body.and_then(|b| b.0.service);
+    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    let project_id = env_project(&state.db, &app, &env).await?;
+    crate::deployments::check_billing_for_org(&state.db, app.org_id).await?;
+
+    let services: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, slug, type::text FROM services
+         WHERE project_id = $1 AND service_parent_id IS NULL AND ($2::text IS NULL OR slug = $2)
+         ORDER BY created_at",
+    )
+    .bind(project_id)
+    .bind(&only)
+    .fetch_all(&state.db)
+    .await
+    .map_err(db_err)?;
+    if services.is_empty() {
+        return Err(ApiAppError(AppError::NotFound(match only {
+            Some(s) => format!("Service '{s}' not found"),
+            None => "This environment has no services".into(),
+        })));
+    }
+
+    let mut restarted = vec![];
+    let mut skipped = vec![];
+    for (id, slug, svc_type) in services {
+        if matches!(svc_type.as_str(), "static" | "docker_compose" | "sandbox_app") {
+            skipped.push(serde_json::json!({ "service": slug, "reason": format!("{svc_type} services don't restart this way") }));
+            continue;
+        }
+        match crate::shorthand::apply_current_env(&state, id).await {
+            Ok(()) => restarted.push(slug),
+            Err(e) => skipped.push(serde_json::json!({ "service": slug, "reason": e.0.to_string() })),
+        }
+    }
+    caller
+        .audit(
+            &state.db,
+            "restart_environment",
+            "project",
+            Some(project_id),
+            serde_json::json!({ "app": app.app_key, "environment": env, "restarted": restarted }),
+        )
+        .await;
+    Ok(Json(ApiResponse::ok(
+        serde_json::json!({ "restarted": restarted, "skipped": skipped }),
+    )))
+}
+
+/// GET .../services/:service/env: which variables a service has and where
+/// each comes from. Never values.
+async fn list_service_env(
+    caller: IntegrationCaller,
+    Path((org, app_key, env, service)): Path<(String, String, String, String)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    let project_id = env_project(&state.db, &app, &env).await?;
+    let service_id: Uuid = sqlx::query_scalar("SELECT id FROM services WHERE project_id = $1 AND slug = $2")
+        .bind(project_id)
+        .bind(&service)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| ApiAppError(AppError::NotFound(format!("Service '{service}' not found"))))?;
+    let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT e.key, e.is_secret, s.ref
+         FROM service_envs e
+         LEFT JOIN secret_bindings b ON b.service_id = e.service_id AND b.env_key = e.key
+         LEFT JOIN secrets s ON s.id = b.secret_id
+         WHERE e.service_id = $1 AND e.key NOT LIKE '\\_\\_%' ESCAPE '\\'
+         ORDER BY e.key",
+    )
+    .bind(service_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(db_err)?;
+    Ok(Json(ApiResponse::ok(
+        rows.into_iter()
+            .map(|(name, is_secret, secret_ref)| {
+                serde_json::json!({
+                    "name": name,
+                    "secret": is_secret,
+                    // Set from a secret: change it with PUT .../secrets/{name}, then restart.
+                    "secret_ref": secret_ref,
+                })
+            })
+            .collect(),
+    )))
 }
 
 /// Decrypted values of a service's secret env vars, longest first, for masking.
@@ -608,6 +1067,7 @@ async fn env_usage(
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
     use super::mask;
 
     #[test]
@@ -620,6 +1080,27 @@ mod tests {
             ),
             "auth failed for ****; url ****"
         );
+    }
+
+    #[test]
+    fn live_needs_a_successful_deploy_and_something_serving() {
+        assert!(super::is_live(Some("success"), false, 1));
+        assert!(!super::is_live(Some("success"), false, 0), "deployed but no container yet");
+        assert!(!super::is_live(Some("running"), false, 1), "mid-deploy");
+        assert!(!super::is_live(Some("failed"), false, 1));
+        assert!(!super::is_live(None, false, 1));
+        assert!(super::is_live(Some("success"), true, 0), "static sites have no container");
+    }
+
+    #[test]
+    fn rollback_picks_the_previous_success() {
+        let (a, b, c) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let list = vec![(a, "img:3".to_string()), (b, "img:2".to_string()), (c, "img:1".to_string())];
+        assert_eq!(super::pick_rollback_target(&list, None).unwrap().0, b);
+        assert_eq!(super::pick_rollback_target(&list, Some(c)).unwrap().1, "img:1");
+        assert!(super::pick_rollback_target(&list, Some(Uuid::now_v7())).is_err());
+        assert!(super::pick_rollback_target(&list[..1], None).is_err(), "only one version exists");
+        assert!(super::pick_rollback_target(&[], None).is_err());
     }
 
     #[test]

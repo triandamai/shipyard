@@ -9,6 +9,7 @@ use shipyard_common::types::ApiResponse;
 
 /// Newtype wrapper so we can implement `IntoResponse` for `AppError`
 /// without violating the orphan rules (AppError is from shipyard_common).
+#[derive(Debug)]
 pub struct ApiAppError(pub AppError);
 
 impl From<AppError> for ApiAppError {

@@ -11,10 +11,42 @@ Nomi is an agent orchestrator that builds web apps (SvelteKit, Next.js, React, V
 
 | Item | Value |
 |---|---|
-| Base URL | `https://<shipyard>/openapi/v1/integration` |
-| Auth | `Authorization: Bearer ship_int_<64 hex>` |
+| Base URL | `https://<shipyard>/openapi/v1/integration` (also reachable as `/integration`, `/integrations` and the site root; use the first) |
+| Auth | `Authorization: Bearer ship_int_<64 hex>` (see [Credentials](#credentials)) |
 | Content type | `application/json`, except publish (`multipart/form-data`) |
 | Response envelope | `{ "data": ..., "error": null }` or `{ "data": null, "error": { "code", "message" } }` |
+
+## Quick start for the coding agent {#quickstart}
+
+If you read nothing else, this is the whole integration in order:
+
+1. `PUT /orgs/{org}` when Nomi creates an organization.
+2. `PUT /orgs/{org}/apps/{app}` with `"dev_database": true` when a project is created. Keep the two `*_url_ref` values.
+3. Server-side only: reveal `app_url_ref`, set it as `DATABASE_URL` in the dev container.
+4. On publish: zip the source, build the [manifest](#manifest), `POST .../envs/{env}/publish`. You get `202` and a `publish_id`. **The app is not live yet.**
+5. Wait for the `publish.succeeded` webhook (or poll `GET .../publishes/{publish_id}` every 3 s). Only then show the user `urls[0]`.
+6. If it failed, `GET .../deployments/{deployment_id}` returns `failure` with the step, phase, message and log tail. Fix the code, publish again. See [the fix loop](#fix-loop).
+7. `POST .../duplicate` for another environment, `DELETE .../apps/{app}` to terminate.
+
+Before you ship, run the readiness checker against a real Shipyard (it creates and deletes a throwaway org): `python3 scripts/check-nomi-integration.py` in the Shipyard repo. See [Verifying a Shipyard](#verify).
+
+## Credentials {#credentials}
+
+Three kinds of credential work on this API. Each only reaches the organizations it owns.
+
+| Credential | Reaches | Can do |
+|---|---|---|
+| Integration key `ship_int_...` | Orgs created through it (`PUT /orgs/{org}`), plus orgs a superadmin linked to the integration | Everything in this page, within its scopes (`manage`, `secrets:reveal`) |
+| Org API key `ship_...` (created in the dashboard) | Only its own org | Same routes by `manage`-equivalent scopes: needs `write` or `admin`. Cannot create orgs, change plans, manage webhooks or delete the org |
+| User access token (JWT) | Orgs where the user is a member | Same as an org key by role. Cannot create orgs, change plans, manage webhooks or delete the org |
+
+Use an integration key for everything Nomi's server does. Integration keys never see an org they did not create, so an org that already existed in Shipyard (made in the dashboard) is invisible until a superadmin links it:
+
+```bash
+curl -X PUT https://<shipyard>/api/admin/integrations/<integration_id>/orgs/<org_uuid> \
+  -H "Authorization: Bearer <admin session token>" -H "Content-Type: application/json" \
+  -d '{"external_id":"org_2Nf8sK"}'   # your id for it; DELETE the same path to unlink
+```
 
 ## Rules {#rules}
 
@@ -26,6 +58,9 @@ Follow these without exception.
 4. **Verify every webhook signature** and treat delivery as at-least-once and unordered: dedupe on the event `id`, order by `created_at`.
 5. **Prefer webhooks to polling.** If you must poll, poll the publish (`GET .../publishes/{id}`) no faster than every 3 seconds.
 6. **Don't send `node_modules`, `.git`, build output or `.env` files** in the source zip. Shipyard builds from source.
+7. **Accepted is not live.** `202` from publish or duplicate means the build started. Never show the user a link, or tell them the app is up, before `publish.succeeded` (or `status: "succeeded"` and `live: true` on the environment). Before then the URL returns a Shipyard 502/404 page.
+8. **Never invent a URL.** Use `urls` from a succeeded publish/deployment. Failed and running deployments have none.
+9. **A failed publish does not take the previous version down.** The old release keeps serving until a new one succeeds, so a failure is safe to retry.
 
 ## How Nomi maps to Shipyard {#mapping}
 
@@ -172,7 +207,9 @@ Response `202`:
 } }
 ```
 
-The environment is created on first publish. The `url` is reserved immediately; it serves the app once `publish.succeeded` arrives.
+The environment is created on first publish. `url` is the address reserved for it, and `live` is `false`: nothing answers there until `publish.succeeded` arrives. Treat `url` as a name, not a link, until then.
+
+A publish is refused with `403` if the org's billing state doesn't allow deploys (canceled or past due), and with `400` for an invalid manifest, a missing secret, or a zip that doesn't contain the service `path`.
 
 ### The manifest {#manifest}
 
@@ -262,6 +299,8 @@ Webhooks tell you everything: `publish.started`, then for each service `deployme
 
 `publish.succeeded` means every service is running, not just deployed. Show the user the URL from it.
 
+**Status vocabulary** (everywhere in this API): publish and deployment `status` is `running`, `succeeded` or `failed`. Shipyard's internal value is kept in `raw_status` for debugging; branch on `status`. Step `status` is `succeeded`, `failed`, `running`, `pending` or `skipped` (steps after a failed one are `skipped`). Each step has a `phase`: `validate`, `build`, `configure`, `deploy` or `finalize`.
+
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/publishes/{publish_id}
 
 ```json
@@ -269,14 +308,17 @@ Webhooks tell you everything: `publish.started`, then for each service `deployme
   "publish_id": "01a1...", "status": "succeeded",
   "urls": ["https://todo.apps.example.dev"], "error": null,
   "deployments": [
-    { "service": "db", "deployment_id": "01a1...", "status": "success" },
-    { "service": "web", "deployment_id": "01a1...", "status": "success" }
+    { "service": "db", "deployment_id": "01a1...", "status": "succeeded", "raw_status": "success" },
+    { "service": "web", "deployment_id": "01a1...", "status": "succeeded", "raw_status": "success" }
   ],
   "created_at": "...", "finished_at": "..."
 } }
 ```
 
-`status`: `running`, `succeeded` or `failed`. On failure, `error` names the service and the cause; fetch the deployment for the build log.
+On failure, `error` names the service and the cause; fetch that deployment ([below](#deployment-check)) for the step, phase and log tail. Other lookups:
+
+- `GET /orgs/{org}/publishes/{publish_id}`: same body, when you only have the id.
+- `GET /orgs/{org}/apps/{app}/publishes?limit=20`: recent publishes, newest first.
 
 ## 4. Environments {#flow-envs}
 
@@ -414,9 +456,45 @@ Reply `2xx` within 10 seconds; do slow work after replying. Anything else is ret
 
 Show users failures in their own words; give the agent the same logs so it can fix the app. Secret values are masked as `****` in everything below.
 
-### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/deployments/{deployment_id}
+### Checking a deployment {#deployment-check}
 
-Status, image, steps with timings, and the build/deploy log (`logs: [{ level, message, at }]`).
+The same body comes from any of:
+
+- `GET /orgs/{org}/apps/{app}/envs/{env}/deployments/{deployment_id}`
+- `GET /orgs/{org}/deployments/{deployment_id}` (no app/env needed)
+- `GET /deployments/{deployment_id}` (the id alone; the key's orgs are searched)
+
+Query: `logs=false` returns status and steps only; `after=<timestamp>` returns log lines after the previous call's `next_after`; `logs_limit` (default 2000, max 5000).
+
+```json
+{ "data": {
+  "deployment_id": "01a1...", "service": "web", "status": "failed", "raw_status": "failed",
+  "image": null, "urls": [],
+  "failure": {
+    "step": "build_image", "phase": "build",
+    "message": "npm run build exited with code 1",
+    "tail": ["src/routes/+page.svelte:12:5 'x' is not defined", "error during build"]
+  },
+  "steps": [
+    { "name": "clone_repo", "phase": "build", "status": "succeeded", "started_at": "...", "finished_at": "..." },
+    { "name": "build_image", "phase": "build", "status": "failed", "error": "..." },
+    { "name": "deploy", "phase": "deploy", "status": "skipped" }
+  ],
+  "logs": [ { "level": "error", "message": "...", "at": "..." } ],
+  "next_after": "2026-10-16T09:00:00Z"
+} }
+```
+
+`urls` is present only when `status` is `succeeded`. `failure` is `null` unless it failed. Poll with `after=next_after` to stream a running build without re-reading the log.
+
+- `GET .../envs/{env}/deployments?service=web&limit=20`: recent deployments, newest first.
+- `GET .../envs/{env}`: services with `status`, `running`/`replicas`, `urls`, `live` and the last deployment. `live` is `true` only when at least one replica is running and the service has a URL.
+
+### Rollback and restart {#rollback}
+
+- `POST .../envs/{env}/services/{service}/rollback`, body optional `{ "deployment_id": "..." }`. Redeploys the image of an earlier successful deployment (default: the one before the current), without a rebuild, so it takes seconds. Database migrations are **not** undone. Calling it twice flips between the two newest releases. It returns `400` if there is nothing to return to.
+- `POST .../envs/{env}/restart`: restarts every service with its current env (use after changing a secret). Returns the services restarted.
+- `GET .../envs/{env}/services/{service}/env`: the service's env vars as `[{ name, secret, secret_ref }]`. Values are never returned.
 
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/services/{service}/logs
 
@@ -425,6 +503,93 @@ Runtime output of all replicas. Query: `tail` (default 200, max 5000), `since` (
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/usage
 
 Per running container: `cpu_percent`, `memory_usage_bytes`, `memory_limit_bytes`, network and block I/O, and configured limits. Containers on other nodes show `stats: null`.
+
+## The fix loop for coding agents {#fix-loop}
+
+When a publish fails the agent should read the cause, fix the source and publish again. Do not retry blindly.
+
+```ts
+async function publishUntilLive(ctx, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const pub = await shipyard.publish(ctx);                 // 202
+    const result = await waitForPublish(pub.publish_id);     // webhook, or poll every 3 s
+    if (result.status === "succeeded") return result.urls[0];
+
+    const failed = result.deployments.find((d) => d.status === "failed");
+    const dep = await shipyard.getDeployment(failed.deployment_id);
+    const { phase, step, message, tail } = dep.failure;
+
+    if (phase === "validate") await agent.fixManifest(message);          // bad manifest, missing secret
+    else if (phase === "build") await agent.fixCode(message, tail);       // compile/type/install errors
+    else if (phase === "configure") await agent.askUser(message);         // secrets, limits, plan
+    else /* deploy, finalize */ {
+      // The image built but the app didn't come up: read runtime logs.
+      const logs = await shipyard.serviceLogs(ctx, failed.service, { tail: 200 });
+      await agent.fixRuntime(message, logs.lines);
+    }
+  }
+  throw new Error("giving up after 3 failed publishes");
+}
+```
+
+| `failure.phase` | Usual cause | Agent action |
+|---|---|---|
+| `validate` | Manifest rejected, secret not set, zip missing `path` | Fix the manifest or set the secret (ask the user for values) |
+| `build` | `npm ci`/`build` failed, no Dockerfile detected, wrong Node version | Fix source; read `tail` |
+| `configure` | Plan limit, invalid resources, domain taken | Ask the user or lower the request |
+| `deploy` | Container exits at start, port mismatch, migration error, health check fails | Read service logs; listen on `0.0.0.0:$PORT`, check migrations |
+
+## Framework recipes {#recipes}
+
+Shipyard detects SvelteKit, Next.js, Nuxt, Angular and TanStack Start when there is no Dockerfile, and runs Node 22. If detection fails or you need control, ship a Dockerfile.
+
+| Stack | Manifest service | Source requirements |
+|---|---|---|
+| SvelteKit | `{ "name":"web", "kind":"web", "port":3000 }` | `@sveltejs/adapter-node`; set `ORIGIN` to the public URL |
+| Next.js | `{ "name":"web", "kind":"web", "port":3000 }` | `output: "standalone"` |
+| Vite React/Vue (static) | `{ "name":"site", "kind":"static" }` | `npm run build` outputs `dist/`; no port needed. Served by nginx with SPA fallback |
+| Node API + worker | two services, one `web`, one `worker` | Worker has no URL or port |
+
+`kind: "static"` builds the site and serves the output with nginx; the port is detected, so omit `port`. A static site has no server env at runtime: bake public config at build time.
+
+## Verifying a Shipyard {#verify}
+
+Before relying on a Shipyard instance, run the checker from the Shipyard repo. It uses only the Python standard library, creates a throwaway org, and removes it afterwards:
+
+```bash
+SHIPYARD_URL=https://<shipyard>/openapi/v1/integration \
+SHIPYARD_KEY=ship_int_... \
+python3 scripts/check-nomi-integration.py --reveal-key ship_int_...   # reveal key optional
+```
+
+It exercises auth, org and app creation, dev database (refs only), secrets, webhooks (with a test ping), publishing a static site and a container, rollback, restart, a deliberately failing build (checks the `failure` object and that the old version keeps serving), duplicate, terminate and org delete. It prints `ok`/`FAIL` per check and exits non-zero on failures. Publish checks need the instance to be able to build and pull images, so run it against a real deployment, not a bare dev stack.
+
+## Troubleshooting {#troubleshooting}
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `404 NOT_FOUND` on an org that exists | Org was created in the dashboard, not via this integration | Link it with the claim endpoint ([Credentials](#credentials)) |
+| `403` on `PUT /orgs/{org}` with an org key | Only integration keys create orgs | Use the integration key |
+| `403` on reveal | Key lacks `secrets:reveal` | Use the reveal key, server-side only |
+| Publish `403` | Org billing is canceled or past due | Fix the plan; `PUT /orgs/{org}` with `plan` if you own billing |
+| URL shows a Shipyard 502 after publish | You opened `url` before `publish.succeeded` | Wait for the webhook |
+| `publish.failed` at `validate` with "missing secret" | Manifest references `{ "secret": ... }` that was never set | `PUT .../secrets/{name}` first |
+| Container starts then exits | Not listening on `0.0.0.0:$PORT`, or migration error | Read service logs |
+| Webhook signature mismatch | Body was parsed before verifying | Verify against the raw bytes |
+
+## Not available yet {#not-available}
+
+These came up in design and are **not** built. Don't call routes for them; use the workaround.
+
+| Feature | Status | Workaround |
+|---|---|---|
+| Promote a built image from staging to production without rebuilding | Not built | `duplicate` re-deploys from the same source (rebuilds); rollback only moves within one service |
+| Preview environments that expire automatically | Not built | Delete the environment yourself (`DELETE .../envs/{env}`) when the preview closes |
+| Sleep/wake of idle (free-plan) environments | Not built | Environments stay up; scale replicas to 0 via the dashboard if needed |
+| Server-sent-event log follow | Not built | Poll `logs?since=` or the deployment `after` cursor |
+| Members and login links (Nomi users opening the Shipyard dashboard) | Not built | Nomi is the interface; the superadmin can use the dashboard |
+| Org suspend | Not built | Delete the org, or cancel its plan |
+| Release command as a separate step | Not built | Run migrations on start |
 
 ## Errors and limits {#errors}
 
@@ -452,10 +617,6 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 - [ ] "New environment" → `POST .../envs/{env}/duplicate`.
 - [ ] Project deleted → confirm → `DELETE /orgs/{org}/apps/{app}`.
 - [ ] Logs tab → runtime logs and deployment logs; usage → `/usage`.
+- [ ] After publish: never show `url` until `publish.succeeded`; on failure read `failure` from the deployment and run the [fix loop](#fix-loop).
+- [ ] Run `scripts/check-nomi-integration.py` against the target Shipyard before go-live.
 - [ ] Catch-up job: on start, page `GET /orgs/{org}/events?after=<last seen>` for orgs with activity.
-
-## Not available yet {#roadmap}
-
-- Dashboard access for Nomi users (members and login links). Nomi is the interface for now.
-- Release commands as a separate step (run migrations on start instead).
-- Preview environments that sleep when idle, and per-plan egress rules.

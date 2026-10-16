@@ -686,31 +686,71 @@ async fn check_billing_allows_deploy(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if let Some((sub_status, period_end)) = row {
-        match sub_status.as_str() {
-            "canceled" => {
-                return Err(ApiAppError(AppError::Forbidden(
-                    "Subscription has been canceled. Renew your plan to resume deployments.".to_string(),
-                )));
-            }
-            "past_due" => {
-                // Allow a 7-day grace window from the last period end.
-                let grace_expired = period_end
-                    .map(|end| {
-                        let grace = end + chrono::Duration::days(7);
-                        chrono::Utc::now() > grace
-                    })
-                    .unwrap_or(false);
-                if grace_expired {
-                    return Err(ApiAppError(AppError::Forbidden(
-                        "Payment is overdue and the grace period has expired. Update your payment method to resume deployments.".to_string(),
-                    )));
-                }
-            }
-            _ => {}
-        }
+    match row {
+        Some((sub_status, period_end)) => billing_verdict(&sub_status, period_end, chrono::Utc::now()),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// The same rule for callers that hold an org rather than a service (the
+/// integration API's publish).
+pub(crate) async fn check_billing_for_org(db: &sqlx::PgPool, org_id: Uuid) -> Result<(), ApiAppError> {
+    let row = sqlx::query_as::<_, (String, Option<chrono::DateTime<chrono::Utc>>)>(
+        "SELECT sub_status, current_period_end FROM org_billing WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    match row {
+        Some((sub_status, period_end)) => billing_verdict(&sub_status, period_end, chrono::Utc::now()),
+        None => Ok(()),
+    }
+}
+
+/// Canceled subscriptions can't deploy; past-due ones can for 7 days after
+/// the period ended.
+pub(crate) fn billing_verdict(
+    sub_status: &str,
+    period_end: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(), ApiAppError> {
+    match sub_status {
+        "canceled" => Err(ApiAppError(AppError::Forbidden(
+            "Subscription has been canceled. Renew your plan to resume deployments.".to_string(),
+        ))),
+        "past_due" => {
+            let grace_expired = period_end
+                .map(|end| now > end + chrono::Duration::days(7))
+                .unwrap_or(false);
+            if grace_expired {
+                Err(ApiAppError(AppError::Forbidden(
+                    "Payment is overdue and the grace period has expired. Update your payment method to resume deployments.".to_string(),
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod billing_tests {
+    use super::billing_verdict;
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn canceled_blocks_and_past_due_has_a_week_of_grace() {
+        let now = Utc::now();
+        assert!(billing_verdict("active", None, now).is_ok());
+        assert!(billing_verdict("trialing", None, now).is_ok());
+        assert!(billing_verdict("canceled", None, now).is_err());
+        assert!(billing_verdict("past_due", Some(now - Duration::days(3)), now).is_ok());
+        assert!(billing_verdict("past_due", Some(now - Duration::days(8)), now).is_err());
+        assert!(billing_verdict("past_due", None, now).is_ok());
+    }
 }
 
 async fn verify_deployment_service(

@@ -319,7 +319,7 @@ async fn load_endpoint(
          WHERE we.id = $1 AND we.integration_id = $2",
     )
     .bind(id)
-    .bind(caller.integration_id)
+    .bind(caller.integration_id()?)
     .fetch_optional(db)
     .await
     .map_err(db_err)?
@@ -354,7 +354,7 @@ async fn list_endpoints(
          FROM webhook_endpoints we LEFT JOIN organizations o ON o.id = we.org_id
          WHERE we.integration_id = $1 ORDER BY we.created_at",
     )
-    .bind(caller.integration_id)
+    .bind(caller.integration_id()?)
     .fetch_all(&state.db)
     .await
     .map_err(db_err)?;
@@ -432,7 +432,7 @@ async fn create_endpoint(
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(Uuid::now_v7())
-    .bind(caller.integration_id)
+    .bind(caller.integration_id()?)
     .bind(org_id)
     .bind(&body.url)
     .bind(&enc)
@@ -669,7 +669,7 @@ async fn redeliver(
          WHERE d.id = $1 AND we.id = d.endpoint_id AND we.integration_id = $2",
     )
     .bind(id)
-    .bind(caller.integration_id)
+    .bind(caller.integration_id()?)
     .execute(&state.db)
     .await
     .map_err(db_err)?

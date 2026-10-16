@@ -50,6 +50,8 @@ pub fn routes() -> Router<AppState> {
             "/orgs/:org/apps/:app/envs/:env/publishes/:publish_id",
             get(get_publish),
         )
+        .route("/orgs/:org/publishes/:publish_id", get(get_org_publish))
+        .route("/orgs/:org/apps/:app/publishes", get(list_publishes))
         .route(
             "/orgs/:org/apps/:app/envs/:env/duplicate",
             post(duplicate_route),
@@ -506,12 +508,16 @@ pub struct PublishOut {
     pub project_id: Uuid,
     pub status: &'static str,
     pub services: BTreeMap<String, Uuid>,
-    /// The public URL once deploys finish (null without an apps domain).
+    /// Where the app will be reachable (null without an apps domain). This is
+    /// reserved, not live: it answers 502 until `publish.succeeded`. Link to
+    /// it only when `live` is true in a status response or the webhook arrives.
     pub url: Option<String>,
+    /// Always false in this response: the build and deploy are still to run.
+    pub live: bool,
     pub warnings: Vec<String>,
 }
 
-fn engine(state: &AppState) -> DeploymentEngine {
+pub(super) fn engine(state: &AppState) -> DeploymentEngine {
     DeploymentEngine::new(
         Arc::clone(&state.docker),
         state.db.clone(),
@@ -937,6 +943,9 @@ pub async fn publish(
 ) -> Result<PublishOut, ApiAppError> {
     validate_manifest(&manifest)?;
     validate_slug("environment", environment)?;
+    // A canceled subscription (or lapsed past-due grace) can't deploy, same as
+    // the dashboard.
+    crate::deployments::check_billing_for_org(&state.db, app.org_id).await?;
     let (project_id, _) = ensure_env_project(state, app, environment).await?;
     let publish_id = Uuid::now_v7();
     let mut warnings = vec![];
@@ -1063,6 +1072,7 @@ pub async fn publish(
         status: "running",
         services,
         url,
+        live: false,
         warnings,
     })
 }
@@ -1702,26 +1712,67 @@ async fn get_publish(
     caller.require(SCOPE_MANAGE)?;
     let app = app_ref(&state.db, &caller, &org, &app_key).await?;
     let project_id = env_project(&state.db, &app, &env).await?;
+    Ok(Json(ApiResponse::ok(
+        publish_json(&state, app.org_id, publish_id, Some(project_id)).await?,
+    )))
+}
+
+/// GET /orgs/:org/publishes/:id: the same, without knowing the app or environment.
+async fn get_org_publish(
+    caller: IntegrationCaller,
+    Path((org, publish_id)): Path<(String, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let org_id = super::org_by_external(&state.db, &caller, &org).await?;
+    Ok(Json(ApiResponse::ok(
+        publish_json(&state, org_id, publish_id, None).await?,
+    )))
+}
+
+/// A publish with the live status of each deployment it started.
+async fn publish_json(
+    state: &AppState,
+    org_id: Uuid,
+    publish_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<serde_json::Value, ApiAppError> {
     #[allow(clippy::type_complexity)]
-    let row: Option<(String, serde_json::Value, Vec<String>, Option<String>, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>)> =
-        sqlx::query_as(
-            "SELECT status, deployments, urls, error, created_at, finished_at FROM publishes WHERE id = $1 AND project_id = $2",
-        )
-        .bind(publish_id)
-        .bind(project_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(db_err)?;
-    let (status, deployments, urls, error, created_at, finished_at) =
+    let row: Option<(
+        String,
+        serde_json::Value,
+        Vec<String>,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        Option<String>,
+        Uuid,
+    )> = sqlx::query_as(
+        "SELECT pb.status, pb.deployments, pb.urls, pb.error, pb.created_at, pb.finished_at,
+                a.app_key, p.environment, pb.project_id
+         FROM publishes pb
+         JOIN projects p ON p.id = pb.project_id
+         LEFT JOIN integration_apps a ON a.id = p.app_id
+         WHERE pb.id = $1 AND pb.org_id = $2 AND ($3::uuid IS NULL OR pb.project_id = $3)",
+    )
+    .bind(publish_id)
+    .bind(org_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_err)?;
+    let (status, deployments, urls, error, created_at, finished_at, app_key, environment, project_id) =
         row.ok_or_else(|| ApiAppError(AppError::NotFound("Publish not found".into())))?;
 
-    // Live status of each deployment.
+    // Live status of each deployment, in the same vocabulary as the
+    // deployment endpoints.
     let mut items = vec![];
     for d in deployments.as_array().cloned().unwrap_or_default() {
         let dep_id = d["deployment_id"]
             .as_str()
             .and_then(|s| Uuid::parse_str(s).ok());
-        let dep_status: Option<String> = match dep_id {
+        let raw: Option<String> = match dep_id {
             Some(id) => sqlx::query_scalar("SELECT status::text FROM deployments WHERE id = $1")
                 .bind(id)
                 .fetch_optional(&state.db)
@@ -1730,18 +1781,63 @@ async fn get_publish(
             None => None,
         };
         let mut d = d.clone();
-        d["status"] = serde_json::json!(dep_status);
+        d["status"] = serde_json::json!(raw.as_deref().map(super::normalize_deploy_status));
+        d["raw_status"] = serde_json::json!(raw);
         items.push(d);
     }
-    Ok(Json(ApiResponse::ok(serde_json::json!({
+    Ok(serde_json::json!({
         "publish_id": publish_id,
+        "app": app_key,
+        "environment": environment,
+        "project_id": project_id,
         "status": status,
         "urls": urls,
         "error": error,
         "deployments": items,
         "created_at": created_at,
         "finished_at": finished_at,
-    }))))
+    }))
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    limit: Option<i64>,
+    environment: Option<String>,
+}
+
+/// GET /orgs/:org/apps/:app/publishes: recent publishes, newest first.
+async fn list_publishes(
+    caller: IntegrationCaller,
+    Path((org, app_key)): Path<(String, String)>,
+    axum::extract::Query(q): axum::extract::Query<ListQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+    caller.require(SCOPE_MANAGE)?;
+    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(Uuid, String, Option<String>, Vec<String>, Option<String>, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>)> =
+        sqlx::query_as(
+            "SELECT pb.id, pb.status, p.environment, pb.urls, pb.error, pb.created_at, pb.finished_at
+             FROM publishes pb JOIN projects p ON p.id = pb.project_id
+             WHERE p.app_id = $1 AND ($2::text IS NULL OR p.environment = $2)
+             ORDER BY pb.created_at DESC LIMIT $3",
+        )
+        .bind(app.app_id)
+        .bind(&q.environment)
+        .bind(q.limit.unwrap_or(20).clamp(1, 100))
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?;
+    Ok(Json(ApiResponse::ok(
+        rows.into_iter()
+            .map(|(id, status, environment, urls, error, created_at, finished_at)| {
+                serde_json::json!({
+                    "publish_id": id, "status": status, "environment": environment,
+                    "urls": urls, "error": error, "created_at": created_at, "finished_at": finished_at,
+                })
+            })
+            .collect(),
+    )))
 }
 
 #[derive(Deserialize)]
