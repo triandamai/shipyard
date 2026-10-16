@@ -18,6 +18,10 @@
 	import { orgStore } from '$lib/stores/org.store';
 	import { can, perm } from '$lib/auth/permissions';
 	import PermissionDeniedDialog from '$lib/components/PermissionDeniedDialog.svelte';
+	import PermissionField from '$lib/components/PermissionField.svelte';
+	import { apiKeyScopeCatalog } from '$lib/auth/permissionCatalog';
+
+	const scopeCatalog = apiKeyScopeCatalog();
 
 	let orgId    = $derived($orgStore.activeOrg?.id ?? '');
 	let myRole   = $derived($orgStore.myMembership?.role ?? null);
@@ -51,15 +55,6 @@
 	let revoking = $state<string | null>(null);
 	let confirmRevoke = $state<string | null>(null);
 
-	const ALL_SCOPES: { value: ApiKeyScope; label: string; desc: string; group?: string }[] = [
-		{ value: 'read',             label: 'Read',            desc: 'View projects, services, and deployments' },
-		{ value: 'deploy',           label: 'Deploy',          desc: 'Trigger deployments' },
-		{ value: 'write',            label: 'Write',           desc: 'Create and update services' },
-		{ value: 'admin',            label: 'Admin',           desc: 'Manage API keys and org settings' },
-		{ value: 'registry:view',    label: 'Registry — View',    desc: 'Pull images and browse artifacts  (shipyard:<org>:registry:view)',    group: 'registry' },
-		{ value: 'registry:manage',  label: 'Registry — Manage',  desc: 'Push and delete artifacts  (shipyard:<org>:registry:manage)',          group: 'registry' },
-	];
-
 	// ─── Data loading ─────────────────────────────────────────────────────────
 	async function load() {
 		loading = true;
@@ -79,14 +74,6 @@
 	onMount(() => { if (canKeysAny) load(); else loading = false; });
 
 	// ─── Helpers ──────────────────────────────────────────────────────────────
-	function toggleScope(scope: ApiKeyScope) {
-		if (newScopes.includes(scope)) {
-			newScopes = newScopes.filter((s) => s !== scope);
-		} else {
-			newScopes = [...newScopes, scope];
-		}
-	}
-
 	function relativeTime(iso: string) {
 		const diff = Date.now() - new Date(iso).getTime();
 		const m = Math.floor(diff / 60000);
@@ -117,7 +104,7 @@
 	// ─── Create ───────────────────────────────────────────────────────────────
 	async function handleCreate() {
 		if (!newName.trim()) { createError = 'Name is required'; return; }
-		if (newScopes.length === 0) { createError = 'At least one scope is required'; return; }
+		if (newScopes.length === 0) { createError = 'Choose at least one permission'; return; }
 		creating = true;
 		createError = '';
 		try {
@@ -237,24 +224,15 @@
 				<FormField label="Name" for="key-name">
 					<TextField id="key-name" type="text" bind:value={newName} placeholder="e.g. CI/CD Pipeline" />
 				</FormField>
-				<FormField label="Scopes">
-					<div class="scope-list">
-						{#each ALL_SCOPES as s, i}
-							{#if i > 0 && s.group === 'registry' && ALL_SCOPES[i - 1].group !== 'registry'}
-								<div class="scope-divider">
-									<span>Registry permissions</span>
-								</div>
-							{/if}
-							<div class="scope-toggle" class:active={newScopes.includes(s.value)}>
-								<Checkbox
-									checked={newScopes.includes(s.value)}
-									label={s.label}
-									onchange={() => toggleScope(s.value)}
-								/>
-								<span class="scope-toggle-desc">{s.desc}</span>
-							</div>
-						{/each}
-					</div>
+				<FormField label="Permissions">
+					<PermissionField
+						catalog={scopeCatalog}
+						value={newScopes}
+						onchange={(next) => (newScopes = next as ApiKeyScope[])}
+						title="Key permissions"
+						subtitle="Search for what this key may access, then tick the levels it needs."
+						emptyText="No permissions selected. The key can't do anything yet."
+					/>
 				</FormField>
 				<FormField label="Expiry (optional)" for="key-expiry">
 					<TextField id="key-expiry" type="date" bind:value={newExpiry} min={new Date().toISOString().slice(0, 10)} />
@@ -436,25 +414,6 @@
 		gap: 8px;
 	}
 
-	.scope-list { display: flex; flex-direction: column; gap: 6px; }
-	.scope-divider { display: flex; align-items: center; gap: 8px; margin: 4px 0 2px; }
-	.scope-divider::before, .scope-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-	.scope-divider span {
-		font-size: 10px; font-weight: 600; color: var(--text-muted); white-space: nowrap;
-	}
-	.scope-toggle {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 8px 12px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		transition: border-color var(--transition-fast), background var(--transition-fast);
-	}
-	.scope-toggle.active { border-color: var(--accent); background: var(--accent-muted); }
-	.scope-toggle-desc { font-size: 11px; color: var(--text-muted); text-align: right; }
 
 	/* ── Table ── */
 	.table-wrap { display: block; }
@@ -481,7 +440,5 @@
 		.table-wrap { display: none; }
 		.mobile-cards { display: flex; }
 		.page-header { flex-direction: column; gap: 10px; }
-		.scope-toggle { flex-direction: column; align-items: flex-start; gap: 4px; }
-		.scope-toggle-desc { text-align: left; }
 	}
 </style>

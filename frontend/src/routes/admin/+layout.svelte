@@ -8,15 +8,14 @@
 		Home, Building2, Users, ShieldCheck, FolderKanban, Rocket, Server,
 		Cpu, Container, Waypoints, Package, HardDrive, Radio, Globe,
 		Mail, Database, ClipboardList, CreditCard, Wallet, RefreshCw, SlidersHorizontal,
-		Sun, Moon, LogOut, Menu, Anchor
+		Sun, Moon, LogOut
 	} from '@lucide/svelte';
-	import { NavRail, NavDrawer } from '$lib/components/ui';
+	import { NavRail, NavDrawer, Button } from '$lib/components/ui';
 	import PanelContainer from '$lib/components/PanelContainer.svelte';
 
 	let { children } = $props();
 	let checking      = $state(true);
 	let theme         = $state<'light' | 'dark'>('light');
-	let mobileOpen    = $state(false);
 
 	onMount(async () => {
 		// Same theme storage key and mechanism as AppNav.svelte — one
@@ -44,7 +43,6 @@
 		localStorage.setItem('shipyard_theme', theme);
 		document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : '');
 	}
-	function closeMobile() { mobileOpen = false; }
 
 	type NavItem  = { href: string; label: string; icon: typeof Home };
 	type NavGroup = { key: string; label: string; icon: typeof Home; items: NavItem[] };
@@ -115,32 +113,24 @@
 		<div class="gate-ring"></div>
 	</div>
 {:else}
-	{#if mobileOpen}
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="mob-backdrop" onclick={closeMobile}></div>
-	{/if}
-
 	<div class="shell" data-theme={theme}>
 		<NavRail
 			groups={navGroups.map((g) => ({ key: g.key, label: g.label, icon: g.icon }))}
 			bind:activeGroup
 			{currentGroup}
 			labelOverflow="ellipsis"
+			phoneBar
 			onSelectGroup={(key) => (activeGroup = activeGroup === key ? null : key)}
-		/>
-		<div class="rail-footer">
-			<button class="rail-footer-btn" onclick={toggleTheme} aria-label={theme === 'dark' ? 'Light mode' : 'Dark mode'} title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
-				{#if theme === 'dark'}
-					<Sun size={14} />
-				{:else}
-					<Moon size={14} />
-				{/if}
-			</button>
-			<a href="/orgs" class="rail-footer-btn" aria-label="Back to dashboard" title="Exit admin" onclick={closeMobile}>
-				<LogOut size={14} />
-			</a>
-		</div>
+		>
+			{#snippet footer()}
+				<Button variant="ghost" size="icon" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} onclick={toggleTheme}>
+					{#if theme === 'dark'}<Sun size={16} />{:else}<Moon size={16} />{/if}
+				</Button>
+				<Button variant="ghost" size="icon" href="/orgs" aria-label="Exit admin">
+					<LogOut size={16} />
+				</Button>
+			{/snippet}
+		</NavRail>
 		{#each navGroups as group (group.key)}
 			<NavDrawer
 				open={activeGroup === group.key}
@@ -153,18 +143,6 @@
 		{/each}
 
 		<main class="main">
-			<!-- Mobile topbar -->
-			<div class="mob-topbar">
-				<button class="mob-menu-btn" onclick={() => (mobileOpen = !mobileOpen)} aria-label="Toggle menu">
-					<Menu size={18} />
-				</button>
-				<div class="mob-brand">
-					<div class="mob-brand-icon">
-						<Anchor size={14} strokeWidth={2.5} />
-					</div>
-					<span class="mob-brand-name">Admin</span>
-				</div>
-			</div>
 			{@render children()}
 		</main>
 
@@ -187,33 +165,6 @@
 		-webkit-font-smoothing:antialiased;
 	}
 
-	/* ── Rail footer ──────────────────────── */
-	/* Small fixed overlay pinned to the bottom of NavRail's 60px column, kept
-	   local to this layout. NavRail now exposes a `footer` snippet (and a
-	   `phoneBar`), but this admin overlay predates it and has not been
-	   migrated onto it; the two actions (theme toggle, exit admin) stay
-	   admin-specific. */
-	.rail-footer {
-		position: fixed;
-		left: 0;
-		bottom: 0;
-		width: 60px;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 4px;
-		padding: 10px 0;
-		z-index: 6;
-	}
-	.rail-footer-btn {
-		display:flex; align-items:center; justify-content:center;
-		width:36px; height:36px; border-radius:var(--radius-md); border:none;
-		background:none; color:var(--text-muted);
-		cursor:pointer; text-decoration:none;
-		transition:background var(--transition-fast), color var(--transition-fast);
-	}
-	.rail-footer-btn:hover { background:var(--bg-hover); color:var(--accent); }
-
 	/* ── Main ─────────────────────────────── */
 	.main { flex:1; overflow-y:auto; background:var(--bg-base); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
 	/* Page blocks must keep their natural height so .main scrolls. Without
@@ -225,32 +176,11 @@
 	   content changes (empty → loaded, detail panel opening, row expanding). */
 	.main > :global(*) { flex-shrink: 0; width: 100%; }
 
-	/* ── Mobile topbar ────────────────────── */
-	/* NOTE: mob-menu-btn still toggles `mobileOpen`, which was wired to the
-	   old 220px sliding `.sidebar` panel. That panel no longer exists (it's
-	   NavRail/NavDrawer now), so this button is currently a no-op on mobile.
-	   NavRail now has `footer` and `phoneBar` support, but admin has not been
-	   wired to it yet — follow-up. */
-	.mob-topbar {
-		display: none;
-		align-items: center; gap: 10px;
-		padding: 12px 16px;
-		background: var(--rail-bg);
-		border-bottom: 1px solid var(--rail-hover-bg);
-		flex-shrink: 0;
-	}
-	.mob-menu-btn { display:flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:var(--radius-md); border:none; background:var(--rail-hover-bg); color:var(--rail-fg-active); cursor:pointer; }
-	.mob-menu-btn:hover { background:var(--rail-active-bg); }
-	.mob-brand { display:flex; align-items:center; gap:8px; }
-	.mob-brand-icon { width:24px; height:24px; border-radius:var(--radius-sm); background:var(--rail-active-bg); color:var(--accent); display:flex; align-items:center; justify-content:center; }
-	.mob-brand-name { font-size:13px; font-weight:600; color:var(--rail-fg-active); }
-
-	/* ── Mobile backdrop ──────────────────── */
-	.mob-backdrop { position:fixed; inset:0; z-index:39; background:rgba(0,0,0,0.55); }
-
-	/* ── Responsive ───────────────────────── */
-	@media (max-width: 768px) {
-		.shell { flex-direction: column; }
-		.mob-topbar { display:flex; }
+	/* ── Phone ────────────────────────────── */
+	/* NavRail turns into a fixed 56px bottom bar at ≤639px, so the page needs
+	   room beneath it and tighter side padding. */
+	@media (max-width: 639px) {
+		.shell { height: 100dvh; }
+		.main { padding: 16px 14px calc(56px + 20px); }
 	}
 </style>

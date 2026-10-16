@@ -171,5 +171,16 @@
 
 	@media (max-width: 639px) {
 		.ui-nav-drawer--hide-phone { display: none; }
+		/* The rail is a 56px bottom bar on phones, so a modal drawer opens as a
+		   full-width panel above it instead of beside a 60px side rail. */
+		.ui-nav-drawer:not(.ui-nav-drawer--persistent) {
+			position: fixed;
+			left: 0;
+			top: 0;
+			bottom: 56px;
+			z-index: 59;
+		}
+		.ui-nav-drawer--open:not(.ui-nav-drawer--persistent) { width: min(100%, 320px); }
+		.ui-nav-drawer-scrim { left: 0; bottom: 56px; z-index: 58; }
 	}
 </style>

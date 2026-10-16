@@ -10,6 +10,10 @@
 	import InlineAlert from '$lib/components/ui/InlineAlert.svelte';
 	import Select from '$lib/components/ui/Select.svelte';
 	import Spinner from '$lib/components/ui/Spinner.svelte';
+	import PermissionField from '$lib/components/PermissionField.svelte';
+	import { orgPermissionCatalog } from '$lib/auth/permissionCatalog';
+
+	const orgCatalog = orgPermissionCatalog();
 
 	const ROLES: { value: MemberRole; label: string }[] = [
 		{ value: 'owner',  label: 'Owner' },
@@ -228,20 +232,13 @@
 			{/if}
 		</div>
 
-		<div class="perm-groups">
-			{#each PERMISSION_GROUPS as group}
-				<div class="perm-group">
-					<div class="perm-group-name">{group.group}</div>
-					<div class="perm-grid">
-						{#each group.permissions as perm}
-							<span class="perm-check" title={perm.description}>
-								<Checkbox checked={orgPerms.has(perm.id)} label={perm.label} onchange={() => togglePerm(perm.id)} />
-							</span>
-						{/each}
-					</div>
-				</div>
-			{/each}
-		</div>
+		<PermissionField
+			catalog={orgCatalog}
+			value={[...orgPerms]}
+			onchange={(next) => (orgPerms = new Set(next))}
+			title="Organization permissions"
+			emptyText="No extra organization permissions."
+		/>
 
 		{#if permsError}
 			<div role="alert"><InlineAlert tone="error">{permsError}</InlineAlert></div>
@@ -367,12 +364,6 @@
 	.role-select-wrap { display: inline-flex; align-items: center; gap: 8px; min-width: 140px; }
 
 	/* ── Permissions ── */
-	.perm-groups { display: flex; flex-direction: column; gap: 10px; }
-	.perm-group { display: flex; flex-direction: column; gap: 5px; }
-	.perm-group-name { font-size: 10px; font-weight: 700; color: var(--text-dim); }
-	.perm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
-	.perm-check { display: flex; padding: 4px 7px; font-size: 11px; }
-	.perm-check :global(.ui-checkbox), .perm-chip-row :global(.ui-checkbox) { font-size: 11px; }
 
 	/* ── Project assignments ── */
 	.assignment-list { display: flex; flex-direction: column; gap: 6px; }
