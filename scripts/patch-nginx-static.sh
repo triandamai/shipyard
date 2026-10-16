@@ -169,6 +169,7 @@ http:
       errors:
         status:
           - "404"
+          - "502-504"
         service: nginx-static
         query: "/_errors/{status}.html"
 ERRORS_CONF
@@ -198,6 +199,7 @@ http:
       errors:
         status:
           - "404"
+          - "502-504"
         service: nginx-static
         query: "/_errors/{status}.html"
 ERRORS_CONF

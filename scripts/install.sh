@@ -758,6 +758,7 @@ ${STATIC_SITE_TLS}
       errors:
         status:
           - "404"
+          - "502-504"
         service: nginx-static
         query: "/_errors/{status}.html"
 DYNAMIC

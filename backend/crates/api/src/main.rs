@@ -1008,6 +1008,7 @@ async fn write_shipyard_traefik_config(
       errors:
         status:
           - "404"
+          - "502-504"
         service: nginx-static
         query: "/_errors/{{status}}.html"
 "#

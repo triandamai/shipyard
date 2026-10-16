@@ -325,49 +325,6 @@ fn find_html_recursive(dir: &Path, depth: usize) -> bool {
 
 // ─── Custom error page assets ─────────────────────────────────────────────────
 
-/// Branded 404 HTML served for unregistered domains and missing pages.
-pub const HTML_404: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>404 – Not Found</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a; color: #e2e8f0;
-      min-height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      padding: 2rem; gap: 0;
-    }
-    .num {
-      font-size: 6.5rem; font-weight: 800; line-height: 1;
-      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      background-clip: text; margin-bottom: 1.25rem;
-    }
-    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
-    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
-    .badge {
-      display: inline-flex; align-items: center; gap: 0.45rem;
-      font-size: 0.73rem; color: #475569;
-      border: 1px solid #1e293b; border-radius: 9999px;
-      padding: 0.35rem 0.9rem;
-    }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
-  </style>
-</head>
-<body>
-  <div class="num">404</div>
-  <h1>Page Not Found</h1>
-  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
-  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
-</body>
-</html>
-"#;
-
 /// Returns the nginx `_default.conf` content for `shipyard-nginx-static`.
 ///
 /// This server block is the fallback for any domain that doesn't match a deployed
@@ -438,6 +395,11 @@ pub fn render_nginx_site_conf(
     }
     if let Some(p) = &config.error_pages.server_error {
         out.push_str(&format!("    error_page 500 502 503 504 /{p};\n"));
+    } else {
+        out.push_str("    error_page 500 /_errors/500.html;\n");
+        out.push_str("    error_page 502 /_errors/502.html;\n");
+        out.push_str("    error_page 503 /_errors/503.html;\n");
+        out.push_str("    error_page 504 /_errors/504.html;\n");
     }
     // Shared error-page assets — also fetched directly by Traefik's errors middleware.
     out.push_str(&format!(
@@ -840,6 +802,18 @@ mod tests {
         assert!(conf.contains("listen 80 default_server;"));
         assert!(conf.contains("error_page 404 /_errors/404.html;"));
         assert!(conf.contains("root /opt/shipyard/data/static;"));
+    }
+
+    #[test]
+    fn site_conf_serves_branded_5xx_pages_unless_overridden() {
+        let domains = vec!["a.example.com".to_string()];
+        let conf = render_nginx_site_conf("svc-1", &domains, "/d/public", "/d", &DeployConfig::default());
+        assert!(conf.contains("error_page 502 /_errors/502.html;"));
+        let mut custom = DeployConfig::default();
+        custom.error_pages.server_error = Some("oops.html".into());
+        let conf = render_nginx_site_conf("svc-1", &domains, "/d/public", "/d", &custom);
+        assert!(conf.contains("error_page 500 502 503 504 /oops.html;"));
+        assert!(!conf.contains("/_errors/502.html"));
     }
 
     #[test]
