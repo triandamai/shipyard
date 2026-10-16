@@ -121,6 +121,8 @@ async fn async_main() {
         std::process::exit(1);
     }
     tracing::info!("Data directory: {}", config.data_dir);
+    // Refresh the branded error pages nginx-static serves (404, 502-504, ...).
+    shipyard_engine::error_pages::write_all(&format!("{}/static", config.data_dir)).await;
 
     // Write Traefik dynamic config (shipyard.yml) on every startup so Traefik
     // always has the global routes and middleware definitions, even after a volume wipe.

@@ -114,6 +114,19 @@ footer {{
     )
 }
 
+/// Writes every page into `{sites_base}/_errors`, replacing older designs.
+/// Called at startup and before each static deploy so upgraded installs
+/// pick up new pages without redeploying anything.
+pub async fn write_all(sites_base: &str) {
+    let dir = format!("{sites_base}/_errors");
+    if tokio::fs::create_dir_all(&dir).await.is_err() {
+        return;
+    }
+    for (name, html) in all() {
+        let _ = tokio::fs::write(format!("{dir}/{name}"), html.as_bytes()).await;
+    }
+}
+
 /// `(file name, html)` for every status page.
 pub fn all() -> Vec<(String, String)> {
     STATUSES.iter().map(|s| (format!("{s}.html"), render(*s))).collect()

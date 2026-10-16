@@ -914,9 +914,7 @@ impl DeploymentEngine {
         // Always overwrite so the latest design is used after upgrades.
         let errors_dir = format!("{sites_base}/_errors");
         tokio::fs::create_dir_all(&errors_dir).await.ok();
-        for (name, html) in crate::error_pages::all() {
-            tokio::fs::write(format!("{errors_dir}/{name}"), html.as_bytes()).await.ok();
-        }
+        crate::error_pages::write_all(sites_base).await;
         tokio::fs::write(
             format!("{conf_dir}/_default.conf"),
             crate::static_site::render_default_nginx_conf(sites_base).as_bytes(),
