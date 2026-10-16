@@ -123,13 +123,19 @@ if grep -q "nginx-static" "${DYNAMIC}" 2>/dev/null; then
     cat > "${ERRORS_CONFIG}" <<ERRORS_CONF
 # Written by patch-nginx-static.sh — safe to re-run (idempotent).
 http:
+  services:
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-error-pages:
       errors:
         status:
           - "404"
           - "502-504"
-        service: nginx-static
+        service: shipyard-error-backend
         query: "/_errors/{status}.html"
 ERRORS_CONF
 else
@@ -153,13 +159,19 @@ http:
         servers:
           - url: "http://shipyard-nginx-static:80"
 
+    # Serves the branded error pages even when nginx-static is down.
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-error-pages:
       errors:
         status:
           - "404"
           - "502-504"
-        service: nginx-static
+        service: shipyard-error-backend
         query: "/_errors/{status}.html"
 ERRORS_CONF
 fi

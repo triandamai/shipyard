@@ -695,6 +695,8 @@ async fn async_main() {
     // Build the full application router
     let app = Router::new()
         .route("/health", get(health_check))
+        // Branded error pages for Traefik's errors middleware; independent of nginx-static.
+        .route("/_errors/:file", get(error_page))
         .route("/metrics", get(metrics))
         // Internal MQTT auth callback — called by rmqtt-auth-http, not by clients.
         // Lives outside /api so it bypasses the init gate and rate limiter.
@@ -973,6 +975,8 @@ async fn write_shipyard_traefik_config(
       priority: 1
       entryPoints: [{static_entrypoints}]
       service: nginx-static
+      middlewares:
+        - shipyard-error-pages
 {static_tls}
 
   services:
@@ -996,6 +1000,12 @@ async fn write_shipyard_traefik_config(
         servers:
           - url: "http://shipyard-nginx-static:80"
 
+    # Serves the branded error pages even when nginx-static is down.
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-registry-prefix:
       addPrefix:
@@ -1011,7 +1021,7 @@ async fn write_shipyard_traefik_config(
         status:
           - "404"
           - "502-504"
-        service: nginx-static
+        service: shipyard-error-backend
         query: "/_errors/{{status}}.html"
 "#
     );
@@ -1031,5 +1041,22 @@ async fn write_shipyard_traefik_config(
     match tokio::fs::write(&dest, content).await {
         Ok(_) => tracing::info!("Traefik dynamic config written (bootstrap): {dest}"),
         Err(e) => tracing::warn!("Could not write traefik config '{dest}': {e}"),
+    }
+}
+
+/// GET /_errors/<status>.html: the branded error page for `status`. Traefik's
+/// errors middleware fetches this and replaces the failed response's body,
+/// keeping the original status code, so it works even when nginx-static is down.
+async fn error_page(axum::extract::Path(file): axum::extract::Path<String>) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+    let status = file.strip_suffix(".html").and_then(|s| s.parse::<u16>().ok());
+    match status.filter(|s| shipyard_engine::error_pages::STATUSES.contains(s)) {
+        Some(s) => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-store")],
+            shipyard_engine::error_pages::render(s),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
