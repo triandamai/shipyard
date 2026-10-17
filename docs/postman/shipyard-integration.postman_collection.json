@@ -1,0 +1,2342 @@
+{
+  "info": {
+    "name": "Shipyard \u00b7 Nomi integration API",
+    "description": "Every endpoint of the Shipyard integration API (/openapi/v1/integration), plus the admin calls that create an integration and its keys.\n\nSet `baseUrl`, run folder 0 (or paste an existing ship_int_ key into `integrationKey`), then work top to bottom. Scripts on key requests fill `orgUuid`, `publishId`, `deploymentId`, `webhookId`, `secretRef` etc. automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{integrationKey}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://shipyard.example.com"
+    },
+    {
+      "key": "integrationKey",
+      "value": ""
+    },
+    {
+      "key": "revealKey",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "integrationId",
+      "value": ""
+    },
+    {
+      "key": "keyId",
+      "value": ""
+    },
+    {
+      "key": "org",
+      "value": "org_demo"
+    },
+    {
+      "key": "orgUuid",
+      "value": ""
+    },
+    {
+      "key": "app",
+      "value": "todo"
+    },
+    {
+      "key": "env",
+      "value": "production"
+    },
+    {
+      "key": "serviceName",
+      "value": "web"
+    },
+    {
+      "key": "secretName",
+      "value": "STRIPE_KEY"
+    },
+    {
+      "key": "secretRef",
+      "value": ""
+    },
+    {
+      "key": "appUrlRef",
+      "value": ""
+    },
+    {
+      "key": "ownerUrlRef",
+      "value": ""
+    },
+    {
+      "key": "publishId",
+      "value": ""
+    },
+    {
+      "key": "deploymentId",
+      "value": ""
+    },
+    {
+      "key": "webhookId",
+      "value": ""
+    },
+    {
+      "key": "webhookSecret",
+      "value": ""
+    },
+    {
+      "key": "deliveryId",
+      "value": ""
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 \u00b7 Admin setup (superadmin session)",
+      "description": "",
+      "item": [
+        {
+          "name": "Login (get session token)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Returns an access token for the admin calls in this folder. Saved to {{adminToken}}.",
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "const t = (j.data && (j.data.access_token || (j.data.tokens && j.data.tokens.access_token))) || j.access_token;",
+                  "if (t) { pm.collectionVariables.set(\"adminToken\", t); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create integration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"nomi\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); if (j.data && j.data.id) { pm.collectionVariables.set(\"integrationId\", j.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List integrations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create key: agent (manage)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "The full key is returned once. Saved to {{integrationKey}}.",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations/{{integrationId}}/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations",
+                "{{integrationId}}",
+                "keys"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"nomi-agent\",\n  \"scopes\": [\n    \"manage\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const k = j.data && (j.data.key || j.data.token); if (k) { pm.collectionVariables.set(\"integrationKey\", k); }",
+                  "if (pm.response.json().data) { pm.collectionVariables.set(\"keyId\", pm.response.json().data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create key: injector (manage + secrets:reveal)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Saved to {{revealKey}}. Server-side only.",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations/{{integrationId}}/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations",
+                "{{integrationId}}",
+                "keys"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"nomi-injector\",\n  \"scopes\": [\n    \"manage\",\n    \"secrets:reveal\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); const k = j.data && (j.data.key || j.data.token); if (k) { pm.collectionVariables.set(\"revealKey\", k); }",
+                  "if (pm.response.json().data) { pm.collectionVariables.set(\"keyId\", pm.response.json().data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revoke key",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations/{{integrationId}}/keys/{{keyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations",
+                "{{integrationId}}",
+                "keys",
+                "{{keyId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Link an existing org to the integration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Needed for orgs made in the dashboard before the integration existed. Integration keys never reach unlinked orgs.",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations/{{integrationId}}/orgs/{{orgUuid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations",
+                "{{integrationId}}",
+                "orgs",
+                "{{orgUuid}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{org}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unlink an org",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/integrations/{{integrationId}}/orgs/{{orgUuid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "integrations",
+                "{{integrationId}}",
+                "orgs",
+                "{{orgUuid}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 \u00b7 Organizations",
+      "description": "",
+      "item": [
+        {
+          "name": "Create / update org (idempotent)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "201 first time, 200 after. Integration key only.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ana's Workspace\",\n  \"plan\": \"free\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); if (j.data && j.data.id) { pm.collectionVariables.set(\"orgUuid\", j.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get org (with apps)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete org (terminates every app)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "Irreversible.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 \u00b7 Apps & dev database",
+      "description": "",
+      "item": [
+        {
+          "name": "Create / update app (+ dev database)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Todo\",\n  \"dev_database\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "const d = j.data && j.data.dev_database;",
+                  "if (d && d.app_url_ref) { pm.collectionVariables.set(\"appUrlRef\", d.app_url_ref); }",
+                  "if (d && d.owner_url_ref) { pm.collectionVariables.set(\"ownerUrlRef\", d.owner_url_ref); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get app",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Terminate app",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "Removes every environment, the dev database and secrets. Irreversible.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ensure dev database",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/dev-database",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "dev-database"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get dev database",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/dev-database",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "dev-database"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Drop dev database",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/dev-database",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "dev-database"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 \u00b7 Secrets",
+      "description": "",
+      "item": [
+        {
+          "name": "Set a secret (app-wide)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "App-wide: works before any environment exists.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/secrets/{{secretName}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "secrets",
+                "{{secretName}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"sk_live_...\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); if (j.data && j.data.ref) { pm.collectionVariables.set(\"secretRef\", j.data.ref); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set a secret (one environment)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Environment-specific; wins over the app-wide value. The environment must already exist (publish first), else 404.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/secrets/{{secretName}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "secrets",
+                "{{secretName}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"sk_live_...\",\n  \"environment\": \"production\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Generate a secret",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/secrets/SESSION_SECRET",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "secrets",
+                "SESSION_SECRET"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"generate\": \"hex32\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List secrets (names and refs only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/secrets",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "secrets"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete a secret",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "Refused while an env var uses it.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/secrets/{{secretName}}?environment=production",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "secrets",
+                "{{secretName}}"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "production",
+                  "disabled": true
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reveal a secret (needs secrets:reveal)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "Use {{appUrlRef}} to get the dev DATABASE_URL, {{ownerUrlRef}} for the user's own login.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/secrets/{{secretRef}}/reveal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "secrets",
+                "{{secretRef}}",
+                "reveal"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{revealKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 \u00b7 Publish",
+      "description": "",
+      "item": [
+        {
+          "name": "Publish (container)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "Attach a zip of the project as `source` (no node_modules/.git/.env). Omit it to re-apply a changed manifest to the last upload. 202 = build started, NOT live yet.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "publish"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "manifest",
+                  "type": "text",
+                  "value": "{\"services\": [{\"name\": \"web\", \"kind\": \"web\", \"path\": \".\", \"port\": 3000, \"replicas\": 1, \"env\": {\"NODE_ENV\": \"production\", \"SESSION_SECRET\": {\"generate\": \"hex32\"}, \"STRIPE_KEY\": {\"secret\": \"STRIPE_KEY\"}, \"DATABASE_URL\": {\"database\": \"url\"}}, \"volumes\": [{\"path\": \"/app/uploads\"}]}], \"database\": {\"engine\": \"postgres\"}, \"domain\": {\"subdomain\": \"{{app}}\"}}",
+                  "contentType": "application/json"
+                },
+                {
+                  "key": "source",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.publish_id) { pm.collectionVariables.set(\"publishId\", j.data.publish_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish (static site)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "publish"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "manifest",
+                  "type": "text",
+                  "value": "{\"services\": [{\"name\": \"site\", \"kind\": \"static\"}], \"domain\": {\"subdomain\": \"{{app}}\"}}",
+                  "contentType": "application/json"
+                },
+                {
+                  "key": "source",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json(); if (j.data && j.data.publish_id) { pm.collectionVariables.set(\"publishId\", j.data.publish_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get publish status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "status: running | succeeded | failed. Show the URL only when succeeded.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/publishes/{{publishId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "publishes",
+                "{{publishId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "const d = j.data && j.data.deployments;",
+                  "if (d && d.length) { pm.collectionVariables.set(\"deploymentId\", d[d.length - 1].deployment_id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get publish by id (org only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/publishes/{{publishId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "publishes",
+                "{{publishId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List publishes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/publishes?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "publishes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": false
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 \u00b7 Environments & deployments",
+      "description": "",
+      "item": [
+        {
+          "name": "Get environment (services, urls, live)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete environment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Duplicate environment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Copies the last manifest and source. Empty database, new generated secrets, own URL.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/duplicate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "duplicate"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"staging\",\n  \"copy_secrets\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List deployments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/deployments?service=web&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "deployments"
+              ],
+              "query": [
+                {
+                  "key": "service",
+                  "value": "web",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": false
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get deployment (app/env path)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "status, failure{step,phase,message,tail}, steps, logs, next_after. Poll with after=<next_after>.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/deployments/{{deploymentId}}?logs=true&after=&logs_limit=2000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "deployments",
+                "{{deploymentId}}"
+              ],
+              "query": [
+                {
+                  "key": "logs",
+                  "value": "true",
+                  "disabled": false
+                },
+                {
+                  "key": "after",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "logs_limit",
+                  "value": "2000",
+                  "disabled": true
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get deployment (org path)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/deployments/{{deploymentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "deployments",
+                "{{deploymentId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get deployment (id only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/deployments/{{deploymentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "deployments",
+                "{{deploymentId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rollback service",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Optional body {\"deployment_id\": \"...\"}. No rebuild; migrations are not undone.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/services/{{serviceName}}/rollback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "services",
+                "{{serviceName}}",
+                "rollback"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Restart environment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/restart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "restart"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List service env vars",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/services/{{serviceName}}/env",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "services",
+                "{{serviceName}}",
+                "env"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Service runtime logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/services/{{serviceName}}/logs?tail=200&since=10m",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "services",
+                "{{serviceName}}",
+                "logs"
+              ],
+              "query": [
+                {
+                  "key": "tail",
+                  "value": "200",
+                  "disabled": false
+                },
+                {
+                  "key": "since",
+                  "value": "10m",
+                  "disabled": true
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Usage (CPU / memory)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/usage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "usage"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 \u00b7 Webhooks & events",
+      "description": "",
+      "item": [
+        {
+          "name": "Register webhook endpoint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "The `secret` (whsec_\u2026) is shown once. Add \"org\": \"<org>\" to limit to one org.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://nomi.example.com/hooks/shipyard\",\n  \"events\": [\n    \"*\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.id) { pm.collectionVariables.set(\"webhookId\", j.data.id); }",
+                  "if (j.data && j.data.secret) { pm.collectionVariables.set(\"webhookSecret\", j.data.secret); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List webhook endpoints",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update endpoint",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks/{{webhookId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks",
+                "{{webhookId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    \"deployment.*\",\n    \"publish.*\"\n  ],\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rotate secret",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks/{{webhookId}}/rotate-secret",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks",
+                "{{webhookId}}",
+                "rotate-secret"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Send test ping",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks/{{webhookId}}/test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks",
+                "{{webhookId}}",
+                "test"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List deliveries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks/{{webhookId}}/deliveries?status=failed",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks",
+                "{{webhookId}}",
+                "deliveries"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "failed",
+                  "disabled": true
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "const first = j.data && (Array.isArray(j.data) ? j.data[0] : (j.data.deliveries || [])[0]);",
+                  "if (first && first.id) { pm.collectionVariables.set(\"deliveryId\", first.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Redeliver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/deliveries/{{deliveryId}}/redeliver",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "deliveries",
+                "{{deliveryId}}",
+                "redeliver"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete endpoint",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/webhooks/{{webhookId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "webhooks",
+                "{{webhookId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Event types",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/event-types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "event-types"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Events feed (catch up)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Oldest first; pass the last id as `after`. Kept 30 days.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/events?after={{eventId}}&type=deployment.*&app={{app}}&limit=100",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "events"
+              ],
+              "query": [
+                {
+                  "key": "after",
+                  "value": "{{eventId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "deployment.*",
+                  "disabled": true
+                },
+                {
+                  "key": "app",
+                  "value": "{{app}}",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "100",
+                  "disabled": false
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.next_after) { pm.collectionVariables.set(\"eventId\", j.data.next_after); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
