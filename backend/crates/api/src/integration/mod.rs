@@ -20,6 +20,7 @@ pub mod keys;
 pub mod orgs;
 pub mod publish;
 pub mod secrets;
+pub mod transfer;
 pub mod webhooks;
 
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts, Router};
@@ -42,6 +43,7 @@ pub fn routes() -> Router<AppState> {
         .merge(publish::routes())
         .merge(devdb::routes())
         .merge(domains::routes())
+        .merge(transfer::routes())
         .merge(secrets::routes())
         .merge(webhooks::routes())
 }
@@ -807,6 +809,117 @@ mod access_tests {
         let _ = sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)")).execute(&admin).await;
     }
 
+    /// An app moves to another org with everything it owns, in one step, and
+    /// is refused cleanly when the destination can't take it.
+    #[tokio::test]
+    #[ignore]
+    async fn transferring_an_app_moves_everything_it_owns() {
+        let Some((admin, db, name)) = fresh_db().await else {
+            eprintln!("skipped: set TEST_DATABASE_URL");
+            return;
+        };
+        let integ = Uuid::now_v7();
+        sqlx::query("INSERT INTO integrations (id, name) VALUES ($1, 'nomi')")
+            .bind(integ)
+            .execute(&db)
+            .await
+            .unwrap();
+        let (a, b) = (
+            org(&db, "org-a", Some(integ), Some("org_a")).await,
+            org(&db, "org-b", Some(integ), Some("org_b")).await,
+        );
+        let app: Uuid = sqlx::query_scalar(
+            "INSERT INTO integration_apps (id, org_id, app_key, name) VALUES ($1, $2, 'todo', 'Todo') RETURNING id",
+        )
+        .bind(Uuid::now_v7())
+        .bind(a)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let mut projects = vec![];
+        for env in ["production", "staging"] {
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO projects (id, org_id, name, slug, directory_path, app_id, environment)
+                 VALUES ($1, $2, $3, $3, '/x', $4, $5) RETURNING id",
+            )
+            .bind(Uuid::now_v7())
+            .bind(a)
+            .bind(format!("todo-{env}"))
+            .bind(app)
+            .bind(env)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO publishes (id, org_id, project_id, status, manifest) VALUES ($1, $2, $3, 'succeeded', '{}')")
+                .bind(Uuid::now_v7())
+                .bind(a)
+                .bind(id)
+                .execute(&db)
+                .await
+                .unwrap();
+            projects.push(id);
+        }
+        // The destination already uses one of the project slugs.
+        sqlx::query("INSERT INTO projects (id, org_id, name, slug, directory_path) VALUES ($1, $2, 'x', 'todo-staging', '/y')")
+            .bind(Uuid::now_v7())
+            .bind(b)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        // A running publish blocks the move.
+        sqlx::query("UPDATE publishes SET status = 'running' WHERE project_id = $1")
+            .bind(projects[0])
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(matches!(
+            transfer::move_app(&db, app, a, b, None).await,
+            Err(transfer::MoveError::Conflict(_))
+        ));
+        sqlx::query("UPDATE publishes SET status = 'succeeded'").execute(&db).await.unwrap();
+
+        let moved = transfer::move_app(&db, app, a, b, None).await.unwrap();
+        assert_eq!(moved.app_key, "todo");
+        assert_eq!(moved.environments.len(), 2);
+
+        let owners: Vec<Uuid> = sqlx::query_scalar("SELECT org_id FROM projects WHERE app_id = $1")
+            .bind(app)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert!(owners.iter().all(|o| *o == b));
+        let pub_owner: Vec<Uuid> = sqlx::query_scalar("SELECT DISTINCT org_id FROM publishes")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(pub_owner, vec![b]);
+        // The clashing slug was renamed, the other kept.
+        let slugs: Vec<String> = moved.environments.iter().map(|e| e.2.clone()).collect();
+        assert!(slugs.contains(&"todo-production".to_string()));
+        assert!(slugs.iter().any(|s| s.starts_with("todo-staging-") && s != "todo-staging"));
+        // The app is reachable under the new org only.
+        let c = caller(Access::Integration { integration_id: integ }, &["manage"]);
+        assert!(app_ref(&db, &c, "org_b", "todo").await.is_ok());
+        assert!(app_ref(&db, &c, "org_a", "todo").await.is_err());
+
+        // Moving back is refused when the key is taken in the destination.
+        sqlx::query("INSERT INTO integration_apps (id, org_id, app_key, name) VALUES ($1, $2, 'todo', 'Other')")
+            .bind(Uuid::now_v7())
+            .bind(a)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(matches!(
+            transfer::move_app(&db, app, b, a, None).await,
+            Err(transfer::MoveError::Conflict(_))
+        ));
+        assert!(transfer::move_app(&db, app, b, a, Some("todo-2")).await.is_ok());
+
+        db.close().await;
+        let _ = sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)")).execute(&admin).await;
+    }
+
 }
 
 #[cfg(test)]
@@ -1011,6 +1124,7 @@ mod tests {
             (Method::GET, "/orgs/my-org/apps/my-app/envs/production/services/web/env"),
             (Method::POST, "/orgs/my-org/apps/my-app/envs/production/duplicate"),
             (Method::GET, "/orgs/my-org/domains/check?subdomain=shop"),
+            (Method::POST, "/orgs/my-org/apps/my-app/transfer"),
             (Method::GET, "/orgs/my-org/apps/my-app/envs/production/domain"),
             (Method::PUT, "/orgs/my-org/apps/my-app/envs/production/domain"),
 

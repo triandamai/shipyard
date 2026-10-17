@@ -361,6 +361,27 @@ def main():
             r = c.call("DELETE", f"/orgs/{org}/apps/{app}/envs/preview-check")
             check("delete the copy", r[0] == 200, errmsg(r))
 
+        print("\nTransfer to another organization")
+        org2 = org + "-b"
+        r = c.call("PUT", f"/orgs/{org2}", {"name": "check destination"})
+        check("create a second org", r[0] in (200, 201), errmsg(r))
+        try:
+            r = c.call("POST", f"/orgs/{org}/apps/{app}/transfer", {"to_org": org})
+            check("transfer to the same org is refused", r[0] == 400, errmsg(r))
+            r = c.call("POST", f"/orgs/{org}/apps/{app}/transfer", {"to_org": org2})
+            moved = data(r) or {}
+            check("transfer the app", r[0] == 200 and len(moved.get("environments", [])) >= 1, errmsg(r))
+            r = c.call("GET", f"/orgs/{org}/apps/{app}")
+            check("the old org no longer has the app", r[0] == 404, errmsg(r))
+            r = c.call("GET", f"/orgs/{org2}/apps/{app}/envs/production")
+            check("the new org has the environment", r[0] == 200, errmsg(r))
+            r = c.call("GET", f"/orgs/{org2}/apps/{app}/secrets")
+            check("secrets moved with it", r[0] == 200 and len(data(r) or []) >= 1, errmsg(r))
+            r = c.call("POST", f"/orgs/{org2}/apps/{app}/transfer", {"to_org": org})
+            check("transfer back", r[0] == 200, errmsg(r))
+        finally:
+            c.call("DELETE", f"/orgs/{org2}")
+
         print("\nTermination")
         r = c.call("DELETE", f"/orgs/{org}/apps/{app}")
         check("terminate the app", r[0] == 200, errmsg(r))

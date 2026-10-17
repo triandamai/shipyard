@@ -833,6 +833,54 @@
               ]
             }
           }
+        },
+        {
+          "name": "Transfer app to another org",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Moves the app with all environments, secrets, dev database and history. Containers redeploy once to join the new org's network; URLs and data stay. 409 if the destination has an app with this key (send app_key) or a publish is running.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_org\": \"org_other\",\n  \"app_key\": \"optional-new-key\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/transfer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "transfer"
+              ]
+            }
+          }
         }
       ]
     },
