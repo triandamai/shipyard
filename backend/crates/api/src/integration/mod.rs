@@ -15,6 +15,7 @@
 
 pub mod apps;
 pub mod devdb;
+pub mod domains;
 pub mod keys;
 pub mod orgs;
 pub mod publish;
@@ -40,6 +41,7 @@ pub fn routes() -> Router<AppState> {
         .merge(apps::routes())
         .merge(publish::routes())
         .merge(devdb::routes())
+        .merge(domains::routes())
         .merge(secrets::routes())
         .merge(webhooks::routes())
 }
@@ -1008,6 +1010,9 @@ mod tests {
             (Method::POST, "/orgs/my-org/apps/my-app/envs/production/restart"),
             (Method::GET, "/orgs/my-org/apps/my-app/envs/production/services/web/env"),
             (Method::POST, "/orgs/my-org/apps/my-app/envs/production/duplicate"),
+            (Method::GET, "/orgs/my-org/domains/check?subdomain=shop"),
+            (Method::GET, "/orgs/my-org/apps/my-app/envs/production/domain"),
+            (Method::PUT, "/orgs/my-org/apps/my-app/envs/production/domain"),
 
             // Shorthand aliases /integration and /integrations
             (Method::POST, "/integration/orgs/my-org/apps/my-app/envs/production/publish"),

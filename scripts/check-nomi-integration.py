@@ -263,6 +263,34 @@ def main():
             types = [e["type"] for e in (data(r) or {}).get("events", [])]
             check("events feed has publish.started and publish.succeeded", "publish.started" in types and "publish.succeeded" in types, str(types))
 
+        print("\nDomain")
+        r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/production/domain")
+        cur = data(r) or {}
+        if r[0] == 200 and cur.get("subdomain"):
+            check("current domain is reported", bool(cur.get("url")), json.dumps(cur)[:160])
+            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={cur['subdomain']}&app={app}&env=production")
+            d = data(r) or {}
+            check("own name counts as available", d.get("available") is True and d.get("current") is True, json.dumps(d)[:160])
+            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={cur['subdomain']}")
+            d = data(r) or {}
+            check("a name in use is refused with free suggestions", d.get("available") is False and d.get("reason") == "taken" and len(d.get("suggestions", [])) > 0, json.dumps(d)[:200])
+            if d.get("suggestions"):
+                s0 = d["suggestions"][0]["subdomain"]
+                r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={s0}")
+                check("every suggestion is itself available", (data(r) or {}).get("available") is True, s0)
+            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain=Bad_Name")
+            d = data(r) or {}
+            check("an invalid name is explained", d.get("available") is False and d.get("reason") == "invalid", json.dumps(d)[:160])
+            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"subdomain": cur["subdomain"] + "-x"})
+            d = data(r) or {}
+            check("change to a free name", r[0] == 200 and d.get("changed") is True, errmsg(r))
+            r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/production/domain")
+            check("the new name is live in the environment", (data(r) or {}).get("subdomain") == cur["subdomain"] + "-x", json.dumps(data(r))[:160])
+            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"subdomain": "www"})
+            check("a reserved name is refused (409 with suggestions)", r[0] == 409, errmsg(r))
+        else:
+            skip("domain checks", "no apps base domain configured")
+
         if args.skip_container:
             skip("container publish, rollback, restart, failure", "--skip-container")
         else:
