@@ -1884,6 +1884,148 @@
       ]
     },
     {
+      "name": "5b \u00b7 Domain",
+      "description": "Pick and change an environment's public address.",
+      "item": [
+        {
+          "name": "Check a name (and get suggestions)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "available:true, or available:false with reason taken|invalid and free `suggestions`. With app+env, the environment's own current name counts as available.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/domains/check",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "domains",
+                "check"
+              ],
+              "query": [
+                {
+                  "key": "subdomain",
+                  "value": "my-app",
+                  "disabled": false
+                },
+                {
+                  "key": "app",
+                  "value": "{{app}}",
+                  "disabled": true
+                },
+                {
+                  "key": "env",
+                  "value": "{{env}}",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get current domain",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/domain",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "domain"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Change domain",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "200 on success. 409 with `data.suggestions` when the name is taken or invalid; nothing changes.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/domain",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "domain"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subdomain\": \"my-app\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "6 \u00b7 Webhooks & events",
       "description": "",
       "item": [

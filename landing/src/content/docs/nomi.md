@@ -26,7 +26,8 @@ If you read nothing else, this is the whole integration in order:
 4. On publish: zip the source, build the [manifest](#manifest), `POST .../envs/{env}/publish`. You get `202` and a `publish_id`. **The app is not live yet.**
 5. Wait for the `publish.succeeded` webhook (or poll `GET .../publishes/{publish_id}` every 3 s). Only then show the user `urls[0]`.
 6. If it failed, `GET .../deployments/{deployment_id}` returns `failure` with the step, phase, message and log tail. Fix the code, publish again. See [the fix loop](#fix-loop).
-7. `POST .../duplicate` for another environment, `DELETE .../apps/{app}` to terminate.
+7. User wants another address: `GET /orgs/{org}/domains/check?subdomain=...` as they type, then `PUT .../envs/{env}/domain`. See [Choosing a domain](#domains).
+8. `POST .../duplicate` for another environment, `DELETE .../apps/{app}` to terminate.
 
 Before you ship, run the readiness checker against a real Shipyard (it creates and deletes a throwaway org): `python3 scripts/check-nomi-integration.py` in the Shipyard repo. See [Verifying a Shipyard](#verify).
 
@@ -72,7 +73,7 @@ Follow these without exception.
 | Published app | Environment: one Shipyard project per environment | `{env}`: `production`, `staging`, `preview-123`, ... |
 | Secrets the user enters | Secret store, app-wide or per environment | Env var name, e.g. `STRIPE_KEY` |
 
-Web addresses belong to Shipyard: production gets `https://<app>.<apps-domain>`, other environments `https://<app>-<env>.<apps-domain>`. If a name is taken, Shipyard appends a random suffix. Always use the URL Shipyard returns; never construct it.
+Web addresses belong to Shipyard: production gets `https://<app>.<apps-domain>`, other environments `https://<app>-<env>.<apps-domain>`. If a name is taken, Shipyard appends a random suffix. Always use the URL Shipyard returns; never construct it. To let a user pick their own name, see [Choosing a domain](#domains).
 
 ## Setup {#setup}
 
@@ -249,7 +250,7 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
 | `services[].env` | The service's complete env. Keys not listed are removed |
 | `services[].volumes` | Paths whose data survives deploys |
 | `database` | `{ "engine": "postgres" }` gives the environment its own Postgres with a persistent volume |
-| `domain.subdomain` | First label of the hostname. Default `<app>` (production) or `<app>-<env>` |
+| `domain.subdomain` | First label of the hostname. Default `<app>` (production) or `<app>-<env>`. Only used the first time: once an environment has an address, change it with [`PUT .../domain`](#domains) |
 | `domain.service` | Which web service gets the URL. Default: the first web service |
 
 Env values:
@@ -340,6 +341,67 @@ Services with status, running replica count, URLs and last deployment, plus the 
 ### DELETE /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}
 
 Removes the environment: services, database and its data, volumes, domains and DNS records.
+
+## Choosing a domain {#domains}
+
+Every environment gets `<name>.<apps-domain>` on its first publish. When a user wants a different name, use these endpoints. Names are shared across the whole platform, so a name another app already uses is refused, and Shipyard suggests free ones nearby.
+
+Typing flow in Nomi: call **check** as the user types (debounced), show the answer, and call **change** when they confirm.
+
+### GET /openapi/v1/integration/orgs/{org}/domains/check?subdomain=my-shop
+
+Optional `app` and `env`: with them, the environment's own current name counts as available (so re-confirming the current name isn't an error).
+
+```json
+// free
+{ "data": { "subdomain": "my-shop", "hostname": "my-shop.apps.example.dev", "available": true, "suggestions": [] } }
+
+// already used by someone else
+{ "data": {
+  "subdomain": "todo", "hostname": "todo.apps.example.dev", "available": false,
+  "reason": "taken", "message": "'todo' is already in use",
+  "suggestions": [
+    { "subdomain": "todo-app", "hostname": "todo-app.apps.example.dev" },
+    { "subdomain": "my-todo",  "hostname": "my-todo.apps.example.dev" },
+    { "subdomain": "todo-hq",  "hostname": "todo-hq.apps.example.dev" }
+  ] } }
+
+// not a valid name (letters, digits, '-', 3 to 63 characters, not reserved)
+{ "data": { "subdomain": "ab_c", "hostname": null, "available": false,
+            "reason": "invalid", "message": "Use only letters a-z, digits 0-9 and '-'", "suggestions": [ ... ] } }
+```
+
+The answer is `200` in every case; read `available`. Input is lowercased and trimmed. `reason` is `taken` or `invalid`. Reserved names (`www`, `api`, `admin`, `mail`, `status`, anything starting `preview-`, and similar) count as invalid. Suggestions are checked against the platform at the time of the call, but a name can still be taken a moment later, so handle `409` on change.
+
+### PUT /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/domain
+
+```json
+// request
+{ "subdomain": "my-shop" }
+// response 200
+{ "data": { "hostname": "my-shop.apps.example.dev", "url": "https://my-shop.apps.example.dev",
+            "previous_hostname": "todo.apps.example.dev", "changed": true } }
+```
+
+- The new name is attached before the old one is removed, so the app stays reachable. The old name becomes free for others.
+- TLS and the DNS record for the new name are set up the same way as on publish.
+- Asking for the name the environment already has returns `200` with `"changed": false`.
+- If the name is taken or invalid, **nothing changes** and you get `409`, with the same `suggestions` under `data`:
+
+```json
+{ "data": { "available": false, "reason": "taken", "suggestions": [ { "subdomain": "todo-app", "hostname": "todo-app.apps.example.dev" } ] },
+  "error": { "code": "CONFLICT", "message": "'todo' is already in use" } }
+```
+
+- An environment that hasn't been published has no address yet: you get `409` until the first publish.
+- Later publishes keep the chosen name. `domain.subdomain` in a manifest does not move an environment that already has an address.
+- Emits `domain.attached` for the new name and `domain.removed` for the old one.
+
+### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/domain
+
+Returns `{ "hostname", "subdomain", "url" }` for the current platform address, or nulls when there is none yet.
+
+Only the platform address (`<name>.<apps-domain>`) is managed here. Custom domains the user owns are not part of this API yet.
 
 ## 5. A user deletes a project or organization {#flow-terminate}
 
@@ -615,6 +677,7 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 - [ ] Secrets form → `PUT .../secrets/{name}` from the server; agent tools can list names and refs, never values.
 - [ ] Publish button → zip source (no `node_modules`, `.git`, `.env`, build output), build manifest, `POST .../publish`; show progress from `deployment.step_*`; on `publish.succeeded` show `urls[0]`; on `publish.failed` show `error` and fetch the deployment log for the agent.
 - [ ] "New environment" → `POST .../envs/{env}/duplicate`.
+- [ ] "Change address" → `GET /orgs/{org}/domains/check` while typing, `PUT .../envs/{env}/domain` on confirm; on `409` show `data.suggestions`.
 - [ ] Project deleted → confirm → `DELETE /orgs/{org}/apps/{app}`.
 - [ ] Logs tab → runtime logs and deployment logs; usage → `/usage`.
 - [ ] After publish: never show `url` until `publish.succeeded`; on failure read `failure` from the deployment and run the [fix loop](#fix-loop).

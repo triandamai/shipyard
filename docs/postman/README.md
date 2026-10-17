@@ -2,7 +2,7 @@
 
 Files:
 
-- `shipyard-integration.postman_collection.json`: every endpoint of `/openapi/v1/integration` (49 requests), plus the admin calls that create an integration and its keys.
+- `shipyard-integration.postman_collection.json`: every endpoint of `/openapi/v1/integration` (52 requests), plus the admin calls that create an integration and its keys.
 - `shipyard-local.postman_environment.json`: an environment with `baseUrl`, `integrationKey` and `revealKey`.
 
 ## Use

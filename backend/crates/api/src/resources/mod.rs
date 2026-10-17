@@ -695,13 +695,14 @@ async fn create_domain(
     Ok((StatusCode::CREATED, Json(ApiResponse::ok(domain))))
 }
 
-/// DELETE /services/:service_id/domains/:domain_id
-async fn delete_domain(
-    auth_user: AuthUser,
-    Path((service_id, domain_id)): Path<(Uuid, Uuid)>,
-    State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
-    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
+/// Remove a hostname from a service: domain row, Cloudflare DNS record, Traefik
+/// route, static-site server name, topology and `domain.removed` events. Used
+/// by the dashboard and the integration domain-change endpoint.
+pub(crate) async fn detach_domain(
+    state: &AppState,
+    service_id: Uuid,
+    domain_id: Uuid,
+) -> Result<(), ApiAppError> {
     let deleted: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "DELETE FROM domains WHERE id = $1 AND service_id = $2 RETURNING cloudflare_zone_id, cloudflare_record_id",
     )
@@ -751,6 +752,18 @@ async fn delete_domain(
         state.mqtt.publish_status(&topic, &payload).await.ok();
     }
     events::emit_for_service(&state.db, service_id, "domain.removed", serde_json::json!({ "domain_id": domain_id })).await;
+
+    Ok(())
+}
+
+/// DELETE /services/:service_id/domains/:domain_id
+async fn delete_domain(
+    auth_user: AuthUser,
+    Path((service_id, domain_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_service_permission(&state.db, auth_user.user_id, service_id, "domain:write").await.map_err(ApiAppError)?;
+    detach_domain(&state, service_id, domain_id).await?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": "Domain deleted successfully"
