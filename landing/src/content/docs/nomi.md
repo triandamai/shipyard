@@ -403,6 +403,36 @@ Returns `{ "hostname", "subdomain", "url" }` for the current platform address, o
 
 Only the platform address (`<name>.<apps-domain>`) is managed here. Custom domains the user owns are not part of this API yet.
 
+## Moving an app to another organization {#transfer}
+
+When a project moves to another Nomi organization, move its Shipyard app too, so the two stay in step. Both organizations must belong to your integration (both created through it, or linked by a superadmin).
+
+### POST /openapi/v1/integration/orgs/{org}/apps/{app}/transfer
+
+```json
+// request
+{ "to_org": "org_9Zk2", "app_key": "todo-2" }   // app_key is optional
+// response 200
+{ "data": {
+  "app": "todo", "from_org": "org_2Nf8sK", "to_org": "org_9Zk2",
+  "environments": [ { "environment": "production", "project_id": "01a1...", "slug": "todo-production" } ],
+  "redeploying": [ { "service": "web", "deployment_id": "01a1..." } ],
+  "skipped": []
+} }
+```
+
+What moves, in one step: the app, all its environments (production, staging, ...), their services and data, secrets (app-wide and per environment), the dev database, publish history and the image registry namespace. Nothing is copied, so **web addresses, volumes and databases stay as they are** and URLs keep working.
+
+What you should know:
+
+- **Containers restart once.** Each container service is redeployed from the image it already runs so it joins the new org's private network. Watch `redeploying[].deployment_id` like any deployment. Static sites don't restart. A service with no successful deployment is listed in `skipped`.
+- **Same app key.** If the destination already has an app with this key you get `409`; send `app_key` to rename it on the way.
+- **Slugs.** If a project slug is in use in the destination, the moved project gets a short suffix. The environment name does not change.
+- **Refused with `409`** while a publish or deployment of the app is running (try again when it finishes). **`403`** when the destination's plan can't hold the app's environments, or its billing doesn't allow deploys. `400` if `to_org` is the app's current org, `404` if either org is unknown to your key.
+- **Access.** Integration key only. Project-level access that was given to members of the old org is removed; the new org's members and roles apply.
+- **Events.** `app.transferred` is emitted in both orgs (data: `app`, `from_org`, `to_org`, `environments`). After this call `GET /orgs/{old}/apps/{app}` returns `404` and the app answers under the new org.
+- **Cloudflare.** DNS records created for the app's hostnames stay in place. If the new org uses a different Cloudflare connection, manage those hostnames there.
+
 ## 5. A user deletes a project or organization {#flow-terminate}
 
 ### DELETE /openapi/v1/integration/orgs/{org}/apps/{app}
@@ -678,6 +708,7 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 - [ ] Publish button → zip source (no `node_modules`, `.git`, `.env`, build output), build manifest, `POST .../publish`; show progress from `deployment.step_*`; on `publish.succeeded` show `urls[0]`; on `publish.failed` show `error` and fetch the deployment log for the agent.
 - [ ] "New environment" → `POST .../envs/{env}/duplicate`.
 - [ ] "Change address" → `GET /orgs/{org}/domains/check` while typing, `PUT .../envs/{env}/domain` on confirm; on `409` show `data.suggestions`.
+- [ ] Project moved to another org → `POST /orgs/{org}/apps/{app}/transfer` with `to_org`; store the returned app key if you passed `app_key`.
 - [ ] Project deleted → confirm → `DELETE /orgs/{org}/apps/{app}`.
 - [ ] Logs tab → runtime logs and deployment logs; usage → `/usage`.
 - [ ] After publish: never show `url` until `publish.succeeded`; on failure read `failure` from the deployment and run the [fix loop](#fix-loop).
