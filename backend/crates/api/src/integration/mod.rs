@@ -454,10 +454,11 @@ pub async fn app_ref(
         });
     }
 
-    // Fallback: check if there's an existing project matching app_key in this org
+    // Legacy: adopt a project nobody owns yet (made in the dashboard). A project
+    // that already belongs to another app is never returned for this key.
     let project_row = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
         "SELECT id, app_id FROM projects
-         WHERE org_id = $1 AND (slug = $2 OR name = $2 OR id = $3)
+         WHERE org_id = $1 AND app_id IS NULL AND (slug = $2 OR id = $3)
          LIMIT 1",
     )
     .bind(org_id)
@@ -523,7 +524,7 @@ pub async fn env_project(
     let env_uuid = Uuid::parse_str(environment).ok();
     let row = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM projects
-         WHERE app_id = $1 AND (environment = $2 OR slug = $2 OR name = $2 OR id = $3)",
+         WHERE app_id = $1 AND (environment = $2 OR id = $3)",
     )
     .bind(app.app_id)
     .bind(environment)
@@ -532,24 +533,7 @@ pub async fn env_project(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if let Some(id) = row {
-        return Ok(id);
-    }
-
-    // Fallback: check if there's any project in the org matching environment
-    let org_proj = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM projects
-         WHERE org_id = $1 AND (environment = $2 OR slug = $2 OR name = $2 OR id = $3)
-         LIMIT 1",
-    )
-    .bind(app.org_id)
-    .bind(environment)
-    .bind(env_uuid)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
-
-    org_proj.ok_or_else(|| {
+    row.ok_or_else(|| {
         ApiAppError(AppError::NotFound(format!(
             "Environment '{environment}' of app '{}' not found",
             app.app_key
@@ -757,6 +741,65 @@ mod access_tests {
             .await
             .unwrap();
         assert_eq!(find(&nomi, "victim".into()).await, Some(victim));
+
+        db.close().await;
+        let _ = sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)")).execute(&admin).await;
+    }
+
+    /// One app's environment must never resolve to another app's project, even
+    /// when the requested app has no such environment or shares a name.
+    #[tokio::test]
+    #[ignore]
+    async fn environments_never_resolve_to_another_apps_project() {
+        let Some((admin, db, name)) = fresh_db().await else {
+            eprintln!("skipped: set TEST_DATABASE_URL");
+            return;
+        };
+        let integ = Uuid::now_v7();
+        sqlx::query("INSERT INTO integrations (id, name) VALUES ($1, 'nomi')")
+            .bind(integ)
+            .execute(&db)
+            .await
+            .unwrap();
+        let org_id = org(&db, "acme", Some(integ), Some("org_1")).await;
+
+        let mut apps = vec![];
+        for key in ["todo", "habit"] {
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO integration_apps (id, org_id, app_key, name) VALUES ($1, $2, $3, $3) RETURNING id",
+            )
+            .bind(Uuid::now_v7())
+            .bind(org_id)
+            .bind(key)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            apps.push(id);
+        }
+        // Only "todo" has a production environment.
+        let todo_prod: Uuid = sqlx::query_scalar(
+            "INSERT INTO projects (id, org_id, name, slug, directory_path, app_id, environment)
+             VALUES ($1, $2, 'todo-production', 'todo-production', '/x', $3, 'production') RETURNING id",
+        )
+        .bind(Uuid::now_v7())
+        .bind(org_id)
+        .bind(apps[0])
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+        let ref_for = |app_id: Uuid, key: &str| AppRef { org_id, app_id, app_key: key.into() };
+
+        assert_eq!(env_project(&db, &ref_for(apps[0], "todo"), "production").await.ok(), Some(todo_prod));
+        assert!(env_project(&db, &ref_for(apps[1], "habit"), "production").await.is_err());
+        // Neither slug, name nor the other app's project id leak across apps.
+        assert!(env_project(&db, &ref_for(apps[1], "habit"), "todo-production").await.is_err());
+        assert!(env_project(&db, &ref_for(apps[1], "habit"), &todo_prod.to_string()).await.is_err());
+
+        // A key that isn't an app must not adopt another app's project.
+        let c = caller(Access::Integration { integration_id: integ }, &["manage"]);
+        assert!(app_ref(&db, &c, "org_1", "todo-production").await.is_err());
+        assert!(app_ref(&db, &c, "org_1", &todo_prod.to_string()).await.is_err());
 
         db.close().await;
         let _ = sqlx::query(&format!("DROP DATABASE {name} WITH (FORCE)")).execute(&admin).await;
