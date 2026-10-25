@@ -7,7 +7,7 @@
 	} from '@lucide/svelte';
 	import {
 		Button, Badge, Card, ListRow, Tabs, KeyValueList, FormField, TextField, Select,
-		InlineAlert, Spinner, SectionLabel, ActivityList, StatusDot, EmptyState, ConfirmDialog
+		InlineAlert, Spinner, SectionLabel, ActivityList, StatusDot, EmptyState, ConfirmDialog, LabelChips
 	} from '$lib/components/ui';
 	import { toDotStatus } from '$lib/utils/status';
 	import type { DotStatus } from '$lib/utils/status';
@@ -707,6 +707,9 @@
 								{/if}
 							{/snippet}
 						</ListRow>
+						{#if service?.labels && Object.keys(service.labels).length}
+							<div class="header-labels"><LabelChips labels={service.labels} /></div>
+						{/if}
 						<div class="header-actions">
 							{#if isDeploymentActive}
 								<Button variant="primary" size="sm" onclick={() => latestDeployment && openDeploymentLogs(latestDeployment)}>
@@ -1105,6 +1108,7 @@ export default &#123;
 	}
 
 	.tabs-wrap { flex-shrink: 0; }
+	.header-labels { padding-bottom: 10px; }
 	.header-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
 	.stack { display: flex; flex-direction: column; gap: 10px; }
 	.mono-field :global(input) { font-family: var(--font-mono); }

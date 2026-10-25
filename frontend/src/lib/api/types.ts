@@ -106,6 +106,9 @@ export interface Organization {
 	slug: string;
 	plan_id: string | null;
 	created_at: string;
+	/** Integration that manages this org (e.g. "nomi"); null for dashboard orgs. */
+	integration?: string | null;
+	labels?: Labels;
 }
 
 export interface Plan {
@@ -377,7 +380,11 @@ export interface Project {
 	node_positions: Record<string, { x: number; y: number }> | null;
 	created_at: string;
 	updated_at: string;
+	labels?: Labels;
 }
+
+/** Key/value labels. Keys under `shipyard.io/` are set by Shipyard. */
+export type Labels = Record<string, string>;
 
 export interface Service {
 	id: string;
@@ -401,6 +408,7 @@ export interface Service {
 	icon: string | null;
 	created_at: string;
 	updated_at: string;
+	labels?: Labels;
 }
 
 export interface ServiceEnv {

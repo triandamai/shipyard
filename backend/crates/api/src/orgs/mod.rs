@@ -70,6 +70,9 @@ pub struct OrgResponse {
     pub slug: String,
     pub plan_id: Option<Uuid>,
     pub created_at: chrono::DateTime<Utc>,
+    /// Integration that manages this org (e.g. "nomi"); null for orgs created in the dashboard.
+    pub integration: Option<String>,
+    pub labels: shipyard_db::labels::Labels,
 }
 
 impl From<Organization> for OrgResponse {
@@ -80,6 +83,8 @@ impl From<Organization> for OrgResponse {
             slug: o.slug,
             plan_id: o.plan_id,
             created_at: o.created_at,
+            integration: o.integration,
+            labels: o.labels.0,
         }
     }
 }
@@ -431,8 +436,9 @@ async fn list_orgs(
 ) -> Result<Json<ApiResponse<Vec<OrgResponse>>>, ApiAppError> {
     let orgs: Vec<Organization> = if crate::admin::is_admin_or_superadmin(&state.db, auth.user_id).await {
         sqlx::query_as::<_, Organization>(
-            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at, i.name AS integration, o.labels
              FROM organizations o
+             LEFT JOIN integrations i ON i.id = o.integration_id
              ORDER BY o.name ASC",
         )
         .fetch_all(&state.db)
@@ -440,8 +446,9 @@ async fn list_orgs(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     } else {
         sqlx::query_as::<_, Organization>(
-            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at, i.name AS integration, o.labels
              FROM organizations o
+             LEFT JOIN integrations i ON i.id = o.integration_id
              INNER JOIN org_members m ON m.org_id = o.id
              WHERE m.user_id = $1
              ORDER BY o.name ASC",
@@ -623,7 +630,8 @@ async fn get_org(
 ) -> Result<Json<ApiResponse<OrgResponse>>, ApiAppError> {
     let org: Organization = if let Ok(id) = Uuid::parse_str(&id_or_slug) {
         sqlx::query_as::<_, Organization>(
-            "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE id = $1",
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at, i.name AS integration, o.labels
+             FROM organizations o LEFT JOIN integrations i ON i.id = o.integration_id WHERE o.id = $1",
         )
         .bind(id)
         .fetch_optional(&state.db)
@@ -631,7 +639,8 @@ async fn get_org(
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
     } else {
         sqlx::query_as::<_, Organization>(
-            "SELECT id, name, slug, plan_id, created_at FROM organizations WHERE slug = $1",
+            "SELECT o.id, o.name, o.slug, o.plan_id, o.created_at, i.name AS integration, o.labels
+             FROM organizations o LEFT JOIN integrations i ON i.id = o.integration_id WHERE o.slug = $1",
         )
         .bind(&id_or_slug)
         .fetch_optional(&state.db)

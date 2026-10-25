@@ -11,7 +11,7 @@
 	import { Plus, Package } from '@lucide/svelte';
 	import {
 		PageHeader, Card, Button, Modal, FormField, TextField, InlineAlert,
-		EmptyState, Spinner, Avatar
+		EmptyState, Spinner, Avatar, LabelChips
 	} from '$lib/components/ui';
 
 	let orgSlug = $derived(page.params.orgSlug ?? '');
@@ -110,6 +110,7 @@
 
 		<PageHeader title="Projects" subtitle={currentOrg?.name}>
 			{#snippet actions()}
+				<LabelChips labels={currentOrg?.labels} integration={currentOrg?.integration} compact />
 				<Button onclick={openModal}>
 					<Plus size={14} />
 					New Project
@@ -152,6 +153,7 @@
 								<div class="project-text">
 									<div class="project-name">{project.name}</div>
 									<div class="project-slug">{project.slug}</div>
+									<LabelChips labels={project.labels} />
 								</div>
 							</button>
 						</Card>
@@ -277,6 +279,7 @@
 		font-size: 12px;
 		color: var(--text-muted);
 		font-family: var(--font-mono);
+		margin-bottom: 6px;
 	}
 	.create-form { display: flex; flex-direction: column; gap: 16px; }
 </style>

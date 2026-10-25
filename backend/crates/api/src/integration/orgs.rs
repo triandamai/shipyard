@@ -6,6 +6,8 @@ use axum::{
     routing::put,
     Json, Router,
 };
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -13,6 +15,7 @@ use uuid::Uuid;
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::events::{self, Scope};
+use shipyard_db::labels::{self, Labels, Table};
 
 use super::{can_delete_org, Access, 
     db_err, org_by_external, random_alnum, validate_external_id, IntegrationCaller, SCOPE_MANAGE,
@@ -33,6 +36,9 @@ struct UpsertOrg {
     /// Plan name ('free', 'pro', 'max', or any enabled plan). Defaults to free
     /// on create; changes the plan when sent for an existing org.
     plan: Option<String>,
+    /// Labels to set on the org; a null value removes that label.
+    #[serde(default)]
+    labels: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +49,9 @@ pub struct OrgOut {
     pub slug: String,
     pub plan: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Integration that manages the org (e.g. "nomi").
+    pub integration: Option<String>,
+    pub labels: Labels,
     /// True when this call created the org.
     pub created: bool,
 }
@@ -92,10 +101,20 @@ async fn plan_by_name(db: &sqlx::PgPool, name: &str) -> Result<(Uuid, String), A
 }
 
 async fn load(db: &sqlx::PgPool, org_id: Uuid, created: bool) -> Result<OrgOut, ApiAppError> {
-    let (id, external_id, name, slug, plan, created_at): (Uuid, Option<String>, String, String, Option<String>, DateTime<Utc>) =
-        sqlx::query_as(
-            "SELECT o.id, o.external_id, o.name, o.slug, p.name, o.created_at
+    #[allow(clippy::type_complexity)]
+    let (id, external_id, name, slug, plan, created_at, integration, labels): (
+        Uuid,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        DateTime<Utc>,
+        Option<String>,
+        sqlx::types::Json<Labels>,
+    ) = sqlx::query_as(
+            "SELECT o.id, o.external_id, o.name, o.slug, p.name, o.created_at, i.name, o.labels
              FROM organizations o LEFT JOIN org_billing b ON b.org_id = o.id LEFT JOIN plans p ON p.id = b.plan_id
+             LEFT JOIN integrations i ON i.id = o.integration_id
              WHERE o.id = $1",
         )
         .bind(org_id)
@@ -109,6 +128,8 @@ async fn load(db: &sqlx::PgPool, org_id: Uuid, created: bool) -> Result<OrgOut, 
         slug,
         plan,
         created_at,
+        integration,
+        labels: labels.0,
         created,
     })
 }
@@ -129,12 +150,16 @@ async fn upsert_org(
             "name must be 1-100 characters".into(),
         )));
     }
+    labels::validate(&body.labels).map_err(|e| ApiAppError(AppError::BadRequest(e)))?;
 
     if let Ok(org_id) = org_by_external(&state.db, &caller, &external_id).await {
         sqlx::query("UPDATE organizations SET name = $2 WHERE id = $1")
             .bind(org_id)
             .bind(name)
             .execute(&state.db)
+            .await
+            .map_err(db_err)?;
+        labels::apply(&state.db, Table::Organizations, org_id, &body.labels)
             .await
             .map_err(db_err)?;
         if let Some(plan) = &body.plan {
@@ -175,8 +200,9 @@ async fn upsert_org(
     let org_id = Uuid::now_v7();
     let mut tx = state.db.begin().await.map_err(db_err)?;
     let inserted = sqlx::query(
-        "INSERT INTO organizations (id, name, slug, plan_id, integration_id, external_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        "INSERT INTO organizations (id, name, slug, plan_id, integration_id, external_id, labels, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 COALESCE((SELECT jsonb_build_object($7::text, name) FROM integrations WHERE id = $5), '{}'::jsonb), NOW())
          ON CONFLICT (integration_id, external_id) WHERE integration_id IS NOT NULL DO NOTHING",
     )
     .bind(org_id)
@@ -185,6 +211,7 @@ async fn upsert_org(
     .bind(plan_id)
     .bind(integration_id)
     .bind(&external_id)
+    .bind(labels::INTEGRATION)
     .execute(&mut *tx)
     .await
     .map_err(db_err)?
@@ -202,6 +229,9 @@ async fn upsert_org(
         .await
         .map_err(db_err)?;
     tx.commit().await.map_err(db_err)?;
+    labels::apply(&state.db, Table::Organizations, org_id, &body.labels)
+        .await
+        .map_err(db_err)?;
 
     events::emit(
         &state.db,

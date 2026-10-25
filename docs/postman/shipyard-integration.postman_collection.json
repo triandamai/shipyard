@@ -493,7 +493,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Ana's Workspace\",\n  \"plan\": \"free\"\n}",
+              "raw": "{\n  \"name\": \"Ana's Workspace\",\n  \"plan\": \"free\",\n  \"labels\": {\n    \"nomi.app/workspace\": \"personal\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1190,7 +1190,7 @@
                 {
                   "key": "manifest",
                   "type": "text",
-                  "value": "{\"services\": [{\"name\": \"web\", \"kind\": \"web\", \"path\": \".\", \"port\": 3000, \"replicas\": 1, \"env\": {\"NODE_ENV\": \"production\", \"SESSION_SECRET\": {\"generate\": \"hex32\"}, \"STRIPE_KEY\": {\"secret\": \"STRIPE_KEY\"}, \"DATABASE_URL\": {\"database\": \"url\"}}, \"volumes\": [{\"path\": \"/app/uploads\"}]}], \"database\": {\"engine\": \"postgres\"}, \"domain\": {\"subdomain\": \"{{app}}\"}}",
+                  "value": "{\"services\": [{\"name\": \"web\", \"kind\": \"web\", \"path\": \".\", \"port\": 3000, \"replicas\": 1, \"env\": {\"NODE_ENV\": \"production\", \"SESSION_SECRET\": {\"generate\": \"hex32\"}, \"STRIPE_KEY\": {\"secret\": \"STRIPE_KEY\"}, \"DATABASE_URL\": {\"database\": \"url\"}}, \"volumes\": [{\"path\": \"/app/uploads\"}]}], \"database\": {\"engine\": \"postgres\"}, \"domain\": {\"subdomain\": \"{{app}}\"}, \"labels\": {\"nomi.app/template\": \"nextjs\"}}",
                   "contentType": "application/json"
                 },
                 {

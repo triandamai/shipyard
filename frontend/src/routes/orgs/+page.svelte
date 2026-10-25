@@ -7,7 +7,7 @@
 	import { get } from 'svelte/store';
 	import type { Organization, Plan } from '$lib/api/types';
 	import { Plus, Folder, Building2, Check, ArrowRight, ArrowLeft } from '@lucide/svelte';
-	import { PageHeader, Card, Avatar, Button, Modal, FormField, TextField, InlineAlert, EmptyState, Spinner } from '$lib/components/ui';
+	import { PageHeader, Card, Avatar, LabelChips, Button, Modal, FormField, TextField, InlineAlert, EmptyState, Spinner } from '$lib/components/ui';
 
 	let orgs = $state<Organization[]>([]);
 	let loading = $state(true);
@@ -215,6 +215,7 @@
 								<div class="org-details">
 									<div class="org-name">{org.name}</div>
 									<div class="org-slug">{org.slug}</div>
+									<LabelChips labels={org.labels} integration={org.integration} compact />
 								</div>
 								<div class="org-footer">
 									<span class="org-meta-item">

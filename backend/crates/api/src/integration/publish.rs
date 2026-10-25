@@ -29,6 +29,7 @@ use shipyard_common::crypto;
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::events::{self, Scope};
+use shipyard_db::labels::{self, Labels, Table};
 use shipyard_engine::DeploymentEngine;
 
 use super::secrets::{bind_env, find_secret, generate, upsert_secret, validate_env_name, Generate};
@@ -68,6 +69,10 @@ pub struct Manifest {
     pub database: Option<DatabaseIn>,
     #[serde(default)]
     pub domain: Option<DomainIn>,
+    /// Labels for the environment's project (e.g. `{"version": "1.4.2"}`);
+    /// a null value removes that label.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
@@ -120,6 +125,9 @@ pub struct ServiceIn {
     /// Paths whose data must survive deploys.
     #[serde(default)]
     pub volumes: Vec<VolumeIn>,
+    /// Labels for this service; a null value removes that label.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -193,6 +201,12 @@ pub fn validate_manifest(m: &Manifest) -> Result<(), ApiAppError> {
     }
     if m.services.len() > 20 {
         return bad("at most 20 services per environment".into());
+    }
+    labels::validate(&m.labels).map_err(|e| ApiAppError(AppError::BadRequest(format!("labels: {e}"))))?;
+    for s in &m.services {
+        labels::validate(&s.labels).map_err(|e| {
+            ApiAppError(AppError::BadRequest(format!("service '{}' labels: {e}", s.name)))
+        })?;
     }
     if let Some(db) = &m.database {
         if db.engine != "postgres" {
@@ -598,6 +612,33 @@ async fn ensure_env_project(
     Ok((id, true))
 }
 
+/// Stamp Shipyard's labels on an environment project: the integration that
+/// manages the org, the app and the environment.
+async fn stamp_project_labels(
+    state: &AppState,
+    app: &AppRef,
+    project_id: Uuid,
+    environment: &str,
+) -> Result<(), ApiAppError> {
+    let integration: Option<String> = sqlx::query_scalar(
+        "SELECT i.name FROM organizations o JOIN integrations i ON i.id = o.integration_id WHERE o.id = $1",
+    )
+    .bind(app.org_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(db_err)?;
+    let mut system = Labels::from([
+        (labels::APP.to_string(), app.app_key.clone()),
+        (labels::ENVIRONMENT.to_string(), environment.to_string()),
+    ]);
+    if let Some(name) = integration {
+        system.insert(labels::INTEGRATION.to_string(), name);
+    }
+    labels::set_system(&state.db, Table::Projects, project_id, &system)
+        .await
+        .map_err(db_err)
+}
+
 /// Find or create a service row by slug.
 #[allow(clippy::too_many_arguments)]
 async fn upsert_service(
@@ -635,6 +676,7 @@ async fn upsert_service(
         .execute(&state.db)
         .await
         .map_err(db_err)?;
+        inherit_project_labels(state, id).await?;
         return Ok(id);
     }
     let id = Uuid::now_v7();
@@ -671,7 +713,27 @@ async fn upsert_service(
         serde_json::json!({ "slug": slug, "type": svc_type }),
     )
     .await;
+    inherit_project_labels(state, id).await?;
     Ok(id)
+}
+
+/// Copy the project's Shipyard labels (integration, app, environment) onto
+/// one of its services. The service's version is its own.
+async fn inherit_project_labels(state: &AppState, service_id: Uuid) -> Result<(), ApiAppError> {
+    sqlx::query(
+        "UPDATE services s
+         SET labels = s.labels || COALESCE(
+             (SELECT jsonb_object_agg(key, value) FROM jsonb_each(p.labels)
+              WHERE key LIKE 'shipyard.io/%' AND key <> $2), '{}'::jsonb)
+         FROM projects p
+         WHERE s.id = $1 AND p.id = s.project_id",
+    )
+    .bind(service_id)
+    .bind(labels::VERSION)
+    .execute(&state.db)
+    .await
+    .map_err(db_err)?;
+    Ok(())
 }
 
 async fn set_plain_env(
@@ -875,10 +937,21 @@ async fn ensure_database(
 
 /// Attach `<subdomain>.<apps_base_domain>` to the web service unless it
 /// already has a hostname there. Falls back to a random suffix when taken.
+/// Subdomains to try for an environment, best first. One manifest is often
+/// published to every environment, so a `domain.subdomain` of `todo` gives
+/// production `todo` and staging `todo-staging` rather than a random suffix.
+fn subdomain_candidates(requested: Option<&str>, app_key: &str, environment: &str) -> Vec<String> {
+    match requested {
+        Some(sub) if environment != "production" => vec![sub.to_string(), default_subdomain(sub, environment)],
+        Some(sub) => vec![sub.to_string()],
+        None => vec![default_subdomain(app_key, environment)],
+    }
+}
+
 async fn ensure_domain(
     state: &AppState,
     service_id: Uuid,
-    subdomain: &str,
+    subdomains: &[String],
     port: u16,
 ) -> Result<Option<String>, ApiAppError> {
     let Some(base) = state.config.integration.apps_base_domain.as_deref() else {
@@ -895,11 +968,12 @@ async fn ensure_domain(
     if let Some(h) = existing {
         return Ok(Some(format!("https://{h}")));
     }
-    let mut candidates = vec![format!("{subdomain}.{base}")];
+    let mut candidates: Vec<String> = subdomains.iter().map(|s| format!("{s}.{base}")).collect();
+    let last = subdomains.last().map(String::as_str).unwrap_or("app");
     for _ in 0..3 {
         candidates.push(format!(
             "{}-{}.{base}",
-            subdomain.chars().take(52).collect::<String>(),
+            last.chars().take(52).collect::<String>(),
             random_alnum(8)
         ));
     }
@@ -947,6 +1021,10 @@ pub async fn publish(
     // the dashboard.
     crate::deployments::check_billing_for_org(&state.db, app.org_id).await?;
     let (project_id, _) = ensure_env_project(state, app, environment).await?;
+    stamp_project_labels(state, app, project_id, environment).await?;
+    labels::apply(&state.db, Table::Projects, project_id, &manifest.labels)
+        .await
+        .map_err(db_err)?;
     let publish_id = Uuid::now_v7();
     let mut warnings = vec![];
 
@@ -1203,6 +1281,9 @@ async fn configure(
             s.memory_mb,
         )
         .await?;
+        labels::apply(&state.db, Table::Services, id, &s.labels)
+            .await
+            .map_err(db_err)?;
 
         if is_static {
             let _ = sqlx::query(
@@ -1370,16 +1451,13 @@ async fn configure(
     };
     let url = match web {
         Some(w) => {
-            let sub = domain_cfg
-                .subdomain
-                .clone()
-                .unwrap_or_else(|| default_subdomain(&app.app_key, environment));
+            let subs = subdomain_candidates(domain_cfg.subdomain.as_deref(), &app.app_key, environment);
             let port = if w.kind == ServiceKind::Static || is_static_map.get(&w.name).copied().unwrap_or(false) {
                 80
             } else {
                 detected_ports.get(&w.name).copied().or(w.port).unwrap_or(3000)
             };
-            let url = ensure_domain(state, services[&w.name], &sub, port).await?;
+            let url = ensure_domain(state, services[&w.name], &subs, port).await?;
             if url.is_none() {
                 warnings
                     .push("no apps base domain is configured, so the app has no public URL".into());
@@ -2039,6 +2117,26 @@ mod tests {
     }
 
     #[test]
+    fn manifest_labels_parse_and_system_keys_are_rejected() {
+        let m: Manifest = serde_json::from_value(serde_json::json!({
+            "labels": { "nomi.app/template": "nextjs", "old": null },
+            "services": [{ "name": "web", "port": 3000, "labels": { "role": "frontend" } }]
+        }))
+        .unwrap();
+        assert!(validate_manifest(&m).is_ok());
+        assert_eq!(m.labels["old"], None);
+        assert_eq!(m.services[0].labels["role"].as_deref(), Some("frontend"));
+
+        for bad in [
+            serde_json::json!({ "labels": { "shipyard.io/version": "1" }, "services": [{ "name": "web", "port": 1 }] }),
+            serde_json::json!({ "services": [{ "name": "web", "port": 1, "labels": { "Bad Key": "x" } }] }),
+        ] {
+            let m: Manifest = serde_json::from_value(bad).unwrap();
+            assert!(validate_manifest(&m).is_err());
+        }
+    }
+
+    #[test]
     fn invalid_manifests_are_rejected() {
         let cases = [
             serde_json::json!({ "services": [] }),
@@ -2167,5 +2265,243 @@ mod tests {
         let data = vec![b'a'; 4096];
         write_zip(&big, &[("a.bin", &data), ("b.bin", &data)]);
         assert!(extract_zip(&big, &dir.path().join("o2"), 6000).is_err());
+    }
+}
+
+#[cfg(test)]
+mod multi_env_tests {
+    //! One app published to several environments, against a real database.
+    //! Needs `TEST_DATABASE_URL` (a role that can create databases) and runs
+    //! with `cargo test -- --include-ignored`; skipped when it isn't set.
+
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+    use std::collections::HashSet;
+
+    #[test]
+    fn same_requested_subdomain_gets_an_env_fallback() {
+        assert_eq!(subdomain_candidates(Some("todo"), "todo", "production"), vec!["todo"]);
+        assert_eq!(subdomain_candidates(Some("todo"), "todo", "staging"), vec!["todo", "todo-staging"]);
+        assert_eq!(subdomain_candidates(None, "todo", "dev"), vec!["todo-dev"]);
+    }
+
+    async fn fresh_db() -> Option<sqlx::PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let admin = PgPoolOptions::new().max_connections(2).connect(&url).await.ok()?;
+        let name = format!("multi_env_test_{}", random_alnum(10));
+        sqlx::query(&format!("CREATE DATABASE {name}")).execute(&admin).await.ok()?;
+        let (base, _) = url.rsplit_once('/')?;
+        let pool = PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&format!("{base}/{name}"))
+            .await
+            .ok()?;
+        shipyard_db::run_migrations(&pool).await.ok()?;
+        Some(pool)
+    }
+
+    fn state(db: sqlx::PgPool, data_dir: &std::path::Path) -> AppState {
+        use dashmap::DashMap;
+        use shipyard_common::config::AppConfig;
+        use shipyard_docker::engine::BollardDockerEngine;
+
+        let mut config = AppConfig::default();
+        config.data_dir = data_dir.to_string_lossy().into_owned();
+        config.integration.apps_base_domain = Some("apps.test".into());
+        // Nothing listens here: deploys started in the background just fail.
+        let socket = data_dir.join("docker.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (mqtt, _, _) =
+            shipyard_mqtt::create_mqtt_client("127.0.0.1", 1, "multi-env-test", None, None).unwrap();
+        AppState {
+            config: Arc::new(config),
+            db,
+            docker: Arc::new(BollardDockerEngine::with_socket(socket.to_str().unwrap()).unwrap()),
+            mqtt: Arc::new(mqtt),
+            oauth_states: Arc::new(DashMap::new()),
+            redis: None,
+            http_client: reqwest::Client::new(),
+            auth_limiter: crate::middleware::rate_limit::make_auth_rate_limiter(),
+            swarm_sync_trigger: Arc::new(tokio::sync::Notify::new()),
+            registry_storage: Arc::new(shipyard_registry::storage::local::LocalStorage::new(
+                data_dir.join("registry").to_str().unwrap(),
+            )),
+        }
+    }
+
+    /// The manifest Nomi sends unchanged to every environment.
+    fn manifest() -> Manifest {
+        serde_json::from_value(serde_json::json!({
+            "services": [
+                {
+                    "name": "web", "port": 3000,
+                    "env": {
+                        "SESSION_SECRET": { "generate": "hex32" },
+                        "DATABASE_URL": { "database": "url" }
+                    },
+                    "volumes": [{ "path": "/app/uploads" }]
+                },
+                { "name": "worker", "kind": "worker" }
+            ],
+            "database": { "engine": "postgres" },
+            "domain": { "subdomain": "todo" },
+            "labels": { "nomi.app/template": "nextjs" }
+        }))
+        .unwrap()
+    }
+
+    async fn scalar<T>(db: &sqlx::PgPool, sql: &str, id: Uuid) -> T
+    where
+        T: for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres> + Send + Unpin,
+    {
+        sqlx::query_scalar(sql).bind(id).fetch_one(db).await.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn environments_of_one_app_never_share_anything() {
+        let Some(db) = fresh_db().await else {
+            eprintln!("skipped: set TEST_DATABASE_URL");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(db.clone(), dir.path());
+
+        let integration = Uuid::now_v7();
+        sqlx::query("INSERT INTO integrations (id, name) VALUES ($1, 'nomi')")
+            .bind(integration)
+            .execute(&db)
+            .await
+            .unwrap();
+        let org_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO organizations (id, name, slug, integration_id, external_id)
+             VALUES ($1, 'Ana', 'ana', $2, 'org_1') RETURNING id",
+        )
+        .bind(Uuid::now_v7())
+        .bind(integration)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let app_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO integration_apps (org_id, app_key, name) VALUES ($1, 'todo', 'Todo') RETURNING id",
+        )
+        .bind(org_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let app = AppRef { org_id, app_id, app_key: "todo".into() };
+
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Dockerfile"), "FROM node:22-alpine\nCMD [\"node\", \"index.js\"]\n").unwrap();
+        std::fs::write(src.join("index.js"), "console.log('hi')\n").unwrap();
+
+        let envs = ["production", "staging", "dev"];
+        let mut outs = vec![];
+        for env in envs {
+            outs.push(publish(&state, &app, env, manifest(), Source::Upload(src.clone())).await.unwrap());
+        }
+
+        // One project per environment, each owned by the app.
+        let projects: HashSet<Uuid> = outs.iter().map(|o| o.project_id).collect();
+        assert_eq!(projects.len(), 3);
+        for (env, out) in envs.iter().zip(&outs) {
+            let (owner, environment): (Option<Uuid>, Option<String>) =
+                sqlx::query_as("SELECT app_id, environment FROM projects WHERE id = $1")
+                    .bind(out.project_id)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap();
+            assert_eq!(owner, Some(app_id));
+            assert_eq!(environment.as_deref(), Some(*env));
+        }
+
+        // Every environment has its own web, worker and db services.
+        let mut all_services = HashSet::new();
+        for out in &outs {
+            let slugs: Vec<String> = sqlx::query_scalar(
+                "SELECT slug FROM services WHERE project_id = $1 ORDER BY slug",
+            )
+            .bind(out.project_id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+            assert_eq!(slugs, vec!["db", "web", "worker"]);
+            let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM services WHERE project_id = $1")
+                .bind(out.project_id)
+                .fetch_all(&db)
+                .await
+                .unwrap();
+            all_services.extend(ids);
+        }
+        assert_eq!(all_services.len(), 9);
+
+        // Production keeps the requested name; the others get `<name>-<env>`.
+        let urls: Vec<_> = outs.iter().map(|o| o.url.clone().unwrap()).collect();
+        assert_eq!(
+            urls,
+            vec!["https://todo.apps.test", "https://todo-staging.apps.test", "https://todo-dev.apps.test"]
+        );
+
+        // Generated secrets, database passwords and volumes are per environment.
+        let session_secrets: HashSet<String> = sqlx::query_scalar(
+            "SELECT value_encrypted FROM secrets WHERE app_id = $1 AND name = 'SESSION_SECRET'",
+        )
+        .bind(app_id)
+        .fetch_all(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(session_secrets.len(), 3);
+        let db_passwords: i64 = scalar(
+            &db,
+            "SELECT COUNT(DISTINCT project_id) FROM secrets WHERE app_id = $1 AND name = 'DATABASE_PASSWORD'",
+            app_id,
+        )
+        .await;
+        assert_eq!(db_passwords, 3);
+        let volumes: HashSet<String> = sqlx::query_scalar(
+            "SELECT v.name FROM volumes v JOIN services s ON s.id = v.service_id
+             JOIN projects p ON p.id = s.project_id WHERE p.app_id = $1 AND s.slug = 'web'",
+        )
+        .bind(app_id)
+        .fetch_all(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(volumes.len(), 3);
+
+        // Labels say which environment each object belongs to.
+        for (env, out) in envs.iter().zip(&outs) {
+            let labels: sqlx::types::Json<Labels> = scalar(
+                &db,
+                "SELECT labels FROM services WHERE id = $1",
+                out.services["web"],
+            )
+            .await;
+            assert_eq!(labels.0.get(labels::ENVIRONMENT).map(String::as_str), Some(*env));
+            assert_eq!(labels.0.get(labels::INTEGRATION).map(String::as_str), Some("nomi"));
+            assert_eq!(labels.0.get(labels::APP).map(String::as_str), Some("todo"));
+            let project_labels: sqlx::types::Json<Labels> =
+                scalar(&db, "SELECT labels FROM projects WHERE id = $1", out.project_id).await;
+            assert_eq!(project_labels.0.get("nomi.app/template").map(String::as_str), Some("nextjs"));
+        }
+
+        // Publishing production again updates it in place and leaves the
+        // other environments alone.
+        let staging_before = outs[1].services.clone();
+        let again = publish(&state, &app, "production", manifest(), Source::Upload(src.clone())).await.unwrap();
+        assert_eq!(again.project_id, outs[0].project_id);
+        assert_eq!(again.services, outs[0].services);
+        assert_eq!(again.url.as_deref(), Some("https://todo.apps.test"));
+        let staging_now: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM services WHERE project_id = $1 AND slug <> 'db'")
+            .bind(outs[1].project_id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert_eq!(staging_now.len(), staging_before.len());
+        assert!(staging_now.iter().all(|id| staging_before.values().any(|v| v == id)));
     }
 }

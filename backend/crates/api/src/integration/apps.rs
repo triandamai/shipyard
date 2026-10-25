@@ -15,6 +15,7 @@ use shipyard_common::crypto;
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_db::events::{self, Scope};
+use shipyard_db::labels::{self, Labels};
 
 use super::{
     app_ref, db_err, env_project, org_by_external, validate_slug, AppRef, IntegrationCaller,
@@ -175,8 +176,8 @@ async fn env_summary(
     project_id: Uuid,
 ) -> Result<serde_json::Value, ApiAppError> {
     #[allow(clippy::type_complexity)]
-    let services: Vec<(Uuid, String, String, String, i32, Option<Uuid>, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT s.id, s.slug, s.type::text, s.status, s.replicas, d.id, d.status::text, d.created_at
+    let services: Vec<(Uuid, String, String, String, i32, Option<Uuid>, Option<String>, Option<DateTime<Utc>>, sqlx::types::Json<Labels>)> = sqlx::query_as(
+        "SELECT s.id, s.slug, s.type::text, s.status, s.replicas, d.id, d.status::text, d.created_at, s.labels
          FROM services s
          LEFT JOIN LATERAL (
              SELECT id, status, created_at FROM deployments WHERE service_id = s.id ORDER BY created_at DESC LIMIT 1
@@ -188,7 +189,7 @@ async fn env_summary(
     .await
     .map_err(db_err)?;
     let mut items = vec![];
-    for (id, slug, svc_type, status, replicas, dep_id, dep_status, dep_at) in services {
+    for (id, slug, svc_type, status, replicas, dep_id, dep_status, dep_at, svc_labels) in services {
         let urls: Vec<String> = sqlx::query_scalar(
             "SELECT 'https://' || hostname FROM domains WHERE service_id = $1 ORDER BY created_at",
         )
@@ -213,6 +214,7 @@ async fn env_summary(
         items.push(serde_json::json!({
             "name": slug, "service_id": id, "type": svc_type, "status": status,
             "replicas": replicas, "running": running, "urls": urls, "live": live,
+            "version": svc_labels.0.get(labels::VERSION), "labels": svc_labels.0,
             "last_deployment": dep_id.map(|d| serde_json::json!({
                 "id": d,
                 "status": dep_status.as_deref().map(super::normalize_deploy_status),
@@ -229,9 +231,16 @@ async fn env_summary(
     .fetch_optional(&state.db)
     .await
     .map_err(db_err)?;
+    let project_labels: sqlx::types::Json<Labels> =
+        sqlx::query_scalar("SELECT labels FROM projects WHERE id = $1")
+            .bind(project_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(db_err)?;
     Ok(serde_json::json!({
         "environment": environment,
         "project_id": project_id,
+        "labels": project_labels.0,
         "services": items,
         "last_publish": publish.map(|(id, status, urls, error, at)| serde_json::json!({
             "id": id, "status": status, "urls": urls, "error": error, "created_at": at,
