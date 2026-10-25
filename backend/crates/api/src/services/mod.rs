@@ -207,7 +207,7 @@ const SERVICE_SELECT: &str =
     "SELECT id, project_id, name, slug, type::text AS type, image, git_repo_url, git_branch, \
      auto_deploy, directory_path, ports, status, replicas, cpu_limit, memory_limit_mb, \
      service_parent_id, git_deploy_strategy, git_deploy_branch, git_deploy_tag_pattern, \
-     git_provider_id, icon, created_at, updated_at \
+     git_provider_id, icon, created_at, updated_at, labels \
      FROM services";
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────

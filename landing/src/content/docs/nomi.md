@@ -130,15 +130,18 @@ When an organization (or a user's personal workspace) is created in Nomi, create
 
 ```json
 // request
-{ "name": "Ana's Workspace", "plan": "free" }
+{ "name": "Ana's Workspace", "plan": "free", "labels": { "nomi.app/workspace": "personal" } }
 // response 201
 { "data": {
   "id": "01a1...", "external_id": "org_2Nf8sK", "name": "Ana's Workspace",
-  "slug": "ana-s-workspace-k3x9qa", "plan": "free", "created_at": "...", "created": true
+  "slug": "ana-s-workspace-k3x9qa", "plan": "free", "created_at": "...",
+  "integration": "nomi",
+  "labels": { "shipyard.io/integration": "nomi", "nomi.app/workspace": "personal" },
+  "created": true
 } }
 ```
 
-`plan` is optional (`free` on create). Send it again to change the plan. Renames: send the new `name`.
+`plan` is optional (`free` on create). Send it again to change the plan. Renames: send the new `name`. `labels` is optional; see [Labels and versions](#labels). `integration` is the integration that created the org, and the Shipyard dashboard shows it as a badge on the org.
 
 ### GET /openapi/v1/integration/orgs/{org}
 
@@ -234,7 +237,8 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
     }
   ],
   "database": { "engine": "postgres" },
-  "domain": { "subdomain": "todo" }
+  "domain": { "subdomain": "todo" },
+  "labels": { "nomi.app/template": "nextjs" }
 }
 ```
 
@@ -250,8 +254,10 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
 | `services[].env` | The service's complete env. Keys not listed are removed |
 | `services[].volumes` | Paths whose data survives deploys |
 | `database` | `{ "engine": "postgres" }` gives the environment its own Postgres with a persistent volume |
-| `domain.subdomain` | First label of the hostname. Default `<app>` (production) or `<app>-<env>`. Only used the first time: once an environment has an address, change it with [`PUT .../domain`](#domains) |
+| `domain.subdomain` | First label of the hostname. Default `<app>` (production) or `<app>-<env>`. You can send the same manifest to every environment: if the name is already used by another environment, a non-production environment gets `<subdomain>-<env>` instead (`todo` → `todo-staging`). Only used the first time: once an environment has an address, change it with [`PUT .../domain`](#domains) |
 | `domain.service` | Which web service gets the URL. Default: the first web service |
+| `labels` | Labels for the environment's project. See [Labels and versions](#labels) |
+| `services[].labels` | Labels for that service |
 
 Env values:
 
@@ -323,7 +329,7 @@ On failure, `error` names the service and the cause; fetch that deployment ([bel
 
 ## 4. Environments {#flow-envs}
 
-Each environment is independent: its own services, database, generated secrets and URL. Publish to any `{env}` name to create it. To start one from an existing environment:
+Each environment is independent: its own Shipyard project with its own services, database, generated secrets, volumes and URL. Publish to any `{env}` name (`production`, `staging`, `dev`, `preview-123`, ...) to create it. You can publish the same manifest and source to each one, and publishing one environment never touches another. To start one from an existing environment:
 
 ### POST /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/duplicate
 
@@ -336,11 +342,51 @@ The copy uses the source environment's last manifest and source, gets an **empty
 
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}
 
-Services with status, running replica count, URLs and last deployment, plus the last publish.
+Services with status, running replica count, URLs, last deployment, `version` and `labels`, plus the environment's `labels` and the last publish.
+
+```json
+{ "data": {
+  "environment": "production", "project_id": "01b2...",
+  "labels": { "shipyard.io/integration": "nomi", "shipyard.io/app": "todo", "shipyard.io/environment": "production" },
+  "services": [{
+    "name": "web", "status": "running", "live": true, "urls": ["https://todo.apps.example.dev"],
+    "version": "3f2a91c",
+    "labels": { "shipyard.io/integration": "nomi", "shipyard.io/app": "todo",
+                "shipyard.io/environment": "production", "shipyard.io/version": "3f2a91c" },
+    "...": "..."
+  }],
+  "last_publish": { "...": "..." }
+} }
+```
 
 ### DELETE /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}
 
 Removes the environment: services, database and its data, volumes, domains and DNS records.
+
+## Labels and versions {#labels}
+
+Orgs, environments (projects) and services carry key/value labels. The Shipyard dashboard shows them as tags. The integration badge shows which platform manages an object, so support staff can tell a Nomi org from one created in the dashboard.
+
+**Labels Shipyard sets.** Keys under `shipyard.io/` are written by Shipyard and are read-only for you. If you send one, the request is refused with `400`.
+
+| Key | On | Value |
+|---|---|---|
+| `shipyard.io/integration` | org, project, service | The integration that manages it, e.g. `nomi` |
+| `shipyard.io/app` | project, service | The `{app}` key |
+| `shipyard.io/environment` | project, service | The `{env}` name |
+| `shipyard.io/version` | service | The tag of the image the service runs, set after each successful deploy |
+
+**Version.** Every git or publish build is tagged with the short commit sha of the source it built (the same `shipyard/<service>:<sha>` tag shown in the deploy log). When the deploy succeeds, that tag becomes the service's `shipyard.io/version`, and `GET .../envs/{env}` returns it as `version`. A failed deploy leaves the previous version in place, matching what is actually serving. Services that run a registry image get the image's tag (`1.4.2`, `latest`). Static sites get the commit sha.
+
+**Your own labels.** Send `labels` on `PUT /orgs/{org}`, at the top level of the manifest (for the environment's project) and on each manifest service. Use them for anything Nomi wants to see next to the app in Shipyard, such as a template name, a Nomi build number or a release name.
+
+```json
+{ "labels": { "nomi.app/template": "nextjs", "nomi.app/release": "spring-launch", "old-label": null } }
+```
+
+- Labels are merged: keys you send are set, keys you leave out stay, and a `null` value removes that key.
+- Keys: 1–63 characters of `a-z 0-9 . / _ -`. Prefix them with `nomi.app/` so they never clash with another integration's labels.
+- Values: up to 256 characters. At most 32 labels per request.
 
 ## Choosing a domain {#domains}
 

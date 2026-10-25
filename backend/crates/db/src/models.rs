@@ -26,6 +26,11 @@ pub struct Organization {
     pub slug: String,
     pub plan_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Name of the integration that manages this org (e.g. "nomi"), if any.
+    #[sqlx(default)]
+    pub integration: Option<String>,
+    #[sqlx(default)]
+    pub labels: sqlx::types::Json<crate::labels::Labels>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -74,6 +79,8 @@ pub struct Project {
     pub node_positions: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[sqlx(default)]
+    pub labels: sqlx::types::Json<crate::labels::Labels>,
 }
 
 // ─── Services ────────────────────────────────────────────────────
@@ -105,6 +112,8 @@ pub struct Service {
     pub icon: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[sqlx(default)]
+    pub labels: sqlx::types::Json<crate::labels::Labels>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

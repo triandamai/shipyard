@@ -18,6 +18,7 @@ use shipyard_common::types::{LogLevel, MqttPayload};
 use shipyard_docker::engine::DockerEngine;
 use shipyard_docker::types::{MountSpec, MountType, PortSpec, ResourceSpec, ServiceSpec};
 use shipyard_db::events;
+use shipyard_db::labels;
 use shipyard_docker::isolation;
 use shipyard_docker::BollardDockerEngine;
 use shipyard_git::GitService;
@@ -626,6 +627,12 @@ impl DeploymentEngine {
             &repo_url, &git_branch, target_ref, &repo_path,
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+        // Same version as a docker build of this commit: the short sha.
+        let version = self
+            .git_head_commit(&repo_path)
+            .await
+            .ok()
+            .map(|c| c.sha[..7.min(c.sha.len())].to_string());
 
         // Determine build config — priority: shipyard.json > auto-detect > stored DB config.
         let (build_command, output_dir, node_version, install_command, image) = {
@@ -819,6 +826,7 @@ impl DeploymentEngine {
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 6).await?;
         let r = self.static_step_finalize(service_id, &deploy_config, deployment_id, step_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
+        self.record_version(service_id, version).await;
 
         Ok(())
     }
@@ -1339,6 +1347,7 @@ impl DeploymentEngine {
         let (step_id, _) = self.begin_step(org_id, project_id, service_id, deployment_id, 7).await?;
         let fin_result = self.step_finalize(org_id, project_id, service_id).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, fin_result).await?;
+        self.record_version(service_id, labels::image_version(image_ref)).await;
 
         Ok(())
     }
@@ -1555,24 +1564,33 @@ impl DeploymentEngine {
             None => return Err(AppError::Internal("acquire_image returned no value".into())),
         };
 
+        // The version this deploy ships: the tag of the image it runs (for git
+        // builds, the short commit sha the build was tagged with).
+        let version = match &image_source {
+            ImageSource::Registry { tag, .. } | ImageSource::ShipyardArtifact { tag, .. } => Some(tag.clone()),
+            ImageSource::Git { .. } => labels::image_version(&resolved_image_ref),
+        };
+
         // ── ShipyardArtifact short-circuit ─────────────────────────────────────
         // static_bundle and edge_function artifacts don't go through Docker steps;
         // step_acquire_image returns a sentinel string that we dispatch here.
         if resolved_image_ref.starts_with("__ARTIFACT_STATIC__:") {
-            return self
-                .run_static_from_artifact_steps(
-                    org_id, project_id, service_id, deployment_id,
-                    &resolved_image_ref,
-                )
-                .await;
+            self.run_static_from_artifact_steps(
+                org_id, project_id, service_id, deployment_id,
+                &resolved_image_ref,
+            )
+            .await?;
+            self.record_version(service_id, version).await;
+            return Ok(());
         }
         if resolved_image_ref.starts_with("__ARTIFACT_EDGE__:") {
-            return self
-                .run_edge_from_artifact_steps(
-                    org_id, project_id, service_id, deployment_id,
-                    &resolved_image_ref,
-                )
-                .await;
+            self.run_edge_from_artifact_steps(
+                org_id, project_id, service_id, deployment_id,
+                &resolved_image_ref,
+            )
+            .await?;
+            self.record_version(service_id, version).await;
+            return Ok(());
         }
 
         // Record the resolved image so rollback can re-use the exact artifact.
@@ -1719,6 +1737,7 @@ impl DeploymentEngine {
             fin_result,
         )
         .await?;
+        self.record_version(service_id, version).await;
 
         Ok(())
     }
@@ -4494,6 +4513,15 @@ impl DeploymentEngine {
     ///
     /// If `stop_service` set `replicas = 0` before this deploy, GREATEST(replicas,1)
     /// resets it to 1 so the topology shows the correct count immediately.
+    /// Label the service with the version it now runs. Best-effort: a missing
+    /// label never fails a deploy that already went out.
+    async fn record_version(&self, service_id: Uuid, version: Option<String>) {
+        let Some(version) = version else { return };
+        if let Err(e) = labels::set_version(&self.db, service_id, &version).await {
+            tracing::warn!(service_id = %service_id, "failed to record service version: {e}");
+        }
+    }
+
     async fn step_finalize(&self, org_id: Uuid, project_id: Uuid, service_id: Uuid) -> AppResult<()> {
         sqlx::query(
             "UPDATE services

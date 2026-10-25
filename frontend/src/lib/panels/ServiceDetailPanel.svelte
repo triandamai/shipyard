@@ -22,7 +22,7 @@
 	import {
 		Button, Card, Badge, StatusDot, Tabs, KeyValueList, ListRow,
 		Spinner, EmptyState, InlineAlert, ConfirmDialog,
-		ActivityList, FormField, TextField, Checkbox
+		ActivityList, FormField, TextField, Checkbox, LabelChips
 	} from '$lib/components/ui';
 	import type { KeyValueItem } from '$lib/components/ui';
 	import { toDotStatus } from '$lib/utils/status';
@@ -1339,6 +1339,9 @@
 						<StatusDot status={toDotStatus(svc.status)} />
 					{/snippet}
 				</ListRow>
+				{#if svc.labels && Object.keys(svc.labels).length}
+					<div class="header-labels"><LabelChips labels={svc.labels} /></div>
+				{/if}
 				<div class="header-actions">
 					{#if service.status === 'running'}
 						<Button variant="secondary" size="sm" onclick={() => showExecPanel = true} title="Open a shell in this container">
@@ -2302,6 +2305,7 @@
 		flex-shrink: 0;
 	}
 	.meta-sep { color: var(--text-dim); }
+	.header-labels { padding-bottom: 10px; }
 	.header-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 10px; border-top: 1px solid var(--border); }
 	.tabs-wrap { flex-shrink: 0; padding: 0 8px; }
 

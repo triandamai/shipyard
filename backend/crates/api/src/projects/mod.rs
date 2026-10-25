@@ -122,7 +122,7 @@ async fn list_projects(
     require_org_member(&state.db, auth_user.user_id, org_id).await?;
 
     let projects = sqlx::query_as::<_, Project>(
-        "SELECT id, org_id, name, slug, directory_path, node_positions, created_at, updated_at
+        "SELECT id, org_id, name, slug, directory_path, node_positions, created_at, updated_at, labels
          FROM projects
          WHERE org_id = $1
          ORDER BY created_at ASC",
@@ -174,7 +174,7 @@ async fn create_project(
     let project = sqlx::query_as::<_, Project>(
         "INSERT INTO projects (id, org_id, name, slug, directory_path, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-         RETURNING id, org_id, name, slug, directory_path, node_positions, created_at, updated_at",
+         RETURNING id, org_id, name, slug, directory_path, node_positions, created_at, updated_at, labels",
     )
     .bind(project_id)
     .bind(org_id)
@@ -207,7 +207,7 @@ async fn get_project(
     require_org_member(&state.db, auth_user.user_id, org_id).await?;
 
     let project = sqlx::query_as::<_, Project>(
-        "SELECT id, org_id, name, slug, directory_path, node_positions, created_at, updated_at
+        "SELECT id, org_id, name, slug, directory_path, node_positions, created_at, updated_at, labels
          FROM projects
          WHERE id = $1 AND org_id = $2",
     )
@@ -238,7 +238,7 @@ async fn update_project(
         "UPDATE projects
          SET name = $1, updated_at = NOW()
          WHERE id = $2 AND org_id = $3
-         RETURNING id, org_id, name, slug, directory_path, node_positions, created_at, updated_at",
+         RETURNING id, org_id, name, slug, directory_path, node_positions, created_at, updated_at, labels",
     )
     .bind(&body.name)
     .bind(project_id)
