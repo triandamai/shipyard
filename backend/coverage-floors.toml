@@ -1,0 +1,17 @@
+# Minimum line coverage (%) per crate. CI fails when a crate drops below its
+# floor. Floors sit just under the measured baseline (taken without the DB
+# tests, so CI, which runs them, should be higher) and are only ever raised.
+# A crate not listed has no floor.
+api = 9
+cloudflare = 35
+common = 65
+db = 5
+docker = 24
+docker_worker = 1
+engine = 19
+git = 13
+mqtt_broker = 12
+node_agent = 0
+openapi = 0
+registry = 19
+traefik = 100
