@@ -591,9 +591,9 @@ Reply `2xx` within 10 seconds; do slow work after replying. Anything else is ret
 
 `GET /event-types` lists them. The same envelopes are available as a feed: `GET /orgs/{org}/events?after=<event id>&type=deployment.*&app=todo&limit=100` returns `{ "events": [...], "next_after": "<id>" }`, oldest first. Use it to catch up after downtime. Events are kept 30 days.
 
-## Logs, deployments and usage {#observability}
+## Logs, deployments, usage and metrics {#observability}
 
-Show users failures in their own words; give the agent the same logs so it can fix the app. Secret values are masked as `****` in everything below.
+Show users failures in their own words; give the agent the same logs so it can fix the app. Nomi's Monitor sheet (`MonitorPanel.svelte`) displays live usage, structured runtime logs, and 7-day traffic and container resource history. Secret values are masked as `****` in everything below.
 
 ### Checking a deployment {#deployment-check}
 
@@ -789,7 +789,8 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 - [ ] "Change address" → `GET /orgs/{org}/domains/check` while typing, `PUT .../envs/{env}/domain` on confirm; on `409` show `data.suggestions`.
 - [ ] Project moved to another org → `POST /orgs/{org}/apps/{app}/transfer` with `to_org`; store the returned app key if you passed `app_key`.
 - [ ] Project deleted → confirm → `DELETE /orgs/{org}/apps/{app}`.
-- [ ] Logs tab → runtime logs and deployment logs; usage → `/usage`.
+- [ ] Logs and Monitor panel → runtime logs (structured), live usage (`/usage`), and historical metrics (`/metrics`) for traffic and containers.
+- [ ] Monitor sheet alerts → handle `service.resource_alert` and `service.error_rate_alert` webhooks.
 - [ ] After publish: never show `url` until `publish.succeeded`; on failure read `failure` from the deployment and run the [fix loop](#fix-loop).
 - [ ] Run `scripts/check-nomi-integration.py` against the target Shipyard before go-live.
 - [ ] Catch-up job: on start, page `GET /orgs/{org}/events?after=<last seen>` for orgs with activity.

@@ -1928,6 +1928,54 @@
               ]
             }
           }
+        },
+        {
+          "name": "Metrics (traffic & resource history)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Bucketed traffic metrics (visitors, requests, 4xx/5xx errors, p50/p95 latency) and container resource history for Nomi's Monitor sheet.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/apps/{{app}}/envs/{{env}}/metrics?range=24h&step=1h",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "apps",
+                "{{app}}",
+                "envs",
+                "{{env}}",
+                "metrics"
+              ],
+              "query": [
+                {
+                  "key": "range",
+                  "value": "24h",
+                  "disabled": false
+                },
+                {
+                  "key": "step",
+                  "value": "1h",
+                  "disabled": false
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
         }
       ]
     },

@@ -270,6 +270,7 @@ curl -X PUT https://ship.example.com/openapi/v1/apps/shop/environments/productio
 | What the app is printing now | `GET /apps/shop/environments/production/logs?follow=1` |
 | Only errors | `GET /apps/shop/environments/production/logs?level=error&since=1h` |
 | Crashes, out-of-memory kills, restart loops | `GET /apps/shop/environments/production/events` |
+| Monitor sheet: traffic & resource history | `GET /orgs/:org/apps/:app/envs/:env/metrics?range=24h&step=1h` |
 
 `?follow=1` streams Server-Sent Events. Lines from every replica are merged in time order and each carries its replica number.
 
@@ -293,6 +294,8 @@ Each delivery has a `Shipyard-Signature` header: an HMAC-SHA256 of the raw body 
 | `build.succeeded`, `build.failed` | A build finishes |
 | `deployment.succeeded`, `deployment.failed` | A deploy finishes, with the environment URL or the failing step |
 | `service.crashed` | A running app exits unexpectedly, with exit code and the last log lines |
+| `service.resource_alert` | CPU or memory crosses configured threshold |
+| `service.error_rate_alert` | 5xx error rate crosses threshold (>5% for 5 min) |
 | `environment.slept`, `environment.woke` | A free-plan environment goes to sleep or wakes up |
 | `preview.expiring` | A preview will be removed in 24 hours |
 
