@@ -904,8 +904,9 @@ async fn secure_project_data(state: &AppState) -> Result<Vec<String>, String> {
 
 /// Pin the platform images in `.env` to the newest stable release so installs
 /// run an exact version (`repo:1.4.2`) instead of a moving tag or a commit
-/// hash. Returns the version, or `None` when no release is published yet, in
-/// which case the configured tags are pulled as they are.
+/// hash. Returns `None` when no release is published (or the registry is
+/// unreachable); the caller must then refuse to update rather than pull a
+/// moving tag, which would never look different from what is running.
 async fn pin_to_latest_release() -> Option<String> {
     let (_, _, repo) = get_build_info();
     let latest = fetch_latest_release(repo).await?.to_string();
@@ -927,8 +928,16 @@ async fn run_platform_update(
     state: &AppState,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) -> bool {
-    if let Some(v) = pin_to_latest_release().await {
-        let _ = tx.send(Ok(Event::default().data(format!("[shipyard] Updating to release {v}")))).await;
+    match pin_to_latest_release().await {
+        Some(v) => {
+            let _ = tx.send(Ok(Event::default().data(format!("[shipyard] Updating to release {v}")))).await;
+        }
+        None => {
+            let _ = tx.send(Ok(Event::default().event("error").data(
+                "No published release found (registry unreachable or no X.Y.Z tags). Nothing was changed."
+            ))).await;
+            return false;
+        }
     }
     let images = images_to_pull();
     if images.is_empty() {
@@ -1050,7 +1059,11 @@ async fn trigger_update(
     require_update_perm(&state, &auth).await?;
     tracing::info!(user_id = %auth.user_id, "Platform update triggered (one-shot)");
 
-    pin_to_latest_release().await;
+    if pin_to_latest_release().await.is_none() {
+        return Err(ApiAppError(AppError::Internal(
+            "No published release found (registry unreachable or no X.Y.Z tags). Nothing was changed.".to_string(),
+        )));
+    }
     let images = images_to_pull();
     if images.is_empty() {
         return Err(ApiAppError(AppError::Internal(

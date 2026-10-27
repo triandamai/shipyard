@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release: bump the workspace version, commit, and tag vX.Y.Z.
-# Pushing the tag builds and publishes X.Y.Z / X.Y / X / latest images and
+# Pushing the tag builds and publishes X.Y.Z / X.Y / X images and
 # creates the GitHub Release (see .github/workflows/docker.yml).
 #
 #   scripts/release.sh 1.4.0          # stable

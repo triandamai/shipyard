@@ -20,7 +20,9 @@ on:
   workflow_dispatch:
 
 # main  -> edge + <sha>            (never `latest`)
-# vX.Y.Z -> X.Y.Z, X.Y, X, latest  (pre-release tags: exact version only)
+# vX.Y.Z -> X.Y.Z, X.Y, X          (pre-release tags: exact version only)
+# There is deliberately no `latest`: installs pin an exact version so the
+# updater can tell whether it is behind.
 
 jobs:
   # A release tag must match the version compiled into the binary, so the
@@ -87,7 +89,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
 
       - name: Set build metadata
         id: build-meta
@@ -151,7 +152,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -203,7 +203,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -248,7 +247,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

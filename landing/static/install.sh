@@ -317,22 +317,22 @@ SCRIPTS_URL=""
 read_input "  Landing/scripts base URL (e.g. https://shipyard.example.com) [leave blank to skip auto-update]: " SCRIPTS_URL ""
 
 TAG=""
-read_input "  Image tag [latest release]: " TAG "latest"
+read_input "  Release version [newest]: " TAG "latest"
 
-# "latest" is resolved to the newest stable release (X.Y.Z) and pinned, so the
-# install runs an exact version and the updater can compare versions. Use
-# "edge" for the main branch build. Falls back to the moving tag if Docker Hub
-# can't be reached.
-if [[ "$TAG" == "latest" ]]; then
+# There is no moving `latest` image tag: installs pin an exact release (X.Y.Z)
+# so the updater can compare versions. "newest"/"latest" resolves to the highest
+# stable release; "edge" installs the main-branch build; or type a version.
+if [[ "$TAG" == "latest" || "$TAG" == "newest" ]]; then
     _repo="${BACKEND_IMAGE#*/}"; _user="${BACKEND_IMAGE%%/*}"
-    _resolved=$(curl -fsS --max-time 10 \
+    TAG=$(curl -fsS --max-time 10 \
         "https://hub.docker.com/v2/repositories/${_user}/${_repo}/tags/?page_size=100&ordering=last_updated" 2>/dev/null \
         | grep -oE '"name": ?"[0-9]+\.[0-9]+\.[0-9]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
         | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
-    if [[ -n "$_resolved" ]]; then
-        TAG="$_resolved"
-        echo "  Pinned to release ${TAG}"
+    if [[ -z "$TAG" ]]; then
+        echo "Could not find a published release. Re-run and enter a version (e.g. 1.0.0) or 'edge'." >&2
+        exit 1
     fi
+    echo "  Pinned to release ${TAG}"
 fi
 
 BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
