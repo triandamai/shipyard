@@ -14,12 +14,37 @@ on:
       - 'scripts/worker-setup.sh'
       - '.github/workflows/docker.yml'
       - '.github/workflows/ci.yml'
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
 
+# main  -> edge + <sha>            (never `latest`)
+# vX.Y.Z -> X.Y.Z, X.Y, X          (pre-release tags: exact version only)
+# There is deliberately no `latest`: installs pin an exact version so the
+# updater can tell whether it is behind.
+
 jobs:
+  # A release tag must match the version compiled into the binary, so the
+  # in-app updater (which compares versions) agrees with the registry.
+  verify-version:
+    name: Verify release version
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches backend/Cargo.toml
+        run: |
+          cargo_version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' backend/Cargo.toml | head -1)
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag_version cargo=$cargo_version"
+          test "$tag_version" = "$cargo_version" || { echo "::error::Tag $GITHUB_REF_NAME does not match workspace version $cargo_version. Run scripts/release.sh."; exit 1; }
+
   # ── CI (fmt/clippy/build/test + frontend/landing typecheck) ────────────────
   ci:
     name: CI
+    needs: [verify-version]
+    if: always() && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')
     uses: ./.github/workflows/ci.yml
 
   # ── Backend ────────────────────────────────────────────────────────────────
@@ -59,8 +84,11 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/shipyard-backend
           tags: |
-            type=raw,value=latest
+            type=raw,value=edge,enable=${{ github.ref_type != 'tag' }}
             type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Set build metadata
         id: build-meta
@@ -119,8 +147,11 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/shipyard-frontend
           tags: |
-            type=raw,value=latest
+            type=raw,value=edge,enable=${{ github.ref_type != 'tag' }}
             type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -167,8 +198,11 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/shipyard-landing
           tags: |
-            type=raw,value=latest
+            type=raw,value=edge,enable=${{ github.ref_type != 'tag' }}
             type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -208,8 +242,11 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/shipyard-edge-runtime
           tags: |
-            type=raw,value=latest
+            type=raw,value=edge,enable=${{ github.ref_type != 'tag' }}
             type=sha,prefix=,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -234,3 +271,23 @@ jobs:
             -X POST "${{ secrets.LANDING_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
             -d '{"ref":"${{ github.ref_name }}","sha":"${{ github.sha }}"}'
+
+  # ── GitHub Release (tags only) ─────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [backend, frontend, landing, edge-runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" $flags --generate-notes \
+            --title "Shipyard ${GITHUB_REF_NAME#v}" \
+            scripts/install.sh scripts/update.sh scripts/worker-setup.sh

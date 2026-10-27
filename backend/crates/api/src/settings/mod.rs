@@ -128,7 +128,21 @@ pub struct VersionInfo {
     pub git_sha: String,
     pub build_date: String,
     pub update_available: bool,
-    pub remote_sha: Option<String>,
+    /// Newest stable release published to the registry (`1.4.2`).
+    pub latest: Option<String>,
+    pub release_url: Option<String>,
+    /// Changelog of every stable release newer than the running version,
+    /// newest first, from the GitHub Releases of the Shipyard repo.
+    pub changelog: Vec<ReleaseNote>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ReleaseNote {
+    pub version: String,
+    pub name: String,
+    pub published_at: Option<String>,
+    pub body: String,
+    pub url: String,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -713,67 +727,145 @@ async fn get_version(
         }
     }
 
-    let (update_available, remote_sha) = check_hub_update(docker_repo, git_sha).await;
+    let latest = fetch_latest_release(docker_repo).await;
+    let changelog = fetch_changelog(&current).await;
+    let update_available = latest
+        .as_ref()
+        .map(|l| shipyard_common::version::update_available(&current, l))
+        .unwrap_or(false);
 
     let info = VersionInfo {
         current,
         git_sha: git_sha.clone(),
         build_date: build_date.clone(),
         update_available,
-        remote_sha,
+        release_url: latest
+            .as_ref()
+            .map(|l| format!("https://github.com/triandamai/shipyard/releases/tag/v{l}")),
+        latest: latest.map(|l| l.to_string()),
+        changelog,
     };
 
     *guard = Some((Instant::now(), info.clone()));
     Ok(Json(ApiResponse::ok(info)))
 }
 
-/// Query Docker Hub for the most recently pushed SHA tag and compare it with
-/// the SHA baked into this running container.
-///
-/// Docker Hub returns tags ordered by `last_updated` descending. We look for
-/// the first tag that looks like a 7-char git short SHA (all hex digits) and
-/// compare it against `current_sha`. If they differ, an update is available.
-async fn check_hub_update(repo: &str, current_sha: &str) -> (bool, Option<String>) {
-    if repo.is_empty() || current_sha == "dev" {
-        return (false, None);
+/// Newest stable release tag (`MAJOR.MINOR.PATCH`) in the platform's registry
+/// repository. Non-version tags (`latest`, `edge`, commit SHAs) are ignored, so
+/// the updater compares versions, never hashes.
+async fn fetch_latest_release(repo: &str) -> Option<shipyard_common::version::Version> {
+    if repo.is_empty() {
+        return None;
     }
-
     let url = format!(
-        "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&ordering=last_updated"
+        "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100&ordering=last_updated"
     );
-    let client = match reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(format!("shipyard/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(8))
         .build()
-    {
-        Ok(c) => c,
-        Err(_) => return (false, None),
-    };
-
-    let body: serde_json::Value = match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => match r.json().await {
-            Ok(v) => v,
-            Err(_) => return (false, None),
-        },
-        _ => return (false, None),
-    };
-
-    let results = match body["results"].as_array() {
-        Some(a) => a,
-        None => return (false, None),
-    };
-
-    // The 7-char short SHA tag is the fingerprint for each CI push.
-    let current_short = &current_sha[..7.min(current_sha.len())];
-    let latest_sha = results
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .find(|name| name.len() == 7 && name.chars().all(|c| c.is_ascii_hexdigit()));
-
-    match latest_sha {
-        Some(sha) => (sha != current_short, Some(sha.to_string())),
-        None => (false, None),
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
     }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    latest_from_hub_tags(&body)
+}
+
+/// Release notes come from the GitHub Releases of the Shipyard repository
+/// (`SHIPYARD_RELEASES_REPO` overrides `owner/name` for forks).
+async fn fetch_changelog(current: &str) -> Vec<ReleaseNote> {
+    let repo = std::env::var("SHIPYARD_RELEASES_REPO")
+        .ok()
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| "triandamai/shipyard".to_string());
+    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=30");
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent(format!("shipyard/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+    else {
+        return Vec::new();
+    };
+    let Ok(resp) = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    else {
+        return Vec::new();
+    };
+    if !resp.status().is_success() {
+        return Vec::new();
+    }
+    match resp.json::<serde_json::Value>().await {
+        Ok(body) => releases_since(&body, current),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Stable, published releases newer than `current`, newest first. When the
+/// running build has no parseable version (a dev build) only the five newest
+/// are returned so the page doesn't dump the whole history.
+fn releases_since(body: &serde_json::Value, current: &str) -> Vec<ReleaseNote> {
+    use shipyard_common::version::Version;
+    let cur = Version::parse(current);
+    let mut notes: Vec<(Version, ReleaseNote)> = body
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false))
+        .filter_map(|r| {
+            let tag = r["tag_name"].as_str()?;
+            let v = Version::parse(tag)?;
+            if !v.is_stable() || cur.as_ref().is_some_and(|c| &v <= c) {
+                return None;
+            }
+            Some((
+                v.clone(),
+                ReleaseNote {
+                    version: v.to_string(),
+                    name: r["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(tag).to_string(),
+                    published_at: r["published_at"].as_str().map(str::to_string),
+                    body: r["body"].as_str().unwrap_or("").to_string(),
+                    url: r["html_url"].as_str().unwrap_or("").to_string(),
+                },
+            ))
+        })
+        .collect();
+    notes.sort_by(|a, b| b.0.cmp(&a.0));
+    let limit = if cur.is_some() { usize::MAX } else { 5 };
+    notes.into_iter().take(limit).map(|(_, n)| n).collect()
+}
+
+fn latest_from_hub_tags(body: &serde_json::Value) -> Option<shipyard_common::version::Version> {
+    let names = body["results"]
+        .as_array()?
+        .iter()
+        .filter_map(|t| t["name"].as_str());
+    shipyard_common::version::latest_release(names, false)
+}
+
+/// Rewrite `KEY=image:tag` lines for `keys` so each image is pinned to `tag`.
+/// Other lines are untouched; a key that is not present is not added.
+fn pin_dotenv_images(content: &str, keys: &[&str], tag: &str) -> String {
+    let mut out: Vec<String> = content
+        .lines()
+        .map(|line| {
+            for k in keys {
+                if let Some(val) = line.strip_prefix(&format!("{k}=")) {
+                    return format!("{k}={}", shipyard_common::version::with_tag(val.trim(), tag));
+                }
+            }
+            line.to_string()
+        })
+        .collect();
+    if content.ends_with('\n') {
+        out.push(String::new());
+    }
+    out.join("\n")
 }
 
 // ── Self-update ───────────────────────────────────────────────────────────────
@@ -821,8 +913,10 @@ fn resolve_image_key(content: &str, key: &str) -> Option<(String, String)> {
     parse_image_ref(&val)
 }
 
+const IMAGE_KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
+
 fn images_to_pull() -> Vec<(String, String)> {
-    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
+    const KEYS: &[&str] = IMAGE_KEYS;
     let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
     KEYS.iter().filter_map(|k| resolve_image_key(&content, k)).collect()
 }
@@ -889,6 +983,25 @@ async fn secure_project_data(state: &AppState) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// Pin the platform images in `.env` to the newest stable release so installs
+/// run an exact version (`repo:1.4.2`) instead of a moving tag or a commit
+/// hash. Returns `None` when no release is published (or the registry is
+/// unreachable); the caller must then refuse to update rather than pull a
+/// moving tag, which would never look different from what is running.
+async fn pin_to_latest_release() -> Option<String> {
+    let (_, _, repo) = get_build_info();
+    let latest = fetch_latest_release(repo).await?.to_string();
+    let content = std::fs::read_to_string(DOTENV_PATH).ok()?;
+    let pinned = pin_dotenv_images(&content, IMAGE_KEYS, &latest);
+    if pinned != content {
+        if let Err(e) = std::fs::write(DOTENV_PATH, pinned) {
+            tracing::warn!("Could not pin images to {latest} in {DOTENV_PATH}: {e}");
+            return None;
+        }
+    }
+    Some(latest)
+}
+
 /// Core update logic shared by the streaming and one-shot handlers.
 /// Pulls all platform images via the Docker API (no docker CLI required),
 /// then spawns a detached `docker:cli` container to run `docker compose up -d`.
@@ -896,6 +1009,17 @@ async fn run_platform_update(
     state: &AppState,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) -> bool {
+    match pin_to_latest_release().await {
+        Some(v) => {
+            let _ = tx.send(Ok(Event::default().data(format!("[shipyard] Updating to release {v}")))).await;
+        }
+        None => {
+            let _ = tx.send(Ok(Event::default().event("error").data(
+                "No published release found (registry unreachable or no X.Y.Z tags). Nothing was changed."
+            ))).await;
+            return false;
+        }
+    }
     let images = images_to_pull();
     if images.is_empty() {
         let _ = tx.send(Ok(Event::default().event("error").data(
@@ -1016,6 +1140,11 @@ async fn trigger_update(
     require_update_perm(&state, &auth).await?;
     tracing::info!(user_id = %auth.user_id, "Platform update triggered (one-shot)");
 
+    if pin_to_latest_release().await.is_none() {
+        return Err(ApiAppError(AppError::Internal(
+            "No published release found (registry unreachable or no X.Y.Z tags). Nothing was changed.".to_string(),
+        )));
+    }
     let images = images_to_pull();
     if images.is_empty() {
         return Err(ApiAppError(AppError::Internal(
@@ -3070,5 +3199,54 @@ mod sandbox_preview_dns_tests {
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json["preview_base_domain"], "shipyard-apps.dev");
         assert!(json["owner_org_id"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    fn hub_tags_pick_highest_stable_version_not_newest_push() {
+        let body = serde_json::json!({"results": [
+            {"name": "latest"}, {"name": "a1b2c3d"}, {"name": "1.9.0"},
+            {"name": "1.10.0"}, {"name": "2.0.0-rc.1"}, {"name": "edge"}
+        ]});
+        assert_eq!(latest_from_hub_tags(&body).unwrap().to_string(), "1.10.0");
+        assert!(latest_from_hub_tags(&serde_json::json!({"results": [{"name": "latest"}]})).is_none());
+        assert!(latest_from_hub_tags(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn changelog_lists_newer_stable_releases_newest_first() {
+        let body = serde_json::json!([
+            {"tag_name": "v1.1.0", "name": "Shipyard 1.1.0", "body": "- a", "html_url": "u1", "published_at": "2026-01-02T00:00:00Z"},
+            {"tag_name": "v1.3.0", "name": "", "body": "- c", "html_url": "u3"},
+            {"tag_name": "v1.2.0", "name": "Shipyard 1.2.0", "body": "- b", "html_url": "u2"},
+            {"tag_name": "v1.4.0-rc.1", "prerelease": true, "body": "x"},
+            {"tag_name": "v1.5.0", "draft": true, "body": "x"},
+            {"tag_name": "nightly", "body": "x"},
+            {"tag_name": "v1.0.0", "body": "old"}
+        ]);
+        let notes = releases_since(&body, "1.1.0");
+        let versions: Vec<_> = notes.iter().map(|n| n.version.as_str()).collect();
+        assert_eq!(versions, ["1.3.0", "1.2.0"]);
+        assert_eq!(notes[0].name, "v1.3.0");
+        assert_eq!(notes[1].body, "- b");
+        // Dev builds get a bounded list; garbage input gives an empty one.
+        assert_eq!(releases_since(&body, "dev").len(), 4);
+        assert!(releases_since(&serde_json::json!({}), "1.0.0").is_empty());
+    }
+
+    #[test]
+    fn pinning_rewrites_only_image_keys() {
+        let env = "FOO=bar\nBACKEND_IMAGE=me/shipyard-backend:abc1234\nFRONTEND_IMAGE=me/shipyard-frontend:latest\nOTHER_IMAGE=x:1\n";
+        let out = pin_dotenv_images(env, &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"], "1.4.2");
+        assert_eq!(
+            out,
+            "FOO=bar\nBACKEND_IMAGE=me/shipyard-backend:1.4.2\nFRONTEND_IMAGE=me/shipyard-frontend:1.4.2\nOTHER_IMAGE=x:1\n"
+        );
+        // Idempotent.
+        assert_eq!(pin_dotenv_images(&out, &["BACKEND_IMAGE"], "1.4.2"), out);
     }
 }

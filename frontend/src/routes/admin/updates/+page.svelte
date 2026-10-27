@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { renderReleaseNotes } from '$lib/utils/releaseNotes';
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { Card, InlineAlert, Button, Badge } from '$lib/components/ui';
@@ -9,7 +10,9 @@
 		git_sha: string;
 		build_date: string;
 		update_available: boolean;
-		remote_sha: string | null;
+		latest: string | null;
+		release_url: string | null;
+		changelog: { version: string; name: string; published_at: string | null; body: string; url: string }[];
 	}
 
 	let info           = $state<VersionInfo | null>(null);
@@ -130,15 +133,41 @@
 			<div class="version-body">
 				<div class="v-row">
 					<span class="v-label">Version</span>
-					<code class="v-sha">{info.git_sha}</code>
+					<code class="v-sha">{info.current}</code>
+					<span class="v-date">{info.git_sha}</span>
 					{#if info.build_date && info.build_date !== 'unknown'}
 						<span class="v-date">{formatDate(info.build_date)}</span>
 					{/if}
 				</div>
-				{#if info.update_available && info.remote_sha}
-					<InlineAlert tone="info">Update available — <code class="v-remote-sha">{info.remote_sha}</code></InlineAlert>
-				{:else if info.remote_sha}
+				{#if info.update_available && info.latest}
+					<InlineAlert tone="info">
+						Update available — <code class="v-remote-sha">{info.latest}</code>
+						{#if info.release_url}<a href={info.release_url} target="_blank" rel="noreferrer">release notes</a>{/if}
+					</InlineAlert>
+				{:else if info.latest}
 					<InlineAlert tone="success">Up to date</InlineAlert>
+				{/if}
+				{#if info.changelog?.length}
+					<div class="changelog">
+						<span class="cl-title">What's new</span>
+						{#each info.changelog as rel (rel.version)}
+							<details class="cl-item" open={rel === info.changelog[0]}>
+								<summary>
+									<code>{rel.version}</code>
+									<span class="cl-name">{rel.name}</span>
+									{#if rel.published_at}<span class="v-date">{formatDate(rel.published_at)}</span>{/if}
+								</summary>
+								<div class="cl-body">
+									{#if rel.body.trim()}
+										{@html renderReleaseNotes(rel.body)}
+									{:else}
+										<p>No notes for this release.</p>
+									{/if}
+									{#if rel.url}<a href={rel.url} target="_blank" rel="noreferrer">View on GitHub</a>{/if}
+								</div>
+							</details>
+						{/each}
+					</div>
 				{/if}
 			</div>
 		{/if}
@@ -248,6 +277,18 @@
 	/* ── Update card ── */
 	.update-desc { margin: 0; padding: 12px 18px 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
 	.update-actions { display: flex; align-items: center; gap: 10px; padding: 14px 18px; flex-wrap: wrap; }
+
+	.changelog { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+	.cl-title { font-size: 12px; font-weight: 600; color: var(--text-muted, inherit); text-transform: uppercase; letter-spacing: .04em; }
+	.cl-item { border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 8px; padding: 8px 12px; }
+	.cl-item summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+	.cl-name { font-weight: 500; }
+	.cl-body { margin-top: 8px; font-size: 13px; line-height: 1.5; }
+	.cl-body :global(h4) { margin: 10px 0 4px; font-size: 13px; }
+	.cl-body :global(ul) { margin: 4px 0; padding-left: 18px; }
+	.cl-body :global(pre) { overflow-x: auto; padding: 8px; border-radius: 6px; background: rgba(128,128,128,.12); }
+	.cl-body :global(code) { font-size: 12px; }
+	.cl-body :global(a) { color: var(--primary, inherit); }
 
 	/* Spinner — uses currentColor so it stays visible both on the primary
 	   button's white text and the secondary button's dark/light text,
