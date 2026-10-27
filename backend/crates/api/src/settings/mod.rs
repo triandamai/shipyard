@@ -888,10 +888,9 @@ fn parse_image_ref(val: &str) -> Option<(String, String)> {
 /// Resolve images to pull.
 ///
 /// Tries two sources in order:
-/// 1. Process env vars `BACKEND_IMAGE` / `FRONTEND_IMAGE` (set when the compose
-///    service definition includes `env_file: .env`).
-/// 2. Reads `/opt/shipyard/.env` directly — the file is always mounted and is the
-///    authoritative source regardless of how env vars are forwarded.
+/// 1. Reads `/opt/shipyard/.env` directly — the file is always mounted and is the
+///    authoritative source, updated when pinning releases.
+/// 2. Process env vars `BACKEND_IMAGE` / `FRONTEND_IMAGE` (fallback if .env is missing).
 fn read_dotenv_key(content: &str, key: &str) -> String {
     let prefix = format!("{key}=");
     content
@@ -904,12 +903,13 @@ fn read_dotenv_key(content: &str, key: &str) -> String {
 }
 
 fn resolve_image_key(content: &str, key: &str) -> Option<(String, String)> {
-    // Env var takes priority; fall back to .env file.
-    let val = std::env::var(key)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let val = if val.is_empty() { read_dotenv_key(content, key) } else { val };
+    // .env file takes priority as it reflects pinned release updates; fall back to process env var.
+    let val = read_dotenv_key(content, key);
+    let val = if val.is_empty() {
+        std::env::var(key).unwrap_or_default().trim().to_string()
+    } else {
+        val
+    };
     parse_image_ref(&val)
 }
 
@@ -994,9 +994,16 @@ async fn pin_to_latest_release() -> Option<String> {
     let content = std::fs::read_to_string(DOTENV_PATH).ok()?;
     let pinned = pin_dotenv_images(&content, IMAGE_KEYS, &latest);
     if pinned != content {
-        if let Err(e) = std::fs::write(DOTENV_PATH, pinned) {
+        if let Err(e) = std::fs::write(DOTENV_PATH, &pinned) {
             tracing::warn!("Could not pin images to {latest} in {DOTENV_PATH}: {e}");
             return None;
+        }
+    }
+    // Update process environment variables so any caller in the current process also sees the updated pinned tag.
+    for &key in IMAGE_KEYS {
+        let val = read_dotenv_key(&pinned, key);
+        if !val.is_empty() {
+            std::env::set_var(key, val);
         }
     }
     Some(latest)
@@ -3133,6 +3140,27 @@ mod tests {
         // "BACKEND_IMAGE_EXTRA=foo" must not be picked up when looking for "BACKEND_IMAGE"
         let content = "BACKEND_IMAGE_EXTRA=foo\nBACKEND_IMAGE=real-value\n";
         assert_eq!(read_dotenv_key(content, "BACKEND_IMAGE"), "real-value");
+    }
+
+    #[test]
+    fn resolve_image_key_prioritizes_dotenv_over_process_env() {
+        let key = "TEST_BACKEND_IMAGE_RESOLVE";
+        std::env::set_var(key, "triandamai827/shipyard-backend:0.0.2");
+        let dotenv = format!("{key}=triandamai827/shipyard-backend:0.0.3\n");
+
+        // .env file overrides the process's inherited environment variable.
+        assert_eq!(
+            resolve_image_key(&dotenv, key),
+            Some(("triandamai827/shipyard-backend".to_string(), "0.0.3".to_string()))
+        );
+
+        // Fallback to process env when key is not in .env file.
+        assert_eq!(
+            resolve_image_key("", key),
+            Some(("triandamai827/shipyard-backend".to_string(), "0.0.2".to_string()))
+        );
+
+        std::env::remove_var(key);
     }
 
     #[test]
