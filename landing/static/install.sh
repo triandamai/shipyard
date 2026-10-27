@@ -41,6 +41,7 @@ read_input() {
 INSTALL_DIR="/opt/shipyard"
 BACKEND_IMAGE="triandamai827/shipyard-backend"
 FRONTEND_IMAGE="triandamai827/shipyard-frontend"
+EDGE_RUNTIME_IMAGE="triandamai827/shipyard-edge-runtime"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}"
@@ -84,6 +85,50 @@ install_pkg() {
         *)
             error "Unsupported OS '${OS_ID}'. Install $* manually and re-run." ;;
     esac
+}
+
+# ── gVisor (runsc) ────────────────────────────────────────────────────────────
+# Installs the runsc binary + containerd shim straight from Google's release
+# bucket and registers it as a Docker runtime, without depending on apt/gpg
+# repo setup (which isn't guaranteed on every host and has bitten us before).
+# Idempotent — skips entirely if "runsc" is already a registered Docker runtime.
+ensure_gvisor_installed() {
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        info "gVisor (runsc) already registered with Docker — skipping install."
+        return 0
+    fi
+
+    info "Installing gVisor (runsc)..."
+    local gv_arch gv_url gv_tmp
+    gv_arch=$(uname -m)
+    gv_url="https://storage.googleapis.com/gvisor/releases/release/latest/${gv_arch}"
+    gv_tmp=$(mktemp -d)
+    if ! (
+        cd "${gv_tmp}" &&
+        curl -fsSL -O "${gv_url}/runsc" -O "${gv_url}/runsc.sha512" \
+            -O "${gv_url}/containerd-shim-runsc-v1" -O "${gv_url}/containerd-shim-runsc-v1.sha512" &&
+        sha512sum -c runsc.sha512 &&
+        sha512sum -c containerd-shim-runsc-v1.sha512 &&
+        chmod a+rx runsc containerd-shim-runsc-v1 &&
+        mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    ); then
+        rm -rf "${gv_tmp}"
+        warn "gVisor download/verification failed — falling back to the standard runtime (runc). Install manually later: https://gvisor.dev/docs/user_guide/install/"
+        SANDBOX_RUNTIME_CLASS="runc"
+        return 1
+    fi
+    rm -rf "${gv_tmp}"
+
+    /usr/local/bin/runsc install
+    systemctl restart docker
+    sleep 2
+
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"'; then
+        success "gVisor (runsc) installed and registered with Docker"
+    else
+        warn "gVisor install ran but 'runsc' does not appear in 'docker info' — falling back to the standard runtime (runc). Check /etc/docker/daemon.json manually."
+        SANDBOX_RUNTIME_CLASS="runc"
+    fi
 }
 
 # ── Base utilities ────────────────────────────────────────────────────────────
@@ -238,15 +283,61 @@ DOMAIN=""
 read_input "  Domain name (e.g. app.example.com): " DOMAIN ""
 [[ -n "${DOMAIN}" ]] || error "Domain name is required."
 
+API_DOMAIN=""
+read_input "  API domain (e.g. api.example.com) [api-${DOMAIN}]: " API_DOMAIN "api-${DOMAIN}"
+
+REGISTRY_DOMAIN=""
+read_input "  Registry domain (e.g. registry.example.com) [registry.${DOMAIN}]: " REGISTRY_DOMAIN "registry.${DOMAIN}"
+
+# ── Sandbox apps (in-browser editor + live preview) ─────────────────────────
+SANDBOX_ENABLED_INPUT=""
+read_input "  Enable sandbox apps — in-browser code editor + live preview? [y/N]: " SANDBOX_ENABLED_INPUT "n"
+
+SANDBOX_ENABLED="false"
+SANDBOX_PREVIEW_DOMAIN=""
+SANDBOX_RUNTIME_CLASS="runc"
+if [[ "${SANDBOX_ENABLED_INPUT}" == "y" || "${SANDBOX_ENABLED_INPUT}" == "Y" || "${SANDBOX_ENABLED_INPUT}" == "yes" || "${SANDBOX_ENABLED_INPUT}" == "YES" || "${SANDBOX_ENABLED_INPUT}" == "Yes" ]]; then
+    SANDBOX_ENABLED="true"
+
+    read_input "  Sandbox preview domain — needs wildcard DNS + TLS, e.g. *.apps.example.com [apps-${DOMAIN}]: " SANDBOX_PREVIEW_DOMAIN "apps-${DOMAIN}"
+
+    SANDBOX_GVISOR_INPUT=""
+    read_input "  Use gVisor (runsc) for stronger sandbox isolation? [Y/n]: " SANDBOX_GVISOR_INPUT "y"
+    if [[ "${SANDBOX_GVISOR_INPUT}" == "y" || "${SANDBOX_GVISOR_INPUT}" == "Y" || "${SANDBOX_GVISOR_INPUT}" == "yes" || "${SANDBOX_GVISOR_INPUT}" == "YES" || "${SANDBOX_GVISOR_INPUT}" == "Yes" ]]; then
+        SANDBOX_RUNTIME_CLASS="runsc"
+        ensure_gvisor_installed || true
+    fi
+fi
+
 ACME_EMAIL=""
 read_input "  Email for Let's Encrypt certificates: " ACME_EMAIL ""
 [[ -n "${ACME_EMAIL}" ]] || error "Email is required for Let's Encrypt."
 
+SCRIPTS_URL=""
+read_input "  Landing/scripts base URL (e.g. https://shipyard.example.com) [leave blank to skip auto-update]: " SCRIPTS_URL ""
+
 TAG=""
-read_input "  Image tag [latest]: " TAG "latest"
+read_input "  Image tag [latest release]: " TAG "latest"
+
+# "latest" is resolved to the newest stable release (X.Y.Z) and pinned, so the
+# install runs an exact version and the updater can compare versions. Use
+# "edge" for the main branch build. Falls back to the moving tag if Docker Hub
+# can't be reached.
+if [[ "$TAG" == "latest" ]]; then
+    _repo="${BACKEND_IMAGE#*/}"; _user="${BACKEND_IMAGE%%/*}"
+    _resolved=$(curl -fsS --max-time 10 \
+        "https://hub.docker.com/v2/repositories/${_user}/${_repo}/tags/?page_size=100&ordering=last_updated" 2>/dev/null \
+        | grep -oE '"name": ?"[0-9]+\.[0-9]+\.[0-9]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
+    if [[ -n "$_resolved" ]]; then
+        TAG="$_resolved"
+        echo "  Pinned to release ${TAG}"
+    fi
+fi
 
 BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
 FRONTEND_IMAGE_FULL="${FRONTEND_IMAGE}:${TAG}"
+EDGE_RUNTIME_IMAGE_FULL="${EDGE_RUNTIME_IMAGE}:${TAG}"
 
 USE_HTTPS=""
 read_input "  Enable HTTPS / TLS? [Y/n]: " USE_HTTPS "y"
@@ -257,12 +348,47 @@ else
     PROTOCOL="http"
 fi
 
+# ── Registry storage engine ───────────────────────────────────────────────────
+REGISTRY_STORAGE=""
+read_input "  Artifact registry storage engine [disk/s3] (default: disk): " REGISTRY_STORAGE "disk"
+
+S3_ENDPOINT=""
+S3_BUCKET=""
+S3_ACCESS_KEY=""
+S3_SECRET_KEY=""
+S3_REGION=""
+
+if [[ "${REGISTRY_STORAGE}" == "s3" ]]; then
+    read_input "  S3/MinIO endpoint URL (e.g. https://s3.example.com): " S3_ENDPOINT ""
+    [[ -n "${S3_ENDPOINT}" ]] || error "S3 endpoint is required when using s3 storage."
+
+    read_input "  S3 bucket name [shipyard-registry]: " S3_BUCKET "shipyard-registry"
+
+    read_input "  S3 access key: " S3_ACCESS_KEY ""
+    [[ -n "${S3_ACCESS_KEY}" ]] || error "S3 access key is required."
+
+    # Read secret key without echo
+    if [[ -t 0 ]]; then
+        read -rsp "  S3 secret key: " S3_SECRET_KEY; echo ""
+    elif [[ -c /dev/tty ]]; then
+        read -rsp "  S3 secret key: " S3_SECRET_KEY < /dev/tty; echo ""
+    fi
+    [[ -n "${S3_SECRET_KEY}" ]] || error "S3 secret key is required."
+
+    read_input "  S3 region [us-east-1]: " S3_REGION "us-east-1"
+    success "S3 registry storage configured (endpoint=${S3_ENDPOINT}, bucket=${S3_BUCKET})"
+else
+    REGISTRY_STORAGE="local"
+    success "Local disk registry storage selected"
+fi
+
 # ── Secrets ───────────────────────────────────────────────────────────────────
 step "Generating secrets"
 JWT_SECRET="$(openssl rand -hex 32)"
 SECRET_KEY="$(openssl rand -hex 32)"
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 MQTT_PASSWORD="$(openssl rand -hex 24)"
+EDGE_RUNTIME_SECRET="$(openssl rand -hex 24)"
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info "Preserving existing secrets from ${INSTALL_DIR}/.env..."
@@ -270,11 +396,13 @@ if [[ -f "${INSTALL_DIR}/.env" ]]; then
     EXISTING_SECRET_KEY=$(grep -E "^SHIPYARD__AUTH__SECRET_KEY=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_POSTGRES_PASSWORD=$(grep -E "^POSTGRES_PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
     EXISTING_MQTT_PASSWORD=$(grep -E "^SHIPYARD__MQTT__PASSWORD=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
+    EXISTING_EDGE_RUNTIME_SECRET=$(grep -E "^SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=" "${INSTALL_DIR}/.env" | cut -d= -f2-)
 
     JWT_SECRET="${EXISTING_JWT_SECRET:-$JWT_SECRET}"
     SECRET_KEY="${EXISTING_SECRET_KEY:-$SECRET_KEY}"
     POSTGRES_PASSWORD="${EXISTING_POSTGRES_PASSWORD:-$POSTGRES_PASSWORD}"
     MQTT_PASSWORD="${EXISTING_MQTT_PASSWORD:-$MQTT_PASSWORD}"
+    EDGE_RUNTIME_SECRET="${EXISTING_EDGE_RUNTIME_SECRET:-$EDGE_RUNTIME_SECRET}"
 fi
 success "Secrets ready"
 
@@ -286,6 +414,8 @@ mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/certs" "${INSTALL_DIR}/traefik/dy
 mkdir -p "${INSTALL_DIR}/data/static/conf.d" "${INSTALL_DIR}/data/static/uploads" "${INSTALL_DIR}/data/static/_errors"
 chmod 700 "${INSTALL_DIR}"
 
+# Write the default nginx server conf and branded 404 page.
+# nginx-static serves these for any domain not matched by a deployed site's conf.
 cat > "${INSTALL_DIR}/data/static/conf.d/_default.conf" <<'NGINX_DEFAULT'
 # Shipyard default — serves the custom 404 page for unregistered domains.
 server {
@@ -304,51 +434,11 @@ server {
     }
 }
 NGINX_DEFAULT
+# Replace the placeholder with the actual path
 sed -i "s|SITES_BASE_PLACEHOLDER|${INSTALL_DIR}/data/static|g" \
     "${INSTALL_DIR}/data/static/conf.d/_default.conf"
 
-cat > "${INSTALL_DIR}/data/static/_errors/404.html" <<'HTML404'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>404 – Not Found</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a; color: #e2e8f0;
-      min-height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      padding: 2rem;
-    }
-    .num {
-      font-size: 6.5rem; font-weight: 800; line-height: 1;
-      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      background-clip: text; margin-bottom: 1.25rem;
-    }
-    h1 { font-size: 1.4rem; font-weight: 600; color: #f1f5f9; margin-bottom: 0.65rem; }
-    p { color: #94a3b8; font-size: 0.9rem; text-align: center; max-width: 380px; margin-bottom: 2.5rem; }
-    .badge {
-      display: inline-flex; align-items: center; gap: 0.45rem;
-      font-size: 0.73rem; color: #475569;
-      border: 1px solid #1e293b; border-radius: 9999px;
-      padding: 0.35rem 0.9rem;
-    }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; flex-shrink: 0; }
-  </style>
-</head>
-<body>
-  <div class="num">404</div>
-  <h1>Page Not Found</h1>
-  <p>The page you're looking for doesn't exist or hasn't been deployed yet.</p>
-  <div class="badge"><span class="dot"></span>Powered by Shipyard</div>
-</body>
-</html>
-HTML404
+# Error pages (_errors/*.html) are written by the Shipyard backend on startup.
 
 success "Directories ready at ${INSTALL_DIR}"
 
@@ -363,6 +453,7 @@ ACME_EMAIL=${ACME_EMAIL}
 TAG=${TAG}
 BACKEND_IMAGE=${BACKEND_IMAGE_FULL}
 FRONTEND_IMAGE=${FRONTEND_IMAGE_FULL}
+EDGE_RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
 PROTOCOL=${PROTOCOL}
 
 # Database
@@ -402,6 +493,39 @@ SHIPYARD__TRAEFIK__DYNAMIC_CONFIG_DIR=/etc/traefik/dynamic
 
 # Data
 SHIPYARD__DATA_DIR=/opt/shipyard/data
+
+# Sandbox Apps (in-browser code editor + live preview)
+SHIPYARD__SANDBOX__ENABLED=${SANDBOX_ENABLED}
+SHIPYARD__SANDBOX__PREVIEW_BASE_DOMAIN=${SANDBOX_PREVIEW_DOMAIN:-apps-${DOMAIN}}
+SHIPYARD__SANDBOX__RUNTIME_CLASS=${SANDBOX_RUNTIME_CLASS}
+
+# Edge Functions (Deno-based serverless)
+SHIPYARD__EDGE_FUNCTIONS__ENABLED=true
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_IMAGE=${EDGE_RUNTIME_IMAGE_FULL}
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_SECRET=${EDGE_RUNTIME_SECRET}
+# API URL reachable from every Swarm node (via Traefik). Worker nodes cannot
+# resolve the container name 'shipyard-backend' via DNS — use the public subdomain.
+SHIPYARD__EDGE_FUNCTIONS__RUNTIME_API_URL=${PROTOCOL}://${API_DOMAIN}
+
+# Scripts base URL — used by update.sh to self-update from the landing site.
+# Set this to the public URL of your Shipyard landing (e.g. https://shipyard.example.com).
+SCRIPTS_URL=${SCRIPTS_URL}
+
+# Public API domain (used by Traefik router rule and edge runtime API URL)
+SHIPYARD__API_DOMAIN=${API_DOMAIN}
+
+# Artifact Registry
+SHIPYARD__REGISTRY__HOSTNAME=${REGISTRY_DOMAIN}
+SHIPYARD__REGISTRY__STORAGE=${REGISTRY_STORAGE}
+$(if [[ "${REGISTRY_STORAGE}" == "s3" ]]; then
+cat <<S3VARS
+SHIPYARD__REGISTRY__S3_ENDPOINT=${S3_ENDPOINT}
+SHIPYARD__REGISTRY__S3_BUCKET=${S3_BUCKET}
+SHIPYARD__REGISTRY__S3_ACCESS_KEY=${S3_ACCESS_KEY}
+SHIPYARD__REGISTRY__S3_SECRET_KEY=${S3_SECRET_KEY}
+SHIPYARD__REGISTRY__S3_REGION=${S3_REGION}
+S3VARS
+fi)
 
 RUST_LOG=shipyard=info,tower_http=warn
 ENV
@@ -506,8 +630,7 @@ certificatesResolvers:
     acme:
       email: ${ACME_EMAIL}
       storage: /letsencrypt/acme.json
-      httpChallenge:
-        entryPoint: web
+      tlsChallenge: {}
 
 api:
   dashboard: false
@@ -534,8 +657,24 @@ http:
       tls:
         certResolver: letsencrypt
 
+    shipyard-exec-ws:
+      rule: "Host(\`${DOMAIN}\`) && PathRegexp(\`^/api/projects/[^/]+/services/[^/]+/exec$\`)"
+      priority: 100
+      entryPoints: [websecure]
+      service: shipyard-backend
+      tls:
+        certResolver: letsencrypt
+
+    shipyard-integration:
+      rule: "Host(\`${DOMAIN}\`) && (PathPrefix(\`/openapi\`) || PathPrefix(\`/integration\`) || PathPrefix(\`/integrations\`) || (PathPrefix(\`/orgs\`) && PathRegexp(\`/orgs/[^/]+/apps\`)) || HeadersRegexp(\`Authorization\`, \`(?i)^Bearer ship_int_\`))"
+      priority: 90
+      entryPoints: [websecure]
+      service: shipyard-backend
+      tls:
+        certResolver: letsencrypt
+
     shipyard-backend:
-      rule: "Host(\`api-${DOMAIN}\`) && PathPrefix(\`/openapi/v1\`)"
+      rule: "Host(\`api-${DOMAIN}\`)"
       entryPoints: [websecure]
       service: shipyard-backend
       tls:
@@ -558,6 +697,8 @@ http:
       priority: 1
       entryPoints: ${STATIC_SITE_ENTRYPOINTS}
       service: nginx-static
+      middlewares:
+        - shipyard-error-pages
 ${STATIC_SITE_TLS}
 
   services:
@@ -581,17 +722,27 @@ ${STATIC_SITE_TLS}
         servers:
           - url: "http://shipyard-nginx-static:80"
 
+    # Serves the branded error pages even when nginx-static is down.
+    shipyard-error-backend:
+      loadBalancer:
+        servers:
+          - url: "http://shipyard-backend:3001"
+
   middlewares:
     shipyard-mqtt-strip:
       stripPrefix:
         prefixes:
           - "/mqtt"
 
+    # Intercepts 404 responses from any backend and returns the Shipyard branded
+    # error page served by nginx-static. Works alongside the catch-all router so
+    # every possible path to a 404 shows the same styled page.
     shipyard-error-pages:
       errors:
         status:
           - "404"
-        service: nginx-static
+          - "502-504"
+        service: shipyard-error-backend
         query: "/_errors/{status}.html"
 DYNAMIC
 success "Traefik config written"
@@ -710,16 +861,15 @@ services:
     container_name: shipyard-nginx-static
     restart: unless-stopped
     volumes:
-      # Bind the sites dir at the same host path so nginx `root` directives
-      # written by the engine (absolute host paths) resolve correctly in the container.
       - ${INSTALL_DIR}/data/static:${INSTALL_DIR}/data/static:ro
-      # conf.d at the standard nginx include path — engine writes *.conf files here.
       - ${INSTALL_DIR}/data/static/conf.d:/etc/nginx/conf.d:ro
+      - ${INSTALL_DIR}/data/static/logs:/var/log/nginx/shipyard:rw
     networks:
       - platform_proxy
     labels:
       # Traefik catch-all: route every domain that has no explicit Traefik router
       # to nginx-static, which then dispatches by server_name.
+      # Two routers cover both HTTP (before redirect) and HTTPS.
       - "traefik.enable=true"
       - "traefik.docker.network=platform_proxy"
       - "traefik.http.routers.static-sites-http.rule=HostRegexp(\`.+\`)"
@@ -751,34 +901,69 @@ success "docker-compose.yml written"
 
 # ── update.sh ─────────────────────────────────────────────────────────────────
 info "Writing ${INSTALL_DIR}/update.sh..."
-cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
+# Try to download the canonical update.sh from the landing site so we always
+# install the latest version. Fall back to the copy bundled inside install.sh.
+DOWNLOADED_UPDATE=""
+if [[ -n "${SCRIPTS_URL}" ]]; then
+    DOWNLOADED_UPDATE=$(curl -fsSL "${SCRIPTS_URL}/update.sh" 2>/dev/null || true)
+fi
+
+if [[ -n "${DOWNLOADED_UPDATE}" ]]; then
+    echo "${DOWNLOADED_UPDATE}" > "${INSTALL_DIR}/update.sh"
+    info "update.sh fetched from ${SCRIPTS_URL}"
+else
+    # Bundled fallback — kept in sync with scripts/update.sh in the repo.
+    cat > "${INSTALL_DIR}/update.sh" <<'UPDATE'
 #!/usr/bin/env bash
-# Shipyard self-update script — run by the backend when a user triggers an update.
-#
-# This script runs inside the shipyard-backend container (Docker socket is mounted).
-# Calling "docker compose up -d" directly would stop this container mid-execution.
-# Instead, we spawn a detached docker:cli container that runs the restart after we exit.
-# docker:cli is a tiny (~10 MB) official image that has docker + compose — unlike the
-# backend image which is just a compiled Rust binary with no shell or docker CLI.
 set -euo pipefail
 INSTALL_DIR="/opt/shipyard"
 cd "${INSTALL_DIR}"
+set -a; source "${INSTALL_DIR}/.env"; set +a
+
+if [[ -n "${SCRIPTS_URL:-}" ]]; then
+    FRESH=$(curl -fsSL "${SCRIPTS_URL}/update.sh" 2>/dev/null || true)
+    if [[ -n "${FRESH}" && "${FRESH}" != "$(cat "${INSTALL_DIR}/update.sh")" ]]; then
+        echo "[shipyard] Updating update.sh from ${SCRIPTS_URL}..."
+        echo "${FRESH}" > "${INSTALL_DIR}/update.sh.new"
+        chmod +x "${INSTALL_DIR}/update.sh.new"
+        mv "${INSTALL_DIR}/update.sh.new" "${INSTALL_DIR}/update.sh"
+        exec "${INSTALL_DIR}/update.sh"
+    fi
+fi
 
 echo "[shipyard] Pulling latest images..."
 docker compose pull
+
+if [[ -n "${EDGE_RUNTIME_IMAGE:-}" ]]; then
+    echo "[shipyard] Pulling edge runtime image: ${EDGE_RUNTIME_IMAGE}..."
+    docker pull "${EDGE_RUNTIME_IMAGE}" || true
+fi
 
 echo "[shipyard] Spawning detached updater to apply new images..."
 docker rm -f shipyard-updater 2>/dev/null || true
 docker run --rm -d \
     --name shipyard-updater \
+    -e EDGE_RUNTIME_IMAGE="${EDGE_RUNTIME_IMAGE:-}" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "${INSTALL_DIR}:${INSTALL_DIR}" \
     -w "${INSTALL_DIR}" \
     docker:cli \
-    sh -c 'sleep 5 && docker compose up -d --remove-orphans'
+    sh -c 'sleep 5 \
+        && docker compose up -d --remove-orphans \
+        && if [ -n "${EDGE_RUNTIME_IMAGE}" ]; then \
+               docker service ls --filter name=shipyard-edge- --format "{{.Name}}" \
+               | while read -r svc; do \
+                   [ -n "$svc" ] && docker service update \
+                       --image "${EDGE_RUNTIME_IMAGE}" \
+                       --with-registry-auth \
+                       "${svc}" \
+                       && echo "[shipyard] updated ${svc}"; \
+               done; \
+           fi'
 
 echo "[shipyard] Images pulled. All services will restart with new images in ~5 seconds."
 UPDATE
+fi
 chmod +x "${INSTALL_DIR}/update.sh"
 success "update.sh written"
 

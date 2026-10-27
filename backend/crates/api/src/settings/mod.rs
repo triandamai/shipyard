@@ -128,7 +128,9 @@ pub struct VersionInfo {
     pub git_sha: String,
     pub build_date: String,
     pub update_available: bool,
-    pub remote_sha: Option<String>,
+    /// Newest stable release published to the registry (`1.4.2`).
+    pub latest: Option<String>,
+    pub release_url: Option<String>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -713,67 +715,76 @@ async fn get_version(
         }
     }
 
-    let (update_available, remote_sha) = check_hub_update(docker_repo, git_sha).await;
+    let latest = fetch_latest_release(docker_repo).await;
+    let update_available = latest
+        .as_ref()
+        .map(|l| shipyard_common::version::update_available(&current, l))
+        .unwrap_or(false);
 
     let info = VersionInfo {
         current,
         git_sha: git_sha.clone(),
         build_date: build_date.clone(),
         update_available,
-        remote_sha,
+        release_url: latest
+            .as_ref()
+            .map(|l| format!("https://github.com/triandamai/shipyard/releases/tag/v{l}")),
+        latest: latest.map(|l| l.to_string()),
     };
 
     *guard = Some((Instant::now(), info.clone()));
     Ok(Json(ApiResponse::ok(info)))
 }
 
-/// Query Docker Hub for the most recently pushed SHA tag and compare it with
-/// the SHA baked into this running container.
-///
-/// Docker Hub returns tags ordered by `last_updated` descending. We look for
-/// the first tag that looks like a 7-char git short SHA (all hex digits) and
-/// compare it against `current_sha`. If they differ, an update is available.
-async fn check_hub_update(repo: &str, current_sha: &str) -> (bool, Option<String>) {
-    if repo.is_empty() || current_sha == "dev" {
-        return (false, None);
+/// Newest stable release tag (`MAJOR.MINOR.PATCH`) in the platform's registry
+/// repository. Non-version tags (`latest`, `edge`, commit SHAs) are ignored, so
+/// the updater compares versions, never hashes.
+async fn fetch_latest_release(repo: &str) -> Option<shipyard_common::version::Version> {
+    if repo.is_empty() {
+        return None;
     }
-
     let url = format!(
-        "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&ordering=last_updated"
+        "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=100&ordering=last_updated"
     );
-    let client = match reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(format!("shipyard/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(8))
         .build()
-    {
-        Ok(c) => c,
-        Err(_) => return (false, None),
-    };
-
-    let body: serde_json::Value = match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => match r.json().await {
-            Ok(v) => v,
-            Err(_) => return (false, None),
-        },
-        _ => return (false, None),
-    };
-
-    let results = match body["results"].as_array() {
-        Some(a) => a,
-        None => return (false, None),
-    };
-
-    // The 7-char short SHA tag is the fingerprint for each CI push.
-    let current_short = &current_sha[..7.min(current_sha.len())];
-    let latest_sha = results
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .find(|name| name.len() == 7 && name.chars().all(|c| c.is_ascii_hexdigit()));
-
-    match latest_sha {
-        Some(sha) => (sha != current_short, Some(sha.to_string())),
-        None => (false, None),
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
     }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    latest_from_hub_tags(&body)
+}
+
+fn latest_from_hub_tags(body: &serde_json::Value) -> Option<shipyard_common::version::Version> {
+    let names = body["results"]
+        .as_array()?
+        .iter()
+        .filter_map(|t| t["name"].as_str());
+    shipyard_common::version::latest_release(names, false)
+}
+
+/// Rewrite `KEY=image:tag` lines for `keys` so each image is pinned to `tag`.
+/// Other lines are untouched; a key that is not present is not added.
+fn pin_dotenv_images(content: &str, keys: &[&str], tag: &str) -> String {
+    let mut out: Vec<String> = content
+        .lines()
+        .map(|line| {
+            for k in keys {
+                if let Some(val) = line.strip_prefix(&format!("{k}=")) {
+                    return format!("{k}={}", shipyard_common::version::with_tag(val.trim(), tag));
+                }
+            }
+            line.to_string()
+        })
+        .collect();
+    if content.ends_with('\n') {
+        out.push(String::new());
+    }
+    out.join("\n")
 }
 
 // ── Self-update ───────────────────────────────────────────────────────────────
@@ -821,8 +832,10 @@ fn resolve_image_key(content: &str, key: &str) -> Option<(String, String)> {
     parse_image_ref(&val)
 }
 
+const IMAGE_KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
+
 fn images_to_pull() -> Vec<(String, String)> {
-    const KEYS: &[&str] = &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"];
+    const KEYS: &[&str] = IMAGE_KEYS;
     let content = std::fs::read_to_string(DOTENV_PATH).unwrap_or_default();
     KEYS.iter().filter_map(|k| resolve_image_key(&content, k)).collect()
 }
@@ -889,6 +902,24 @@ async fn secure_project_data(state: &AppState) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// Pin the platform images in `.env` to the newest stable release so installs
+/// run an exact version (`repo:1.4.2`) instead of a moving tag or a commit
+/// hash. Returns the version, or `None` when no release is published yet, in
+/// which case the configured tags are pulled as they are.
+async fn pin_to_latest_release() -> Option<String> {
+    let (_, _, repo) = get_build_info();
+    let latest = fetch_latest_release(repo).await?.to_string();
+    let content = std::fs::read_to_string(DOTENV_PATH).ok()?;
+    let pinned = pin_dotenv_images(&content, IMAGE_KEYS, &latest);
+    if pinned != content {
+        if let Err(e) = std::fs::write(DOTENV_PATH, pinned) {
+            tracing::warn!("Could not pin images to {latest} in {DOTENV_PATH}: {e}");
+            return None;
+        }
+    }
+    Some(latest)
+}
+
 /// Core update logic shared by the streaming and one-shot handlers.
 /// Pulls all platform images via the Docker API (no docker CLI required),
 /// then spawns a detached `docker:cli` container to run `docker compose up -d`.
@@ -896,6 +927,9 @@ async fn run_platform_update(
     state: &AppState,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) -> bool {
+    if let Some(v) = pin_to_latest_release().await {
+        let _ = tx.send(Ok(Event::default().data(format!("[shipyard] Updating to release {v}")))).await;
+    }
     let images = images_to_pull();
     if images.is_empty() {
         let _ = tx.send(Ok(Event::default().event("error").data(
@@ -1016,6 +1050,7 @@ async fn trigger_update(
     require_update_perm(&state, &auth).await?;
     tracing::info!(user_id = %auth.user_id, "Platform update triggered (one-shot)");
 
+    pin_to_latest_release().await;
     let images = images_to_pull();
     if images.is_empty() {
         return Err(ApiAppError(AppError::Internal(
@@ -3070,5 +3105,33 @@ mod sandbox_preview_dns_tests {
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json["preview_base_domain"], "shipyard-apps.dev");
         assert!(json["owner_org_id"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[test]
+    fn hub_tags_pick_highest_stable_version_not_newest_push() {
+        let body = serde_json::json!({"results": [
+            {"name": "latest"}, {"name": "a1b2c3d"}, {"name": "1.9.0"},
+            {"name": "1.10.0"}, {"name": "2.0.0-rc.1"}, {"name": "edge"}
+        ]});
+        assert_eq!(latest_from_hub_tags(&body).unwrap().to_string(), "1.10.0");
+        assert!(latest_from_hub_tags(&serde_json::json!({"results": [{"name": "latest"}]})).is_none());
+        assert!(latest_from_hub_tags(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn pinning_rewrites_only_image_keys() {
+        let env = "FOO=bar\nBACKEND_IMAGE=me/shipyard-backend:abc1234\nFRONTEND_IMAGE=me/shipyard-frontend:latest\nOTHER_IMAGE=x:1\n";
+        let out = pin_dotenv_images(env, &["BACKEND_IMAGE", "FRONTEND_IMAGE", "EDGE_RUNTIME_IMAGE"], "1.4.2");
+        assert_eq!(
+            out,
+            "FOO=bar\nBACKEND_IMAGE=me/shipyard-backend:1.4.2\nFRONTEND_IMAGE=me/shipyard-frontend:1.4.2\nOTHER_IMAGE=x:1\n"
+        );
+        // Idempotent.
+        assert_eq!(pin_dotenv_images(&out, &["BACKEND_IMAGE"], "1.4.2"), out);
     }
 }

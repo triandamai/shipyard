@@ -9,7 +9,8 @@
 		git_sha: string;
 		build_date: string;
 		update_available: boolean;
-		remote_sha: string | null;
+		latest: string | null;
+		release_url: string | null;
 	}
 
 	let info           = $state<VersionInfo | null>(null);
@@ -130,14 +131,18 @@
 			<div class="version-body">
 				<div class="v-row">
 					<span class="v-label">Version</span>
-					<code class="v-sha">{info.git_sha}</code>
+					<code class="v-sha">{info.current}</code>
+					<span class="v-date">{info.git_sha}</span>
 					{#if info.build_date && info.build_date !== 'unknown'}
 						<span class="v-date">{formatDate(info.build_date)}</span>
 					{/if}
 				</div>
-				{#if info.update_available && info.remote_sha}
-					<InlineAlert tone="info">Update available — <code class="v-remote-sha">{info.remote_sha}</code></InlineAlert>
-				{:else if info.remote_sha}
+				{#if info.update_available && info.latest}
+					<InlineAlert tone="info">
+						Update available — <code class="v-remote-sha">{info.latest}</code>
+						{#if info.release_url}<a href={info.release_url} target="_blank" rel="noreferrer">release notes</a>{/if}
+					</InlineAlert>
+				{:else if info.latest}
 					<InlineAlert tone="success">Up to date</InlineAlert>
 				{/if}
 			</div>

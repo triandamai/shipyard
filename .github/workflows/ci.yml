@@ -6,6 +6,7 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'landing/**'
+      - 'scripts/coverage-summary.py'
       - '.github/workflows/ci.yml'
   push:
     branches-ignore: [main]
@@ -73,9 +74,29 @@ jobs:
         working-directory: backend
         run: cargo build --workspace
 
-      - name: Test
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Runs the whole workspace test suite (including the DB tests) under
+      # instrumentation, so this is both the test step and the coverage run.
+      - name: Test with coverage
         working-directory: backend
-        run: cargo test --workspace -- --include-ignored
+        run: |
+          cargo llvm-cov --workspace --json --output-path coverage.json -- --include-ignored
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Coverage summary
+        run: |
+          python3 scripts/coverage-summary.py backend/coverage.json backend/coverage-floors.toml | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/lcov.info
+            backend/coverage.json
 
   # ── Frontend ───────────────────────────────────────────────────────────────
   frontend-check:

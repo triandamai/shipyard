@@ -317,7 +317,23 @@ SCRIPTS_URL=""
 read_input "  Landing/scripts base URL (e.g. https://shipyard.example.com) [leave blank to skip auto-update]: " SCRIPTS_URL ""
 
 TAG=""
-read_input "  Image tag [latest]: " TAG "latest"
+read_input "  Image tag [latest release]: " TAG "latest"
+
+# "latest" is resolved to the newest stable release (X.Y.Z) and pinned, so the
+# install runs an exact version and the updater can compare versions. Use
+# "edge" for the main branch build. Falls back to the moving tag if Docker Hub
+# can't be reached.
+if [[ "$TAG" == "latest" ]]; then
+    _repo="${BACKEND_IMAGE#*/}"; _user="${BACKEND_IMAGE%%/*}"
+    _resolved=$(curl -fsS --max-time 10 \
+        "https://hub.docker.com/v2/repositories/${_user}/${_repo}/tags/?page_size=100&ordering=last_updated" 2>/dev/null \
+        | grep -oE '"name": ?"[0-9]+\.[0-9]+\.[0-9]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+        | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 || true)
+    if [[ -n "$_resolved" ]]; then
+        TAG="$_resolved"
+        echo "  Pinned to release ${TAG}"
+    fi
+fi
 
 BACKEND_IMAGE_FULL="${BACKEND_IMAGE}:${TAG}"
 FRONTEND_IMAGE_FULL="${FRONTEND_IMAGE}:${TAG}"
