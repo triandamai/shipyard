@@ -619,6 +619,14 @@ async fn async_main() {
         });
     }
 
+    // Metrics background collector (container resource samples, error rate alerts, 7-day retention).
+    {
+        let metrics_state = state.clone();
+        tokio::spawn(async move {
+            integration::metrics::run_metrics_collector(metrics_state).await;
+        });
+    }
+
     // Build the API sub-router with the initialization gate middleware.
     let api = routes::api_router()
         .layer(axum_middleware::from_fn_with_state(

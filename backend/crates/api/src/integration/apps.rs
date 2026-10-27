@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use shipyard_common::crypto;
@@ -1020,16 +1020,116 @@ async fn service_logs(
         ))));
     }
     let secrets = secret_values(&state, service_id).await;
-    let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    let mut structured: Vec<StructuredLog> = stdout_str
         .lines()
-        .chain(String::from_utf8_lossy(&output.stderr).lines())
-        .map(|l| mask(l, &secrets))
+        .map(|l| parse_log_line(l, false, &service, &secrets))
+        .chain(stderr_str.lines().map(|l| parse_log_line(l, true, &service, &secrets)))
         .collect();
     // Interleaved stdout/stderr: order by the leading timestamp.
-    lines.sort();
+    structured.sort_by(|a, b| a.at.cmp(&b.at));
     Ok(Json(ApiResponse::ok(
-        serde_json::json!({ "service": service, "lines": lines }),
+        serde_json::json!({ "service": service, "lines": structured }),
     )))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StructuredLog {
+    pub at: String,
+    pub level: String,
+    pub message: String,
+    pub service: String,
+}
+
+pub(crate) fn parse_log_line(
+    raw: &str,
+    is_stderr: bool,
+    service: &str,
+    secrets: &[String],
+) -> StructuredLog {
+    let (at, body) = if let Some((ts, rest)) = raw.split_once(' ') {
+        if ts.contains('T') && (ts.ends_with('Z') || ts.contains('+') || ts.contains('-')) {
+            (ts.to_string(), rest)
+        } else {
+            (chrono::Utc::now().to_rfc3339(), raw)
+        }
+    } else {
+        (chrono::Utc::now().to_rfc3339(), raw)
+    };
+
+    let masked_body = mask(body, secrets);
+
+    // Try parsing as JSON
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&masked_body) {
+        if let Some(obj) = v.as_object() {
+            let level = obj
+                .get("level")
+                .or_else(|| obj.get("lvl"))
+                .or_else(|| obj.get("severity"))
+                .and_then(|l| l.as_str())
+                .map(normalize_log_level)
+                .unwrap_or_else(|| if is_stderr { "warn".to_string() } else { "info".to_string() });
+
+            let msg = obj
+                .get("message")
+                .or_else(|| obj.get("msg"))
+                .or_else(|| obj.get("error"))
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| masked_body.clone());
+
+            let timestamp = obj
+                .get("at")
+                .or_else(|| obj.get("time"))
+                .or_else(|| obj.get("timestamp"))
+                .or_else(|| obj.get("ts"))
+                .and_then(|t| t.as_str())
+                .unwrap_or(&at)
+                .to_string();
+
+            return StructuredLog {
+                at: timestamp,
+                level,
+                message: msg,
+                service: service.to_string(),
+            };
+        }
+    }
+
+    // Plain text line
+    let level = if is_stderr {
+        let lower = masked_body.to_ascii_lowercase();
+        if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") {
+            "error".to_string()
+        } else {
+            "warn".to_string()
+        }
+    } else {
+        let lower = masked_body.to_ascii_lowercase();
+        if lower.starts_with("[error]") || lower.starts_with("error:") || lower.starts_with("fatal:") {
+            "error".to_string()
+        } else if lower.starts_with("[warn]") || lower.starts_with("warn:") || lower.starts_with("warning:") {
+            "warn".to_string()
+        } else {
+            "info".to_string()
+        }
+    };
+
+    StructuredLog {
+        at,
+        level,
+        message: masked_body,
+        service: service.to_string(),
+    }
+}
+
+fn normalize_log_level(raw: &str) -> String {
+    match raw.to_ascii_lowercase().as_str() {
+        "error" | "err" | "fatal" | "crit" | "critical" | "panic" => "error".to_string(),
+        "warn" | "warning" => "warn".to_string(),
+        _ => "info".to_string(),
+    }
 }
 
 /// GET .../envs/:env/usage — CPU, memory, network and disk I/O of each
@@ -1120,5 +1220,44 @@ mod tests {
             "connecting with **** and ****"
         );
         assert_eq!(mask("nothing here", &secrets), "nothing here");
+    }
+
+    #[test]
+    fn parses_plain_stdout_log_line() {
+        let raw = "2026-10-26T09:00:00.123456789Z Listening on 0.0.0.0:3000";
+        let parsed = super::parse_log_line(raw, false, "web", &[]);
+        assert_eq!(parsed.at, "2026-10-26T09:00:00.123456789Z");
+        assert_eq!(parsed.level, "info");
+        assert_eq!(parsed.message, "Listening on 0.0.0.0:3000");
+        assert_eq!(parsed.service, "web");
+    }
+
+    #[test]
+    fn parses_plain_stderr_log_line() {
+        let raw = "2026-10-26T09:00:01.000000000Z DeprecationWarning: Buffer() is deprecated";
+        let parsed = super::parse_log_line(raw, true, "web", &[]);
+        assert_eq!(parsed.at, "2026-10-26T09:00:01.000000000Z");
+        assert_eq!(parsed.level, "warn");
+        assert_eq!(parsed.message, "DeprecationWarning: Buffer() is deprecated");
+        assert_eq!(parsed.service, "web");
+    }
+
+    #[test]
+    fn parses_structured_json_log_line() {
+        let raw = r#"2026-10-26T09:00:02.000000000Z {"level":"error","message":"DB connection failed"}"#;
+        let parsed = super::parse_log_line(raw, false, "web", &[]);
+        assert_eq!(parsed.at, "2026-10-26T09:00:02.000000000Z");
+        assert_eq!(parsed.level, "error");
+        assert_eq!(parsed.message, "DB connection failed");
+        assert_eq!(parsed.service, "web");
+    }
+
+    #[test]
+    fn parses_json_log_line_with_msg_and_secret_masking() {
+        let raw = r#"2026-10-26T09:00:03.000000000Z {"level":"warn","msg":"token mysecretval was invalid"}"#;
+        let parsed = super::parse_log_line(raw, false, "worker", &["mysecretval".to_string()]);
+        assert_eq!(parsed.level, "warn");
+        assert_eq!(parsed.message, "token **** was invalid");
+        assert_eq!(parsed.service, "worker");
     }
 }

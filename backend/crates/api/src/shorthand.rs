@@ -835,16 +835,16 @@ async fn publish_env_changed(state: &AppState, service_id: Uuid) {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ContainerStatsSnapshot {
-    cpu_percent: f64,
-    memory_usage_bytes: u64,
-    memory_limit_bytes: u64,
-    memory_percent: f64,
-    net_rx_bytes: u64,
-    net_tx_bytes: u64,
-    block_read_bytes: u64,
-    block_write_bytes: u64,
-    pids: u64,
-    timestamp: String,
+    pub cpu_percent: f64,
+    pub memory_usage_bytes: u64,
+    pub memory_limit_bytes: u64,
+    pub memory_percent: f64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+    pub block_read_bytes: u64,
+    pub block_write_bytes: u64,
+    pub pids: u64,
+    pub timestamp: String,
 }
 
 pub(crate) fn parse_stats_snapshot(v: &serde_json::Value) -> ContainerStatsSnapshot {

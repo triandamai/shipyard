@@ -581,6 +581,7 @@ Reply `2xx` within 10 seconds; do slow work after replying. Anything else is ret
 | `service.created`, `service.deleted`, `service.env_changed` | Service changes | `slug`, `type` |
 | `service.crashed` | A container exited unexpectedly | `container_id`, `replica`, `exit_code` |
 | `service.resource_alert` | CPU or memory over threshold | `metric`, `value`, `threshold` |
+| `service.error_rate_alert` | 5xx error rate over threshold | `error_rate`, `threshold`, `requests`, `errors_5xx` |
 | `domain.attached`, `domain.removed` | Hostname added / removed | `hostname`, `tls` |
 | `volume.created`, `volume.attached`, `volume.deleted` | Volume changes | `volume`, `mount_path` |
 | `network.created`, `network.attached`, `network.detached`, `network.deleted` | Network changes | `network_id` |
@@ -636,11 +637,43 @@ Query: `logs=false` returns status and steps only; `after=<timestamp>` returns l
 
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/services/{service}/logs
 
-Runtime output of all replicas. Query: `tail` (default 200, max 5000), `since` (`10m`, `1h` or RFC 3339). Returns `{ "service", "lines": ["<RFC 3339 time> <line>", ...] }`.
+Runtime output of all replicas. Query: `tail` (default 200, max 5000), `since` (`10m`, `1h` or RFC 3339). Returns `{ "service", "lines": [{ "at": "<RFC 3339>", "level": "info|warn|error", "message": "...", "service": "web" }] }`. Levels are extracted from structured JSON output where available and infer stream/severity otherwise. Secret values are masked.
 
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/usage
 
 Per running container: `cpu_percent`, `memory_usage_bytes`, `memory_limit_bytes`, network and block I/O, and configured limits. Containers on other nodes show `stats: null`.
+
+### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/metrics
+
+Bucketed traffic and container resource history. Query: `range` (`1h`, `24h`, `7d`; default `24h`), `step` (`1m`, `5m`, `1h`, `1d`; default matched to range).
+
+```json
+{
+  "data": {
+    "range": "24h",
+    "step": "1h",
+    "buckets": [
+      {
+        "at": "2026-10-26T09:00:00Z",
+        "visitors": 34,
+        "requests": 812,
+        "errors_5xx": 2,
+        "errors_4xx": 11,
+        "p50_ms": 96,
+        "p95_ms": 288,
+        "containers": [
+          { "service": "web", "container_id": "…", "cpu_percent": 21.4, "memory_percent": 58.1, "memory_bytes": 312475648, "memory_limit_bytes": 536870912 }
+        ]
+      }
+    ],
+    "totals": { "visitors": 412, "requests": 9811, "errors_5xx": 38, "errors_4xx": 120, "p50_ms": 120, "p95_ms": 310 },
+    "previous_totals": { "visitors": 349, "requests": 8702, "errors_5xx": 41, "errors_4xx": 98, "p50_ms": 131, "p95_ms": 342 }
+  },
+  "error": null
+}
+```
+
+Unmeasured metrics return `null`. Historical metrics are retained for at least 7 days.
 
 ## The fix loop for coding agents {#fix-loop}
 

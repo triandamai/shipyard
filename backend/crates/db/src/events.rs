@@ -92,6 +92,24 @@ pub async fn emit(db: &PgPool, scope: Scope, event_type: &str, data: Value) -> O
     }
 }
 
+/// Look up the org of a project, for callers that only hold a project id.
+pub async fn project_scope(db: &PgPool, project_id: Uuid) -> Option<Scope> {
+    sqlx::query_scalar::<_, Uuid>("SELECT org_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .map(|org_id| Scope::project(org_id, project_id))
+}
+
+/// `emit` for callers that only hold a project id.
+pub async fn emit_for_project(db: &PgPool, project_id: Uuid, event_type: &str, data: Value) {
+    if let Some(scope) = project_scope(db, project_id).await {
+        emit(db, scope, event_type, data).await;
+    }
+}
+
 /// Look up the org and project of a service, for callers that only hold a
 /// service id.
 pub async fn service_scope(db: &PgPool, service_id: Uuid) -> Option<Scope> {
@@ -139,6 +157,7 @@ pub const EVENT_TYPES: &[&str] = &[
     "service.env_changed",
     "service.crashed",
     "service.resource_alert",
+    "service.error_rate_alert",
     "deployment.started",
     "deployment.step_started",
     "deployment.step_succeeded",

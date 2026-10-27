@@ -331,8 +331,13 @@ def main():
                 check("restart applies current env", r[0] == 200 and "web" in (data(r) or {}).get("restarted", []), errmsg(r))
                 r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/services/web/logs?tail=20")
                 check("runtime logs readable", r[0] == 200, errmsg(r))
+                lines = (data(r) or {}).get("lines", [])
+                check("runtime logs are structured", len(lines) == 0 or (isinstance(lines[0], dict) and "at" in lines[0] and "level" in lines[0] and "message" in lines[0] and "service" in lines[0]), str(lines[:1]))
                 r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/usage")
                 check("usage readable", r[0] == 200, errmsg(r))
+                r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/metrics?range=24h&step=1h")
+                m = data(r) or {}
+                check("metrics endpoint readable with buckets and totals", r[0] == 200 and "buckets" in m and "totals" in m and "previous_totals" in m, errmsg(r))
 
             print("\nA build that fails")
             r = publish(c, org, app, "staging", manifest, container_files("v3", broken=True))

@@ -17,6 +17,7 @@ pub mod apps;
 pub mod devdb;
 pub mod domains;
 pub mod keys;
+pub mod metrics;
 pub mod orgs;
 pub mod publish;
 pub mod secrets;
@@ -40,6 +41,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(orgs::routes())
         .merge(apps::routes())
+        .merge(metrics::routes())
         .merge(publish::routes())
         .merge(devdb::routes())
         .merge(domains::routes())
