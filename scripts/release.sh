@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 [[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean" >&2; exit 1; }
 git rev-parse "v$v" >/dev/null 2>&1 && { echo "tag v$v already exists" >&2; exit 1; }
 
-sed -i '/^\[workspace.package\]/,/^\[/{s/^version *= *".*"/version = "'"$v"'"/}' backend/Cargo.toml
+sed -i.bak -e '/^\[workspace.package\]/,/^\[/{s/^version *= *".*"/version = "'"$v"'"/;}' backend/Cargo.toml && rm -f backend/Cargo.toml.bak
 (cd backend && cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null)
 git add backend/Cargo.toml backend/Cargo.lock
 git commit -m "release: v$v"
