@@ -154,8 +154,8 @@ async fn current_domain(
     let row: Option<(Uuid, Uuid, String, Option<i32>)> = sqlx::query_as(
         "SELECT d.service_id, d.id, d.hostname, d.port
          FROM domains d JOIN services s ON s.id = d.service_id
-         WHERE s.project_id = $1 AND d.hostname LIKE '%.' || $2
-         ORDER BY d.created_at LIMIT 1",
+         WHERE s.project_id = $1 AND d.hostname LIKE '%.' || $2 AND s.slug <> 'relay'
+         ORDER BY (s.slug = 'web') DESC, d.created_at LIMIT 1",
     )
     .bind(project_id)
     .bind(base)

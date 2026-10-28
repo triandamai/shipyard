@@ -951,22 +951,35 @@ fn subdomain_candidates(requested: Option<&str>, app_key: &str, environment: &st
 async fn ensure_domain(
     state: &AppState,
     service_id: Uuid,
+    requested: Option<&str>,
     subdomains: &[String],
     port: u16,
 ) -> Result<Option<String>, ApiAppError> {
     let Some(base) = state.config.integration.apps_base_domain.as_deref() else {
         return Ok(None);
     };
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT hostname FROM domains WHERE service_id = $1 AND hostname LIKE '%.' || $2 LIMIT 1",
+    let existing: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, hostname FROM domains WHERE service_id = $1 AND hostname LIKE '%.' || $2 LIMIT 1",
     )
     .bind(service_id)
     .bind(base)
     .fetch_optional(&state.db)
     .await
     .map_err(db_err)?;
-    if let Some(h) = existing {
-        return Ok(Some(format!("https://{h}")));
+    if let Some((did, h)) = existing {
+        if let Some(req) = requested {
+            let target = format!("{req}.{base}");
+            if h != target {
+                // The service currently has a different domain than requested (e.g. relay was previously
+                // provisioned without domain.subdomain and took the app's default domain).
+                // Detach the old domain so it can attach the requested one and release the old name.
+                let _ = crate::resources::detach_domain(state, service_id, did).await;
+            } else {
+                return Ok(Some(format!("https://{h}")));
+            }
+        } else {
+            return Ok(Some(format!("https://{h}")));
+        }
     }
     let mut candidates: Vec<String> = subdomains.iter().map(|s| format!("{s}.{base}")).collect();
     let last = subdomains.last().map(String::as_str).unwrap_or("app");
@@ -1457,7 +1470,7 @@ async fn configure(
             } else {
                 detected_ports.get(&w.name).copied().or(w.port).unwrap_or(3000)
             };
-            let url = ensure_domain(state, services[&w.name], &subs, port).await?;
+            let url = ensure_domain(state, services[&w.name], domain_cfg.subdomain.as_deref(), &subs, port).await?;
             if url.is_none() {
                 warnings
                     .push("no apps base domain is configured, so the app has no public URL".into());
