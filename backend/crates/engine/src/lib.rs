@@ -4094,8 +4094,8 @@ impl DeploymentEngine {
             .map(|ps| ps.target);
 
         // Stable named service that all routers for this Shipyard service share.
-        // Using a prefix of the service UUID keeps it unique and Traefik-label-safe.
-        let svc_name = format!("svc{}", &service_id.simple().to_string()[..8]);
+        // Using the full service UUID keeps it unique across UUIDv7s created in the same minute.
+        let svc_name = format!("svc{}", service_id.simple());
 
         labels.insert("traefik.enable".to_string(), "true".to_string());
 
