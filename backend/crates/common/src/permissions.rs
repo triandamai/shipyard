@@ -73,6 +73,12 @@ pub const PERM_ADMIN_UPDATES_VIEW:     &str = "shipyard:admin:system:update:view
 pub const PERM_ADMIN_UPDATES_MANAGE:   &str = "shipyard:admin:system:update:manage";
 pub const PERM_ADMIN_CONFIG_VIEW:      &str = "shipyard:admin:system:config:view";
 pub const PERM_ADMIN_CONFIG_MANAGE:    &str = "shipyard:admin:system:config:manage";
+pub const PERM_ADMIN_LOGS_READ:        &str = "shipyard:admin:logs:read";
+
+/// Build the scoped org logs read permission string: `shipyard:<org_id>:logs:read`.
+pub fn org_logs_read(org_id: &uuid::Uuid) -> String {
+    format!("shipyard:{org_id}:logs:read")
+}
 
 /// All permissions granted to a super-admin user. Embedded in their JWT.
 pub const SUPERADMIN_PERMISSIONS: &[&str] = &[
@@ -102,6 +108,7 @@ pub const SUPERADMIN_PERMISSIONS: &[&str] = &[
     PERM_BILLING_MANAGE,
     PERM_CONFIG_VIEW,
     PERM_CONFIG_EDIT,
+    PERM_ADMIN_LOGS_READ,
 ];
 
 /// Returns the full superadmin permission list as owned Strings.

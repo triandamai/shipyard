@@ -79,6 +79,62 @@ export interface AdminOrg {
 	created_at: string;
 }
 
+// ─── Observability & Logs ──────────────────────────────────────────────────
+
+export interface StoredLog {
+	id: number;
+	ts: string;
+	org_id: string | null;
+	project_id: string | null;
+	service_id: string | null;
+	deployment_id: string | null;
+	source: 'app' | 'traefik' | 'postgres' | 'backend' | 'frontend' | 'collector';
+	container_id: string | null;
+	replica: number | null;
+	stream: 'stdout' | 'stderr';
+	level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+	trace_id: string | null;
+	span_id: string | null;
+	message: string;
+	fields: Record<string, unknown> | null;
+}
+
+export interface LogPage {
+	entries: StoredLog[];
+	next_cursor: string | null;
+}
+
+export interface LogCountPoint {
+	bucket_start: string;
+	source: string;
+	level: string;
+	count: number;
+}
+
+export interface LogStatsResult {
+	total: number;
+	errors: number;
+	points: LogCountPoint[];
+}
+
+export interface LogQueryParams {
+	source?: string;
+	level?: string;
+	q?: string;
+	from?: string;
+	to?: string;
+	trace_id?: string;
+	org_id?: string;
+	project_id?: string;
+	service_id?: string;
+	deployment_id?: string;
+	replica?: number;
+	container_id?: string;
+	cursor?: string;
+	limit?: number;
+	previous?: boolean;
+}
+
 export interface AdminUser {
 	id: string;
 	email: string;

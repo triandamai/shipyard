@@ -149,6 +149,9 @@
 			{ id: 'shipyard:admin:registry:view',   label: 'View' },
 			{ id: 'shipyard:admin:registry:manage', label: 'Manage' },
 		]},
+		{ label: 'Logs & Observability', perms: [
+			{ id: 'shipyard:admin:logs:read',   label: 'Read' },
+		]},
 	];
 
 	const permCatalog = catalogFromIds(PERM_GROUPS.map((g) => ({ label: g.label, perms: g.perms.map((p) => ({ id: p.id })) })));

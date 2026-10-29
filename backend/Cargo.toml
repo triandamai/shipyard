@@ -2,6 +2,7 @@
 members = [
     "crates/api",
     "crates/cloudflare",
+    "crates/collector",
     "crates/common",
     "crates/db",
     "crates/docker",
@@ -10,6 +11,7 @@ members = [
     "crates/git",
     "crates/mqtt_broker",
     "crates/node_agent",
+    "crates/observability",
     "crates/openapi",
     "crates/registry",
     "crates/traefik",

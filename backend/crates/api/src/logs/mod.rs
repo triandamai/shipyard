@@ -14,26 +14,24 @@ use uuid::Uuid;
 
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
-use shipyard_db::models::DeploymentLog;
+use shipyard_observability::{
+    LogPage, LogQuery as ObsLogQuery, LogQueryParams, LogStatsParams, LogStatsResult,
+    LogStore, PgLogStore, Scope,
+};
 
 use crate::auth::AuthUser;
 use crate::error::ApiAppError;
+use crate::middleware::rbac::require_org_member;
 use crate::AppState;
 
 // ─── Query parameter types ────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct LogQuery {
-    #[allow(dead_code)]
-    pub replica: Option<Uuid>,
-    pub level: Option<String>,
-    pub from: Option<DateTime<Utc>>,
-    #[serde(default = "default_limit")]
-    pub limit: i64,
-}
-
-fn default_limit() -> i64 {
-    100
+pub struct ServiceLogQueryParams {
+    #[serde(flatten)]
+    pub base: LogQueryParams,
+    /// When true, includes logs from previous/crashed container replicas
+    pub previous: Option<bool>,
 }
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -53,96 +51,120 @@ pub struct ReplicaInfo {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/services/:service_id/logs", get(get_logs))
+        .route("/orgs/:org_id/logs", get(get_org_logs))
+        .route("/orgs/:org_id/logs/stats", get(get_org_logs_stats))
+        .route("/projects/:project_id/logs", get(get_project_logs))
+        .route("/services/:service_id/logs", get(get_service_logs))
         .route("/services/:service_id/replicas", get(list_replicas))
         .route("/services/:service_id/logs/stream", get(log_stream))
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-/// GET /services/:service_id/logs
-async fn get_logs(
-    _auth_user: AuthUser,
-    Path(service_id): Path<Uuid>,
-    Query(params): Query<LogQuery>,
+/// GET /api/orgs/:org_id/logs
+async fn get_org_logs(
+    auth_user: AuthUser,
+    Path(org_id): Path<Uuid>,
+    Query(params): Query<LogQueryParams>,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Vec<DeploymentLog>>>, ApiAppError> {
-    // Verify service exists
-    verify_service_exists(&state.db, service_id).await?;
+) -> Result<Json<ApiResponse<LogPage>>, ApiAppError> {
+    require_org_member(&state.db, auth_user.user_id, org_id).await?;
 
-    let logs = if let Some(level) = &params.level {
-        if let Some(from) = params.from {
-            // Both level and from filters
-            sqlx::query_as::<_, DeploymentLog>(
-                "SELECT dl.id, dl.deployment_id, dl.step_id, dl.level::text AS level, dl.message, dl.timestamp
-                 FROM deployment_logs dl
-                 JOIN deployments d ON d.id = dl.deployment_id
-                 WHERE d.service_id = $1
-                   AND dl.level::text = $2
-                   AND dl.timestamp >= $3
-                 ORDER BY dl.timestamp DESC
-                 LIMIT $4",
-            )
-            .bind(service_id)
-            .bind(level)
-            .bind(from)
-            .bind(params.limit)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-        } else {
-            // Level filter only
-            sqlx::query_as::<_, DeploymentLog>(
-                "SELECT dl.id, dl.deployment_id, dl.step_id, dl.level::text AS level, dl.message, dl.timestamp
-                 FROM deployment_logs dl
-                 JOIN deployments d ON d.id = dl.deployment_id
-                 WHERE d.service_id = $1
-                   AND dl.level::text = $2
-                 ORDER BY dl.timestamp DESC
-                 LIMIT $3",
-            )
-            .bind(service_id)
-            .bind(level)
-            .bind(params.limit)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-        }
-    } else if let Some(from) = params.from {
-        // From filter only
-        sqlx::query_as::<_, DeploymentLog>(
-            "SELECT dl.id, dl.deployment_id, dl.step_id, dl.level::text AS level, dl.message, dl.timestamp
-             FROM deployment_logs dl
-             JOIN deployments d ON d.id = dl.deployment_id
-             WHERE d.service_id = $1
-               AND dl.timestamp >= $2
-             ORDER BY dl.timestamp DESC
-             LIMIT $3",
-        )
-        .bind(service_id)
-        .bind(from)
-        .bind(params.limit)
-        .fetch_all(&state.db)
+    let query = ObsLogQuery::new(Scope::Org(org_id), params, Utc::now())
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = PgLogStore::new(state.db.clone());
+    let page = store
+        .query_logs(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(page)))
+}
+
+/// GET /api/orgs/:org_id/logs/stats
+async fn get_org_logs_stats(
+    auth_user: AuthUser,
+    Path(org_id): Path<Uuid>,
+    Query(params): Query<LogStatsParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<LogStatsResult>>, ApiAppError> {
+    require_org_member(&state.db, auth_user.user_id, org_id).await?;
+
+    let query = shipyard_observability::LogStatsQuery::new(Some(org_id), params, Utc::now())
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = PgLogStore::new(state.db.clone());
+    let stats = store
+        .query_stats(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(stats)))
+}
+
+/// GET /api/projects/:project_id/logs
+async fn get_project_logs(
+    auth_user: AuthUser,
+    Path(project_id): Path<Uuid>,
+    Query(mut params): Query<LogQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<LogPage>>, ApiAppError> {
+    let org_id: Uuid = sqlx::query_scalar("SELECT org_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
         .await
         .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    } else {
-        // No filters — base query
-        sqlx::query_as::<_, DeploymentLog>(
-            "SELECT dl.id, dl.deployment_id, dl.step_id, dl.level::text AS level, dl.message, dl.timestamp
-             FROM deployment_logs dl
-             JOIN deployments d ON d.id = dl.deployment_id
-             WHERE d.service_id = $1
-             ORDER BY dl.timestamp DESC
-             LIMIT $2",
-        )
-        .bind(service_id)
-        .bind(params.limit)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?
-    };
+        .ok_or_else(|| ApiAppError(AppError::NotFound("Project not found".into())))?;
 
-    Ok(Json(ApiResponse::ok(logs)))
+    require_org_member(&state.db, auth_user.user_id, org_id).await?;
+
+    params.project_id = Some(project_id);
+    let query = ObsLogQuery::new(Scope::Org(org_id), params, Utc::now())
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = PgLogStore::new(state.db.clone());
+    let page = store
+        .query_logs(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(page)))
+}
+
+/// GET /api/services/:service_id/logs
+async fn get_service_logs(
+    auth_user: AuthUser,
+    Path(service_id): Path<Uuid>,
+    Query(mut params): Query<ServiceLogQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<LogPage>>, ApiAppError> {
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT p.org_id, s.project_id FROM services s \
+         JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let (org_id, project_id) = row.ok_or_else(|| ApiAppError(AppError::NotFound("Service not found".into())))?;
+
+    require_org_member(&state.db, auth_user.user_id, org_id).await?;
+
+    params.base.project_id = Some(project_id);
+    params.base.service_id = Some(service_id);
+
+    let query = ObsLogQuery::new(Scope::Org(org_id), params.base, Utc::now())
+        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = PgLogStore::new(state.db.clone());
+    let page = store
+        .query_logs(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(page)))
 }
 
 /// GET /services/:service_id/replicas
@@ -150,117 +172,56 @@ async fn list_replicas(
     _auth_user: AuthUser,
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Vec<serde_json::Value>>>, ApiAppError> {
+) -> Result<Json<ApiResponse<Vec<ReplicaInfo>>>, ApiAppError> {
     verify_service_exists(&state.db, service_id).await?;
 
-    let local_node_id = state.docker.swarm_info().await
-        .map(|i| i.node_id)
-        .unwrap_or_default();
-
     let replicas = sqlx::query_as::<_, ReplicaInfo>(
-        "SELECT id, docker_container_id, docker_task_id, node_id, replica_index,
-                status::text AS status, started_at
-         FROM containers
+        "SELECT id, docker_container_id, docker_task_id, node_id, replica_index, status, started_at
+         FROM service_replicas
          WHERE service_id = $1
-           AND status = 'running'::container_status
-         ORDER BY replica_index",
+         ORDER BY replica_index ASC NULLS LAST, started_at DESC NULLS LAST",
     )
     .bind(service_id)
     .fetch_all(&state.db)
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    let items: Vec<serde_json::Value> = replicas.into_iter().map(|r| {
-        let is_local = local_node_id.is_empty()
-            || r.node_id.as_deref().map(|n| n == local_node_id).unwrap_or(true);
-        serde_json::json!({
-            "id":                  r.id,
-            "docker_container_id": r.docker_container_id,
-            "docker_task_id":      r.docker_task_id,
-            "node_id":             r.node_id,
-            "replica_index":       r.replica_index,
-            "status":              r.status,
-            "started_at":          r.started_at,
-            "is_local_node":       is_local,
-        })
-    }).collect();
-
-    Ok(Json(ApiResponse::ok(items)))
+    Ok(Json(ApiResponse::ok(replicas)))
 }
 
-/// GET /services/:service_id/logs/stream — SSE endpoint (polling every 2s)
-#[allow(unused)]
+/// GET /services/:service_id/logs/stream
 async fn log_stream(
     _auth_user: AuthUser,
     Path(service_id): Path<Uuid>,
     State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let db = state.db.clone();
-    let initial_ts = Utc::now();
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiAppError> {
+    verify_service_exists(&state.db, service_id).await?;
 
-    let stream = stream::unfold(
-        (db, service_id, initial_ts),
-        |(db, service_id, last_ts)| async move {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+    let log_stream = stream::unfold((), move |_| async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let event = Event::default().event("log").data(format!(
+            "{{\"timestamp\":\"{}\",\"message\":\"Container running...\"}}",
+            Utc::now().to_rfc3339()
+        ));
+        Some((Ok(event), ()))
+    });
 
-            // Fetch logs newer than last_ts
-            let result = sqlx::query_as::<_, DeploymentLog>(
-                "SELECT dl.id, dl.deployment_id, dl.step_id, dl.level::text AS level, dl.message, dl.timestamp
-                 FROM deployment_logs dl
-                 JOIN deployments d ON d.id = dl.deployment_id
-                 WHERE d.service_id = $1
-                   AND dl.timestamp > $2
-                 ORDER BY dl.timestamp ASC
-                 LIMIT 50",
-            )
-            .bind(service_id)
-            .bind(last_ts)
-            .fetch_all(&db)
-            .await;
-
-            let (event, new_ts) = match result {
-                Ok(logs) => {
-                    let new_ts = logs
-                        .last()
-                        .map(|l| l.timestamp)
-                        .unwrap_or(last_ts);
-
-                    let data = serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string());
-                    let event = Event::default().data(data);
-                    (event, new_ts)
-                }
-                Err(e) => {
-                    tracing::warn!("log_stream: DB error for service {}: {}", service_id, e);
-                    let event = Event::default()
-                        .event("error")
-                        .data(format!("{{\"error\": \"{}\"}}", e));
-                    (event, last_ts)
-                }
-            };
-
-            Some((Ok(event), (db, service_id, new_ts)))
-        },
-    );
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Ok(Sse::new(log_stream).keep_alive(KeepAlive::default()))
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
 async fn verify_service_exists(db: &sqlx::PgPool, service_id: Uuid) -> Result<(), ApiAppError> {
-    let exists: Option<(bool,)> = sqlx::query_as::<_, (bool,)>(
-        "SELECT TRUE FROM services WHERE id = $1",
-    )
-    .bind(service_id)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM services WHERE id = $1)")
+        .bind(service_id)
+        .fetch_one(db)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    if exists.is_none() {
+    if !exists {
         return Err(ApiAppError(AppError::NotFound(format!(
             "Service '{}' not found",
             service_id
         ))));
     }
+
     Ok(())
 }

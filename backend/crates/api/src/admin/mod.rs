@@ -112,6 +112,8 @@ pub fn routes() -> Router<AppState> {
         .route("/storage/buckets", get(list_storage_buckets))
         .route("/storage/list", get(list_storage))
         .route("/storage/preview", get(preview_storage))
+        .route("/logs", get(admin_get_logs))
+        .route("/logs/stats", get(admin_get_logs_stats))
         .route("/storage/download", get(download_storage))
         .route("/storage/download-archive", get(download_storage))
         .route("/storage/test", get(test_storage))
@@ -1776,6 +1778,56 @@ async fn create_archive_response(
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
 
     Ok(response)
+}
+
+/// GET /api/admin/logs
+pub async fn admin_get_logs(
+    auth_user: AuthUser,
+    Query(params): Query<shipyard_observability::LogQueryParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<shipyard_observability::LogPage>>, ApiAppError> {
+    require_admin_access(&state.db, auth_user.user_id, shipyard_common::permissions::PERM_ADMIN_LOGS_READ).await?;
+
+    let query = shipyard_observability::LogQuery::new(
+        shipyard_observability::Scope::Admin,
+        params,
+        chrono::Utc::now(),
+    )
+    .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = shipyard_observability::PgLogStore::new(state.db.clone());
+    use shipyard_observability::LogStore;
+    let page = store
+        .query_logs(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(page)))
+}
+
+/// GET /api/admin/logs/stats
+pub async fn admin_get_logs_stats(
+    auth_user: AuthUser,
+    Query(params): Query<shipyard_observability::LogStatsParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<shipyard_observability::LogStatsResult>>, ApiAppError> {
+    require_admin_access(&state.db, auth_user.user_id, shipyard_common::permissions::PERM_ADMIN_LOGS_READ).await?;
+
+    let query = shipyard_observability::LogStatsQuery::new(
+        None,
+        params,
+        chrono::Utc::now(),
+    )
+    .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+
+    let store = shipyard_observability::PgLogStore::new(state.db.clone());
+    use shipyard_observability::LogStore;
+    let stats = store
+        .query_stats(&query)
+        .await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(stats)))
 }
 
 
