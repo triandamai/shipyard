@@ -3811,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-api"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3872,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-cloudflare"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "reqwest",
  "serde",
@@ -3883,7 +3883,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-collector"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "bollard",
@@ -3905,7 +3905,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-common"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-db"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3941,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-docker"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-docker-worker"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3983,7 +3983,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-engine"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4012,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-git"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-mqtt"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-node-agent"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-stream",
  "axum",
@@ -4071,7 +4071,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-observability"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4090,7 +4090,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-openapi"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "axum",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-registry"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4140,7 +4140,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-traefik"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "serde",
