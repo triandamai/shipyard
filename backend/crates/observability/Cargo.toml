@@ -1,0 +1,27 @@
+[package]
+name = "shipyard-observability"
+version.workspace = true
+edition.workspace = true
+
+# Core observability model: log/metric types, masking, level detection, query
+# model and retention rules. Deliberately free of Docker and HTTP so it can be
+# tested in isolation; the Postgres store lives in `pg` and is the only module
+# that touches a database.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+sqlx = { workspace = true }
+tracing = { workspace = true }
+regex = "1"
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true }

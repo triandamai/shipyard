@@ -43,6 +43,7 @@
 	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
 	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
+	import ObservabilityLogs from '$lib/components/ObservabilityLogs.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain,
@@ -104,6 +105,7 @@
 	let isRestarting = $state(false);
 	let isRollingBack = $state<string | null>(null); // deployment id being rolled back
 	let serviceError = $state<string | null>(null);
+	let logViewMode = $state<'runtime' | 'deployments'>('runtime');
 
 	// ── Domains ──────────────────────────────────────────────────────
 	let domains = $state<Domain[]>([]);
@@ -1564,9 +1566,37 @@
 					{/if}
 				</div>
 
-			<!-- ── Logs (deployment list) ── -->
+			<!-- ── Logs (deployment list & runtime observability) ── -->
 			{:else if activeTab === 'logs'}
 				<div class="logs-section">
+					<div class="log-mode-tabs" style="display: flex; gap: 8px; margin-bottom: 14px;">
+						<Button
+							variant={logViewMode === 'runtime' ? 'primary' : 'secondary'}
+							size="sm"
+							onclick={() => logViewMode = 'runtime'}
+						>
+							Runtime Logs (Durable)
+						</Button>
+						<Button
+							variant={logViewMode === 'deployments' ? 'primary' : 'secondary'}
+							size="sm"
+							onclick={() => logViewMode = 'deployments'}
+						>
+							Deployment History
+						</Button>
+					</div>
+
+					{#if logViewMode === 'runtime'}
+						<div style="height: 600px;">
+							<ObservabilityLogs
+								scope="service"
+								scopeId={serviceId}
+								allowStackTabs={false}
+								fetchLogs={(params) => api.getServiceLogs(serviceId, params)}
+								fetchStats={(params) => api.getOrgLogStats(service?.org_id ?? '', params)}
+							/>
+						</div>
+					{:else}
 					<!-- Webhook trigger URL -->
 					<Card>
 						<div class="webhook-header">
@@ -1654,6 +1684,7 @@
 								</ListRow>
 							{/each}
 						</Card>
+					{/if}
 					{/if}
 				</div>
 

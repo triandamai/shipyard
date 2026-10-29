@@ -333,6 +333,8 @@ def main():
                 check("runtime logs readable", r[0] == 200, errmsg(r))
                 lines = (data(r) or {}).get("lines", [])
                 check("runtime logs are structured", len(lines) == 0 or (isinstance(lines[0], dict) and "at" in lines[0] and "level" in lines[0] and "message" in lines[0] and "service" in lines[0]), str(lines[:1]))
+                r_json = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/services/web/logs?format=json")
+                check("runtime logs format=json returns lines", r_json[0] == 200 and "lines" in (data(r_json) or {}), errmsg(r_json))
                 r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/usage")
                 check("usage readable", r[0] == 200, errmsg(r))
                 r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/staging/metrics?range=24h&step=1h")

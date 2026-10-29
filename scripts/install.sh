@@ -634,6 +634,16 @@ certificatesResolvers:
 
 api:
   dashboard: false
+
+accessLog:
+  format: json
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: keep
+      names:
+        traceparent: keep
+        X-Request-Id: keep
 TRAEFIK
 
 # ── Traefik dynamic config ────────────────────────────────────────────────────

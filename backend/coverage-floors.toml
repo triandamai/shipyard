@@ -4,6 +4,7 @@
 # A crate not listed has no floor.
 api = 9
 cloudflare = 35
+collector = 90
 common = 65
 db = 5
 docker = 24
@@ -12,6 +13,7 @@ engine = 19
 git = 13
 mqtt_broker = 12
 node_agent = 0
+observability = 90
 openapi = 0
 registry = 19
 traefik = 100

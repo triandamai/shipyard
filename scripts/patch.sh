@@ -379,6 +379,24 @@ else
     info "No old edge-domain-*.yml files found — skipping"
 fi
 
+# Ensure Traefik accessLog JSON is configured for observability
+TRAEFIK_STATIC="${INSTALL_DIR}/traefik/traefik.yml"
+if [[ -f "${TRAEFIK_STATIC}" ]] && ! grep -q "accessLog" "${TRAEFIK_STATIC}"; then
+    info "Enabling Traefik accessLog in ${TRAEFIK_STATIC}..."
+    cat >> "${TRAEFIK_STATIC}" <<'EOF'
+
+accessLog:
+  format: json
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: keep
+      names:
+        traceparent: keep
+        X-Request-Id: keep
+EOF
+fi
+
 # ── Rewrite shipyard.yml with updated Traefik config ─────────────────────────
 # Changes in this release:
 #   • OCI registry is now nested at /registry in the backend — Traefik must prepend

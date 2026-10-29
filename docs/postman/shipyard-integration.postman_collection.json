@@ -1878,6 +1878,11 @@
                   "key": "since",
                   "value": "10m",
                   "disabled": true
+                },
+                {
+                  "key": "format",
+                  "value": "json",
+                  "disabled": true
                 }
               ]
             },

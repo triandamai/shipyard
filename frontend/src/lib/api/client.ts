@@ -36,6 +36,9 @@ import type {
 	SandboxInstance,
 	SandboxTemplate,
 	SandboxFileEntry,
+	LogPage,
+	LogStatsResult,
+	LogQueryParams,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -876,6 +879,62 @@ class ApiClient {
 		if (opts.org_id)  p.set('org_id', opts.org_id);
 		const qs = p.toString() ? `?${p}` : '';
 		return this.request('GET', `/admin/audit-logs${qs}`);
+	}
+
+	// ─── Observability & Logs ─────────────────────────────────────────
+
+	getAdminLogs(opts: LogQueryParams = {}): Promise<ApiResponse<LogPage>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/admin/logs${qs}`);
+	}
+
+	getAdminLogStats(opts: LogQueryParams = {}): Promise<ApiResponse<LogStatsResult>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/admin/logs/stats${qs}`);
+	}
+
+	getOrgLogs(orgId: string, opts: LogQueryParams = {}): Promise<ApiResponse<LogPage>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/orgs/${orgId}/logs${qs}`);
+	}
+
+	getOrgLogStats(orgId: string, opts: LogQueryParams = {}): Promise<ApiResponse<LogStatsResult>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/orgs/${orgId}/logs/stats${qs}`);
+	}
+
+	getProjectLogs(projectId: string, opts: LogQueryParams = {}): Promise<ApiResponse<LogPage>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/projects/${projectId}/logs${qs}`);
+	}
+
+	getServiceLogs(serviceId: string, opts: LogQueryParams = {}): Promise<ApiResponse<LogPage>> {
+		const p = new URLSearchParams();
+		for (const [k, v] of Object.entries(opts)) {
+			if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+		}
+		const qs = p.toString() ? `?${p}` : '';
+		return this.request('GET', `/services/${serviceId}/logs${qs}`);
 	}
 
 	// ─── Sandbox Apps ────────────────────────────────────────────────

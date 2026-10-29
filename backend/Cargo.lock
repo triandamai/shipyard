@@ -3203,6 +3203,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3799,7 +3811,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-api"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3829,6 +3841,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "shipyard-cloudflare",
+ "shipyard-collector",
  "shipyard-common",
  "shipyard-db",
  "shipyard-docker",
@@ -3836,6 +3849,7 @@ dependencies = [
  "shipyard-engine",
  "shipyard-git",
  "shipyard-mqtt",
+ "shipyard-observability",
  "shipyard-openapi",
  "shipyard-registry",
  "shipyard-traefik",
@@ -3858,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-cloudflare"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "reqwest",
  "serde",
@@ -3868,8 +3882,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipyard-collector"
+version = "0.0.7"
+dependencies = [
+ "async-trait",
+ "bollard",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "shipyard-common",
+ "shipyard-docker",
+ "shipyard-observability",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "shipyard-common"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -3887,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-db"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3905,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-docker"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3925,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-docker-worker"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3947,7 +3983,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-engine"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3976,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-git"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3993,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-mqtt"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4011,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-node-agent"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-stream",
  "axum",
@@ -4034,8 +4070,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "shipyard-observability"
+version = "0.0.7"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "shipyard-openapi"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-trait",
  "axum",
@@ -4057,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-registry"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4085,7 +4140,7 @@ dependencies = [
 
 [[package]]
 name = "shipyard-traefik"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "serde",

@@ -1,0 +1,1 @@
+../landing/src/content/docs/nomi.md

@@ -952,6 +952,7 @@ struct LogsQuery {
     tail: u32,
     /// e.g. "10m", "1h", or an RFC 3339 time.
     since: Option<String>,
+    format: Option<String>,
 }
 
 fn default_tail() -> u32 {
@@ -1029,6 +1030,14 @@ async fn service_logs(
         .collect();
     // Interleaved stdout/stderr: order by the leading timestamp.
     structured.sort_by(|a, b| a.at.cmp(&b.at));
+
+    if q.format.as_deref() == Some("text") {
+        let plain = structured.iter().map(|s| format!("{} [{}] {}", s.at, s.level, s.message)).collect::<Vec<_>>().join("\n");
+        return Ok(Json(ApiResponse::ok(
+            serde_json::json!({ "service": service, "text": plain }),
+        )));
+    }
+
     Ok(Json(ApiResponse::ok(
         serde_json::json!({ "service": service, "lines": structured }),
     )))
