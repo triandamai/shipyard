@@ -364,4 +364,45 @@ mod tests {
             Some(("user".to_string(), "pass:with:colons".to_string()))
         );
     }
+
+    #[test]
+    fn checkout_ref_pulls_new_commit_from_source_repo() {
+        let test_id = uuid::Uuid::now_v7();
+        let dir = std::env::temp_dir().join(format!("git_test_{test_id}"));
+        let repo_a_path = dir.join("source");
+        let repo_b_path = dir.join("clone");
+
+        // Init repo A and make commit 1
+        let repo_a = Repository::init(&repo_a_path).unwrap();
+        let sig = git2::Signature::now("Shipyard", "shipyard@local").unwrap();
+        std::fs::write(repo_a_path.join("file.txt"), "v1").unwrap();
+        let mut idx = repo_a.index().unwrap();
+        idx.add_path(std::path::Path::new("file.txt")).unwrap();
+        let tree_id = idx.write_tree().unwrap();
+        let tree = repo_a.find_tree(tree_id).unwrap();
+        let c1_id = repo_a.commit(Some("refs/heads/main"), &sig, &sig, "commit 1", &tree, &[]).unwrap();
+
+        // Clone to repo B
+        let git_svc = GitService::new(repo_b_path.to_str().unwrap());
+        git_svc.clone_repo(repo_a_path.to_str().unwrap(), repo_b_path.to_str().unwrap(), Some("main"), |_| ()).unwrap();
+        let head1 = git_svc.head_commit(repo_b_path.to_str().unwrap()).unwrap();
+        assert_eq!(head1.sha, c1_id.to_string());
+
+        // Make commit 2 in repo A
+        std::fs::write(repo_a_path.join("file.txt"), "v2").unwrap();
+        let mut idx = repo_a.index().unwrap();
+        idx.add_path(std::path::Path::new("file.txt")).unwrap();
+        let tree_id = idx.write_tree().unwrap();
+        let tree = repo_a.find_tree(tree_id).unwrap();
+        let parent = repo_a.find_commit(c1_id).unwrap();
+        let c2_id = repo_a.commit(Some("refs/heads/main"), &sig, &sig, "commit 2", &tree, &[&parent]).unwrap();
+
+        // Checkout ref in repo B
+        git_svc.checkout_ref(repo_b_path.to_str().unwrap(), "main", None).unwrap();
+        let head2 = git_svc.head_commit(repo_b_path.to_str().unwrap()).unwrap();
+        assert_eq!(head2.sha, c2_id.to_string());
+        assert_eq!(std::fs::read_to_string(repo_b_path.join("file.txt")).unwrap(), "v2");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

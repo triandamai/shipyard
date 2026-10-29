@@ -508,7 +508,13 @@ async fn commit_source(
         }
     }
     git(repo, &["add", "-A"]).await?;
-    git(repo, &["commit", "-q", "--allow-empty", "-m", message]).await?;
+    let has_commits = git(repo, &["rev-parse", "--verify", "HEAD"]).await.is_ok();
+    let status = git(repo, &["status", "--porcelain"]).await?;
+    if !has_commits {
+        git(repo, &["commit", "-q", "--allow-empty", "-m", message]).await?;
+    } else if !status.trim().is_empty() {
+        git(repo, &["commit", "-q", "-m", message]).await?;
+    }
     git(repo, &["rev-parse", "HEAD"]).await
 }
 
@@ -663,11 +669,12 @@ async fn upsert_service(
             .map_err(db_err)?
     {
         sqlx::query(
-            "UPDATE services SET ports = $2, replicas = $3, cpu_limit = $4, memory_limit_mb = $5,
-                    git_repo_url = COALESCE($6, git_repo_url), updated_at = NOW()
+            "UPDATE services SET type = $2::service_type, ports = $3, replicas = $4, cpu_limit = $5, memory_limit_mb = $6,
+                    git_repo_url = COALESCE($7, git_repo_url), updated_at = NOW()
              WHERE id = $1",
         )
         .bind(id)
+        .bind(svc_type)
         .bind(&ports)
         .bind(replicas)
         .bind(cpu)
@@ -676,6 +683,14 @@ async fn upsert_service(
         .execute(&state.db)
         .await
         .map_err(db_err)?;
+
+        if svc_type == "git" || svc_type == "static" {
+            let _ = sqlx::query("DELETE FROM service_artifact_sources WHERE service_id = $1")
+                .bind(id)
+                .execute(&state.db)
+                .await;
+        }
+
         inherit_project_labels(state, id).await?;
         return Ok(id);
     }

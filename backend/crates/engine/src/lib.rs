@@ -2820,9 +2820,48 @@ impl DeploymentEngine {
 
         let (svc_type, image_col, git_repo_url, git_branch, directory_path) = row;
 
-        // ── Shipyard internal artifact source (highest priority) ──────────────
-        // Check before git/registry so a service can switch from git to artifact
-        // without changing svc_type.
+        // If this service has a managed source repo, it is always a git-managed service.
+        let is_managed_git = git_repo_url
+            .as_deref()
+            .map(|u| u == managed_source_repo(&self.data_dir, service_id))
+            .unwrap_or(false);
+
+        if is_managed_git {
+            let _ = sqlx::query("DELETE FROM service_artifact_sources WHERE service_id = $1")
+                .bind(service_id)
+                .execute(&self.db)
+                .await;
+            let _ = sqlx::query("UPDATE services SET type = 'git'::service_type WHERE id = $1 AND type <> 'git'::service_type")
+                .bind(service_id)
+                .execute(&self.db)
+                .await;
+            let repo_url = git_repo_url.unwrap();
+            tracing::info!("Validated managed git service: repo={repo_url} branch={git_branch}");
+            return Ok(ImageSource::Git {
+                repo_url,
+                branch: git_branch,
+                repo_path: directory_path,
+            });
+        }
+
+        if svc_type == "git" {
+            // ── Git service ──────────────────────────────────────────────────
+            let repo_url = git_repo_url.filter(|u| !u.is_empty()).ok_or_else(|| {
+                AppError::BadRequest(
+                    "Git service has no repository URL configured. \
+                     Set git_repo_url on the service.".to_string(),
+                )
+            })?;
+
+            tracing::info!("Validated git service: repo={repo_url} branch={git_branch}");
+            return Ok(ImageSource::Git {
+                repo_url,
+                branch: git_branch,
+                repo_path: directory_path,
+            });
+        }
+
+        // ── Shipyard internal artifact source (highest priority for non-git services) ──
         let artifact_source = sqlx::query_as::<_, (Uuid, String, String)>(
             "SELECT namespace_id, repo, tag
              FROM service_artifact_sources
@@ -2866,24 +2905,6 @@ impl DeploymentEngine {
                      Push an artifact to the registry first."
                 )));
             }
-        }
-
-
-        if svc_type == "git" {
-            // ── Git service ──────────────────────────────────────────────────
-            let repo_url = git_repo_url.filter(|u| !u.is_empty()).ok_or_else(|| {
-                AppError::BadRequest(
-                    "Git service has no repository URL configured. \
-                     Set git_repo_url on the service.".to_string(),
-                )
-            })?;
-
-            tracing::info!("Validated git service: repo={repo_url} branch={git_branch}");
-            Ok(ImageSource::Git {
-                repo_url,
-                branch: git_branch,
-                repo_path: directory_path,
-            })
         } else {
             // ── Image-based service ──────────────────────────────────────────
             let image_full = if !image_col.is_empty() {
@@ -3191,7 +3212,7 @@ impl DeploymentEngine {
                             .await
                             .map_err(|e| AppError::Database(e.to_string()))?;
 
-                            if let Some((ns_id, ns_slug)) = ns_row {
+                            if let Some((_ns_id, ns_slug)) = ns_row {
                                 let canonical_base = format!("{}/{}/{}", self.registry_hostname, ns_slug, repo);
                                 let canonical_ref = format!("{canonical_base}:{tag}");
 
@@ -3202,33 +3223,6 @@ impl DeploymentEngine {
                                 if let Err(e) = self.docker.tag_image(&local_tag, &canonical_base, "latest").await {
                                     tracing::warn!("Failed to tag image as {canonical_base}:latest: {e}");
                                 }
-
-                                // Link service_artifact_sources so service source is set to registry
-                                sqlx::query(
-                                    "INSERT INTO service_artifact_sources (service_id, namespace_id, repo, tag, auto_deploy_on_push, updated_at)
-                                     VALUES ($1, $2, $3, $4, true, NOW())
-                                     ON CONFLICT (service_id) DO UPDATE
-                                        SET namespace_id = EXCLUDED.namespace_id,
-                                            repo = EXCLUDED.repo,
-                                            tag = EXCLUDED.tag,
-                                            auto_deploy_on_push = true,
-                                            updated_at = NOW()",
-                                )
-                                .bind(service_id)
-                                .bind(ns_id)
-                                .bind(&repo)
-                                .bind(tag)
-                                .execute(&self.db)
-                                .await
-                                .map_err(|e| AppError::Database(e.to_string()))?;
-
-                                // Switch service type to docker with registry image ref
-                                sqlx::query("UPDATE services SET type = 'docker'::service_type, image = $1 WHERE id = $2")
-                                    .bind(&canonical_ref)
-                                    .bind(service_id)
-                                    .execute(&self.db)
-                                    .await
-                                    .map_err(|e| AppError::Database(e.to_string()))?;
                             }
 
                             // Return local_tag so Docker Swarm runs it immediately from the local daemon without network pull failure
