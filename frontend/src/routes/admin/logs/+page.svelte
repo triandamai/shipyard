@@ -5,8 +5,9 @@
 </script>
 
 <PageHeader
+	eyebrow="OBSERVABILITY"
 	title="Platform Logs"
-	subtitle="Full-stack observability across Traefik, Database, Backend, Frontend, and App containers."
+	subtitle="Durable masked logs across Traefik, Database, Backend, Frontend, and tenant containers."
 />
 
 <div class="logs-page-container">
@@ -20,7 +21,10 @@
 
 <style>
 	.logs-page-container {
-		margin-top: 16px;
-		height: calc(100vh - 180px);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		flex: 1;
+		height: calc(100vh - 170px);
 	}
 </style>
