@@ -132,6 +132,8 @@ export interface LogQueryParams {
 	container_id?: string;
 	cursor?: string;
 	limit?: number;
+	/** Stats only: `hour` or `day` buckets. */
+	bucket?: 'hour' | 'day';
 	previous?: boolean;
 }
 

@@ -4,27 +4,28 @@
 	import ObservabilityLogs from '$lib/components/ObservabilityLogs.svelte';
 </script>
 
-<PageHeader
-	eyebrow="OBSERVABILITY"
-	title="Platform Logs"
-	subtitle="Durable masked logs across Traefik, Database, Backend, Frontend, and tenant containers."
-/>
+<svelte:head><title>Logs · Admin · Shipyard</title></svelte:head>
 
-<div class="logs-page-container">
+<div class="logs-page">
+	<PageHeader eyebrow="Observability" title="Platform logs" subtitle="Traefik, Postgres, backend, frontend and every tenant container on this node." />
+
 	<ObservabilityLogs
 		scope="admin"
-		allowStackTabs={true}
 		fetchLogs={(params) => api.getAdminLogs(params)}
 		fetchStats={(params) => api.getAdminLogStats(params)}
 	/>
 </div>
 
 <style>
-	.logs-page-container {
+	/* The admin shell scrolls .main; give the log console a viewport-tall frame. */
+	.logs-page {
 		display: flex;
 		flex-direction: column;
-		min-height: 0;
-		flex: 1;
-		height: calc(100vh - 170px);
+		height: calc(100dvh - 48px);
+		min-height: 560px;
+	}
+	.logs-page :global(.ui-page-header) { margin-bottom: 16px; }
+	@media (max-width: 639px) {
+		.logs-page { height: auto; }
 	}
 </style>

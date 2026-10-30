@@ -7,7 +7,7 @@
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
 		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database, Activity,
-		Check, Minus, Circle, Undo2
+		Check, Minus, Circle, Undo2, ScrollText, ArrowUpRight
 	} from '@lucide/svelte';
 	import DbClientModal from '$lib/components/DbClientModal.svelte';
 	import DuplicateServiceDialog from '$lib/components/DuplicateServiceDialog.svelte';
@@ -43,7 +43,6 @@
 	import MonitorViewOverlay from '$lib/components/MonitorViewOverlay.svelte';
 	import EnvManagerOverlay from '$lib/components/EnvManagerOverlay.svelte';
 	import GitSettingsSection from '$lib/components/GitSettingsSection.svelte';
-	import ObservabilityLogs from '$lib/components/ObservabilityLogs.svelte';
 	import type {
 		Service, Container, Deployment, DeploymentStep,
 		DeploymentLog, MqttPayload, ContainerStatus, Domain,
@@ -105,7 +104,6 @@
 	let isRestarting = $state(false);
 	let isRollingBack = $state<string | null>(null); // deployment id being rolled back
 	let serviceError = $state<string | null>(null);
-	let logViewMode = $state<'runtime' | 'deployments'>('runtime');
 
 	// ── Domains ──────────────────────────────────────────────────────
 	let domains = $state<Domain[]>([]);
@@ -1569,34 +1567,14 @@
 			<!-- ── Logs (deployment list & runtime observability) ── -->
 			{:else if activeTab === 'logs'}
 				<div class="logs-section">
-					<div class="log-mode-tabs" style="display: flex; gap: 8px; margin-bottom: 14px;">
-						<Button
-							variant={logViewMode === 'runtime' ? 'primary' : 'secondary'}
-							size="sm"
-							onclick={() => logViewMode = 'runtime'}
-						>
-							Runtime Logs (Durable)
-						</Button>
-						<Button
-							variant={logViewMode === 'deployments' ? 'primary' : 'secondary'}
-							size="sm"
-							onclick={() => logViewMode = 'deployments'}
-						>
-							Deployment History
-						</Button>
-					</div>
-
-					{#if logViewMode === 'runtime'}
-						<div style="height: 600px;">
-							<ObservabilityLogs
-								scope="service"
-								scopeId={serviceId}
-								allowStackTabs={false}
-								fetchLogs={(params) => api.getServiceLogs(serviceId, params)}
-								fetchStats={(params) => api.getOrgLogStats(service?.org_id ?? '', params)}
-							/>
-						</div>
-					{:else}
+					<a class="logs-open-card" href={`/orgs/${$orgStore.activeOrg?.slug ?? ''}/logs?service=${serviceId}`} onclick={() => uiStore.clearPanels()}>
+						<span class="logs-open-icon"><ScrollText size={16} /></span>
+						<span class="logs-open-text">
+							<span class="logs-open-title">Runtime logs</span>
+							<span class="logs-open-sub">Search, filter and live-tail this service's output in the Logs view.</span>
+						</span>
+						<ArrowUpRight size={15} class="logs-open-arrow" />
+					</a>
 					<!-- Webhook trigger URL -->
 					<Card>
 						<div class="webhook-header">
@@ -1684,7 +1662,6 @@
 								</ListRow>
 							{/each}
 						</Card>
-					{/if}
 					{/if}
 				</div>
 
@@ -2471,6 +2448,36 @@
 	.steps-list { margin-top: 6px; }
 
 	/* ── Logs tab (webhook + deployment list) ── */
+	.logs-open-card {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 12px 14px;
+		margin-bottom: 16px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		color: var(--text-primary);
+		text-decoration: none;
+		transition: border-color var(--transition-fast), background var(--transition-fast);
+	}
+	.logs-open-card:hover { border-color: var(--accent); background: var(--accent-muted); color: var(--text-primary); }
+	.logs-open-icon {
+		width: 32px;
+		height: 32px;
+		border-radius: var(--radius-md);
+		background: var(--terminal-bg);
+		color: var(--terminal-fg);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+	}
+	.logs-open-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+	.logs-open-title { font-size: 13px; font-weight: 600; }
+	.logs-open-sub { font-size: 12px; color: var(--text-muted); }
+	:global(.logs-open-arrow) { color: var(--text-muted); flex-shrink: 0; }
+	.logs-open-card:hover :global(.logs-open-arrow) { color: var(--accent); }
 	.logs-section {
 		display: flex;
 		flex-direction: column;

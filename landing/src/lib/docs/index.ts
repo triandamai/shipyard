@@ -12,7 +12,8 @@ export const PAGES = [
 	{ file: 'edge-functions', slug: 'edge-functions', label: 'Edge functions' },
 	{ file: 'sandbox', slug: 'sandbox', label: 'Sandbox apps' },
 	{ file: 'registry', slug: 'registry', label: 'Container registry' },
-	{ file: 'nomi', slug: 'nomi', label: 'Nomi integration' }
+	{ file: 'nomi', slug: 'nomi', label: 'Nomi integration' },
+	{ file: 'design-system', slug: 'design-system', label: 'Design system' }
 ] as const;
 
 export type PageMeta = (typeof PAGES)[number];
@@ -140,6 +141,12 @@ function render(markdown: string): { html: string; toc: TocEntry[] } {
 				const body = inlineMd.parse(token.text.slice(m![0].length)) as string;
 				return `<aside class="alert alert-${alert.kind}" role="note"><p class="alert-label">${alert.label}</p>${body}</aside>\n`;
 			},
+			// Hex colours in inline code get a live swatch (design-system tables).
+			codespan(token: Tokens.Codespan) {
+				const hex = /^#[0-9a-fA-F]{6}$/.test(token.text) ? token.text : '';
+				const swatch = hex ? `<span class="swatch" style="background:${hex}" aria-hidden="true"></span>` : '';
+				return `<code${hex ? ' class="hex"' : ''}>${swatch}${escapeHtml(token.text)}</code>`;
+			},
 			table(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, token: Tokens.Table) {
 				const cell = (c: Tokens.TableCell, tag: 'th' | 'td') =>
 					`<${tag}${c.align ? ` style="text-align:${c.align}"` : ''}>${this.parser.parseInline(c.tokens as Tokens.Generic[])}</${tag}>`;
@@ -193,6 +200,8 @@ export function allDocs(): Doc[] {
 /** The Markdown a model should read for one page: source text with absolute links. */
 export function docAsMarkdown(doc: Doc): string {
 	const body = doc.markdown
+		// Live HTML specimens are for the rendered page only.
+		.replace(/\n?<!-- specimen -->[\s\S]*?<!-- \/specimen -->\n?/g, '\n')
 		.replace(/ \{#[\w-]+\}$/gm, '')
 		.replace(/\]\(\/(?!\/)/g, `](${SITE_URL}/`);
 	return `${body.trimEnd()}\n\n---\nSource: ${SITE_URL}${doc.path}\n`;

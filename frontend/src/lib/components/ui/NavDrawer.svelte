@@ -90,7 +90,7 @@
 	.ui-nav-drawer {
 		position: absolute;
 		top: 0;
-		left: 60px;
+		left: var(--rail-width);
 		bottom: 0;
 		width: 0;
 		background: var(--bg-surface);
@@ -115,7 +115,7 @@
 		position: fixed;
 		top: 0;
 		bottom: 0;
-		left: 60px;
+		left: var(--rail-width);
 		right: 0;
 		z-index: 3;
 		background: rgba(0, 0, 0, 0.32);
@@ -173,7 +173,7 @@
 	@media (max-width: 639px) {
 		.ui-nav-drawer--hide-phone { display: none; }
 		/* The rail is a 56px bottom bar on phones, so a modal drawer opens as a
-		   full-width panel above it instead of beside a 60px side rail. */
+		   full-width panel above it instead of beside the side rail. */
 		.ui-nav-drawer:not(.ui-nav-drawer--persistent) {
 			position: fixed;
 			left: 0;
