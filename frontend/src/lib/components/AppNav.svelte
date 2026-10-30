@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Home, FolderOpen, Settings, Package, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command, CreditCard, ShieldAlert } from '@lucide/svelte';
+	import { Home, FolderOpen, Settings, Package, ScrollText, PanelLeftClose, PanelLeftOpen, LogOut, User, RefreshCw, ExternalLink, Moon, Sun, Command, CreditCard, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { NavRail, Dropdown, Button } from '$lib/components/ui';
@@ -28,6 +28,7 @@
 	let groups = $derived([
 		{ key: 'home',     icon: Home,       label: 'Home',     href: `/orgs/${orgSlug}`,          active: isActive(`/orgs/${orgSlug}`, true) },
 		{ key: 'projects', icon: FolderOpen, label: 'Projects', href: `/orgs/${orgSlug}/projects`, active: isActive(`/orgs/${orgSlug}/projects`) },
+		{ key: 'logs',     icon: ScrollText, label: 'Logs',     href: `/orgs/${orgSlug}/logs`,     active: isActive(`/orgs/${orgSlug}/logs`) },
 		{ key: 'registry', icon: Package,    label: 'Registry', href: `/orgs/${orgSlug}/registry`, active: isActive(`/orgs/${orgSlug}/registry`) },
 		{ key: 'settings', icon: Settings,   label: 'Settings', href: `/orgs/${orgSlug}/settings`, active: isActive(`/orgs/${orgSlug}/settings`) }
 	]);

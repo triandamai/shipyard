@@ -28,8 +28,25 @@ pub fn extract_metadata(
 ) -> ContainerMetadata {
     let clean_name = name.trim_start_matches('/');
 
-    // Check platform container names first
-    let platform_source = if clean_name.contains("traefik") {
+    // Extract shipyard labels: <prefix>.org_id, <prefix>.service_id, etc.
+    let get_uuid = |k: &str| {
+        labels
+            .get(&format!("{label_prefix}.{k}"))
+            .or_else(|| labels.get(&format!("shipyard.{k}")))
+            .or_else(|| labels.get(k))
+            .and_then(|s| Uuid::parse_str(s).ok())
+    };
+
+    let org_id = get_uuid("org_id");
+    let project_id = get_uuid("project_id");
+    let service_id = get_uuid("service_id");
+    let deployment_id = get_uuid("deployment_id");
+
+    // Platform containers carry no tenant labels; match them by name. Tenant
+    // labels win so a user service called e.g. `my-backend` stays org-scoped.
+    let platform_source = if org_id.is_some() || service_id.is_some() {
+        None
+    } else if clean_name.contains("traefik") {
         Some(LogSource::Traefik)
     } else if clean_name.contains("postgres") {
         Some(LogSource::Postgres)
@@ -59,25 +76,13 @@ pub fn extract_metadata(
         };
     }
 
-    // Extract shipyard labels: <prefix>.org_id, <prefix>.service_id, etc.
-    let get_uuid = |k: &str| {
-        labels
-            .get(&format!("{label_prefix}.{k}"))
-            .or_else(|| labels.get(&format!("shipyard.{k}")))
-            .or_else(|| labels.get(k))
-            .and_then(|s| Uuid::parse_str(s).ok())
-    };
-
-    let org_id = get_uuid("org_id");
-    let project_id = get_uuid("project_id");
-    let service_id = get_uuid("service_id");
-    let deployment_id = get_uuid("deployment_id");
-
     let replica = labels
         .get(&format!("{label_prefix}.replica"))
         .or_else(|| labels.get("shipyard.replica"))
         .or_else(|| labels.get("replica"))
-        .and_then(|s| s.parse::<i32>().ok());
+        .and_then(|s| s.parse::<i32>().ok())
+        // Swarm task containers are named `<service>.<slot>.<task_id>`.
+        .or_else(|| clean_name.split('.').nth(1).and_then(|s| s.parse::<i32>().ok()));
 
     let source = if labels.contains_key(&format!("{label_prefix}.managed"))
         || labels.contains_key("shipyard.managed")
@@ -126,6 +131,11 @@ impl CursorTracker {
 
     pub async fn update(&self, container_id: &str, ts: DateTime<Utc>) {
         self.cursors.write().await.insert(container_id.to_string(), ts);
+    }
+
+    /// Copy of every cursor, for persisting to `log_cursors`.
+    pub async fn snapshot(&self) -> Vec<(String, DateTime<Utc>)> {
+        self.cursors.read().await.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
 }
 
@@ -203,6 +213,19 @@ mod tests {
         assert_eq!(meta.context.project_id, Some(proj_id));
         assert_eq!(meta.context.service_id, Some(svc_id));
         assert_eq!(meta.context.replica, Some(3));
+    }
+
+    #[test]
+    fn tenant_labels_win_over_platform_like_names() {
+        let org_id = Uuid::new_v4();
+        let mut labels = HashMap::new();
+        labels.insert("platform.org_id".into(), org_id.to_string());
+        labels.insert("platform.service_id".into(), Uuid::new_v4().to_string());
+
+        let meta = extract_metadata("c1", "/my-backend.2.abc123", &labels, "platform");
+        assert_eq!(meta.context.source(), LogSource::App);
+        assert_eq!(meta.context.org_id, Some(org_id));
+        assert_eq!(meta.context.replica, Some(2));
     }
 
     #[tokio::test]

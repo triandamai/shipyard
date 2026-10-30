@@ -650,3 +650,180 @@ body:has(.docs) {
 		scroll-behavior: smooth;
 	}
 }
+
+/* ─── Design-system specimens ───────────────────────────────────────
+   Live renderings on /docs/design-system. They mirror the app's
+   components; values come from tokens.css. */
+.prose code.hex {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.prose .swatch {
+	width: 12px;
+	height: 12px;
+	border-radius: 3px;
+	box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.35);
+	flex-shrink: 0;
+}
+.ds-specimen {
+	margin: 16px 0 24px;
+	padding: 20px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-family: var(--font-sans);
+	font-size: 13px;
+	line-height: 1.4;
+}
+.ds-specimen--flush { padding: 0; overflow: hidden; border-color: var(--terminal-border); }
+.ds-specimen--rail { padding: 0; display: flex; background: var(--bg-base); overflow: hidden; }
+.ds-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+.ds-btn {
+	display: inline-flex;
+	align-items: center;
+	height: 36px;
+	padding: 0 16px;
+	border-radius: 6px;
+	border: 1px solid transparent;
+	font-weight: 500;
+}
+.ds-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.ds-btn--secondary { background: var(--bg-surface); border-color: var(--border); color: var(--text-secondary); }
+.ds-btn--ghost { color: var(--text-secondary); }
+.ds-btn--danger-outline { border-color: var(--red); color: var(--red); }
+
+.ds-badge {
+	display: inline-flex;
+	align-items: center;
+	height: 22px;
+	padding: 0 8px;
+	border-radius: 4px;
+	font-size: 11.5px;
+	font-weight: 600;
+}
+.ds-badge--green { background: var(--green-muted); color: var(--green-text); }
+.ds-badge--red { background: var(--red-muted); color: var(--red-text); }
+.ds-badge--yellow { background: var(--yellow-muted); color: var(--yellow-text); }
+.ds-badge--blue { background: var(--blue-muted); color: var(--blue-text); }
+.ds-badge--neutral { background: var(--bg-hover); color: var(--text-muted); }
+
+.ds-seg {
+	display: inline-flex;
+	gap: 2px;
+	padding: 2px;
+	background: var(--bg-surface);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+}
+.ds-seg > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 10px;
+	border-radius: 4px;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-muted);
+}
+.ds-seg > span.on { background: var(--accent-muted); color: var(--accent); font-weight: 600; }
+.ds-seg .g { width: 7px; height: 7px; display: inline-block; }
+.ds-seg .g-err { background: var(--red); transform: rotate(45deg); }
+.ds-seg .g-warn { background: var(--yellow); }
+.ds-seg .g-info { background: var(--blue); border-radius: 50%; }
+.ds-seg .g-debug { border: 1.5px solid var(--text-muted); border-radius: 50%; }
+
+.ds-rail {
+	--ds-rail-fg: #8b9097;
+	--ds-rail-hover: #22252a;
+	--ds-rail-active: #262a30;
+	width: 64px;
+	padding: 12px 0;
+	background: var(--rail-bg);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+}
+.ds-rail-logo {
+	width: 32px;
+	height: 32px;
+	border-radius: 6px;
+	background: var(--accent);
+	margin-bottom: 12px;
+	box-shadow: 0 12px 0 -11px var(--ds-rail-hover);
+}
+.ds-rail-item {
+	position: relative;
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 4px;
+	font-size: 10px;
+	font-weight: 500;
+	color: var(--ds-rail-fg);
+}
+.ds-rail-item .tile {
+	width: 40px;
+	height: 30px;
+	border-radius: 6px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.ds-rail-item .ico {
+	width: 16px;
+	height: 16px;
+	border: 1.75px solid currentColor;
+	border-radius: 4px;
+}
+.ds-rail-item.on { color: #fff; font-weight: 600; }
+.ds-rail-item.on .tile { background: var(--ds-rail-active); }
+.ds-rail-item.on .ico { border-width: 2.25px; }
+.ds-rail-item.on::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 10px;
+	width: 3px;
+	height: 22px;
+	border-radius: 0 3px 3px 0;
+	background: var(--accent);
+}
+
+.ds-log {
+	background: var(--terminal-bg);
+	padding: 6px 0;
+	font-family: var(--font-mono);
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--terminal-fg);
+	overflow-x: auto;
+}
+.ds-log-row {
+	display: grid;
+	grid-template-columns: 104px 32px 72px 1fr;
+	column-gap: 14px;
+	padding: 3px 14px;
+	white-space: nowrap;
+}
+.ds-log-row.warn { box-shadow: inset 2px 0 0 #fbbf24; }
+.ds-log-row.err { box-shadow: inset 2px 0 0 #f87171; background: rgba(248, 113, 113, 0.06); }
+.ds-log-row .t { color: var(--terminal-dim); }
+.ds-log-row .l { font-weight: 600; }
+.ds-log-row .l.info { color: #60a5fa; }
+.ds-log-row .l.warn { color: #fbbf24; }
+.ds-log-row .l.err { color: #f87171; }
+.ds-log-row .l.dbg { color: var(--terminal-dim); }
+.ds-log-row .o { color: #f0b07e; }
+.ds-log-row .m {
+	padding: 0 4px;
+	border-radius: 3px;
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--terminal-dim);
+	font-size: 11px;
+}

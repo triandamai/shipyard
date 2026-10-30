@@ -202,6 +202,15 @@ async fn async_main() {
             tracing::warn!("Docker daemon not reachable at startup: {e}");
         }
 
+        // Observability collector: follow container logs into log_entries and
+        // keep daily partitions / retention current.
+        shipyard_collector::runtime::spawn(
+            engine.client().clone(),
+            pool.clone(),
+            config.docker.label_prefix.clone(),
+        )
+        .await;
+
         Arc::new(engine)
     };
 

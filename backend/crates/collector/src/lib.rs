@@ -3,6 +3,7 @@
 
 pub mod buffer;
 pub mod docker_follower;
+pub mod runtime;
 pub mod stats_sampler;
 pub mod traefik_tailer;
 
