@@ -519,7 +519,7 @@ async fn update_service(
     let new_name       = body.name.unwrap_or(current.name);
     let new_status     = body.status.unwrap_or(current.status);
     let new_ports      = body.ports.map(|p| serde_json::to_value(p).unwrap_or(current.ports.clone())).unwrap_or(current.ports);
-    let new_image      = body.image.unwrap_or(current.image);
+    let new_image      = body.image.clone().unwrap_or(current.image);
     let new_cpu        = body.cpu_limit.or(current.cpu_limit);
     let new_mem        = body.memory_limit_mb.or(current.memory_limit_mb);
     let new_git_branch = body.git_branch.unwrap_or(current.git_branch);
@@ -587,6 +587,30 @@ async fn update_service(
                 "service_name": service.name,
             }));
         state.mqtt.publish_status(&topic, &payload).await.ok();
+    }
+
+    // Sync tag to service_artifact_sources and service_envs if image was updated
+    if let Some(ref img) = body.image {
+        let trimmed = img.trim();
+        if let Some(pos) = trimmed.rfind(':') {
+            let tag_part = &trimmed[pos + 1..];
+            if !tag_part.is_empty() {
+                let _ = sqlx::query(
+                    "UPDATE service_artifact_sources SET tag = $1, updated_at = NOW() WHERE service_id = $2",
+                )
+                .bind(tag_part)
+                .bind(service_id)
+                .execute(&state.db)
+                .await;
+            }
+        }
+        let _ = sqlx::query(
+            "UPDATE service_envs SET value_encrypted = $1 WHERE service_id = $2 AND key = '__IMAGE__'",
+        )
+        .bind(trimmed)
+        .bind(service_id)
+        .execute(&state.db)
+        .await;
     }
 
     // Auto-register webhook when auto_deploy is switched on and a git provider is configured.

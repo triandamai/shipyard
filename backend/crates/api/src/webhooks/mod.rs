@@ -13,12 +13,13 @@
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
 };
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use sha2::Sha256;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -405,16 +406,79 @@ async fn gitea_webhook(
     trigger_deploy(&state, service_id, pushed_branch).await
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct DeployWebhookParams {
+    pub tag: Option<String>,
+    pub image: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DockerHubPushData {
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DeployWebhookPayload {
+    pub tag: Option<String>,
+    pub image: Option<String>,
+    pub push_data: Option<DockerHubPushData>,
+}
+
+/// Resolves the updated image string.
+///
+/// If `new_image` is provided (e.g. "ghcr.io/org/app:v1.2.3"), it takes precedence.
+/// If `new_tag` is provided and `current_image` is present (e.g. "nginx:alpine", "myorg/app:latest", "localhost:5000/app:v1"):
+/// it replaces the tag part while keeping the repository/host base intact.
+/// If `current_image` is empty and only `new_tag` is provided, it returns None.
+pub fn update_image_tag(current_image: &str, new_image: Option<&str>, new_tag: Option<&str>) -> Option<String> {
+    if let Some(img) = new_image.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        return Some(img.to_string());
+    }
+
+    let tag = new_tag.map(|s| s.trim()).filter(|s| !s.is_empty())?;
+    let trimmed_current = current_image.trim();
+    if trimmed_current.is_empty() {
+        return None;
+    }
+
+    // Replace the tag part of trimmed_current.
+    // Docker image formats can have host:port, e.g. "localhost:5000/repo:tag" or "myorg/repo:tag" or "repo".
+    // We only want the colon after the last slash (if any).
+    let base = match trimmed_current.rfind('/') {
+        Some(slash_pos) => {
+            let after_slash = &trimmed_current[slash_pos..];
+            match after_slash.rfind(':') {
+                Some(colon_offset) => &trimmed_current[..slash_pos + colon_offset],
+                None => trimmed_current,
+            }
+        }
+        None => match trimmed_current.rfind(':') {
+            Some(colon_pos) => &trimmed_current[..colon_pos],
+            None => trimmed_current,
+        },
+    };
+
+    Some(format!("{base}:{tag}"))
+}
+
 /// POST /api/webhooks/deploy/:service_id/:token
 ///
-/// Provider-agnostic: no payload, no branch/tag logic. Queues one deployment for
-/// the service (coalescing if a deploy is already queued or running). Intended
-/// for CI to call right after pushing a new image to the Shipyard registry —
-/// the service resolves its image from `service_artifact_sources`, so the
-/// freshest push of the bound tag is what gets deployed.
+/// Provider-agnostic deployment trigger for CI/CD pipelines (e.g. GitHub Actions,
+/// GitLab CI, Docker Hub webhooks, or curl).
+///
+/// Supports updating the service's image tag on each trigger:
+/// - Query parameter: `?tag=v1.2.3` or `?image=myorg/app:v1.2.3`
+/// - JSON body: `{"tag": "v1.2.3"}` or `{"image": "myorg/app:v1.2.3"}` (also supports Docker Hub `push_data.tag`)
+///
+/// If a tag or image is supplied:
+/// - The service's `image` configuration is updated.
+/// - If internal registry artifacts are used, `service_artifact_sources.tag` is updated.
+/// - The deployment's `source_ref` is set to the provided tag/image for tracking.
 async fn deploy_webhook(
     Path((service_id, token)): Path<(Uuid, String)>,
+    Query(query): Query<DeployWebhookParams>,
     State(state): State<AppState>,
+    body: Bytes,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     let webhook_secret = load_webhook_token(&state, service_id).await?;
 
@@ -424,23 +488,109 @@ async fn deploy_webhook(
         )));
     }
 
+    // Parse optional JSON body if provided
+    let payload: Option<DeployWebhookPayload> = if !body.is_empty() {
+        serde_json::from_slice(&body).ok()
+    } else {
+        None
+    };
+
+    // Extract tag/image from payload (takes precedence) or query params
+    let req_tag = payload
+        .as_ref()
+        .and_then(|p| p.tag.clone().or_else(|| p.push_data.as_ref().and_then(|pd| pd.tag.clone())))
+        .or(query.tag)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let req_image = payload
+        .as_ref()
+        .and_then(|p| p.image.clone())
+        .or(query.image)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Fetch existing image to update tag or record new image
+    let svc_row: Option<(String,)> = sqlx::query_as(
+        "SELECT COALESCE(image, '') FROM services WHERE id = $1"
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let current_image = match svc_row {
+        Some((img,)) => img,
+        None => return Err(ApiAppError(AppError::NotFound(format!("Service '{service_id}' not found")))),
+    };
+
+    let updated_image = update_image_tag(&current_image, req_image.as_deref(), req_tag.as_deref());
+
+    if let Some(ref new_img) = updated_image {
+        sqlx::query("UPDATE services SET image = $1, updated_at = NOW() WHERE id = $2")
+            .bind(new_img)
+            .bind(service_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+        // If service uses internal artifact source, update its tag
+        if let Some(tag) = req_tag.as_deref().or_else(|| {
+            new_img.rfind(':').map(|pos| &new_img[pos + 1..])
+        }) {
+            let _ = sqlx::query("UPDATE service_artifact_sources SET tag = $1 WHERE service_id = $2")
+                .bind(tag)
+                .bind(service_id)
+                .execute(&state.db)
+                .await;
+        }
+    } else if let Some(ref tag) = req_tag {
+        // Even if services.image was empty, update service_artifact_sources if present
+        let _ = sqlx::query("UPDATE service_artifact_sources SET tag = $1 WHERE service_id = $2")
+            .bind(tag)
+            .bind(service_id)
+            .execute(&state.db)
+            .await;
+    }
+
+    // Determine source_ref for deployment tracking
+    let source_ref = if let Some(ref tag) = req_tag {
+        tag.clone()
+    } else if let Some(ref img) = req_image {
+        img.clone()
+    } else {
+        "deploy-webhook".to_string()
+    };
+
     let queued = shipyard_registry::deploy_hook::enqueue_service_deploy(
         &state.db,
         service_id,
         "webhook",
-        "deploy-webhook",
+        &source_ref,
     )
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
+    let mut resp = serde_json::json!({
+        "source_ref": source_ref,
+    });
+    if let Some(ref img) = updated_image {
+        resp["image"] = serde_json::json!(img);
+    }
+    if let Some(ref tag) = req_tag {
+        resp["tag"] = serde_json::json!(tag);
+    }
+
     match queued {
-        Some(deployment_id) => Ok(Json(ApiResponse::ok(serde_json::json!({
-            "message": "deployment queued",
-            "deployment_id": deployment_id,
-        })))),
-        None => Ok(Json(ApiResponse::ok(serde_json::json!({
-            "message": "a deployment is already queued or running for this service",
-        })))),
+        Some(deployment_id) => {
+            resp["message"] = serde_json::json!("deployment queued");
+            resp["deployment_id"] = serde_json::json!(deployment_id);
+            Ok(Json(ApiResponse::ok(resp)))
+        }
+        None => {
+            resp["message"] = serde_json::json!("a deployment is already queued or running for this service");
+            Ok(Json(ApiResponse::ok(resp)))
+        }
     }
 }
 
@@ -802,5 +952,87 @@ async fn load_fn_group(
 impl From<(StatusCode, Json<ApiResponse<serde_json::Value>>)> for ApiAppError {
     fn from(_: (StatusCode, Json<ApiResponse<serde_json::Value>>)) -> Self {
         ApiAppError(AppError::Internal("unexpected conversion".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_image_tag_simple() {
+        assert_eq!(
+            update_image_tag("nginx:alpine", None, Some("1.25")),
+            Some("nginx:1.25".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_image_tag_repository() {
+        assert_eq!(
+            update_image_tag("myorg/myapp:latest", None, Some("v1.2.3")),
+            Some("myorg/myapp:v1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_image_tag_without_existing_tag() {
+        assert_eq!(
+            update_image_tag("myorg/myapp", None, Some("v1.2.3")),
+            Some("myorg/myapp:v1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_image_tag_with_registry_port() {
+        assert_eq!(
+            update_image_tag("registry.example.com:5000/org/app:old", None, Some("new")),
+            Some("registry.example.com:5000/org/app:new".to_string())
+        );
+
+        assert_eq!(
+            update_image_tag("localhost:8080/app:v1", None, Some("v2")),
+            Some("localhost:8080/app:v2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_image_tag_explicit_image_override() {
+        assert_eq!(
+            update_image_tag("myorg/app:old", Some("ghcr.io/other/custom:v9"), Some("ignored")),
+            Some("ghcr.io/other/custom:v9".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_image_tag_empty_or_none() {
+        assert_eq!(update_image_tag("", None, Some("v1")), None);
+        assert_eq!(update_image_tag("nginx:latest", None, None), None);
+        assert_eq!(update_image_tag("nginx:latest", None, Some("   ")), None);
+    }
+
+    #[test]
+    fn test_deploy_webhook_payload_deserialization() {
+        // Tag payload
+        let payload: DeployWebhookPayload = serde_json::from_str(r#"{"tag": "v1.2.3"}"#).unwrap();
+        assert_eq!(payload.tag.as_deref(), Some("v1.2.3"));
+        assert_eq!(payload.image, None);
+
+        // Image payload
+        let payload: DeployWebhookPayload = serde_json::from_str(r#"{"image": "myorg/app:v1.2.3"}"#).unwrap();
+        assert_eq!(payload.image.as_deref(), Some("myorg/app:v1.2.3"));
+
+        // Docker Hub push_data payload
+        let payload: DeployWebhookPayload = serde_json::from_str(r#"{"push_data": {"tag": "2.1.0"}}"#).unwrap();
+        assert_eq!(
+            payload.push_data.and_then(|pd| pd.tag).as_deref(),
+            Some("2.1.0")
+        );
+
+        // Empty payload
+        let payload: DeployWebhookPayload = serde_json::from_str("{}").unwrap();
+        assert_eq!(payload.tag, None);
+        assert_eq!(payload.image, None);
+        assert!(payload.push_data.is_none());
     }
 }

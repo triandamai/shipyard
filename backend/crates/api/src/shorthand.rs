@@ -596,7 +596,19 @@ async fn redeploy_service(
 ) -> Result<(StatusCode, Json<ApiResponse<Deployment>>), ApiAppError> {
     require_service_permission(&state.db, auth.user_id, service_id, "service:deploy").await.map_err(ApiAppError)?;
 
-    let source_ref = "manual".to_string();
+    let svc_image: Option<(String,)> = sqlx::query_as(
+        "SELECT COALESCE(image, '') FROM services WHERE id = $1"
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let source_ref = svc_image
+        .and_then(|(img,)| {
+            img.rfind(':').map(|pos| img[pos + 1..].trim().to_string()).filter(|t| !t.is_empty())
+        })
+        .unwrap_or_else(|| "manual".to_string());
     let triggered_by = auth.email.clone();
 
     let max_parallel = sqlx::query_as::<_, (String,)>(
