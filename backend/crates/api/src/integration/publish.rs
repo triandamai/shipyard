@@ -180,8 +180,13 @@ fn default_engine() -> String {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DomainIn {
-    /// First label of the generated hostname. Defaults to `<app>` for
-    /// production and `<app>-<env>` otherwise.
+    /// Full hostname for the environment, e.g. `todo.example.com`. The
+    /// environment is moved to it whenever it differs from the current one.
+    /// Takes precedence over (and can't be combined with) `subdomain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Legacy: first label of a hostname under the apps base domain. Defaults
+    /// to `<app>` for production and `<app>-<env>` otherwise.
     #[serde(default)]
     pub subdomain: Option<String>,
     /// Which web service gets the domain. Defaults to the first web service.
@@ -263,6 +268,13 @@ pub fn validate_manifest(m: &Manifest) -> Result<(), ApiAppError> {
         }
     }
     if let Some(d) = &m.domain {
+        if d.hostname.is_some() && d.subdomain.is_some() {
+            return bad("set domain.hostname or domain.subdomain, not both".into());
+        }
+        if let Some(h) = &d.hostname {
+            super::domains::normalize_hostname(h, None)
+                .map_err(|e| ApiAppError(AppError::BadRequest(format!("domain.hostname '{h}': {e}"))))?;
+        }
         if let Some(sub) = &d.subdomain {
             validate_slug("domain.subdomain", sub)?;
         }
@@ -950,8 +962,6 @@ async fn ensure_database(
     })
 }
 
-/// Attach `<subdomain>.<apps_base_domain>` to the web service unless it
-/// already has a hostname there. Falls back to a random suffix when taken.
 /// Subdomains to try for an environment, best first. One manifest is often
 /// published to every environment, so a `domain.subdomain` of `todo` gives
 /// production `todo` and staging `todo-staging` rather than a random suffix.
@@ -963,6 +973,67 @@ fn subdomain_candidates(requested: Option<&str>, app_key: &str, environment: &st
     }
 }
 
+/// Attach exactly `hostname` (a full domain chosen by the product) to the web
+/// service as its managed address. A different managed address is replaced:
+/// the new one is attached first, then the old one detached. Taken = 409.
+async fn ensure_hostname(
+    state: &AppState,
+    service_id: Uuid,
+    hostname: &str,
+    port: u16,
+) -> Result<String, ApiAppError> {
+    let base = state.config.integration.apps_base_domain.as_deref();
+    let hostname = super::domains::normalize_hostname(hostname, base)
+        .map_err(|e| ApiAppError(AppError::BadRequest(format!("domain.hostname '{hostname}': {e}"))))?;
+    let url = format!("https://{hostname}");
+    let current: Vec<(Uuid, String)> = sqlx::query_as(&format!(
+        "SELECT d.id, d.hostname FROM domains d WHERE d.service_id = $1 AND {}",
+        super::domains::MANAGED_SQL
+    ))
+    .bind(service_id)
+    .bind(base)
+    .fetch_all(&state.db)
+    .await
+    .map_err(db_err)?;
+
+    let owner: Option<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT id, service_id FROM domains WHERE hostname = $1")
+            .bind(&hostname)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(db_err)?;
+    let new_id = match owner {
+        Some((id, sid)) if sid == service_id => id,
+        Some(_) => {
+            return Err(ApiAppError(AppError::Conflict(format!(
+                "domain.hostname '{hostname}' is already in use"
+            ))))
+        }
+        None => {
+            crate::resources::attach_domain(state, service_id, &hostname, true, "letsencrypt", Some(port as i32))
+                .await
+                .map_err(|e| match e {
+                    ApiAppError(AppError::Conflict(_)) => ApiAppError(AppError::Conflict(format!(
+                        "domain.hostname '{hostname}' is already in use"
+                    ))),
+                    e => e,
+                })?
+                .id
+        }
+    };
+    super::domains::mark_managed(state, new_id).await?;
+    for (id, h) in current {
+        if id != new_id {
+            if let Err(e) = crate::resources::detach_domain(state, service_id, id).await {
+                tracing::warn!(hostname = %h, "could not detach the previous address: {e:?}");
+            }
+        }
+    }
+    Ok(url)
+}
+
+/// Attach `<subdomain>.<apps_base_domain>` to the web service unless it
+/// already has a hostname there. Falls back to a random suffix when taken.
 async fn ensure_domain(
     state: &AppState,
     service_id: Uuid,
@@ -973,9 +1044,10 @@ async fn ensure_domain(
     let Some(base) = state.config.integration.apps_base_domain.as_deref() else {
         return Ok(None);
     };
-    let existing: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, hostname FROM domains WHERE service_id = $1 AND hostname LIKE '%.' || $2 LIMIT 1",
-    )
+    let existing: Option<(Uuid, String)> = sqlx::query_as(&format!(
+        "SELECT d.id, d.hostname FROM domains d WHERE d.service_id = $1 AND {} LIMIT 1",
+        super::domains::MANAGED_SQL
+    ))
     .bind(service_id)
     .bind(base)
     .fetch_optional(&state.db)
@@ -1025,7 +1097,10 @@ async fn ensure_domain(
         )
         .await
         {
-            Ok(d) => return Ok(Some(format!("https://{}", d.hostname))),
+            Ok(d) => {
+                super::domains::mark_managed(state, d.id).await?;
+                return Ok(Some(format!("https://{}", d.hostname)));
+            }
             Err(ApiAppError(AppError::Conflict(_))) => continue,
             Err(e) => return Err(e),
         }
@@ -1485,7 +1560,10 @@ async fn configure(
             } else {
                 detected_ports.get(&w.name).copied().or(w.port).unwrap_or(3000)
             };
-            let url = ensure_domain(state, services[&w.name], domain_cfg.subdomain.as_deref(), &subs, port).await?;
+            let url = match domain_cfg.hostname.as_deref() {
+                Some(h) => Some(ensure_hostname(state, services[&w.name], h, port).await?),
+                None => ensure_domain(state, services[&w.name], domain_cfg.subdomain.as_deref(), &subs, port).await?,
+            };
             if url.is_none() {
                 warnings
                     .push("no apps base domain is configured, so the app has no public URL".into());
