@@ -26,7 +26,7 @@ If you read nothing else, this is the whole integration in order:
 4. On publish: zip the source, build the [manifest](#manifest), `POST .../envs/{env}/publish`. You get `202` and a `publish_id`. **The app is not live yet.**
 5. Wait for the `publish.succeeded` webhook (or poll `GET .../publishes/{publish_id}` every 3 s). Only then show the user `urls[0]`.
 6. If it failed, `GET .../deployments/{deployment_id}` returns `failure` with the step, phase, message and log tail. Fix the code, publish again. See [the fix loop](#fix-loop).
-7. User wants another address: `GET /orgs/{org}/domains/check?subdomain=...` as they type, then `PUT .../envs/{env}/domain`. See [Choosing a domain](#domains).
+7. Nomi picks each environment's full hostname (e.g. `todo.nomi.app`) and sends it as `domain.hostname` in the manifest. User wants another address: `GET /orgs/{org}/domains/check?hostname=...` as they type, then `PUT .../envs/{env}/domain`. See [Choosing a domain](#domains).
 8. `POST .../duplicate` for another environment, `DELETE .../apps/{app}` to terminate.
 
 Before you ship, run the readiness checker against a real Shipyard (it creates and deletes a throwaway org): `python3 scripts/check-nomi-integration.py` in the Shipyard repo. See [Verifying a Shipyard](#verify).
@@ -73,14 +73,17 @@ Follow these without exception.
 | Published app | Environment: one Shipyard project per environment | `{env}`: `production`, `staging`, `preview-123`, ... |
 | Secrets the user enters | Secret store, app-wide or per environment | Env var name, e.g. `STRIPE_KEY` |
 
-Web addresses belong to Shipyard: production gets `https://<app>.<apps-domain>`, other environments `https://<app>-<env>.<apps-domain>`. If a name is taken, Shipyard appends a random suffix. Always use the URL Shipyard returns; never construct it. To let a user pick their own name, see [Choosing a domain](#domains).
+Nomi decides each environment's address and sends it as a **full hostname** (`domain.hostname`, e.g. `todo.nomi.app` or `todo-staging.nomi.app`). Because Shipyard stores the whole domain, not just a label under its own base domain, a Nomi admin can move apps to a different domain at any time (`todo.nomi.app` → `todo.nomi.dev`) without any Shipyard config change. The hostname's DNS must point at this Shipyard's Traefik (a wildcard record per domain you use); TLS is issued automatically.
+
+If the manifest has no `domain.hostname`, Shipyard falls back to the legacy behavior: production gets `https://<app>.<apps-domain>`, other environments `https://<app>-<env>.<apps-domain>`, with a random suffix when taken. Either way, show the URL Shipyard returns. To let a user pick their own name, see [Choosing a domain](#domains).
 
 ## Setup {#setup}
 
 The Shipyard operator configures, in `/opt/shipyard/.env`:
 
 ```bash
-# Published apps get <app>.<this> and <app>-<env>.<this>; needs a wildcard DNS record to Traefik.
+# Optional fallback: apps published without domain.hostname get <app>.<this> and <app>-<env>.<this>;
+# needs a wildcard DNS record to Traefik. Not needed when Nomi always sends domain.hostname.
 SHIPYARD__INTEGRATION__APPS_BASE_DOMAIN=apps.example.dev
 # Postgres server for dev databases; the role needs only CREATEDB and CREATEROLE.
 SHIPYARD__INTEGRATION__DEV_DB_ADMIN_URL=postgres://devdb_admin:...@devdb.internal:5432/postgres
@@ -237,7 +240,7 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
     }
   ],
   "database": { "engine": "postgres" },
-  "domain": { "subdomain": "todo" },
+  "domain": { "hostname": "todo.apps.example.dev" },
   "labels": { "nomi.app/template": "nextjs" }
 }
 ```
@@ -254,7 +257,8 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
 | `services[].env` | The service's complete env. Keys not listed are removed |
 | `services[].volumes` | Paths whose data survives deploys |
 | `database` | `{ "engine": "postgres" }` gives the environment its own Postgres with a persistent volume |
-| `domain.subdomain` | First label of the hostname. Default `<app>` (production) or `<app>-<env>`. You can send the same manifest to every environment: if the name is already used by another environment, a non-production environment gets `<subdomain>-<env>` instead (`todo` → `todo-staging`). Only used the first time: once an environment has an address, change it with [`PUT .../domain`](#domains) |
+| `domain.hostname` | **Recommended.** The environment's full hostname, e.g. `todo.nomi.app` (lowercased, trailing dot dropped). Use a different one per environment (`todo-staging.nomi.app`). It is used exactly: no suffix is added, and if another app already uses it the publish fails with `409`. Sending a different hostname on a later publish moves the environment to it (new name attached first, old one removed), so changing your domain is just publishing with the new one. Its DNS must point at Shipyard. Can't be combined with `domain.subdomain` |
+| `domain.subdomain` | Legacy, needs `APPS_BASE_DOMAIN`. First label under the apps base domain. Default `<app>` (production) or `<app>-<env>`. If the name is already used by another environment, a non-production environment gets `<subdomain>-<env>` instead (`todo` → `todo-staging`) |
 | `domain.service` | Which web service gets the URL. Default: the first web service |
 | `labels` | Labels for the environment's project. See [Labels and versions](#labels) |
 | `services[].labels` | Labels for that service |
@@ -390,43 +394,45 @@ Orgs, environments (projects) and services carry key/value labels. The Shipyard 
 
 ## Choosing a domain {#domains}
 
-Every environment gets `<name>.<apps-domain>` on its first publish. When a user wants a different name, use these endpoints. Names are shared across the whole platform, so a name another app already uses is refused, and Shipyard suggests free ones nearby.
+Every environment gets its address on its first publish: `domain.hostname` from the manifest, or the legacy `<name>.<apps-domain>`. When a user wants a different name, use these endpoints. They take a **full hostname**, so the new name can be on any domain you point at Shipyard. Hostnames are shared across the whole platform, so one another app already uses is refused, and Shipyard suggests free ones nearby (same parent domain, different first label).
+
+Each endpoint still accepts the legacy `subdomain` (a label under the apps base domain) instead of `hostname`; send one or the other, never both.
 
 Typing flow in Nomi: call **check** as the user types (debounced), show the answer, and call **change** when they confirm.
 
-### GET /openapi/v1/integration/orgs/{org}/domains/check?subdomain=my-shop
+### GET /openapi/v1/integration/orgs/{org}/domains/check?hostname=my-shop.nomi.app
 
 Optional `app` and `env`: with them, the environment's own current name counts as available (so re-confirming the current name isn't an error).
 
 ```json
 // free
-{ "data": { "subdomain": "my-shop", "hostname": "my-shop.apps.example.dev", "available": true, "suggestions": [] } }
+{ "data": { "hostname": "my-shop.nomi.app", "subdomain": null, "available": true, "suggestions": [] } }
 
 // already used by someone else
 { "data": {
-  "subdomain": "todo", "hostname": "todo.apps.example.dev", "available": false,
-  "reason": "taken", "message": "'todo' is already in use",
+  "hostname": "todo.nomi.app", "subdomain": null, "available": false,
+  "reason": "taken", "message": "'todo.nomi.app' is already in use",
   "suggestions": [
-    { "subdomain": "todo-app", "hostname": "todo-app.apps.example.dev" },
-    { "subdomain": "my-todo",  "hostname": "my-todo.apps.example.dev" },
-    { "subdomain": "todo-hq",  "hostname": "todo-hq.apps.example.dev" }
+    { "subdomain": "todo-app", "hostname": "todo-app.nomi.app" },
+    { "subdomain": "my-todo",  "hostname": "my-todo.nomi.app" },
+    { "subdomain": "todo-hq",  "hostname": "todo-hq.nomi.app" }
   ] } }
 
-// not a valid name (letters, digits, '-', 3 to 63 characters, not reserved)
-{ "data": { "subdomain": "ab_c", "hostname": null, "available": false,
-            "reason": "invalid", "message": "Use only letters a-z, digits 0-9 and '-'", "suggestions": [ ... ] } }
+// not a valid hostname
+{ "data": { "hostname": null, "input": "ab_c.nomi.app", "available": false,
+            "reason": "invalid", "message": "Use only letters a-z, digits 0-9, '-' and '.'", "suggestions": [ ... ] } }
 ```
 
-The answer is `200` in every case; read `available`. Input is lowercased and trimmed. `reason` is `taken` or `invalid`. Reserved names (`www`, `api`, `admin`, `mail`, `status`, anything starting `preview-`, and similar) count as invalid. Suggestions are checked against the platform at the time of the call, but a name can still be taken a moment later, so handle `409` on change.
+The answer is `200` in every case; read `available`. Input is lowercased and trimmed (a trailing dot is dropped). `reason` is `taken` or `invalid`. A valid hostname has at least two labels, each 1–63 characters of `a-z 0-9 -` (not starting or ending with `-`), at most 253 characters in all, and is not an IP address or a wildcard. Directly under the apps base domain the stricter label rules still apply (3+ characters, reserved names such as `www`, `api`, `admin`, `mail`, `status` or anything starting `preview-` are refused), and the base domain itself can't be used. `subdomain` in the answer is the first label when the hostname sits directly under the apps base domain, else `null`. Suggestions are checked against the platform at the time of the call, but a name can still be taken a moment later, so handle `409` on change.
 
 ### PUT /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/domain
 
 ```json
 // request
-{ "subdomain": "my-shop" }
+{ "hostname": "my-shop.nomi.app" }
 // response 200
-{ "data": { "hostname": "my-shop.apps.example.dev", "url": "https://my-shop.apps.example.dev",
-            "previous_hostname": "todo.apps.example.dev", "changed": true } }
+{ "data": { "hostname": "my-shop.nomi.app", "url": "https://my-shop.nomi.app",
+            "previous_hostname": "todo.nomi.app", "changed": true } }
 ```
 
 - The new name is attached before the old one is removed, so the app stays reachable. The old name becomes free for others.
@@ -435,19 +441,20 @@ The answer is `200` in every case; read `available`. Input is lowercased and tri
 - If the name is taken or invalid, **nothing changes** and you get `409`, with the same `suggestions` under `data`:
 
 ```json
-{ "data": { "available": false, "reason": "taken", "suggestions": [ { "subdomain": "todo-app", "hostname": "todo-app.apps.example.dev" } ] },
-  "error": { "code": "CONFLICT", "message": "'todo' is already in use" } }
+{ "data": { "available": false, "reason": "taken", "suggestions": [ { "subdomain": "todo-app", "hostname": "todo-app.nomi.app" } ] },
+  "error": { "code": "CONFLICT", "message": "'todo.nomi.app' is already in use" } }
 ```
 
 - An environment that hasn't been published has no address yet: you get `409` until the first publish.
-- Later publishes keep the chosen name. `domain.subdomain` in a manifest does not move an environment that already has an address.
+- The manifest's `domain.hostname` wins on the next publish: if it differs from the name you set here, the publish moves the environment back to it. After a change, update the hostname Nomi stores for that environment so the next manifest carries it. A manifest without `domain.hostname` keeps the current name.
+- Moving every app to a new domain: point the new domain's DNS at Shipyard, then `PUT .../domain` (or republish) each environment with its new hostname. No Shipyard setting has to change.
 - Emits `domain.attached` for the new name and `domain.removed` for the old one.
 
 ### GET /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/domain
 
-Returns `{ "hostname", "subdomain", "url" }` for the current platform address, or nulls when there is none yet.
+Returns `{ "hostname", "subdomain", "url" }` for the environment's current address, or nulls when there is none yet. `subdomain` is only set when the hostname sits directly under the apps base domain.
 
-Only the platform address (`<name>.<apps-domain>`) is managed here. Custom domains the user owns are not part of this API yet.
+Only the one address Nomi manages per environment is handled here. Extra domains a user adds in the Shipyard dashboard are left alone.
 
 ## Moving an app to another organization {#transfer}
 
@@ -786,7 +793,8 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 - [ ] Secrets form → `PUT .../secrets/{name}` from the server; agent tools can list names and refs, never values.
 - [ ] Publish button → zip source (no `node_modules`, `.git`, `.env`, build output), build manifest, `POST .../publish`; show progress from `deployment.step_*`; on `publish.succeeded` show `urls[0]`; on `publish.failed` show `error` and fetch the deployment log for the agent.
 - [ ] "New environment" → `POST .../envs/{env}/duplicate`.
-- [ ] "Change address" → `GET /orgs/{org}/domains/check` while typing, `PUT .../envs/{env}/domain` on confirm; on `409` show `data.suggestions`.
+- [ ] Every manifest carries `domain.hostname`, the full hostname Nomi stores for that environment (one per environment); DNS for each domain you use points at Shipyard.
+- [ ] "Change address" → `GET /orgs/{org}/domains/check?hostname=...` while typing, `PUT .../envs/{env}/domain` with `{ "hostname" }` on confirm, then store the new hostname; on `409` show `data.suggestions`.
 - [ ] Project moved to another org → `POST /orgs/{org}/apps/{app}/transfer` with `to_org`; store the returned app key if you passed `app_key`.
 - [ ] Project deleted → confirm → `DELETE /orgs/{org}/apps/{app}`.
 - [ ] Logs and Monitor panel → runtime logs (structured), live usage (`/usage`), and historical metrics (`/metrics`) for traffic and containers.
