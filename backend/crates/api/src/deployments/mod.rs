@@ -523,9 +523,19 @@ async fn redeploy_service(
     require_service_access(&state.db, auth_user.user_id, service_id).await.map_err(ApiAppError)?;
     check_billing_allows_deploy(&state.db, service_id).await?;
 
-    // source_ref is a trigger label ("manual", "webhook", etc.), not a git ref.
-    // The engine reads the actual git branch/image from the service config.
-    let source_ref = "manual".to_string();
+    let svc_image: Option<(String,)> = sqlx::query_as(
+        "SELECT COALESCE(image, '') FROM services WHERE id = $1"
+    )
+    .bind(service_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let source_ref = svc_image
+        .and_then(|(img,)| {
+            img.rfind(':').map(|pos| img[pos + 1..].trim().to_string()).filter(|t| !t.is_empty())
+        })
+        .unwrap_or_else(|| "manual".to_string());
     let triggered_by = auth_user.email.clone();
 
     let deployment_id = Uuid::now_v7();
