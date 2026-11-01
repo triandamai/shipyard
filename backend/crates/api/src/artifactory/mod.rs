@@ -88,6 +88,7 @@ pub fn routes() -> Router<AppState> {
         .route("/namespaces/:ns_id/repos",                  get(list_repos))
         .route("/namespaces/:ns_id/repos/:repo",            delete(delete_repo))
         .route("/namespaces/:ns_id/repos/:repo/tags",       get(list_tags))
+        .route("/namespaces/:ns_id/repos/:repo/tags/:tag",  delete(delete_tag))
         // Misc
         .route("/artifacts",        get(list_artifacts))
         .route("/artifacts/search", get(search_artifacts))
@@ -103,6 +104,7 @@ pub fn admin_routes() -> Router<AppState> {
         .route("/namespaces/:ns_id/repos",                  get(admin_list_repos))
         .route("/namespaces/:ns_id",                        delete(admin_delete_namespace))
         .route("/namespaces/:ns_id/repos/:repo",            delete(admin_delete_repo))
+        .route("/namespaces/:ns_id/repos/:repo/tags/:tag",  delete(admin_delete_tag))
 }
 
 // ── Org-scoped handlers ───────────────────────────────────────────────────────
@@ -486,6 +488,91 @@ async fn delete_repo(
     }))))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeleteTagQuery {
+    /// Restrict the delete to one artifact kind. A tag is unique per
+    /// (namespace, repo, tag, kind), so omitting this removes every kind.
+    pub kind: Option<String>,
+}
+
+/// Delete a single tag. Refuses with 409 while a service's artifact source is
+/// bound to the tag, since its next deploy would fail to resolve the artifact.
+/// Manifests and blobs stay; GC handles them.
+async fn delete_artifact_tag(
+    state: &AppState,
+    ns_id: Uuid,
+    repo: &str,
+    tag: &str,
+    kind: Option<&str>,
+) -> Result<u64, ApiAppError> {
+    let bound: Vec<(String,)> = sqlx::query_as(
+        "SELECT s.name FROM service_artifact_sources sas
+         JOIN services s ON s.id = sas.service_id
+         WHERE sas.namespace_id = $1 AND sas.repo = $2 AND sas.tag = $3",
+    )
+    .bind(ns_id)
+    .bind(repo)
+    .bind(tag)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if !bound.is_empty() {
+        let names: Vec<String> = bound.into_iter().map(|(n,)| n).collect();
+        return Err(ApiAppError(AppError::Conflict(format!(
+            "Tag {repo}:{tag} is the artifact source of: {}. Re-point those services first.",
+            names.join(", "),
+        ))));
+    }
+
+    let result = sqlx::query(
+        "DELETE FROM artifacts
+         WHERE namespace_id = $1 AND repo = $2 AND tag = $3
+           AND ($4::text IS NULL OR kind = $4)",
+    )
+    .bind(ns_id)
+    .bind(repo)
+    .bind(tag)
+    .bind(kind)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiAppError(AppError::NotFound(format!("Tag {repo}:{tag} not found"))));
+    }
+    Ok(result.rows_affected())
+}
+
+async fn delete_tag(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((org_id, ns_id, repo, tag)): Path<(Uuid, Uuid, String, String)>,
+    Query(params): Query<DeleteTagQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    check_registry_access(&state, auth.user_id, org_id, true).await?;
+
+    let ns_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM registry_namespaces WHERE id = $1 AND org_id = $2)",
+    )
+    .bind(ns_id)
+    .bind(org_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    if !ns_exists {
+        return Err(ApiAppError(AppError::NotFound("Namespace not found".into())));
+    }
+
+    let rows = delete_artifact_tag(&state, ns_id, &repo, &tag, params.kind.as_deref()).await?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "deleted": true,
+        "rows": rows,
+    }))))
+}
+
 // ── Admin handlers ────────────────────────────────────────────────────────────
 
 async fn admin_stats(
@@ -665,6 +752,22 @@ async fn admin_delete_repo(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "deleted": true,
         "rows": result.rows_affected(),
+    }))))
+}
+
+async fn admin_delete_tag(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((ns_id, repo, tag)): Path<(Uuid, String, String)>,
+    Query(params): Query<DeleteTagQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    crate::admin::require_admin_access(&state.db, auth.user_id, "shipyard:admin:registry:manage").await?;
+
+    let rows = delete_artifact_tag(&state, ns_id, &repo, &tag, params.kind.as_deref()).await?;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({
+        "deleted": true,
+        "rows": rows,
     }))))
 }
 

@@ -37,6 +37,7 @@
 	// ── Artifactory source ─────────────────────────────────────────────────────
 	type SelectedArtifact = { id: string; namespace_id: string; namespace_slug: string; repo: string; tag: string; kind: string };
 	let selectedArtifact = $state<SelectedArtifact | null>(null);
+	let autoDeployOnPush = $state(true);
 
 	function openArtifactoryPicker() {
 		uiStore.pushPanel({
@@ -259,6 +260,17 @@
 			} : {}),
 		} as any);
 
+		// The deploy pipeline resolves static_bundle artifacts through the
+		// service's artifact source, which is also what push-to-deploy matches on.
+		if (isArtifact && selectedArtifact) {
+			await api.putArtifactSource(svc.id, {
+				namespace_id: selectedArtifact.namespace_id,
+				repo: selectedArtifact.repo,
+				tag: selectedArtifact.tag,
+				auto_deploy_on_push: autoDeployOnPush,
+			});
+		}
+
 		submitting = false;
 		uiStore.clearPanels();
 		uiStore.pushPanel({
@@ -428,6 +440,15 @@
 					<ChevronRight size={14} class="picker-chevron" />
 				</button>
 			</FormField>
+
+			<div class="auto-deploy">
+				<Checkbox bind:checked={autoDeployOnPush} label="Auto-deploy on push" />
+				<span class="checkbox-hint">
+					Redeploy this site automatically when a new
+					{#if selectedArtifact}<code>:{selectedArtifact.tag}</code>{:else}bundle{/if}
+					is pushed to the registry.
+				</span>
+			</div>
 		</div>
 	{/if}
 
@@ -493,6 +514,13 @@
 	.picker-btn.loading { cursor: default; }
 
 	.picker-placeholder { color: var(--text-dim); flex: 1; }
+	.auto-deploy {
+		display: flex; flex-direction: column; gap: 4px;
+		padding: 8px 10px; background: var(--bg-elevated);
+		border: 1px solid var(--border); border-radius: var(--radius-sm);
+	}
+	.checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; padding-left: 24px; }
+	.checkbox-hint code { font-family: var(--font-mono); font-size: 10px; }
 	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
