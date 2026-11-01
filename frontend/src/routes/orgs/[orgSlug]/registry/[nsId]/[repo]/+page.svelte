@@ -45,6 +45,31 @@
 		await goto(`/orgs/${orgSlug}/registry/${nsId}`);
 	}
 
+	// ── Delete single tag ─────────────────────────────────────────────────────
+	let tagTarget: ArtTag | null = $state(null);
+	let showTagDialog = $state(false);
+	let tagDeleteError = $state('');
+
+	function openTagDialog(t: ArtTag) {
+		tagTarget = t;
+		tagDeleteError = '';
+		showTagDialog = true;
+	}
+
+	async function confirmTagDelete() {
+		if (!tagTarget) return false;
+		tagDeleteError = '';
+		const res = await api.delete(
+			`/orgs/${orgId}/registry/namespaces/${nsId}/repos/${encodeURIComponent(repo)}/tags/${encodeURIComponent(tagTarget.tag)}?kind=${encodeURIComponent(tagTarget.kind)}`
+		);
+		if (res.error) {
+			tagDeleteError = res.error.message ?? 'Delete failed.';
+			return false;
+		}
+		tagTarget = null;
+		await load();
+	}
+
 	async function load() {
 		if (!orgId || !nsId || !repo) return;
 		loading = true;
@@ -134,7 +159,8 @@
 				{ key: 'kind', label: 'Kind' },
 				{ key: 'size_bytes', label: 'Size' },
 				{ key: 'manifest_digest', label: 'Digest' },
-				{ key: 'pushed_at', label: 'Pushed' }
+				{ key: 'pushed_at', label: 'Pushed' },
+				{ key: 'actions', label: '' }
 			]}
 		>
 			{#snippet row(t: ArtTag)}
@@ -144,6 +170,17 @@
 					<td class="muted">{fmtBytes(t.size_bytes)}</td>
 					<td><span class="digest mono">{t.manifest_digest.slice(0, 23)}…</span></td>
 					<td class="muted">{timeAgo(t.pushed_at)}</td>
+					<td class="actions">
+						<Button
+							variant="ghost"
+							size="icon"
+							title="Delete tag {t.tag}"
+							aria-label="Delete tag {t.tag}"
+							onclick={() => openTagDialog(t)}
+						>
+							<Trash2 size={13} />
+						</Button>
+					</td>
 				</tr>
 			{/snippet}
 		</DataTable>
@@ -167,6 +204,15 @@
 	onConfirm={confirmDelete}
 />
 
+<ConfirmDialog
+	bind:open={showTagDialog}
+	title="Delete tag"
+	message="This will delete the tag {tagTarget?.tag ?? ''} ({kindLabel(tagTarget?.kind ?? '')}) from {repo}. Other tags pointing at the same digest are kept. This action cannot be undone."
+	confirmLabel="Delete tag"
+	error={tagDeleteError}
+	onConfirm={confirmTagDelete}
+/>
+
 <style>
 	.browser { padding: 20px 32px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 1000px; }
 	.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -180,6 +226,7 @@
 	.muted { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 	.mono { font-family: var(--font-mono); font-size: 12px; }
 	.tag-pill { font-family: var(--font-mono); }
+	.actions { width: 1%; text-align: right; }
 	.digest { font-size: 11px; color: var(--text-muted); }
 	.pull-cmd { display: flex; flex-direction: column; gap: 6px; }
 	.pull-label { font-size: 11px; font-weight: 600; color: var(--text-muted); }

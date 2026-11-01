@@ -422,12 +422,46 @@ impl DeploymentEngine {
         source_ref: &str,
     ) -> AppResult<()> {
         // source_ref == "upload" means the artifact path is in deployment metadata;
-        // any other value is treated as git-based.
+        // a site whose config source is 'artifact' deploys the newest static_bundle
+        // pushed to its bound registry repo:tag; anything else is git-based.
         if source_ref == "upload" {
-            self.run_static_upload_steps(org_id, project_id, service_id, deployment_id).await
-        } else {
-            self.run_static_git_steps(org_id, project_id, service_id, deployment_id, source_ref).await
+            return self.run_static_upload_steps(org_id, project_id, service_id, deployment_id).await;
         }
+
+        let config_source: Option<String> = sqlx::query_scalar(
+            "SELECT source FROM static_site_configs WHERE service_id = $1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        if config_source.as_deref() != Some("artifact") {
+            return self.run_static_git_steps(org_id, project_id, service_id, deployment_id, source_ref).await;
+        }
+
+        let (artifact_id, manifest_digest) = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT a.id, a.manifest_digest
+             FROM service_artifact_sources sas
+             JOIN artifacts a ON a.namespace_id = sas.namespace_id
+                             AND a.repo = sas.repo
+                             AND a.tag  = sas.tag
+                             AND a.kind = 'static_bundle'
+             WHERE sas.service_id = $1
+             ORDER BY a.pushed_at DESC
+             LIMIT 1",
+        )
+        .bind(service_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .ok_or_else(|| AppError::BadRequest(
+            "No static_bundle artifact found for this site's registry source. \
+             Push a bundle to the bound repo:tag first.".into(),
+        ))?;
+
+        let artifact_ref = format!("__ARTIFACT_STATIC__:{artifact_id}:{manifest_digest}");
+        self.run_static_from_artifact_steps(org_id, project_id, service_id, deployment_id, &artifact_ref).await
     }
 
     /// Upload pipeline: archive already on disk, just extract → publish → nginx.
