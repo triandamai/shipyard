@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import {
 		Blocks,
 		Key,
@@ -12,7 +13,10 @@
 		Eye,
 		EyeOff,
 		Link as LinkIcon,
-		Unlink
+		Unlink,
+		Radio,
+		Send,
+		ExternalLink
 	} from '@lucide/svelte';
 	import {
 		Button,
@@ -28,11 +32,19 @@
 		ConfirmDialog
 	} from '$lib/components/ui';
 	import api from '$lib/api/client';
-	import type { Integration, CreatedIntegrationKey, AdminOrg } from '$lib/api/types';
+	import type {
+		Integration,
+		CreatedIntegrationKey,
+		AdminOrg,
+		AdminWebhook,
+		CreatedAdminWebhook,
+		WebhookTestResult
+	} from '$lib/api/types';
 
 	// ─── State ────────────────────────────────────────────────────────────────
 	let integrations = $state<Integration[]>([]);
 	let allOrgs = $state<AdminOrg[]>([]);
+	let webhooksByIntegration = $state<Record<string, AdminWebhook[]>>({});
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -56,6 +68,32 @@
 	let showCreatedKeyModal = $state(false);
 	let createdKeyInfo = $state<CreatedIntegrationKey | null>(null);
 	let keyRevealed = $state(false);
+
+	// Webhook Registration Modal
+	let showCreateWebhookModal = $state(false);
+	let targetWebhookIntegrationId = $state<string | null>(null);
+	let targetWebhookIntegrationName = $state<string>('');
+	let webhookUrl = $state('');
+	let webhookEventsPattern = $state('*');
+	let webhookOrgExternalId = $state('');
+	let creatingWebhook = $state(false);
+	let createWebhookError = $state('');
+
+	// One-time Webhook Secret Reveal Modal
+	let showCreatedWebhookModal = $state(false);
+	let createdWebhookInfo = $state<CreatedAdminWebhook | null>(null);
+	let webhookSecretRevealed = $state(false);
+
+	// Test Webhook Modal / Execution
+	let testingWebhookId = $state<string | null>(null);
+	let showTestResultModal = $state(false);
+	let testResult = $state<WebhookTestResult | null>(null);
+	let testWebhookUrl = $state('');
+
+	// Delete Webhook Dialog
+	let deleteWebhookDialogOpen = $state(false);
+	let deleteWebhookTarget = $state<{ integrationId: string; webhookId: string; url: string } | null>(null);
+	let deletingWebhook = $state(false);
 
 	// Link Org Modal
 	let showLinkOrgModal = $state(false);
@@ -95,6 +133,7 @@
 
 			if (integrationsRes.data) {
 				integrations = integrationsRes.data;
+				await loadWebhooksForIntegrations(integrationsRes.data);
 			} else {
 				error = integrationsRes.error?.message ?? 'Failed to load integrations';
 			}
@@ -107,6 +146,17 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function loadWebhooksForIntegrations(items: Integration[]) {
+		const results = await Promise.all(
+			items.map((i) => api.getAdminIntegrationWebhooks(i.id))
+		);
+		const map: Record<string, AdminWebhook[]> = {};
+		for (let idx = 0; idx < items.length; idx++) {
+			map[items[idx].id] = results[idx].data ?? [];
+		}
+		webhooksByIntegration = map;
 	}
 
 	function formatDate(iso: string) {
@@ -169,10 +219,14 @@
 	async function handleDeleteIntegration() {
 		if (!deleteIntegrationId) return;
 		try {
-			await api.deleteAdminIntegration(deleteIntegrationId);
-			deleteDialogOpen = false;
-			deleteIntegrationId = null;
-			await loadData();
+			const res = await api.deleteAdminIntegration(deleteIntegrationId);
+			if (res.data) {
+				deleteDialogOpen = false;
+				deleteIntegrationId = null;
+				await loadData();
+			} else {
+				error = res.error?.message ?? 'Failed to delete integration';
+			}
 		} catch (e: any) {
 			error = e?.message ?? 'Failed to delete integration';
 		}
@@ -202,14 +256,18 @@
 		if (keyScopeReveal) scopes.push('secrets:reveal');
 
 		if (scopes.length === 0) {
-			mintKeyError = 'Select at least one scope';
+			mintKeyError = 'At least one scope must be selected';
 			return;
 		}
 
 		mintingKey = true;
 		mintKeyError = '';
 		try {
-			const res = await api.createAdminIntegrationKey(targetIntegrationId, { name, scopes });
+			const res = await api.createAdminIntegrationKey(targetIntegrationId, {
+				name,
+				scopes
+			});
+
 			if (res.data) {
 				showMintKeyModal = false;
 				createdKeyInfo = res.data;
@@ -217,10 +275,10 @@
 				showCreatedKeyModal = true;
 				await loadData();
 			} else {
-				mintKeyError = res.error?.message ?? 'Failed to create key';
+				mintKeyError = res.error?.message ?? 'Failed to mint key';
 			}
 		} catch (e: any) {
-			mintKeyError = e?.message ?? 'Failed to create key';
+			mintKeyError = e?.message ?? 'Failed to mint key';
 		} finally {
 			mintingKey = false;
 		}
@@ -234,19 +292,128 @@
 	async function handleRevokeKey() {
 		if (!revokeTarget) return;
 		try {
-			await api.revokeAdminIntegrationKey(revokeTarget.integrationId, revokeTarget.keyId);
-			revokeDialogOpen = false;
-			revokeTarget = null;
-			await loadData();
+			const res = await api.revokeAdminIntegrationKey(
+				revokeTarget.integrationId,
+				revokeTarget.keyId
+			);
+			if (res.data) {
+				revokeDialogOpen = false;
+				revokeTarget = null;
+				await loadData();
+			} else {
+				error = res.error?.message ?? 'Failed to revoke key';
+			}
 		} catch (e: any) {
 			error = e?.message ?? 'Failed to revoke key';
 		}
 	}
 
-	// ─── Org Linking Actions ──────────────────────────────────────────────────
+	// ─── Webhook Actions ──────────────────────────────────────────────────────
+	function openCreateWebhookModal(integrationId: string, name: string) {
+		targetWebhookIntegrationId = integrationId;
+		targetWebhookIntegrationName = name;
+		webhookUrl = '';
+		webhookEventsPattern = '*';
+		webhookOrgExternalId = '';
+		createWebhookError = '';
+		showCreateWebhookModal = true;
+	}
+
+	async function handleCreateWebhook() {
+		if (!targetWebhookIntegrationId) return;
+		const url = webhookUrl.trim();
+		if (!url) {
+			createWebhookError = 'Endpoint URL is required';
+			return;
+		}
+
+		creatingWebhook = true;
+		createWebhookError = '';
+		try {
+			const events = webhookEventsPattern
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean);
+
+			const res = await api.createAdminIntegrationWebhook(targetWebhookIntegrationId, {
+				url,
+				events: events.length > 0 ? events : ['*'],
+				org: webhookOrgExternalId.trim() || undefined
+			});
+
+			if (res.data) {
+				showCreateWebhookModal = false;
+				createdWebhookInfo = res.data;
+				webhookSecretRevealed = false;
+				showCreatedWebhookModal = true;
+				await loadData();
+			} else {
+				createWebhookError = res.error?.message ?? 'Failed to register webhook';
+			}
+		} catch (e: any) {
+			createWebhookError = e?.message ?? 'Failed to register webhook';
+		} finally {
+			creatingWebhook = false;
+		}
+	}
+
+	function openDeleteWebhookDialog(integrationId: string, webhook: AdminWebhook) {
+		deleteWebhookTarget = { integrationId, webhookId: webhook.id, url: webhook.url };
+		deleteWebhookDialogOpen = true;
+	}
+
+	async function confirmDeleteWebhook() {
+		if (!deleteWebhookTarget) return;
+		deletingWebhook = true;
+		try {
+			const res = await api.deleteAdminIntegrationWebhook(
+				deleteWebhookTarget.integrationId,
+				deleteWebhookTarget.webhookId
+			);
+			if (res.data) {
+				deleteWebhookDialogOpen = false;
+				deleteWebhookTarget = null;
+				await loadData();
+			} else {
+				error = res.error?.message ?? 'Failed to delete webhook';
+			}
+		} catch (e: any) {
+			error = e?.message ?? 'Failed to delete webhook';
+		} finally {
+			deletingWebhook = false;
+		}
+	}
+
+	async function handleTestWebhook(integrationId: string, webhook: AdminWebhook) {
+		testingWebhookId = webhook.id;
+		testWebhookUrl = webhook.url;
+		try {
+			const res = await api.testAdminIntegrationWebhook(integrationId, webhook.id);
+			if (res.data) {
+				testResult = res.data;
+				showTestResultModal = true;
+			} else {
+				testResult = {
+					ok: false,
+					error: res.error?.message ?? 'Request failed'
+				};
+				showTestResultModal = true;
+			}
+		} catch (e: any) {
+			testResult = {
+				ok: false,
+				error: e?.message ?? 'Network error while triggering test'
+			};
+			showTestResultModal = true;
+		} finally {
+			testingWebhookId = null;
+		}
+	}
+
+	// ─── Org Actions ──────────────────────────────────────────────────────────
 	function openLinkOrgModal(integration: Integration) {
 		linkTargetIntegrationId = integration.id;
-		selectedOrgId = allOrgs[0]?.id ?? '';
+		selectedOrgId = allOrgs.length > 0 ? allOrgs[0].id : '';
 		externalId = '';
 		linkOrgError = '';
 		showLinkOrgModal = true;
@@ -258,9 +425,12 @@
 		linkingOrg = true;
 		linkOrgError = '';
 		try {
-			const res = await api.linkAdminIntegrationOrg(linkTargetIntegrationId, selectedOrgId, {
-				external_id: externalId.trim() || undefined
-			});
+			const res = await api.linkAdminIntegrationOrg(
+				linkTargetIntegrationId,
+				selectedOrgId,
+				externalId.trim() ? { external_id: externalId.trim() } : {}
+			);
+
 			if (res.data) {
 				showLinkOrgModal = false;
 				await loadData();
@@ -282,10 +452,17 @@
 	async function handleUnlinkOrg() {
 		if (!unlinkTarget) return;
 		try {
-			await api.unlinkAdminIntegrationOrg(unlinkTarget.integrationId, unlinkTarget.orgId);
-			unlinkDialogOpen = false;
-			unlinkTarget = null;
-			await loadData();
+			const res = await api.unlinkAdminIntegrationOrg(
+				unlinkTarget.integrationId,
+				unlinkTarget.orgId
+			);
+			if (res.data) {
+				unlinkDialogOpen = false;
+				unlinkTarget = null;
+				await loadData();
+			} else {
+				error = res.error?.message ?? 'Failed to unlink organization';
+			}
 		} catch (e: any) {
 			error = e?.message ?? 'Failed to unlink organization';
 		}
@@ -304,9 +481,9 @@
 				<Button
 					variant="secondary"
 					size="sm"
-					onclick={() => loadData()}
+					onclick={loadData}
 					disabled={loading}
-					aria-label="Refresh integrations"
+					aria-label="Refresh integrations list"
 				>
 					{#if loading}
 						<Spinner size={14} />
@@ -324,7 +501,7 @@
 
 	<!-- Global Error Alert -->
 	{#if error}
-		<InlineAlert tone="error">
+		<InlineAlert tone="error" title="Error">
 			{error}
 		</InlineAlert>
 	{/if}
@@ -352,6 +529,7 @@
 	{:else}
 		<div class="integrations-list">
 			{#each integrations as integration (integration.id)}
+				{@const webhooks = webhooksByIntegration[integration.id] ?? []}
 				<div class="integration-card">
 					<!-- Integration Header -->
 					<div class="card-header">
@@ -384,6 +562,8 @@
 									<span>{integration.org_count} linked org{integration.org_count === 1 ? '' : 's'}</span>
 									<span class="meta-sep">·</span>
 									<span>{integration.keys.filter(k => !k.revoked_at).length} active key{integration.keys.filter(k => !k.revoked_at).length === 1 ? '' : 's'}</span>
+									<span class="meta-sep">·</span>
+									<span>{webhooks.length} webhook{webhooks.length === 1 ? '' : 's'}</span>
 								</div>
 							</div>
 						</div>
@@ -393,9 +573,13 @@
 								<Key size={13} />
 								Mint Key
 							</Button>
-							<Button variant="secondary" size="sm" onclick={() => openLinkOrgModal(integration)}>
-								<LinkIcon size={13} />
-								Link Org
+							<Button variant="secondary" size="sm" onclick={() => openCreateWebhookModal(integration.id, integration.name)}>
+								<Radio size={13} />
+								Add Webhook
+							</Button>
+							<Button variant="secondary" size="sm" onclick={() => goto(`/admin/integrations/${integration.id}/orgs`)}>
+								<Building2 size={13} />
+								Manage Orgs
 							</Button>
 							<button
 								type="button"
@@ -409,9 +593,9 @@
 						</div>
 					</div>
 
-					<!-- Sections: Keys & Linked Orgs -->
+					<!-- Sections: Keys, Webhooks & Linked Orgs -->
 					<div class="card-columns">
-						<!-- Keys Column -->
+						<!-- Column 1: Keys -->
 						<div class="column-box">
 							<div class="column-header">
 								<span class="column-title">
@@ -488,25 +672,113 @@
 							{/if}
 						</div>
 
-						<!-- Linked Orgs Column -->
+						<!-- Column 2: Webhooks -->
+						<div class="column-box">
+							<div class="column-header">
+								<span class="column-title">
+									<Radio size={12} />
+									Outbound Webhooks
+								</span>
+								<button
+									type="button"
+									class="text-link-action"
+									onclick={() => openCreateWebhookModal(integration.id, integration.name)}
+								>
+									<Plus size={11} /> Register
+								</button>
+							</div>
+
+							{#if webhooks.length === 0}
+								<div class="sub-empty">
+									No webhooks registered. Click <strong>Register</strong> to send lifecycle events (e.g. <code>publish.succeeded</code>) to external orchestrators.
+								</div>
+							{:else}
+								<div class="items-list">
+									{#each webhooks as webhook (webhook.id)}
+										<div class="item-row">
+											<div class="item-main">
+												<div class="item-title-row">
+													<span class="item-name truncate-url" title={webhook.url}>
+														{webhook.url}
+													</span>
+													{#if webhook.enabled}
+														<Badge tone="green">Enabled</Badge>
+													{:else}
+														<Badge tone="neutral">Disabled</Badge>
+													{/if}
+												</div>
+
+												<div class="item-meta-row">
+													<div class="scopes-wrap">
+														{#each webhook.events as evt}
+															<span class="scope-chip scope-chip--manage">{evt}</span>
+														{/each}
+													</div>
+													{#if webhook.org}
+														<span class="meta-sep">·</span>
+														<span class="code-val">org: {webhook.org}</span>
+													{/if}
+												</div>
+
+												<div class="item-dates">
+													Created {formatDate(webhook.created_at)}
+												</div>
+											</div>
+
+											<div class="webhook-row-actions">
+												<button
+													type="button"
+													class="row-action-btn"
+													disabled={testingWebhookId === webhook.id}
+													onclick={() => handleTestWebhook(integration.id, webhook)}
+													title="Send signed test ping from Shipyard"
+												>
+													{#if testingWebhookId === webhook.id}
+														<Spinner size={11} />
+														<span>Testing…</span>
+													{:else}
+														<Send size={11} />
+														<span>Send Test</span>
+													{/if}
+												</button>
+												<button
+													type="button"
+													class="row-action-btn row-action-btn--danger"
+													onclick={() => openDeleteWebhookDialog(integration.id, webhook)}
+													title="Delete webhook"
+												>
+													<Trash2 size={11} />
+												</button>
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
+
+						<!-- Column 3: Linked Orgs -->
 						<div class="column-box">
 							<div class="column-header">
 								<span class="column-title">
 									<Building2 size={12} />
 									Linked Organizations
 								</span>
-								<span class="column-hint">
-									{integration.org_count} total
-								</span>
+								<button
+									type="button"
+									class="text-link-action"
+									onclick={() => goto(`/admin/integrations/${integration.id}/orgs`)}
+								>
+									<ExternalLink size={11} /> Manage ({integration.org_count})
+								</button>
 							</div>
 
 							{#if integration.orgs.length === 0}
 								<div class="sub-empty">
-									No organizations linked yet. Organizations created by this integration's key will automatically appear here.
+									No organizations linked yet. Click <strong>Link Org</strong> or manage them in the dedicated view.
 								</div>
 							{:else}
 								<div class="items-list">
-									{#each integration.orgs as org (org.id)}
+									{#each integration.orgs.slice(0, 4) as org (org.id)}
 										<div class="item-row">
 											<div class="item-main">
 												<div class="item-title-row">
@@ -526,11 +798,21 @@
 												onclick={() => openUnlinkDialog(integration.id, org.id, org.name)}
 												title="Unlink organization"
 											>
-												<Unlink size={12} />
+												<Unlink size={11} />
 												Unlink
 											</button>
 										</div>
 									{/each}
+								</div>
+
+								<div class="column-footer-link">
+									<button
+										type="button"
+										class="view-paginated-btn"
+										onclick={() => goto(`/admin/integrations/${integration.id}/orgs`)}
+									>
+										View all {integration.org_count} linked orgs in dedicated page →
+									</button>
 								</div>
 							{/if}
 						</div>
@@ -548,7 +830,7 @@
 	bind:open={showCreateModal}
 	title="Create Platform Integration"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleCreateIntegration(); }} class="dialog-form">
+	<form onsubmit={(e) => { e.preventDefault(); void handleCreateIntegration(); }} class="dialog-form">
 		{#if createIntegrationError}
 			<InlineAlert tone="error">{createIntegrationError}</InlineAlert>
 		{/if}
@@ -584,7 +866,7 @@
 	bind:open={showMintKeyModal}
 	title="Mint Integration Key for '{targetIntegrationName}'"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleMintKey(); }} class="dialog-form">
+	<form onsubmit={(e) => { e.preventDefault(); void handleMintKey(); }} class="dialog-form">
 		{#if mintKeyError}
 			<InlineAlert tone="error">{mintKeyError}</InlineAlert>
 		{/if}
@@ -696,12 +978,173 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 	{/if}
 </Modal>
 
+<!-- Register Webhook Modal -->
+<Modal
+	bind:open={showCreateWebhookModal}
+	title="Register Outbound Webhook for '{targetWebhookIntegrationName}'"
+>
+	<form onsubmit={(e) => { e.preventDefault(); void handleCreateWebhook(); }} class="dialog-form">
+		{#if createWebhookError}
+			<InlineAlert tone="error">{createWebhookError}</InlineAlert>
+		{/if}
+
+		<div class="info-callout">
+			Shipyard will send HTTP <code>POST</code> events (signed with an HMAC-SHA256 secret) to this receiver whenever publish, deployment, or database events occur.
+		</div>
+
+		<FormField label="Receiver URL" required hint="e.g. https://nomi.example.com/api/webhooks/shipyard">
+			<TextField
+				bind:value={webhookUrl}
+				placeholder="https://nomi.example.com/api/webhooks/shipyard"
+				autofocus
+			/>
+		</FormField>
+
+		<FormField label="Subscribed Events" hint="Comma-separated patterns: '*' for all events, or 'publish.*,deployment.*'">
+			<TextField
+				bind:value={webhookEventsPattern}
+				placeholder="*"
+			/>
+		</FormField>
+
+		<FormField label="Limit to Organization (Optional)" hint="Leave empty to subscribe to all organizations linked to this integration.">
+			<TextField
+				bind:value={webhookOrgExternalId}
+				placeholder="e.g. org_2Nf8sK (or org slug)"
+			/>
+		</FormField>
+
+		<div class="modal-buttons">
+			<Button variant="secondary" onclick={() => showCreateWebhookModal = false}>Cancel</Button>
+			<Button
+				variant="primary"
+				type="submit"
+				disabled={creatingWebhook || !webhookUrl.trim()}
+			>
+				{#if creatingWebhook}
+					<Spinner size={14} /> Registering…
+				{:else}
+					Register Webhook
+				{/if}
+			</Button>
+		</div>
+	</form>
+</Modal>
+
+<!-- One-Time Webhook Secret Reveal Modal -->
+<Modal
+	bind:open={showCreatedWebhookModal}
+	title="Webhook Registered — Secret Key"
+>
+	{#if createdWebhookInfo}
+		<div class="dialog-form">
+			<InlineAlert tone="warning">
+				Store this webhook signing secret now. It is shown only once and will not be displayed again.
+			</InlineAlert>
+
+			<FormField label="Signing Secret (HMAC-SHA256)">
+				<div class="reveal-key-row">
+					<input
+						type={webhookSecretRevealed ? 'text' : 'password'}
+						readonly
+						value={createdWebhookInfo.secret}
+						class="key-mono-input"
+					/>
+					<Button
+						variant="secondary"
+						size="sm"
+						onclick={() => webhookSecretRevealed = !webhookSecretRevealed}
+						title={webhookSecretRevealed ? 'Hide secret' : 'Show secret'}
+					>
+						{#if webhookSecretRevealed}
+							<EyeOff size={14} />
+						{:else}
+							<Eye size={14} />
+						{/if}
+					</Button>
+					<Button
+						variant="primary"
+						size="sm"
+						onclick={() => copyToClipboard(createdWebhookInfo!.secret, 'webhook-secret')}
+					>
+						{#if copiedId === 'webhook-secret'}
+							<Check size={14} /> Copied
+						{:else}
+							<Copy size={14} /> Copy
+						{/if}
+					</Button>
+				</div>
+			</FormField>
+
+			<div class="terminal-snippet">
+				<p class="terminal-snippet-title">Nomi environment configuration:</p>
+				<pre class="terminal-code">SHIPYARD_WEBHOOK_SECRET={createdWebhookInfo.secret}</pre>
+			</div>
+
+			<div class="modal-buttons">
+				<Button variant="primary" onclick={() => showCreatedWebhookModal = false}>
+					I Have Stored the Webhook Secret
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Modal>
+
+<!-- Webhook Test Result Modal -->
+<Modal
+	bind:open={showTestResultModal}
+	title="Webhook Test Outcome"
+>
+	{#if testResult}
+		<div class="dialog-form">
+			<div class="test-target-info">
+				Target: <code>{testWebhookUrl}</code>
+			</div>
+
+			{#if testResult.ok}
+				<InlineAlert tone="success" title="Ping Delivered Successfully">
+					{testResult.message ?? `Endpoint responded with HTTP ${testResult.status_code}.`}
+				</InlineAlert>
+				<p class="test-explainer">
+					Shipyard dispatched a signed test <code>ping</code> event with valid <code>Shipyard-Signature</code> and <code>Shipyard-Event-Id</code> headers. Your endpoint responded with a 2xx success code.
+				</p>
+			{:else}
+				<InlineAlert tone="error" title="Delivery Failed">
+					{testResult.error ?? 'The endpoint did not respond successfully.'}
+					{#if testResult.status_code}
+						(HTTP {testResult.status_code})
+					{/if}
+				</InlineAlert>
+				<p class="test-explainer">
+					Verify that your endpoint is publicly reachable, accepts HTTP POST requests with <code>content-type: application/json</code>, and returns a 2xx status code within 10 seconds.
+				</p>
+			{/if}
+
+			<div class="modal-buttons">
+				<Button variant="primary" onclick={() => showTestResultModal = false}>
+					Close
+				</Button>
+			</div>
+		</div>
+	{/if}
+</Modal>
+
+<!-- Delete Webhook Confirm Dialog -->
+<ConfirmDialog
+	bind:open={deleteWebhookDialogOpen}
+	title="Delete Webhook Endpoint"
+	message="Are you sure you want to delete the webhook '{deleteWebhookTarget?.url}'? Shipyard will stop delivering platform events to this endpoint."
+	confirmLabel={deletingWebhook ? 'Deleting…' : 'Delete Webhook'}
+	danger={true}
+	onConfirm={confirmDeleteWebhook}
+/>
+
 <!-- Link Org Modal -->
 <Modal
 	bind:open={showLinkOrgModal}
 	title="Link Organization to Integration"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleLinkOrg(); }} class="dialog-form">
+	<form onsubmit={(e) => { e.preventDefault(); void handleLinkOrg(); }} class="dialog-form">
 		{#if linkOrgError}
 			<InlineAlert tone="error">{linkOrgError}</InlineAlert>
 		{/if}
@@ -750,8 +1193,8 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 <!-- Confirm Delete Integration Dialog -->
 <ConfirmDialog
 	bind:open={deleteDialogOpen}
-	title="Delete Integration"
-	message="Are you sure you want to delete integration '{deleteIntegrationName}'? All its keys will be revoked, and any linked organizations will be unlinked."
+	title="Delete Platform Integration"
+	message="Are you sure you want to delete integration '{deleteIntegrationName}'? All associated integration keys and webhooks will be immediately revoked."
 	confirmLabel="Delete Integration"
 	danger={true}
 	onConfirm={handleDeleteIntegration}
@@ -761,20 +1204,21 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 <ConfirmDialog
 	bind:open={unlinkDialogOpen}
 	title="Unlink Organization"
-	message="Unlink organization '{unlinkTarget?.orgName}' from this integration? The organization and its data will remain untouched, but the integration's keys will no longer be able to manage it."
+	message="Are you sure you want to unlink '{unlinkTarget?.orgName}'? The organization will remain in Shipyard, but external platform keys will no longer be able to manage it."
 	confirmLabel="Unlink Organization"
-	danger={false}
+	danger={true}
 	onConfirm={handleUnlinkOrg}
 />
 
 <style>
 	/* ── Drydock layout ── */
 	.page {
-		padding: 24px 28px 40px;
 		display: flex;
 		flex-direction: column;
-		gap: 20px;
-		max-width: 1100px;
+		gap: 24px;
+		max-width: 1360px;
+		margin: 0 auto;
+		padding: 24px 24px 64px;
 	}
 
 	.header-actions {
@@ -787,7 +1231,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 64px 0;
+		padding: 64px;
 	}
 
 	.empty-cta {
@@ -897,6 +1341,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		gap: 6px;
 		font-size: 12px;
 		color: var(--text-muted);
+		flex-wrap: wrap;
 	}
 	.meta-sep {
 		color: var(--text-dim);
@@ -906,6 +1351,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		display: flex;
 		align-items: center;
 		gap: 8px;
+		flex-wrap: wrap;
 	}
 
 	.delete-btn {
@@ -927,15 +1373,15 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
 	}
 
-	/* ── Two-column content ── */
+	/* ── Three-column content ── */
 	.card-columns {
 		display: grid;
 		grid-template-columns: 1fr;
 		gap: 20px;
 	}
-	@media (min-width: 900px) {
+	@media (min-width: 1080px) {
 		.card-columns {
-			grid-template-columns: 1fr 1fr;
+			grid-template-columns: 1fr 1fr 1fr;
 		}
 	}
 
@@ -950,6 +1396,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		align-items: center;
 		justify-content: space-between;
 		font-size: 11px;
+		gap: 8px;
 	}
 
 	.column-title {
@@ -970,6 +1417,24 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		color: var(--text-secondary);
 	}
 
+	.text-link-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--accent);
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		padding: 2px 4px;
+		border-radius: var(--radius-sm);
+		transition: background var(--transition-fast);
+	}
+	.text-link-action:hover {
+		background: var(--accent-muted);
+	}
+
 	.sub-empty {
 		padding: 14px 16px;
 		border: 1px dashed var(--border);
@@ -988,7 +1453,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 
 	.item-row {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		justify-content: space-between;
 		gap: 12px;
 		padding: 10px 12px;
@@ -998,11 +1463,11 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 	}
 
 	.item-main {
-		min-width: 0;
-		flex: 1;
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
+		min-width: 0;
+		flex: 1;
 	}
 
 	.item-title-row {
@@ -1013,12 +1478,19 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 	}
 
 	.item-name {
+		font-family: var(--font-sans);
 		font-size: 13px;
-		font-weight: 500;
+		font-weight: 600;
 		color: var(--text-primary);
-		white-space: nowrap;
+	}
+
+	.truncate-url {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		max-width: 220px;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.org-slug {
@@ -1031,7 +1503,8 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		font-size: 12px;
+		flex-wrap: wrap;
+		font-size: 11px;
 	}
 
 	.copy-prefix-btn {
@@ -1040,7 +1513,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		gap: 3px;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: var(--text-muted);
+		color: var(--text-secondary);
 		background: transparent;
 		border: none;
 		cursor: pointer;
@@ -1091,12 +1564,19 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		color: var(--text-primary);
 	}
 
+	.webhook-row-actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex-shrink: 0;
+	}
+
 	.row-action-btn {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
 		font-family: var(--font-sans);
-		font-size: 12px;
+		font-size: 11.5px;
 		font-weight: 500;
 		padding: 4px 8px;
 		border-radius: var(--radius-sm);
@@ -1121,6 +1601,27 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
 	}
 
+	.column-footer-link {
+		padding-top: 4px;
+	}
+	.view-paginated-btn {
+		width: 100%;
+		text-align: center;
+		font-size: 11.5px;
+		font-weight: 500;
+		color: var(--accent);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 6px;
+		cursor: pointer;
+		transition: background var(--transition-fast), border-color var(--transition-fast);
+	}
+	.view-paginated-btn:hover {
+		background: var(--bg-hover);
+		border-color: var(--border-hover);
+	}
+
 	/* ── Modals & forms ── */
 	.dialog-form {
 		display: flex;
@@ -1141,6 +1642,26 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		font-weight: 600;
 		color: var(--text-primary);
 		margin-bottom: 2px;
+	}
+
+	.test-target-info {
+		font-size: 12px;
+		color: var(--text-muted);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 6px 10px;
+	}
+	.test-target-info code {
+		font-family: var(--font-mono);
+		color: var(--text-primary);
+	}
+
+	.test-explainer {
+		font-size: 12px;
+		color: var(--text-muted);
+		line-height: 1.5;
+		margin: 0;
 	}
 
 	.scope-fieldset {

@@ -1002,3 +1002,35 @@ export interface CreatedIntegrationKey {
 	scopes: string[];
 	note: string;
 }
+
+export interface AdminWebhook {
+	id: string;
+	url: string;
+	events: string[];
+	enabled: boolean;
+	org: string | null;
+	created_at: string;
+}
+
+export interface CreatedAdminWebhook {
+	id: string;
+	url: string;
+	events: string[];
+	org: string | null;
+	secret: string;
+}
+
+export interface WebhookTestResult {
+	ok: boolean;
+	status_code?: number;
+	message?: string;
+	error?: string;
+}
+
+export interface PaginatedAdminOrgs {
+	items: LinkedOrg[];
+	total: number;
+	page: number;
+	limit: number;
+	total_pages: number;
+}

@@ -41,6 +41,10 @@ import type {
 	LogQueryParams,
 	Integration,
 	CreatedIntegrationKey,
+	AdminWebhook,
+	CreatedAdminWebhook,
+	WebhookTestResult,
+	PaginatedAdminOrgs,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -1033,6 +1037,45 @@ class ApiClient {
 		orgId: string
 	): Promise<ApiResponse<{ released: string }>> {
 		return this.delete(`/admin/integrations/${integrationId}/orgs/${orgId}`);
+	}
+
+	async getAdminIntegrationOrgs(
+		integrationId: string,
+		params: { page?: number; limit?: number; search?: string } = {}
+	): Promise<ApiResponse<PaginatedAdminOrgs>> {
+		const qs = new URLSearchParams();
+		if (params.page) qs.set('page', String(params.page));
+		if (params.limit) qs.set('limit', String(params.limit));
+		if (params.search) qs.set('search', params.search);
+		const q = qs.toString();
+		return this.get(`/admin/integrations/${integrationId}/orgs${q ? `?${q}` : ''}`);
+	}
+
+	async getAdminIntegrationWebhooks(
+		integrationId: string
+	): Promise<ApiResponse<AdminWebhook[]>> {
+		return this.get(`/admin/integrations/${integrationId}/webhooks`);
+	}
+
+	async createAdminIntegrationWebhook(
+		integrationId: string,
+		body: { url: string; events?: string[]; org?: string }
+	): Promise<ApiResponse<CreatedAdminWebhook>> {
+		return this.post(`/admin/integrations/${integrationId}/webhooks`, body);
+	}
+
+	async deleteAdminIntegrationWebhook(
+		integrationId: string,
+		webhookId: string
+	): Promise<ApiResponse<{ deleted: string }>> {
+		return this.delete(`/admin/integrations/${integrationId}/webhooks/${webhookId}`);
+	}
+
+	async testAdminIntegrationWebhook(
+		integrationId: string,
+		webhookId: string
+	): Promise<ApiResponse<WebhookTestResult>> {
+		return this.post(`/admin/integrations/${integrationId}/webhooks/${webhookId}/test`, {});
 	}
 }
 

@@ -35,6 +35,13 @@
 
 			authStore.setUser(user, { access_token });
 			setAuthCookies(access_token);
+			api.setToken(access_token);
+
+			// Populate full user details reactively
+			const me = await api.getMe();
+			if (me.data) {
+				authStore.setUser(me.data, { access_token });
+			}
 
 			goto('/orgs');
 		} finally {
