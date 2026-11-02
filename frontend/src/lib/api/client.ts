@@ -39,6 +39,8 @@ import type {
 	LogPage,
 	LogStatsResult,
 	LogQueryParams,
+	Integration,
+	CreatedIntegrationKey,
 } from './types';
 import { authStore } from '$lib/stores/auth.store';
 import { setAuthCookies } from '$lib/auth/cookies';
@@ -988,6 +990,49 @@ class ApiClient {
 
 	async mintSandboxExecToken(serviceId: string): Promise<ApiResponse<{ token: string }>> {
 		return this.post(`/apps/${serviceId}/exec/token`);
+	}
+
+	// ─── Platform Integrations ───────────────────────────────────────
+
+	async getAdminIntegrations(): Promise<ApiResponse<Integration[]>> {
+		return this.get('/admin/integrations');
+	}
+
+	async createAdminIntegration(body: { name: string }): Promise<ApiResponse<{ id: string; name: string }>> {
+		return this.post('/admin/integrations', body);
+	}
+
+	async deleteAdminIntegration(integrationId: string): Promise<ApiResponse<{ deleted: string }>> {
+		return this.delete(`/admin/integrations/${integrationId}`);
+	}
+
+	async createAdminIntegrationKey(
+		integrationId: string,
+		body: { name: string; scopes: string[] }
+	): Promise<ApiResponse<CreatedIntegrationKey>> {
+		return this.post(`/admin/integrations/${integrationId}/keys`, body);
+	}
+
+	async revokeAdminIntegrationKey(
+		integrationId: string,
+		keyId: string
+	): Promise<ApiResponse<{ revoked: string }>> {
+		return this.delete(`/admin/integrations/${integrationId}/keys/${keyId}`);
+	}
+
+	async linkAdminIntegrationOrg(
+		integrationId: string,
+		orgId: string,
+		body: { external_id?: string } = {}
+	): Promise<ApiResponse<{ org_id: string; external_id: string }>> {
+		return this.put(`/admin/integrations/${integrationId}/orgs/${orgId}`, body);
+	}
+
+	async unlinkAdminIntegrationOrg(
+		integrationId: string,
+		orgId: string
+	): Promise<ApiResponse<{ released: string }>> {
+		return this.delete(`/admin/integrations/${integrationId}/orgs/${orgId}`);
 	}
 }
 

@@ -23,6 +23,7 @@ use crate::AppState;
 pub fn admin_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_integrations).post(create_integration))
+        .route("/:integration_id", delete(delete_integration))
         .route("/:integration_id/keys", post(create_key))
         .route("/:integration_id/keys/:key_id", delete(revoke_key))
         .route(
@@ -31,24 +32,61 @@ pub fn admin_routes() -> Router<AppState> {
         )
 }
 
-#[derive(Serialize)]
-struct IntegrationOut {
-    id: Uuid,
-    name: String,
-    created_at: DateTime<Utc>,
-    org_count: i64,
-    keys: Vec<KeyOut>,
+pub fn validate_integration_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return Err(AppError::BadRequest("name must be 1-64 characters".into()));
+    }
+    Ok(trimmed.to_string())
+}
+
+pub fn validate_key_scopes(scopes: &[String]) -> Result<(), AppError> {
+    if scopes.is_empty()
+        || scopes
+            .iter()
+            .any(|s| s != SCOPE_MANAGE && s != SCOPE_REVEAL)
+    {
+        return Err(AppError::BadRequest(format!(
+            "scopes must be a non-empty subset of ['{SCOPE_MANAGE}', '{SCOPE_REVEAL}']"
+        )));
+    }
+    Ok(())
+}
+
+pub fn generate_integration_key() -> (String, String, String) {
+    let key = format!("{KEY_PREFIX}{}", random_hex(32));
+    let prefix = key[..KEY_PREFIX.len() + 8].to_string();
+    let hash = hash_key(&key);
+    (key, prefix, hash)
 }
 
 #[derive(Serialize)]
-struct KeyOut {
-    id: Uuid,
-    name: String,
-    prefix: String,
-    scopes: Vec<String>,
-    created_at: DateTime<Utc>,
-    last_used_at: Option<DateTime<Utc>>,
-    revoked_at: Option<DateTime<Utc>>,
+pub struct IntegrationOut {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub org_count: i64,
+    pub keys: Vec<KeyOut>,
+    pub orgs: Vec<LinkedOrgOut>,
+}
+
+#[derive(Serialize)]
+pub struct LinkedOrgOut {
+    pub id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub external_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct KeyOut {
+    pub id: Uuid,
+    pub name: String,
+    pub prefix: String,
+    pub scopes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 async fn list_integrations(
@@ -100,12 +138,30 @@ async fn list_integrations(
             },
         )
         .collect();
+
+        let orgs = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+            "SELECT id, name, slug, external_id FROM organizations WHERE integration_id = $1 ORDER BY name",
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .map(|(id, name, slug, external_id)| LinkedOrgOut {
+            id,
+            name,
+            slug,
+            external_id,
+        })
+        .collect();
+
         out.push(IntegrationOut {
             id,
             name,
             created_at,
             org_count,
             keys,
+            orgs,
         });
     }
     Ok(Json(ApiResponse::ok(out)))
@@ -122,16 +178,11 @@ async fn create_integration(
     Json(body): Json<CreateIntegration>,
 ) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
     require_superadmin(&state.db, auth.user_id).await?;
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 64 {
-        return Err(ApiAppError(AppError::BadRequest(
-            "name must be 1-64 characters".into(),
-        )));
-    }
+    let name = validate_integration_name(&body.name).map_err(ApiAppError)?;
     let id: Uuid =
         sqlx::query_scalar("INSERT INTO integrations (id, name) VALUES ($1, $2) RETURNING id")
             .bind(Uuid::now_v7())
-            .bind(name)
+            .bind(&name)
             .fetch_one(&state.db)
             .await
             .map_err(|e| {
@@ -161,6 +212,38 @@ async fn create_integration(
     ))
 }
 
+async fn delete_integration(
+    auth: AuthUser,
+    Path(integration_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    require_superadmin(&state.db, auth.user_id).await?;
+
+    let n = sqlx::query("DELETE FROM integrations WHERE id = $1")
+        .bind(integration_id)
+        .execute(&state.db)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+
+    if n == 0 {
+        return Err(ApiAppError(AppError::NotFound("Integration not found".into())));
+    }
+
+    crate::middleware::audit::write_audit_log(
+        &state.db,
+        &auth,
+        "delete_integration",
+        Some("integration"),
+        Some(integration_id),
+        None,
+        None,
+    )
+    .await;
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": integration_id }))))
+}
+
 #[derive(Deserialize)]
 struct CreateKey {
     name: String,
@@ -180,19 +263,9 @@ async fn create_key(
     Json(body): Json<CreateKey>,
 ) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
     require_superadmin(&state.db, auth.user_id).await?;
-    if body.scopes.is_empty()
-        || body
-            .scopes
-            .iter()
-            .any(|s| s != SCOPE_MANAGE && s != SCOPE_REVEAL)
-    {
-        return Err(ApiAppError(AppError::BadRequest(format!(
-            "scopes must be a non-empty subset of ['{SCOPE_MANAGE}', '{SCOPE_REVEAL}']"
-        ))));
-    }
+    validate_key_scopes(&body.scopes).map_err(ApiAppError)?;
 
-    let key = format!("{KEY_PREFIX}{}", random_hex(32));
-    let prefix = key[..KEY_PREFIX.len() + 8].to_string();
+    let (key, prefix, hash) = generate_integration_key();
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO integration_keys (id, integration_id, name, key_prefix, key_hash, scopes)
          SELECT $1, i.id, $3, $4, $5, $6 FROM integrations i WHERE i.id = $2
@@ -202,7 +275,7 @@ async fn create_key(
     .bind(integration_id)
     .bind(body.name.trim())
     .bind(&prefix)
-    .bind(hash_key(&key))
+    .bind(&hash)
     .bind(&body.scopes)
     .fetch_optional(&state.db)
     .await
@@ -370,4 +443,42 @@ async fn release_org(
     )
     .await;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "released": org_id }))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_integration_name() {
+        assert_eq!(validate_integration_name("nomi").unwrap(), "nomi");
+        assert_eq!(validate_integration_name("  nomi-prod  ").unwrap(), "nomi-prod");
+        assert!(validate_integration_name("").is_err());
+        assert!(validate_integration_name("   ").is_err());
+        assert!(validate_integration_name(&"a".repeat(65)).is_err());
+        assert_eq!(validate_integration_name(&"a".repeat(64)).unwrap().len(), 64);
+    }
+
+    #[test]
+    fn test_validate_key_scopes() {
+        assert!(validate_key_scopes(&[SCOPE_MANAGE.to_string()]).is_ok());
+        assert!(validate_key_scopes(&[SCOPE_MANAGE.to_string(), SCOPE_REVEAL.to_string()]).is_ok());
+        assert!(validate_key_scopes(&[SCOPE_REVEAL.to_string()]).is_ok());
+
+        // Empty scopes should fail
+        assert!(validate_key_scopes(&[]).is_err());
+        // Unauthorized / unknown scope should fail
+        assert!(validate_key_scopes(&["admin".to_string()]).is_err());
+        assert!(validate_key_scopes(&[SCOPE_MANAGE.to_string(), "read".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_generate_integration_key_format() {
+        let (key, prefix, hash) = generate_integration_key();
+        assert!(key.starts_with(KEY_PREFIX), "Key must start with {}", KEY_PREFIX);
+        assert_eq!(key.len(), KEY_PREFIX.len() + 64);
+        assert!(prefix.starts_with(KEY_PREFIX));
+        assert_eq!(prefix.len(), KEY_PREFIX.len() + 8);
+        assert_eq!(hash, hash_key(&key));
+    }
 }
