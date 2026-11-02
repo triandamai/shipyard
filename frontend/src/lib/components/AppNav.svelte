@@ -25,14 +25,6 @@
 		return page.url.pathname === href || page.url.pathname.startsWith(href + '/');
 	}
 
-	let groups = $derived([
-		{ key: 'home',     icon: Home,       label: 'Home',     href: `/orgs/${orgSlug}`,          active: isActive(`/orgs/${orgSlug}`, true) },
-		{ key: 'projects', icon: FolderOpen, label: 'Projects', href: `/orgs/${orgSlug}/projects`, active: isActive(`/orgs/${orgSlug}/projects`) },
-		{ key: 'logs',     icon: ScrollText, label: 'Logs',     href: `/orgs/${orgSlug}/logs`,     active: isActive(`/orgs/${orgSlug}/logs`) },
-		{ key: 'registry', icon: Package,    label: 'Registry', href: `/orgs/${orgSlug}/registry`, active: isActive(`/orgs/${orgSlug}/registry`) },
-		{ key: 'settings', icon: Settings,   label: 'Settings', href: `/orgs/${orgSlug}/settings`, active: isActive(`/orgs/${orgSlug}/settings`) }
-	]);
-
 	let userEmail    = $derived($authStore.user?.email ?? '');
 	let isSuperadmin = $derived($authStore.user?.is_superadmin === true);
 	let myRole       = $derived($orgStore.myMembership?.role ?? '');
@@ -42,6 +34,15 @@
 	let canUpdate    = $derived(can(myRole as import('$lib/api/types').MemberRole, myPerms, perm(orgId, 'system', 'update')));
 	let hasUpdate    = $derived($versionStore.info?.update_available ?? false);
 	let updating     = $derived($versionStore.updating);
+
+	let groups = $derived([
+		{ key: 'home',     icon: Home,       label: 'Home',     href: `/orgs/${orgSlug}`,          active: isActive(`/orgs/${orgSlug}`, true) },
+		{ key: 'projects', icon: FolderOpen, label: 'Projects', href: `/orgs/${orgSlug}/projects`, active: isActive(`/orgs/${orgSlug}/projects`) },
+		{ key: 'logs',     icon: ScrollText, label: 'Logs',     href: `/orgs/${orgSlug}/logs`,     active: isActive(`/orgs/${orgSlug}/logs`) },
+		{ key: 'registry', icon: Package,    label: 'Registry', href: `/orgs/${orgSlug}/registry`, active: isActive(`/orgs/${orgSlug}/registry`) },
+		{ key: 'settings', icon: Settings,   label: 'Settings', href: `/orgs/${orgSlug}/settings`, active: isActive(`/orgs/${orgSlug}/settings`) },
+		...(isSuperadmin ? [{ key: 'admin', icon: ShieldAlert, label: 'Admin', href: '/admin', active: isActive('/admin') }] : [])
+	]);
 
 	const ROLE_LABELS: Record<string, string> = {
 		owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer'

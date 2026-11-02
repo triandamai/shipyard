@@ -288,6 +288,7 @@
 	}
 
 	// ── App bar state ──────────────────────────────────────────────────────────
+	let activeOrgName = $derived($orgStore.activeOrg?.name ?? orgSlug);
 	let activeProjectName = $derived(
 		$projectStore.projects.find((p) => p.slug === projectSlug)?.name ?? projectSlug
 	);
@@ -376,31 +377,41 @@
 <div class="canvas-container">
 	<!-- Canvas app bar -->
 	<div class="canvas-appbar">
-		<div class="project-switcher">
-			<Dropdown triggerLabel="Switch project">
-				{#snippet trigger()}
-					<span class="project-btn">
-						<span class="project-name">{activeProjectName}</span>
-						<ChevronDown size={14} />
-					</span>
-				{/snippet}
-				{#snippet menu(close)}
-					{#each allProjects as project}
-						<button
-							type="button"
-							class={project.slug === projectSlug ? 'ui-dropdown-item project-menu-item active' : 'ui-dropdown-item project-menu-item'}
-							onclick={() => { close(); switchProject(project.slug); }}
-							role="menuitem"
-						>
-							{project.name}
-						</button>
-					{/each}
-					{#if allProjects.length === 0}
-						<div class="project-menu-empty">No projects</div>
-					{/if}
-				{/snippet}
-			</Dropdown>
-		</div>
+		<nav class="appbar-breadcrumb" aria-label="Breadcrumb">
+			<a
+				href="/orgs"
+				class="breadcrumb-org-link"
+				title="View all organizations"
+			>
+				{activeOrgName}
+			</a>
+			<span class="breadcrumb-separator" aria-hidden="true">/</span>
+			<div class="project-switcher">
+				<Dropdown triggerLabel="Switch project">
+					{#snippet trigger()}
+						<span class="project-btn">
+							<span class="project-name">{activeProjectName}</span>
+							<ChevronDown size={14} />
+						</span>
+					{/snippet}
+					{#snippet menu(close)}
+						{#each allProjects as project}
+							<button
+								type="button"
+								class={project.slug === projectSlug ? 'ui-dropdown-item project-menu-item active' : 'ui-dropdown-item project-menu-item'}
+								onclick={() => { close(); switchProject(project.slug); }}
+								role="menuitem"
+							>
+								{project.name}
+							</button>
+						{/each}
+						{#if allProjects.length === 0}
+							<div class="project-menu-empty">No projects</div>
+						{/if}
+					{/snippet}
+				</Dropdown>
+			</div>
+		</nav>
 
 		<div class="appbar-spacer"></div>
 
@@ -659,6 +670,40 @@
 		border-bottom: 1px solid var(--border);
 		padding: 0 16px;
 		box-shadow: var(--shadow-sm);
+	}
+
+	.appbar-breadcrumb {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.breadcrumb-org-link {
+		display: inline-flex;
+		align-items: center;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-secondary);
+		padding: 5px 8px;
+		border-radius: var(--radius-md);
+		text-decoration: none;
+		transition: color var(--transition-fast), background var(--transition-fast);
+		max-width: 140px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.breadcrumb-org-link:hover {
+		color: var(--text-primary);
+		background: var(--bg-hover);
+	}
+
+	.breadcrumb-separator {
+		font-size: 13px;
+		color: var(--text-dim);
+		user-select: none;
 	}
 
 	.project-switcher { position: relative; }

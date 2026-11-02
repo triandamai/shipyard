@@ -204,9 +204,9 @@ async fn dispatch_due(state: &AppState, client: &reqwest::Client) -> Result<usiz
     Ok(n)
 }
 
-type SendOutcome = Result<u16, (Option<u16>, String)>;
+pub type SendOutcome = Result<u16, (Option<u16>, String)>;
 
-async fn send(
+pub async fn send(
     client: &reqwest::Client,
     url: &str,
     secret: &str,
@@ -385,7 +385,7 @@ fn all_events() -> Vec<String> {
     vec!["*".to_string()]
 }
 
-fn validate_url(url: &str) -> Result<(), ApiAppError> {
+pub fn validate_url(url: &str) -> Result<(), ApiAppError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| ApiAppError(AppError::BadRequest(format!("Invalid URL: {e}"))))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
@@ -396,7 +396,7 @@ fn validate_url(url: &str) -> Result<(), ApiAppError> {
     Ok(())
 }
 
-fn validate_patterns(patterns: &[String]) -> Result<(), ApiAppError> {
+pub fn validate_patterns(patterns: &[String]) -> Result<(), ApiAppError> {
     if patterns.is_empty() {
         return Err(ApiAppError(AppError::BadRequest(
             "events must not be empty".into(),
