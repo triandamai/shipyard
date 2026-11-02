@@ -966,3 +966,39 @@ export interface ComputeNode {
 	created_at: string;
 	updated_at: string;
 }
+
+// ─── Platform Integrations ───────────────────────────────────────────────────
+
+export interface IntegrationKey {
+	id: string;
+	name: string;
+	prefix: string;
+	scopes: string[];
+	created_at: string;
+	last_used_at: string | null;
+	revoked_at: string | null;
+}
+
+export interface LinkedOrg {
+	id: string;
+	name: string;
+	slug: string;
+	external_id: string | null;
+}
+
+export interface Integration {
+	id: string;
+	name: string;
+	created_at: string;
+	org_count: number;
+	keys: IntegrationKey[];
+	orgs: LinkedOrg[];
+}
+
+export interface CreatedIntegrationKey {
+	id: string;
+	key: string;
+	prefix: string;
+	scopes: string[];
+	note: string;
+}
