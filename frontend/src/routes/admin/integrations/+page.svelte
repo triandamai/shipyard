@@ -22,7 +22,6 @@
 		Checkbox,
 		FormField,
 		PageHeader,
-		Card,
 		EmptyState,
 		InlineAlert,
 		Modal,
@@ -57,7 +56,6 @@
 	let showCreatedKeyModal = $state(false);
 	let createdKeyInfo = $state<CreatedIntegrationKey | null>(null);
 	let keyRevealed = $state(false);
-	let keyCopied = $state(false);
 
 	// Link Org Modal
 	let showLinkOrgModal = $state(false);
@@ -216,7 +214,6 @@
 				showMintKeyModal = false;
 				createdKeyInfo = res.data;
 				keyRevealed = false;
-				keyCopied = false;
 				showCreatedKeyModal = true;
 				await loadData();
 			} else {
@@ -295,14 +292,15 @@
 	}
 </script>
 
-<div class="space-y-6">
-	<!-- Page Header -->
+<div class="page">
+	<!-- Page Header with Drydock eyebrow -->
 	<PageHeader
-		title="Platform Integrations"
-		subtitle="Configure and manage external platforms (e.g. Nomi) that orchestrate organizations, databases, and apps."
+		eyebrow="Platform"
+		title="Integrations"
+		subtitle="Configure external agent orchestrators (like Nomi) that manage organizations, dev databases, and apps."
 	>
 		{#snippet actions()}
-			<div class="flex items-center gap-2">
+			<div class="header-actions">
 				<Button
 					variant="secondary"
 					size="sm"
@@ -313,11 +311,11 @@
 					{#if loading}
 						<Spinner size={14} />
 					{:else}
-						<RefreshCw class="w-4 h-4" />
+						<RefreshCw size={14} />
 					{/if}
 				</Button>
 				<Button variant="primary" size="sm" onclick={openCreateModal}>
-					<Plus class="w-4 h-4 mr-1.5" />
+					<Plus size={14} />
 					New Integration
 				</Button>
 			</div>
@@ -333,110 +331,109 @@
 
 	<!-- Main Content Area -->
 	{#if loading && integrations.length === 0}
-		<div class="flex items-center justify-center p-16">
-			<Spinner size={32} />
+		<div class="loading-state">
+			<Spinner size={28} />
 		</div>
 	{:else if integrations.length === 0}
 		<EmptyState
 			message="No platform integrations"
-			sub="Create an integration (like 'nomi') to issue scoped platform keys (ship_int_...) for external agent orchestrators."
+			sub="Create an integration (such as 'nomi') to issue scoped platform keys (ship_int_...) for external agent orchestrators."
 		>
 			{#snippet icon()}
-				<Blocks class="w-10 h-10 text-[var(--text-dim)]" />
+				<Blocks size={32} />
 			{/snippet}
 		</EmptyState>
-		<div class="flex justify-center -mt-2">
+		<div class="empty-cta">
 			<Button variant="primary" onclick={openCreateModal}>
-				<Plus class="w-4 h-4 mr-1.5" />
+				<Plus size={14} />
 				Create Integration
 			</Button>
 		</div>
 	{:else}
-		<div class="space-y-6">
+		<div class="integrations-list">
 			{#each integrations as integration (integration.id)}
-				<Card padding="20px">
+				<div class="integration-card">
 					<!-- Integration Header -->
-					<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[var(--border)]">
-						<div class="flex items-start gap-3">
-							<div class="p-2.5 rounded-lg bg-[var(--bg-hover)] border border-[var(--border)] text-[var(--text-primary)]">
-								<Blocks class="w-6 h-6 text-indigo-400" />
+					<div class="card-header">
+						<div class="header-left">
+							<div class="integration-icon-tile">
+								<Blocks size={20} />
 							</div>
-							<div>
-								<div class="flex items-center gap-2.5 flex-wrap">
-									<h2 class="text-lg font-semibold text-[var(--text-primary)]">
+							<div class="header-details">
+								<div class="title-row">
+									<h2 class="integration-title">
 										{integration.name}
 									</h2>
 									<button
 										type="button"
-										class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono rounded bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-[var(--border)] transition-colors cursor-pointer"
+										class="id-chip"
 										onclick={() => copyToClipboard(integration.id, integration.id)}
 										title="Click to copy Integration ID"
 									>
 										<span>{integration.id.slice(0, 8)}…{integration.id.slice(-4)}</span>
 										{#if copiedId === integration.id}
-											<Check class="w-3 h-3 text-emerald-400" />
+											<Check size={11} class="id-copied" />
 										{:else}
-											<Copy class="w-3 h-3" />
+											<Copy size={11} />
 										{/if}
 									</button>
 								</div>
-								<div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-secondary)]">
+								<div class="meta-row">
 									<span>Created {formatDate(integration.created_at)}</span>
-									<span>•</span>
+									<span class="meta-sep">·</span>
 									<span>{integration.org_count} linked org{integration.org_count === 1 ? '' : 's'}</span>
-									<span>•</span>
+									<span class="meta-sep">·</span>
 									<span>{integration.keys.filter(k => !k.revoked_at).length} active key{integration.keys.filter(k => !k.revoked_at).length === 1 ? '' : 's'}</span>
 								</div>
 							</div>
 						</div>
 
-						<div class="flex items-center gap-2">
+						<div class="card-actions">
 							<Button variant="secondary" size="sm" onclick={() => openMintKeyModal(integration)}>
-								<Key class="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+								<Key size={13} />
 								Mint Key
 							</Button>
 							<Button variant="secondary" size="sm" onclick={() => openLinkOrgModal(integration)}>
-								<LinkIcon class="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
+								<LinkIcon size={13} />
 								Link Org
 							</Button>
-							<Button
-								variant="danger-outline"
-								size="sm"
-								onclick={() => confirmDeleteIntegration(integration.id, integration.name)}
+							<button
+								type="button"
+								class="delete-btn"
 								title="Delete integration"
+								aria-label="Delete integration {integration.name}"
+								onclick={() => confirmDeleteIntegration(integration.id, integration.name)}
 							>
-								<Trash2 class="w-4 h-4" />
-							</Button>
+								<Trash2 size={13} />
+							</button>
 						</div>
 					</div>
 
 					<!-- Sections: Keys & Linked Orgs -->
-					<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+					<div class="card-columns">
 						<!-- Keys Column -->
-						<div class="space-y-3">
-							<div class="flex items-center justify-between">
-								<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-1.5">
-									<Key class="w-3.5 h-3.5" />
+						<div class="column-box">
+							<div class="column-header">
+								<span class="column-title">
+									<Key size={12} />
 									Integration Keys
-								</h3>
-								<span class="text-xs text-[var(--text-secondary)]">
-									Prefix: <code class="font-mono text-indigo-300">ship_int_</code>
+								</span>
+								<span class="column-hint">
+									Prefix: <code>ship_int_</code>
 								</span>
 							</div>
 
 							{#if integration.keys.length === 0}
-								<div class="p-4 rounded-lg border border-dashed border-[var(--border)] text-center text-xs text-[var(--text-secondary)]">
+								<div class="sub-empty">
 									No keys minted yet. Click <strong>Mint Key</strong> to create credentials for this integration.
 								</div>
 							{:else}
-								<div class="space-y-2">
+								<div class="items-list">
 									{#each integration.keys as key (key.id)}
-										<div class="p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] flex items-center justify-between gap-3 text-sm">
-											<div class="min-w-0 flex-1 space-y-1">
-												<div class="flex items-center gap-2 flex-wrap">
-													<span class="font-medium text-[var(--text-primary)] truncate">
-														{key.name}
-													</span>
+										<div class="item-row">
+											<div class="item-main">
+												<div class="item-title-row">
+													<span class="item-name">{key.name}</span>
 													{#if key.revoked_at}
 														<Badge tone="red">Revoked</Badge>
 													{:else}
@@ -444,46 +441,46 @@
 													{/if}
 												</div>
 
-												<div class="flex items-center gap-2 text-xs">
+												<div class="item-meta-row">
 													<button
 														type="button"
-														class="inline-flex items-center gap-1 font-mono text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+														class="copy-prefix-btn"
 														onclick={() => copyToClipboard(key.prefix, key.id)}
 														title="Copy key prefix"
 													>
 														<span>{key.prefix}…</span>
 														{#if copiedId === key.id}
-															<Check class="w-3 h-3 text-emerald-400" />
+															<Check size={10} class="id-copied" />
 														{:else}
-															<Copy class="w-3 h-3" />
+															<Copy size={10} />
 														{/if}
 													</button>
-													<span class="text-[var(--text-secondary)]">•</span>
-													<div class="flex items-center gap-1 flex-wrap">
+													<span class="meta-sep">·</span>
+													<div class="scopes-wrap">
 														{#each key.scopes as sc}
-															<span class="px-1.5 py-0.5 rounded text-[10px] font-mono {sc === 'secrets:reveal' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'}">
+															<span class="scope-chip scope-chip--{sc === 'secrets:reveal' ? 'reveal' : 'manage'}">
 																{sc}
 															</span>
 														{/each}
 													</div>
 												</div>
 
-												<div class="text-[11px] text-[var(--text-secondary)]">
+												<div class="item-dates">
 													Created {formatDate(key.created_at)}
 													{#if key.last_used_at}
-														• Used {formatDate(key.last_used_at)}
+														· Used {formatDate(key.last_used_at)}
 													{/if}
 												</div>
 											</div>
 
 											{#if !key.revoked_at}
-												<Button
-													variant="danger-outline"
-													size="sm"
+												<button
+													type="button"
+													class="row-action-btn row-action-btn--danger"
 													onclick={() => openRevokeDialog(integration.id, key.id, key.name)}
 												>
 													Revoke
-												</Button>
+												</button>
 											{/if}
 										</div>
 									{/each}
@@ -492,57 +489,53 @@
 						</div>
 
 						<!-- Linked Orgs Column -->
-						<div class="space-y-3">
-							<div class="flex items-center justify-between">
-								<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-1.5">
-									<Building2 class="w-3.5 h-3.5" />
+						<div class="column-box">
+							<div class="column-header">
+								<span class="column-title">
+									<Building2 size={12} />
 									Linked Organizations
-								</h3>
-								<span class="text-xs text-[var(--text-secondary)]">
+								</span>
+								<span class="column-hint">
 									{integration.org_count} total
 								</span>
 							</div>
 
 							{#if integration.orgs.length === 0}
-								<div class="p-4 rounded-lg border border-dashed border-[var(--border)] text-center text-xs text-[var(--text-secondary)]">
-									No organizations linked yet. Organizations created by this integration via the API will automatically appear here.
+								<div class="sub-empty">
+									No organizations linked yet. Organizations created by this integration's key will automatically appear here.
 								</div>
 							{:else}
-								<div class="space-y-2">
+								<div class="items-list">
 									{#each integration.orgs as org (org.id)}
-										<div class="p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-hover)] flex items-center justify-between gap-3 text-sm">
-											<div class="min-w-0 flex-1 space-y-0.5">
-												<div class="flex items-center gap-2">
-													<span class="font-medium text-[var(--text-primary)] truncate">
-														{org.name}
-													</span>
-													<span class="text-xs font-mono text-[var(--text-secondary)]">
-														({org.slug})
-													</span>
+										<div class="item-row">
+											<div class="item-main">
+												<div class="item-title-row">
+													<span class="item-name">{org.name}</span>
+													<span class="org-slug">({org.slug})</span>
 												</div>
 												{#if org.external_id}
-													<div class="text-xs text-[var(--text-secondary)]">
-														External ID: <code class="font-mono text-indigo-300">{org.external_id}</code>
+													<div class="item-dates">
+														External ID: <code class="code-val">{org.external_id}</code>
 													</div>
 												{/if}
 											</div>
 
-											<Button
-												variant="secondary"
-												size="sm"
+											<button
+												type="button"
+												class="row-action-btn"
 												onclick={() => openUnlinkDialog(integration.id, org.id, org.name)}
 												title="Unlink organization"
 											>
-												<Unlink class="w-3.5 h-3.5 mr-1" />
+												<Unlink size={12} />
 												Unlink
-											</Button>
+											</button>
 										</div>
 									{/each}
 								</div>
 							{/if}
 						</div>
 					</div>
-				</Card>
+				</div>
 			{/each}
 		</div>
 	{/if}
@@ -555,12 +548,12 @@
 	bind:open={showCreateModal}
 	title="Create Platform Integration"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleCreateIntegration(); }} class="space-y-4">
+	<form onsubmit={(e) => { e.preventDefault(); handleCreateIntegration(); }} class="dialog-form">
 		{#if createIntegrationError}
 			<InlineAlert tone="error">{createIntegrationError}</InlineAlert>
 		{/if}
 
-		<FormField label="Integration Name" hint="e.g. 'nomi', 'deploy-agent', or your platform's name. (1-64 characters)">
+		<FormField label="Integration Name" hint="e.g. 'nomi', 'deploy-agent', or your platform's name (1–64 characters).">
 			<TextField
 				bind:value={newIntegrationName}
 				placeholder="nomi"
@@ -568,12 +561,12 @@
 			/>
 		</FormField>
 
-		<div class="p-3 rounded bg-[var(--bg-hover)] border border-[var(--border)] text-xs text-[var(--text-secondary)] space-y-1">
-			<p class="font-medium text-[var(--text-primary)]">What is a platform integration?</p>
-			<p>An integration represents an external orchestrator (like Nomi) that automates tenant organizations, dev databases, domains, and published applications using dedicated <code>ship_int_...</code> credentials.</p>
+		<div class="info-callout">
+			<p class="info-callout-title">What is a platform integration?</p>
+			<p>An integration represents an external orchestrator (like Nomi) that manages tenant organizations, dev databases, and published apps via dedicated <code>ship_int_...</code> credentials.</p>
 		</div>
 
-		<div class="flex justify-end gap-2 pt-2">
+		<div class="modal-buttons">
 			<Button variant="secondary" onclick={() => showCreateModal = false}>Cancel</Button>
 			<Button variant="primary" type="submit" disabled={creatingIntegration || !newIntegrationName.trim()}>
 				{#if creatingIntegration}
@@ -591,12 +584,12 @@
 	bind:open={showMintKeyModal}
 	title="Mint Integration Key for '{targetIntegrationName}'"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleMintKey(); }} class="space-y-4">
+	<form onsubmit={(e) => { e.preventDefault(); handleMintKey(); }} class="dialog-form">
 		{#if mintKeyError}
 			<InlineAlert tone="error">{mintKeyError}</InlineAlert>
 		{/if}
 
-		<FormField label="Key Identifier / Name" hint="Helps you distinguish where this key is installed (e.g. 'nomi-agent', 'nomi-server').">
+		<FormField label="Key Identifier / Name" hint="Helps identify where this key is stored (e.g. 'nomi-agent', 'nomi-server').">
 			<TextField
 				bind:value={newKeyName}
 				placeholder="nomi-agent"
@@ -604,33 +597,31 @@
 			/>
 		</FormField>
 
-		<div class="space-y-2">
-			<label class="block text-sm font-medium text-[var(--text-primary)]">
-				Key Scopes
-			</label>
-			<div class="space-y-2 p-3 rounded bg-[var(--bg-hover)] border border-[var(--border)]">
-				<label class="flex items-start gap-2.5 cursor-pointer">
+		<div class="scope-fieldset">
+			<span class="scope-legend">Key Scopes</span>
+			<div class="scope-options">
+				<label class="scope-option">
 					<Checkbox bind:checked={keyScopeManage} />
-					<div class="text-xs">
-						<span class="font-mono font-medium text-indigo-300">manage</span>
-						<p class="text-[var(--text-secondary)] mt-0.5">
+					<div class="scope-desc">
+						<span class="scope-name">manage</span>
+						<p class="scope-sub">
 							Full orchestration — create & manage apps, environments, dev databases, publish zips, and domains.
 						</p>
 					</div>
 				</label>
-				<label class="flex items-start gap-2.5 cursor-pointer pt-2 border-t border-[var(--border)]">
+				<label class="scope-option scope-option--bordered">
 					<Checkbox bind:checked={keyScopeReveal} />
-					<div class="text-xs">
-						<span class="font-mono font-medium text-amber-300">secrets:reveal</span>
-						<p class="text-[var(--text-secondary)] mt-0.5">
-							Secret reveal capability — allows decrypting and reading raw environment variables and database passwords. Recommended only for server-side containers.
+					<div class="scope-desc">
+						<span class="scope-name scope-name--reveal">secrets:reveal</span>
+						<p class="scope-sub">
+							Secret reveal capability — decrypt and read raw environment variables and database passwords. Recommended for server-side code only.
 						</p>
 					</div>
 				</label>
 			</div>
 		</div>
 
-		<div class="flex justify-end gap-2 pt-2">
+		<div class="modal-buttons">
 			<Button variant="secondary" onclick={() => showMintKeyModal = false}>Cancel</Button>
 			<Button variant="primary" type="submit" disabled={mintingKey || !newKeyName.trim() || (!keyScopeManage && !keyScopeReveal)}>
 				{#if mintingKey}
@@ -649,18 +640,18 @@
 	title="Integration Key Generated"
 >
 	{#if createdKeyInfo}
-		<div class="space-y-4">
+		<div class="dialog-form">
 			<InlineAlert tone="warning">
 				{createdKeyInfo.note ?? 'Store this key now. It will not be shown again.'}
 			</InlineAlert>
 
 			<FormField label="Full API Key">
-				<div class="flex items-center gap-2">
+				<div class="reveal-key-row">
 					<input
 						type={keyRevealed ? 'text' : 'password'}
 						readonly
 						value={createdKeyInfo.key}
-						class="flex-1 px-3 py-2 text-xs font-mono rounded bg-[var(--bg-hover)] border border-[var(--border)] text-[var(--text-primary)] select-all"
+						class="key-mono-input"
 					/>
 					<Button
 						variant="secondary"
@@ -669,9 +660,9 @@
 						title={keyRevealed ? 'Hide key' : 'Show key'}
 					>
 						{#if keyRevealed}
-							<EyeOff class="w-4 h-4" />
+							<EyeOff size={14} />
 						{:else}
-							<Eye class="w-4 h-4" />
+							<Eye size={14} />
 						{/if}
 					</Button>
 					<Button
@@ -680,23 +671,23 @@
 						onclick={() => copyToClipboard(createdKeyInfo!.key, 'created-key')}
 					>
 						{#if copiedId === 'created-key'}
-							<Check class="w-4 h-4 mr-1 text-emerald-400" />
+							<Check size={14} />
 							Copied
 						{:else}
-							<Copy class="w-4 h-4 mr-1" />
+							<Copy size={14} />
 							Copy
 						{/if}
 					</Button>
 				</div>
 			</FormField>
 
-			<div class="p-3 rounded bg-[var(--bg-hover)] border border-[var(--border)] space-y-2 text-xs">
-				<p class="font-medium text-[var(--text-primary)]">Quick setup snippet for Nomi:</p>
-				<pre class="p-2 rounded bg-black/40 font-mono text-[11px] text-emerald-300 overflow-x-auto">SHIPYARD_URL={typeof window !== 'undefined' ? window.location.origin : 'https://your-shipyard.com'}/openapi/v1/integration
+			<div class="terminal-snippet">
+				<p class="terminal-snippet-title">Quick setup snippet for Nomi:</p>
+				<pre class="terminal-code">SHIPYARD_URL={typeof window !== 'undefined' ? window.location.origin : 'https://your-shipyard.com'}/openapi/v1/integration
 SHIPYARD_KEY={createdKeyInfo.key}</pre>
 			</div>
 
-			<div class="flex justify-end pt-2">
+			<div class="modal-buttons">
 				<Button variant="primary" onclick={() => showCreatedKeyModal = false}>
 					I Have Stored the Key
 				</Button>
@@ -708,9 +699,9 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 <!-- Link Org Modal -->
 <Modal
 	bind:open={showLinkOrgModal}
-	title="Link Existing Organization to Integration"
+	title="Link Organization to Integration"
 >
-	<form onsubmit={(e) => { e.preventDefault(); handleLinkOrg(); }} class="space-y-4">
+	<form onsubmit={(e) => { e.preventDefault(); handleLinkOrg(); }} class="dialog-form">
 		{#if linkOrgError}
 			<InlineAlert tone="error">{linkOrgError}</InlineAlert>
 		{/if}
@@ -718,7 +709,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 		<FormField label="Select Organization">
 			<select
 				bind:value={selectedOrgId}
-				class="w-full px-3 py-2 text-sm rounded bg-[var(--bg-hover)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+				class="drydock-select"
 			>
 				{#each allOrgs as org}
 					<option value={org.id}>{org.name} ({org.slug})</option>
@@ -733,7 +724,7 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 			/>
 		</FormField>
 
-		<div class="flex justify-end gap-2 pt-2">
+		<div class="modal-buttons">
 			<Button variant="secondary" onclick={() => showLinkOrgModal = false}>Cancel</Button>
 			<Button variant="primary" type="submit" disabled={linkingOrg || !selectedOrgId}>
 				{#if linkingOrg}
@@ -775,3 +766,497 @@ SHIPYARD_KEY={createdKeyInfo.key}</pre>
 	danger={false}
 	onConfirm={handleUnlinkOrg}
 />
+
+<style>
+	/* ── Drydock layout ── */
+	.page {
+		padding: 24px 28px 40px;
+		display: flex;
+		flex-direction: column;
+		gap: 20px;
+		max-width: 1100px;
+	}
+
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.loading-state {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 64px 0;
+	}
+
+	.empty-cta {
+		display: flex;
+		justify-content: center;
+		margin-top: -8px;
+	}
+
+	.integrations-list {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	/* ── Integration card ── */
+	.integration-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		padding: 20px;
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.card-header {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		padding-bottom: 16px;
+		border-bottom: 1px solid var(--border);
+	}
+	@media (min-width: 768px) {
+		.card-header {
+			flex-direction: row;
+			align-items: center;
+			justify-content: space-between;
+		}
+	}
+
+	.header-left {
+		display: flex;
+		align-items: flex-start;
+		gap: 12px;
+	}
+
+	.integration-icon-tile {
+		width: 36px;
+		height: 36px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		color: var(--text-primary);
+		flex-shrink: 0;
+	}
+
+	.header-details {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.title-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.integration-title {
+		font-family: var(--font-sans);
+		font-size: 16px;
+		font-weight: 600;
+		color: var(--text-primary);
+		margin: 0;
+	}
+
+	.id-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 6px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		background: var(--bg-elevated);
+		color: var(--text-secondary);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: color var(--transition-fast), border-color var(--transition-fast);
+	}
+	.id-chip:hover {
+		color: var(--text-primary);
+		border-color: var(--border-hover);
+	}
+
+	:global(.id-copied) {
+		color: var(--accent-green);
+	}
+
+	.meta-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+		color: var(--text-muted);
+	}
+	.meta-sep {
+		color: var(--text-dim);
+	}
+
+	.card-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.delete-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 30px;
+		height: 30px;
+		border-radius: var(--radius-md);
+		border: 1px solid transparent;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+	}
+	.delete-btn:hover {
+		background: var(--accent-red-muted);
+		color: var(--accent-red);
+		border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
+	}
+
+	/* ── Two-column content ── */
+	.card-columns {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 20px;
+	}
+	@media (min-width: 900px) {
+		.card-columns {
+			grid-template-columns: 1fr 1fr;
+		}
+	}
+
+	.column-box {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.column-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 11px;
+	}
+
+	.column-title {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--text-muted);
+	}
+
+	.column-hint {
+		color: var(--text-dim);
+		font-family: var(--font-mono);
+	}
+	.column-hint code {
+		color: var(--text-secondary);
+	}
+
+	.sub-empty {
+		padding: 14px 16px;
+		border: 1px dashed var(--border);
+		border-radius: var(--radius-md);
+		text-align: center;
+		font-size: 12px;
+		color: var(--text-muted);
+		line-height: 1.5;
+	}
+
+	.items-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.item-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 10px 12px;
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+	}
+
+	.item-main {
+		min-width: 0;
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.item-title-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.item-name {
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--text-primary);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.org-slug {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+
+	.item-meta-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+	}
+
+	.copy-prefix-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-muted);
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		padding: 0;
+		transition: color var(--transition-fast);
+	}
+	.copy-prefix-btn:hover {
+		color: var(--text-primary);
+	}
+
+	.scopes-wrap {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		flex-wrap: wrap;
+	}
+
+	.scope-chip {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		padding: 1px 6px;
+		border-radius: var(--radius-sm);
+		border: 1px solid;
+	}
+	.scope-chip--manage {
+		background: var(--accent-muted);
+		color: var(--accent);
+		border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+	}
+	.scope-chip--reveal {
+		background: var(--accent-yellow-muted);
+		color: var(--accent-yellow-text);
+		border-color: color-mix(in srgb, var(--accent-yellow) 30%, transparent);
+	}
+
+	.item-dates {
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+
+	.code-val {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		background: var(--bg-surface);
+		padding: 1px 4px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		color: var(--text-primary);
+	}
+
+	.row-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		font-weight: 500;
+		padding: 4px 8px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+		background: var(--bg-surface);
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+		flex-shrink: 0;
+	}
+	.row-action-btn:hover {
+		background: var(--bg-hover);
+		color: var(--text-primary);
+	}
+	.row-action-btn--danger {
+		border-color: transparent;
+		color: var(--accent-red);
+		background: transparent;
+	}
+	.row-action-btn--danger:hover {
+		background: var(--accent-red-muted);
+		border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
+	}
+
+	/* ── Modals & forms ── */
+	.dialog-form {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.info-callout {
+		padding: 10px 12px;
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		font-size: 12px;
+		color: var(--text-muted);
+		line-height: 1.5;
+	}
+	.info-callout-title {
+		font-weight: 600;
+		color: var(--text-primary);
+		margin-bottom: 2px;
+	}
+
+	.scope-fieldset {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.scope-legend {
+		font-size: 12.5px;
+		font-weight: 500;
+		color: var(--text-secondary);
+	}
+	.scope-options {
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		padding: 8px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.scope-option {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		cursor: pointer;
+	}
+	.scope-option--bordered {
+		padding-top: 8px;
+		border-top: 1px solid var(--border);
+	}
+	.scope-desc {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		font-size: 12px;
+	}
+	.scope-name {
+		font-family: var(--font-mono);
+		font-weight: 600;
+		color: var(--accent);
+	}
+	.scope-name--reveal {
+		color: var(--accent-yellow);
+	}
+	.scope-sub {
+		color: var(--text-muted);
+		line-height: 1.4;
+		margin: 0;
+	}
+
+	.reveal-key-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.key-mono-input {
+		flex: 1;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		padding: 6px 10px;
+		border-radius: var(--radius-md);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-control);
+		color: var(--text-primary);
+	}
+	.key-mono-input:focus {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+
+	.terminal-snippet {
+		border-radius: var(--radius-md);
+		background: var(--terminal-bg);
+		border: 1px solid var(--terminal-border);
+		padding: 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.terminal-snippet-title {
+		font-size: 11.5px;
+		font-weight: 500;
+		color: var(--terminal-dim);
+		margin: 0;
+	}
+	.terminal-code {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--terminal-green);
+		background: transparent;
+		padding: 0;
+		margin: 0;
+		overflow-x: auto;
+		white-space: pre;
+	}
+
+	.drydock-select {
+		width: 100%;
+		padding: 8px 10px;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		border-radius: var(--radius-md);
+		background: var(--bg-surface);
+		border: 1px solid var(--border-control);
+		color: var(--text-primary);
+	}
+	.drydock-select:focus {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+
+	.modal-buttons {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		padding-top: 8px;
+	}
+</style>
