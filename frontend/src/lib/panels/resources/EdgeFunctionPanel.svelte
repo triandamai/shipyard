@@ -321,8 +321,8 @@
 	.picker-btn:disabled { opacity: 0.45; cursor: default; }
 	.picker-btn.loading { cursor: default; }
 
-	.picker-placeholder { color: var(--text-dim); flex: 1; }
-	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.picker-placeholder { color: var(--text-dim); flex: 1; min-width: 0; }
+	.picker-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.font-mono { font-family: var(--font-mono); }
 
 	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }

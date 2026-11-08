@@ -8,7 +8,7 @@
 		Home, Building2, Users, ShieldCheck, FolderKanban, Rocket, Server,
 		Cpu, Container, Waypoints, Package, HardDrive, Radio, Globe,
 		Mail, Database, ClipboardList, CreditCard, Wallet, RefreshCw, SlidersHorizontal,
-		Sun, Moon, LogOut, ScrollText, Blocks
+		Sun, Moon, LogOut, ScrollText, Blocks, Trash2
 	} from '@lucide/svelte';
 	import { NavRail, NavDrawer, Button } from '$lib/components/ui';
 	import PanelContainer from '$lib/components/PanelContainer.svelte';
@@ -68,6 +68,7 @@
 			items: [
 				{ href: '/admin/infra',    label: 'System',       icon: Cpu },
 				{ href: '/admin/docker',   label: 'Docker',       icon: Container },
+				{ href: '/admin/orphan',   label: 'Orphans',      icon: Trash2 },
 				{ href: '/admin/traefik',  label: 'Traefik',      icon: Waypoints },
 				{ href: '/admin/registry', label: 'Registry',     icon: Package },
 				{ href: '/admin/storage',  label: 'Storage (S3)', icon: HardDrive },

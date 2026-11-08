@@ -278,13 +278,24 @@ async fn get_org(
     }))))
 }
 
+/// Orgs with a teardown running in this process. A repeated DELETE while one
+/// runs answers 202 again instead of starting a second, racing teardown.
+static DELETING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<Uuid>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// DELETE /orgs/:external_id — terminate every app (workloads, data, dev
 /// databases, domains, secrets), then delete the org.
+///
+/// Answers 202 at once and tears down in the background: stopping every
+/// stack of a large org takes longer than the edge proxies wait (Traefik
+/// cuts requests at 60s, Cloudflare at 100s), which surfaced as a 502.
+/// `org.deleted` is emitted when it finishes. If the teardown fails, the org
+/// stays and a repeated DELETE picks up where it stopped.
 async fn delete_org(
     caller: IntegrationCaller,
     Path(external_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     let org_id = org_by_external(&state.db, &caller, &external_id).await?;
     if !can_delete_org(&state.db, &caller, org_id).await? {
@@ -299,9 +310,71 @@ async fn delete_org(
             .fetch_all(&state.db)
             .await
             .map_err(db_err)?;
+    let accepted = || {
+        (
+            StatusCode::ACCEPTED,
+            Json(ApiResponse::ok(serde_json::json!({
+                "deleted": external_id,
+                "status": "deleting",
+                "apps_terminated": app_keys,
+            }))),
+        )
+    };
+
+    if !DELETING.lock().unwrap().insert(org_id) {
+        return Ok(accepted());
+    }
+    caller
+        .audit(
+            &state.db,
+            "delete_org",
+            "organization",
+            Some(org_id),
+            serde_json::json!({ "external_id": external_id, "apps": app_keys }),
+        )
+        .await;
+
+    let (task_state, task_caller, task_external) =
+        (state.clone(), caller.clone(), external_id.clone());
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let result = run_org_deletion(&task_state, &task_caller, org_id, &task_external).await;
+        DELETING.lock().unwrap().remove(&org_id);
+        match result {
+            Ok(()) => tracing::info!(
+                %org_id, external_id = %task_external,
+                "org deleted in {:.1}s", started.elapsed().as_secs_f64()
+            ),
+            Err(e) => tracing::error!(
+                %org_id, external_id = %task_external,
+                "org deletion failed after {:.1}s: {}", started.elapsed().as_secs_f64(), e.0
+            ),
+        }
+    });
+
+    Ok(accepted())
+}
+
+async fn run_org_deletion(
+    state: &AppState,
+    caller: &IntegrationCaller,
+    org_id: Uuid,
+    external_id: &str,
+) -> Result<(), ApiAppError> {
+    let app_keys: Vec<String> =
+        sqlx::query_scalar("SELECT app_key FROM integration_apps WHERE org_id = $1")
+            .bind(org_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(db_err)?;
     for key in &app_keys {
-        let app = super::app_ref(&state.db, &caller, &external_id, key).await?;
-        super::apps::terminate_app(&state, &app).await?;
+        // An app terminated meanwhile by its own DELETE is already gone.
+        let app = match super::app_ref(&state.db, caller, external_id, key).await {
+            Ok(app) => app,
+            Err(ApiAppError(AppError::NotFound(_))) => continue,
+            Err(e) => return Err(e),
+        };
+        super::apps::terminate_app(state, &app).await?;
     }
     // Projects created outside the integration (e.g. by a member in the dashboard).
     let others: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM projects WHERE org_id = $1")
@@ -311,7 +384,7 @@ async fn delete_org(
         .map_err(db_err)?;
     for project_id in &others {
         crate::projects::teardown::teardown_project(
-            &state,
+            state,
             *project_id,
             crate::projects::teardown::TeardownOptions {
                 remove_volumes: true,
@@ -348,19 +421,7 @@ async fn delete_org(
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         let _ = docker.remove_network(&net).await;
     });
-
-    caller
-        .audit(
-            &state.db,
-            "delete_org",
-            "organization",
-            Some(org_id),
-            serde_json::json!({ "external_id": external_id }),
-        )
-        .await;
-    Ok(Json(ApiResponse::ok(
-        serde_json::json!({ "deleted": external_id, "apps_terminated": app_keys }),
-    )))
+    Ok(())
 }
 
 #[cfg(test)]

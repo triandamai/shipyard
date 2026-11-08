@@ -240,7 +240,7 @@ async fn async_main() {
         Arc::clone(&mqtt_publisher),
         config.docker.label_prefix.clone(),
     ) {
-        Ok(w) => w,
+        Ok(w) => w.with_data_dir(config.data_dir.clone()),
         Err(e) => {
             tracing::error!("Failed to create Docker event worker: {e}");
             std::process::exit(1);
@@ -560,6 +560,22 @@ async fn async_main() {
                     _ = sync_notify.notified() => {}
                     _ = tokio::time::sleep(Duration::from_secs(10)) => {}
                 }
+            }
+        });
+    }
+
+    // Spawn periodic orphan directory scanner — walks data_dir and /shipyard
+    // to detect orphaned orgs, projects, services, volumes, and directories.
+    {
+        let orphan_worker = event_worker.clone();
+        let orphan_data_dir = state.config.data_dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            loop {
+                if let Err(e) = orphan_worker.scan_orphans(&orphan_data_dir).await {
+                    tracing::warn!("Periodic orphan directory scan failed: {e}");
+                }
+                tokio::time::sleep(Duration::from_secs(3600)).await;
             }
         });
     }

@@ -18,6 +18,8 @@
 //! # }
 //! ```
 
+pub mod orphans;
 pub mod worker;
 
+pub use orphans::{delete_orphan, list_orphans, scan_and_reconcile_orphans, OrphanResource, OrphanType};
 pub use worker::DockerEventWorker;
