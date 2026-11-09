@@ -88,7 +88,18 @@ pub async fn get_cleanup_settings(db: &PgPool) -> CleanupSettings {
 
     match row {
         Some((val,)) => serde_json::from_value(val).unwrap_or_default(),
-        None => CleanupSettings::default(),
+        None => {
+            let default_settings = CleanupSettings::default();
+            if let Ok(val) = serde_json::to_value(&default_settings) {
+                let _ = sqlx::query(
+                    "INSERT INTO system_config (key, value, updated_at) VALUES ('cleanup_settings', $1, NOW()) ON CONFLICT (key) DO NOTHING"
+                )
+                .bind(val)
+                .execute(db)
+                .await;
+            }
+            default_settings
+        }
     }
 }
 
@@ -351,8 +362,9 @@ pub async fn scan_filesystem_orphans_with_sets(
         let dir_name = file_name;
 
         // Check well-known system dirs under data_dir
-        match dir_name.as_str() {
-            "static" => {
+        let dir_lower = dir_name.to_lowercase();
+        match dir_lower.as_str() {
+            "static" | "static file" | "static_file" | "static-file" | "static-files" => {
                 scan_static_artifacts(&entry_path, &active_service_set, &mut orphans).await;
                 continue;
             }
@@ -364,7 +376,7 @@ pub async fn scan_filesystem_orphans_with_sets(
                 scan_source_repos(&entry_path, &active_service_set, &mut orphans).await;
                 continue;
             }
-            "files" | "uploads" => {
+            "files" | "uploads" | "file" => {
                 scan_file_artifacts(&entry_path, &active_service_set, active_org_set, &mut orphans).await;
                 continue;
             }
@@ -831,8 +843,13 @@ async fn scan_file_artifacts(
             }
         } else {
             let size = dir_size_bytes(&entry_path).await;
+            let o_type = if entry_path.is_dir() {
+                OrphanType::Directory
+            } else {
+                OrphanType::File
+            };
             orphans.push(DiscoveredOrphan {
-                orphan_type: OrphanType::File,
+                orphan_type: o_type,
                 identifier: name,
                 path: entry_path.to_string_lossy().to_string(),
                 size_bytes: size,
@@ -849,16 +866,20 @@ async fn check_shipyard_root_directories(
     orphans: &mut Vec<DiscoveredOrphan>,
 ) {
     let mut candidate_roots = Vec::new();
+    let data_path = Path::new(data_dir);
 
-    if let Some(parent) = Path::new(data_dir).parent() {
-        if parent.exists() && (parent.ends_with("shipyard") || parent.to_string_lossy() == "/shipyard") {
-            candidate_roots.push(parent.to_path_buf());
+    // Only check parent if distinct from data_dir and ends with shipyard
+    if let Some(parent) = data_path.parent() {
+        if parent != data_path && parent.exists() && (parent.ends_with("shipyard") || parent.to_string_lossy() == "/shipyard" || parent.to_string_lossy() == "/opt/shipyard") {
+            if !candidate_roots.contains(&parent.to_path_buf()) {
+                candidate_roots.push(parent.to_path_buf());
+            }
         }
     }
 
     let explicit_roots = [Path::new("/shipyard"), Path::new("/opt/shipyard")];
     for r in explicit_roots {
-        if r.exists() && !candidate_roots.contains(&r.to_path_buf()) {
+        if r != data_path && r.exists() && !candidate_roots.contains(&r.to_path_buf()) {
             candidate_roots.push(r.to_path_buf());
         }
     }
@@ -879,20 +900,27 @@ async fn check_shipyard_root_directories(
                 continue;
             }
 
+            let name_lower = name.to_lowercase();
+
             if entry_path.is_dir() {
                 if known_root_dirs.contains(&name.as_str()) {
                     continue;
                 }
-                if name == "sources" || name == "git" {
+                if name_lower == "sources" || name_lower == "git" {
                     scan_source_repos(&entry_path, active_service_set, orphans).await;
                     continue;
                 }
-                if name == "static" {
+                if name_lower == "static" || name_lower == "static file" || name_lower == "static_file" || name_lower == "static-files" {
                     scan_static_artifacts(&entry_path, active_service_set, orphans).await;
                     continue;
                 }
-                if name == "files" || name == "uploads" {
+                if name_lower == "files" || name_lower == "uploads" || name_lower == "file" {
                     scan_file_artifacts(&entry_path, active_service_set, active_org_set, orphans).await;
+                    continue;
+                }
+
+                let path_str = entry_path.to_string_lossy().to_string();
+                if orphans.iter().any(|o| o.path == path_str) {
                     continue;
                 }
 
@@ -905,12 +933,17 @@ async fn check_shipyard_root_directories(
                 orphans.push(DiscoveredOrphan {
                     orphan_type: o_type,
                     identifier: name,
-                    path: entry_path.to_string_lossy().to_string(),
+                    path: path_str,
                     size_bytes: size,
-                    details: Some("Unrecognized directory directly under shipyard installation root".to_string()),
+                    details: Some("Directory directly under shipyard installation root".to_string()),
                 });
             } else {
                 // Loose file under shipyard root
+                let path_str = entry_path.to_string_lossy().to_string();
+                if orphans.iter().any(|o| o.path == path_str) {
+                    continue;
+                }
+
                 let size = dir_size_bytes(&entry_path).await;
                 let o_type = if name.ends_with(".git") {
                     OrphanType::Git
@@ -922,7 +955,7 @@ async fn check_shipyard_root_directories(
                 orphans.push(DiscoveredOrphan {
                     orphan_type: o_type,
                     identifier: name,
-                    path: entry_path.to_string_lossy().to_string(),
+                    path: path_str,
                     size_bytes: size,
                     details: Some("Loose file directly under shipyard installation root".to_string()),
                 });
@@ -1601,6 +1634,61 @@ mod tests {
         // File orphans
         let file_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::File).collect();
         assert_eq!(file_orphans.len(), 2, "Expected 2 file orphans (files/doc + stray_dump.sql)");
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_shipyard_root_directories_walks_git_file_and_static_files() {
+        let tmp = std::env::temp_dir().join(format!("shipyard-walk-test-{}", Uuid::now_v7()));
+        tokio::fs::create_dir_all(&tmp).await.unwrap();
+
+        // Under root: git, file, static file, and an arbitrary directory
+        let git_dir = tmp.join("git");
+        tokio::fs::create_dir_all(&git_dir).await.unwrap();
+        tokio::fs::create_dir_all(git_dir.join("legacy_repo")).await.unwrap();
+
+        let file_dir = tmp.join("file");
+        tokio::fs::create_dir_all(&file_dir).await.unwrap();
+        tokio::fs::create_dir_all(file_dir.join("nested_folder")).await.unwrap();
+        tokio::fs::write(file_dir.join("orphaned_doc.pdf"), b"pdf").await.unwrap();
+
+        let static_dir = tmp.join("static file");
+        tokio::fs::create_dir_all(&static_dir).await.unwrap();
+        tokio::fs::write(static_dir.join("app.tar.gz"), b"tar").await.unwrap();
+
+        let custom_dir = tmp.join("custom_shipyard_folder");
+        tokio::fs::create_dir_all(&custom_dir).await.unwrap();
+
+        let active_org_set = std::collections::HashSet::new();
+        let active_project_set = std::collections::HashMap::new();
+        let active_service_set = std::collections::HashMap::new();
+        let active_volume_set = std::collections::HashSet::new();
+        let active_edge_set = std::collections::HashSet::new();
+
+        let res = scan_filesystem_orphans_with_sets(
+            &active_org_set,
+            &active_project_set,
+            &active_service_set,
+            &active_volume_set,
+            &active_edge_set,
+            tmp.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Verify git orphan found
+        assert!(res.iter().any(|o| o.orphan_type == OrphanType::Git && o.identifier == "legacy_repo"));
+
+        // Verify file orphan found
+        assert!(res.iter().any(|o| o.orphan_type == OrphanType::File && o.identifier == "orphaned_doc.pdf"));
+
+        // Verify directory orphans found
+        assert!(res.iter().any(|o| o.orphan_type == OrphanType::Directory && o.identifier == "nested_folder"));
+        assert!(res.iter().any(|o| o.orphan_type == OrphanType::Directory && o.identifier == "custom_shipyard_folder"));
+
+        // Verify static file found
+        assert!(res.iter().any(|o| o.orphan_type == OrphanType::StaticFile && o.identifier == "app.tar.gz"));
 
         let _ = tokio::fs::remove_dir_all(&tmp).await;
     }

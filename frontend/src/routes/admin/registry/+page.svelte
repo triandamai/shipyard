@@ -15,7 +15,11 @@
 		InlineAlert,
 		Spinner,
 		Skeleton,
-		ConfirmDialog
+		ConfirmDialog,
+		Card,
+		Toggle,
+		FormField,
+		TextField
 	} from '$lib/components/ui';
 
 	// ── Types ─────────────────────────────────────────────────────────────────────
@@ -56,6 +60,21 @@
 	let cleanupSettings = $state<CleanupSettings | null>(null);
 	let cleaningUnused  = $state(false);
 	let cleanupSuccessMsg = $state('');
+
+	// Editable registry retention settings
+	let savingSettings             = $state(false);
+	let settingsSavedMsg           = $state('');
+	let editRegistryRetention      = $state('90');
+	let editRegistryRemovalEnabled = $state(true);
+	let editOrphanRetention        = $state('30');
+	let editOrphanDestructEnabled  = $state(true);
+
+	function syncFormFromSettings(s: CleanupSettings) {
+		editRegistryRetention = String(s.registry_unused_retention_days);
+		editRegistryRemovalEnabled = s.registry_auto_removal_enabled;
+		editOrphanRetention = String(s.orphan_retention_days);
+		editOrphanDestructEnabled = s.orphan_auto_destruct_enabled;
+	}
 
 	let namespaces = $state<NsRow[]>([]);
 	let loading    = $state(true);
@@ -107,7 +126,48 @@
 		stats           = sRes.data ?? null;
 		namespaces      = nRes.data ?? [];
 		cleanupSettings = cRes.data ?? null;
+		if (cRes.data) syncFormFromSettings(cRes.data);
 		loading         = false;
+	}
+
+	async function saveSettings() {
+		const regDays = parseInt(editRegistryRetention, 10);
+		const orphanDays = parseInt(editOrphanRetention, 10);
+		if (isNaN(regDays) || regDays < 1) {
+			deleteError = 'Registry retention days must be at least 1 day';
+			return;
+		}
+		if (isNaN(orphanDays) || orphanDays < 1) {
+			deleteError = 'Orphan retention days must be at least 1 day';
+			return;
+		}
+
+		savingSettings = true;
+		deleteError = '';
+		settingsSavedMsg = '';
+		try {
+			const payload: CleanupSettings = {
+				orphan_retention_days: orphanDays,
+				orphan_auto_destruct_enabled: editOrphanDestructEnabled,
+				registry_unused_retention_days: regDays,
+				registry_auto_removal_enabled: editRegistryRemovalEnabled
+			};
+			const res = await api.put<CleanupSettings>('/admin/orphans/settings', payload);
+			if (res.error) {
+				deleteError = res.error.message;
+			} else {
+				if (res.data) {
+					cleanupSettings = res.data;
+					syncFormFromSettings(res.data);
+				}
+				settingsSavedMsg = 'Registry retention and auto-removal settings saved successfully.';
+				setTimeout(() => { settingsSavedMsg = ''; }, 4000);
+			}
+		} catch (e: any) {
+			deleteError = e.message;
+		} finally {
+			savingSettings = false;
+		}
 	}
 
 	async function runRegistryCleanup() {
@@ -209,11 +269,11 @@
 			<Button
 				variant="secondary"
 				size="sm"
-				loading={cleaningUnused}
+				disabled={cleaningUnused}
 				onclick={runRegistryCleanup}
 			>
 				<Trash2 size={13} />
-				<span>Clean Unused ({cleanupSettings?.registry_unused_retention_days ?? 90}d+)</span>
+				<span>{cleaningUnused ? 'Cleaning...' : `Clean Unused (${cleanupSettings?.registry_unused_retention_days ?? 90}d+)`}</span>
 			</Button>
 			<Button variant="secondary" size="icon" onclick={load}>
 				<RefreshCw size={14} />
@@ -261,25 +321,91 @@
 					{stats.storage_type === 's3' ? 'S3 / MinIO' : 'Local Disk'}
 				</Badge>
 			</div>
-			<div class="reg-config-row">
-				<span class="reg-config-key">Unused Image Retention</span>
-				<div class="reg-config-policy">
-					{#if cleanupSettings?.registry_auto_removal_enabled}
-						<Badge tone="green">
-							Auto-removes unused images after {cleanupSettings.registry_unused_retention_days} days (3 months)
-						</Badge>
-					{:else}
-						<Badge tone="neutral">Auto-removal disabled</Badge>
-					{/if}
-					<a href="/admin/orphan" class="reg-config-link">Configure Retention</a>
-				</div>
-			</div>
 			{#if stats.hostname}
 				<div class="reg-config-row">
 					<span class="reg-config-key">Login Command</span>
 					<code class="reg-config-val">docker login {stats.hostname}</code>
 				</div>
 			{/if}
+		</div>
+
+		<!-- Registry Retention & Auto-Removal Configuration -->
+		<div class="reg-section">
+			<SectionLabel>Registry Retention & Garbage Collection Configuration</SectionLabel>
+			<Card variant="default">
+				<div class="reg-settings-card">
+					<div class="reg-settings-header">
+						<div class="reg-settings-title-wrap">
+							<h3 class="reg-settings-title">Automatic Image Removal (Garbage Collection)</h3>
+							<p class="reg-settings-desc">
+								Automatically scan and prune unreferenced container images, old tags, and orphan blob layers older than the retention threshold. Artifacts actively used by any running service or container will never be deleted.
+							</p>
+						</div>
+						<div class="reg-settings-toggle-wrap">
+							<Toggle
+								bind:checked={editRegistryRemovalEnabled}
+								label="Enable automatic pruning of unused registry artifacts"
+							/>
+							<span class="reg-toggle-label">{editRegistryRemovalEnabled ? 'Auto-prune Active' : 'Auto-prune Disabled'}</span>
+						</div>
+					</div>
+
+					<div class="reg-settings-grid">
+						<div class="reg-field-wrap">
+							<FormField
+								label="Unused Image Retention Threshold (Days)"
+								hint="Default: 90 days (3 months). Unreferenced artifacts older than this are safely pruned."
+							>
+								<TextField
+									type="number"
+									min="1"
+									max="730"
+									bind:value={editRegistryRetention}
+									placeholder="90"
+								/>
+							</FormField>
+						</div>
+						<div class="reg-field-wrap">
+							<FormField
+								label="Orphan Auto-Destruct Window (Days)"
+								hint="Default: 30 days. Orphan directories, files, and git repos older than this are permanently deleted."
+							>
+								<TextField
+									type="number"
+									min="1"
+									max="365"
+									bind:value={editOrphanRetention}
+									placeholder="30"
+								/>
+							</FormField>
+						</div>
+					</div>
+
+					{#if settingsSavedMsg}
+						<InlineAlert tone="success">{settingsSavedMsg}</InlineAlert>
+					{/if}
+
+					<div class="reg-settings-actions">
+						<Button
+							variant="primary"
+							size="sm"
+							disabled={savingSettings}
+							onclick={saveSettings}
+						>
+							{savingSettings ? 'Saving...' : 'Save Registry Config'}
+						</Button>
+						<Button
+							variant="secondary"
+							size="sm"
+							disabled={cleaningUnused}
+							onclick={runRegistryCleanup}
+						>
+							<Trash2 size={13} />
+							<span>{cleaningUnused ? 'Pruning...' : 'Prune Unused Images Now'}</span>
+						</Button>
+					</div>
+				</div>
+			</Card>
 		</div>
 
 		<!-- Namespaces -->
@@ -398,12 +524,21 @@
 	.reg-config-row:last-child { border-bottom: none; }
 	.reg-config-key { width: 140px; flex-shrink: 0; color: var(--text-secondary); font-weight: 500; }
 	.reg-config-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); background: var(--bg-elevated); padding: 2px 8px; border-radius: var(--radius-sm); }
-	.reg-config-policy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-	.reg-config-link { font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 500; }
-	.reg-config-link:hover { text-decoration: underline; }
 
 	/* ── Section ── */
 	.reg-section { display: flex; flex-direction: column; gap: 10px; }
+
+	/* ── Settings Card ── */
+	.reg-settings-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 16px; }
+	.reg-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+	.reg-settings-title-wrap { flex: 1; min-width: 260px; }
+	.reg-settings-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 4px; }
+	.reg-settings-desc { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin: 0; }
+	.reg-settings-toggle-wrap { display: flex; align-items: center; gap: 10px; padding-top: 2px; }
+	.reg-toggle-label { font-size: 12.5px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+	.reg-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+	.reg-field-wrap { display: flex; flex-direction: column; }
+	.reg-settings-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
 
 	/* ── Namespace rows ── */
 	.reg-row { cursor: pointer; }
