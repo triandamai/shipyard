@@ -54,13 +54,26 @@ async fn get_orphans(
 ) -> Result<Json<ApiResponse<OrphanListResponse>>, ApiAppError> {
     require_admin_access(&state.db, auth.user_id, "shipyard:admin:infra:view").await?;
 
-    let items = list_orphans(
+    let mut items = list_orphans(
         &state.db,
         query.orphan_type.as_deref().filter(|s| !s.is_empty()),
         query.q.as_deref().filter(|s| !s.is_empty()),
     )
     .await
     .map_err(ApiAppError)?;
+
+    // Automatically perform initial scan on first view if no orphans currently recorded
+    if items.is_empty() && query.orphan_type.is_none() && query.q.is_none() {
+        if let Ok(scanned) = scan_and_reconcile_orphans(
+            &state.db,
+            &state.config.data_dir,
+            Some((&*state.docker, &state.config.docker.label_prefix)),
+        )
+        .await
+        {
+            items = scanned;
+        }
+    }
 
     let total_count = items.len();
     let total_size_bytes: i64 = items.iter().map(|i| i.size_bytes).sum();

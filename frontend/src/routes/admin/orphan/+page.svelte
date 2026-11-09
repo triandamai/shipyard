@@ -383,20 +383,20 @@
 
 	let tabs: TabItem[] = $derived([
 		{ id: 'all', label: `All (${orphans.length})` },
-		{ id: 'registry', label: `Registry (${registryCount})` },
+		{ id: 'directory', label: `Directories (${directoryCount})` },
 		{ id: 'git', label: `Git (${gitCount})` },
-		{ id: 'static_file', label: `Static Files (${staticFileCount})` },
 		{ id: 'file', label: `Files (${fileCount})` },
+		{ id: 'static_file', label: `Static Files (${staticFileCount})` },
+		{ id: 'registry', label: `Registry (${registryCount})` },
 		{ id: 'service', label: `Services (${serviceCount})` },
 		{ id: 'volume', label: `Volumes (${volumeCount})` },
-		{ id: 'directory', label: `Directories (${directoryCount})` },
 		{ id: 'org', label: `Orgs (${orgCount})` },
 		{ id: 'project', label: `Projects (${projectCount})` }
 	]);
 
-	onMount(() => {
-		loadOrphans();
+	onMount(async () => {
 		loadSettings();
+		await triggerScan();
 	});
 </script>
 
@@ -459,6 +459,30 @@
 		{/snippet}
 	</PageHeader>
 
+	<!-- ── Active Retention Policy Banner ── -->
+	<div class="retention-banner">
+		<div class="retention-banner-info">
+			<Clock size={15} />
+			<span class="retention-banner-text">
+				<strong>Retention Policy:</strong>
+				{#if settings.orphan_auto_destruct_enabled}
+					Directories & files auto-destruct after <strong>{settings.orphan_retention_days} days</strong>.
+				{:else}
+					Orphan auto-destruct is disabled.
+				{/if}
+				{#if settings.registry_auto_removal_enabled}
+					Unused registry images auto-pruned after <strong>{settings.registry_unused_retention_days} days (3 months)</strong>.
+				{:else}
+					Registry auto-removal is disabled.
+				{/if}
+			</span>
+		</div>
+		<Button variant="secondary" size="sm" onclick={openSettingsModal}>
+			<Settings size={13} />
+			<span>Configure</span>
+		</Button>
+	</div>
+
 	{#if error}
 		<div class="alert-wrap">
 			<InlineAlert tone="error" message={error} />
@@ -482,11 +506,11 @@
 			{#snippet icon()}<HardDrive size={18} />{/snippet}
 		</StatCard>
 		<StatCard
-			value={`${gitCount} git / ${staticFileCount} static / ${registryCount} images`}
-			label="Git, Static & Registry"
+			value={`${directoryCount} dirs / ${gitCount} git / ${fileCount} files`}
+			label="Directories & Files"
 			tone="neutral"
 		>
-			{#snippet icon()}<GitBranch size={18} />{/snippet}
+			{#snippet icon()}<Layers size={18} />{/snippet}
 		</StatCard>
 		<StatCard
 			value={settings.orphan_auto_destruct_enabled ? `${expiringSoonCount} soon / ${settings.orphan_retention_days}d window` : 'Auto-Destruct Disabled'}
@@ -720,6 +744,35 @@
 		margin: 0 auto;
 		width: 100%;
 		box-sizing: border-box;
+	}
+
+	.retention-banner {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		padding: 12px 16px;
+		flex-wrap: wrap;
+	}
+
+	.retention-banner-info {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: var(--text-secondary);
+		font-size: 13px;
+	}
+
+	.retention-banner-text {
+		color: var(--text-secondary);
+		line-height: 1.4;
+	}
+
+	.retention-banner-text strong {
+		color: var(--text-primary);
 	}
 
 	.alert-wrap {
