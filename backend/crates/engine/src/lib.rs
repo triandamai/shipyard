@@ -2906,7 +2906,29 @@ impl DeploymentEngine {
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        if let Some((namespace_id, repo, tag)) = artifact_source {
+        // If the service has a configured image, verify if it still points to the artifact or was changed
+        let is_artifact = if let Some((_, ref repo, _)) = artifact_source {
+            image_col.is_empty() || image_col.contains(repo)
+        } else {
+            false
+        };
+
+        if let (true, Some((namespace_id, repo, mut tag))) = (is_artifact, artifact_source) {
+            // Check if user manually updated the tag in image_col
+            if !image_col.is_empty() {
+                if let Some(pos) = image_col.rfind(':') {
+                    let img_tag = &image_col[pos + 1..];
+                    if !img_tag.is_empty() && img_tag != tag {
+                        tag = img_tag.to_string();
+                        let _ = sqlx::query("UPDATE service_artifact_sources SET tag = $1, updated_at = NOW() WHERE service_id = $2")
+                            .bind(&tag)
+                            .bind(service_id)
+                            .execute(&self.db)
+                            .await;
+                    }
+                }
+            }
+
             // Resolve to an artifact row (latest pushed, matching namespace/repo/tag).
             let art = sqlx::query_as::<_, (Uuid, String)>(
                 "SELECT id, kind
@@ -2940,6 +2962,14 @@ impl DeploymentEngine {
                 )));
             }
         } else {
+            // Service was switched away from internal artifact to an external image
+            if !is_artifact {
+                let _ = sqlx::query("DELETE FROM service_artifact_sources WHERE service_id = $1")
+                    .bind(service_id)
+                    .execute(&self.db)
+                    .await;
+            }
+
             // ── Image-based service ──────────────────────────────────────────
             let image_full = if !image_col.is_empty() {
                 image_col

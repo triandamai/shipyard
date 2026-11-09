@@ -356,25 +356,70 @@ pub async fn terminate_app(
     )
 }
 
+/// Apps with a termination running in this process. A repeated DELETE while
+/// one runs answers 202 again instead of starting a second, racing teardown.
+static TERMINATING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<Uuid>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// DELETE /orgs/:org/apps/:app — terminate the app (Nomi project deleted).
+///
+/// Answers 202 at once and tears down in the background: stopping every
+/// environment can take longer than the edge proxies wait (Traefik cuts
+/// requests at 60s, Cloudflare at 100s). `app.terminated` is emitted when it
+/// finishes. If it fails, the app stays and a repeated DELETE resumes it.
 async fn delete_app(
     caller: IntegrationCaller,
     Path((org, app_key)): Path<(String, String)>,
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>), ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     let app = app_ref(&state.db, &caller, &org, &app_key).await?;
-    let report = terminate_app(&state, &app).await?;
+    let environments: Vec<String> =
+        sqlx::query_scalar("SELECT environment FROM projects WHERE app_id = $1 ORDER BY environment")
+            .bind(app.app_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(db_err)?;
+    let accepted = (
+        StatusCode::ACCEPTED,
+        Json(ApiResponse::ok(serde_json::json!({
+            "app": app.app_key,
+            "status": "terminating",
+            "environments": environments,
+        }))),
+    );
+
+    if !TERMINATING.lock().unwrap().insert(app.app_id) {
+        return Ok(accepted);
+    }
     caller
         .audit(
             &state.db,
             "terminate_app",
             "app",
             Some(app.app_id),
-            report.clone(),
+            serde_json::json!({ "app": app.app_key, "environments": environments }),
         )
         .await;
-    Ok(Json(ApiResponse::ok(report)))
+
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let result = terminate_app(&task_state, &app).await;
+        TERMINATING.lock().unwrap().remove(&app.app_id);
+        match result {
+            Ok(report) => tracing::info!(
+                app_id = %app.app_id, app = %app.app_key,
+                "app terminated in {:.1}s: {report}", started.elapsed().as_secs_f64()
+            ),
+            Err(e) => tracing::error!(
+                app_id = %app.app_id, app = %app.app_key,
+                "app termination failed after {:.1}s: {}", started.elapsed().as_secs_f64(), e.0
+            ),
+        }
+    });
+
+    Ok(accepted)
 }
 
 #[derive(Deserialize)]

@@ -34,6 +34,8 @@ pub struct DockerEventWorker {
     /// Label prefix, e.g. `"platform"`.  Labels are expected as
     /// `{prefix}.service_id`, `{prefix}.managed`, etc.
     pub(crate) label_prefix: String,
+    /// Host data directory (e.g. `/opt/shipyard/data`).
+    pub(crate) data_dir: Option<String>,
 }
 
 impl DockerEventWorker {
@@ -52,7 +54,19 @@ impl DockerEventWorker {
             db,
             mqtt,
             label_prefix: label_prefix.into(),
+            data_dir: None,
         })
+    }
+
+    /// Set host data directory for orphan filesystem scans.
+    pub fn with_data_dir(mut self, data_dir: impl Into<String>) -> Self {
+        self.data_dir = Some(data_dir.into());
+        self
+    }
+
+    /// Walk the unused / shipyard directories to check for orphans and synchronize the orphans table.
+    pub async fn scan_orphans(&self, data_dir: &str) -> AppResult<Vec<crate::orphans::OrphanResource>> {
+        crate::orphans::scan_and_reconcile_orphans(&self.db, data_dir, Some((&*self.engine, &self.label_prefix))).await
     }
 
     // ─── Startup reconciliation ───────────────────────────────────────────────
@@ -210,6 +224,12 @@ impl DockerEventWorker {
                     docker_container_id = %docker_id,
                     "Failed to sync replica count during compose reconciliation: {e}"
                 );
+            }
+        }
+
+        if let Some(ref dir) = self.data_dir {
+            if let Err(e) = self.scan_orphans(dir).await {
+                tracing::warn!("Orphan directory scan failed during startup reconciliation: {e}");
             }
         }
 

@@ -325,6 +325,46 @@ curl -X POST https://ship.example.com/openapi/v1/services/SERVICE_ID/deploy \
       "https://ship.example.com/openapi/v1/services/${{ vars.SERVICE_ID }}/deploy"
 ```
 
+### POST /api/webhooks/deploy/{service_id}/{token}
+
+Requires authentication: Webhook token in URL path (no API key header needed).
+
+Trigger a deployment via a webhook token. Supports updating the service's image tag dynamically via query parameter or JSON body.
+
+**Query parameters (optional)**
+
+| Name | Type | Description |
+|---|---|---|
+| `tag` | string | New tag to deploy (e.g. `v1.2.3`). Replaces the tag portion of the service image. |
+| `image` | string | Full new image reference (e.g. `ghcr.io/org/app:v1.2.3`). |
+
+**Request body (optional)**
+
+```json
+{
+  "tag": "v1.2.3",
+  "image": "ghcr.io/org/app:v1.2.3"
+}
+```
+
+*Note:* Standard Docker Hub webhook payloads with `push_data.tag` are also automatically recognized.
+
+```bash
+curl -X POST "https://ship.example.com/api/webhooks/deploy/SERVICE_ID/TOKEN?tag=v1.2.3"
+```
+
+```json title="200 OK"
+{
+  "data": {
+    "message": "deployment queued",
+    "deployment_id": "019…",
+    "source_ref": "v1.2.3",
+    "tag": "v1.2.3",
+    "image": "myorg/myapp:v1.2.3"
+  }
+}
+```
+
 ### GET /openapi/v1/services/{service_id}/deployments
 
 Requires scope: `read`

@@ -1,8 +1,10 @@
 //! Choosing and changing an environment's public address.
 //!
-//! Every web environment gets `<subdomain>.<apps base domain>` on publish.
-//! These endpoints let the product ask "is this name free?", get suggestions
-//! when it isn't, and move an environment to a new name without a republish.
+//! Every web environment gets a hostname on publish: the full `hostname` the
+//! manifest asks for, or `<subdomain>.<apps base domain>`. These endpoints let
+//! the product ask "is this name free?", get suggestions when it isn't, and
+//! move an environment to a new name without a republish. Hostnames are full
+//! domains, so the product can move its apps to another domain at any time.
 
 use axum::{
     extract::{Path, Query, State},
@@ -94,20 +96,77 @@ pub fn candidate_labels(label: &str, suffix: &mut dyn FnMut() -> String) -> Vec<
     out
 }
 
-struct Base(String);
+/// The apps base domain, when the operator configured one. Only needed for
+/// `subdomain` requests; a full `hostname` works without it.
+fn base_domain(state: &AppState) -> Option<String> {
+    state.config.integration.apps_base_domain.clone()
+}
 
-fn base_domain(state: &AppState) -> Result<Base, ApiAppError> {
-    state
-        .config
-        .integration
-        .apps_base_domain
-        .clone()
-        .map(Base)
-        .ok_or_else(|| {
-            ApiAppError(AppError::BadRequest(
-                "This Shipyard has no apps base domain configured (integration.apps_base_domain), so apps have no platform addresses".into(),
-            ))
-        })
+fn require_base(state: &AppState) -> Result<String, ApiAppError> {
+    base_domain(state).ok_or_else(|| {
+        ApiAppError(AppError::BadRequest(
+            "This Shipyard has no apps base domain configured (integration.apps_base_domain), so a `subdomain` can't be turned into a hostname. Send a full `hostname` instead".into(),
+        ))
+    })
+}
+
+/// Normalizes a full hostname (`" Shop.Example.COM. "` → `shop.example.com`)
+/// and says why it can't be used when it can't. A direct child of the apps
+/// base domain also has to pass [`normalize_label`] (length, reserved names).
+pub fn normalize_hostname(input: &str, base: Option<&str>) -> Result<String, String> {
+    let host = input.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("Enter a domain".into());
+    }
+    if host.len() > 253 {
+        return Err("A domain can be at most 253 characters".into());
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() < 2 {
+        return Err("Enter a full domain, e.g. my-app.example.com".into());
+    }
+    for l in &labels {
+        if l.is_empty() || l.len() > 63 {
+            return Err("Each part of a domain must be 1 to 63 characters".into());
+        }
+        if !l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+            return Err("Use only letters a-z, digits 0-9, '-' and '.'".into());
+        }
+        if l.starts_with('-') || l.ends_with('-') {
+            return Err("A part of a domain can't start or end with '-'".into());
+        }
+    }
+    if labels.last().is_some_and(|tld| tld.bytes().all(|b| b.is_ascii_digit())) {
+        return Err("Use a domain name, not an IP address".into());
+    }
+    if let Some(base) = base {
+        if host == base {
+            return Err(format!("'{host}' is the platform's base domain"));
+        }
+        if let Some(label) = host.strip_suffix(&format!(".{base}")) {
+            if !label.contains('.') {
+                normalize_label(label)?;
+            }
+        }
+    }
+    Ok(host)
+}
+
+/// `(first label, parent)` of a hostname: `shop.example.com` → `("shop", "example.com")`.
+fn split_host(hostname: &str) -> (&str, &str) {
+    hostname.split_once('.').unwrap_or((hostname, ""))
+}
+
+/// The label typed in a rejected input, made safe enough to seed suggestions.
+fn seed_label(input: &str) -> String {
+    input
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 async fn is_taken(state: &AppState, hostname: &str) -> Result<bool, ApiAppError> {
@@ -118,16 +177,19 @@ async fn is_taken(state: &AppState, hostname: &str) -> Result<bool, ApiAppError>
         .map_err(db_err)
 }
 
-/// Up to `want` free names near `label`, as `{subdomain, hostname}`.
+/// Up to `want` free names near `label` under `parent`, as `{subdomain, hostname}`.
 async fn suggest(
     state: &AppState,
-    base: &str,
+    parent: &str,
     label: &str,
     want: usize,
 ) -> Result<Vec<serde_json::Value>, ApiAppError> {
     let mut out = vec![];
     for c in candidate_labels(label, &mut || random_alnum(4)) {
-        let hostname = format!("{c}.{base}");
+        let hostname = format!("{c}.{parent}");
+        if hostname.len() > 253 {
+            continue;
+        }
         if !is_taken(state, &hostname).await? {
             out.push(serde_json::json!({ "subdomain": c, "hostname": hostname }));
             if out.len() == want {
@@ -138,7 +200,46 @@ async fn suggest(
     Ok(out)
 }
 
-/// The platform hostname (under the base domain) an environment serves on now.
+/// Suggestions for an input that isn't a valid name: in hostname mode keep the
+/// parent domain when what's after the first dot is usable, else fall back to
+/// the apps base domain.
+async fn suggest_for_invalid(
+    state: &AppState,
+    input: &str,
+    hostname_mode: bool,
+) -> Result<Vec<serde_json::Value>, ApiAppError> {
+    let base = base_domain(state);
+    let (seed, parent) = if hostname_mode {
+        let trimmed = input.trim().trim_end_matches('.').to_ascii_lowercase();
+        let (first, rest) = split_host(&trimmed);
+        let parent = normalize_hostname(rest, None).ok().or(base);
+        (seed_label(first), parent)
+    } else {
+        (seed_label(input), base)
+    };
+    match parent {
+        Some(parent) if seed.len() >= 3 => suggest(state, &parent, &seed, 5).await,
+        _ => Ok(vec![]),
+    }
+}
+
+/// The hostname the integration manages for an environment (its platform
+/// address): flagged `integration_managed`, or from before that flag, under
+/// the apps base domain.
+pub(crate) const MANAGED_SQL: &str =
+    "(d.integration_managed OR ($2::text IS NOT NULL AND d.hostname LIKE '%.' || $2))";
+
+/// Flags a domain row as the environment's managed address.
+pub(crate) async fn mark_managed(state: &AppState, domain_id: Uuid) -> Result<(), ApiAppError> {
+    sqlx::query("UPDATE domains SET integration_managed = TRUE WHERE id = $1")
+        .bind(domain_id)
+        .execute(&state.db)
+        .await
+        .map_err(db_err)?;
+    Ok(())
+}
+
+/// The platform hostname an environment serves on now.
 struct Current {
     service_id: Uuid,
     domain_id: Uuid,
@@ -149,14 +250,14 @@ struct Current {
 async fn current_domain(
     state: &AppState,
     project_id: Uuid,
-    base: &str,
+    base: Option<&str>,
 ) -> Result<Option<Current>, ApiAppError> {
-    let row: Option<(Uuid, Uuid, String, Option<i32>)> = sqlx::query_as(
+    let row: Option<(Uuid, Uuid, String, Option<i32>)> = sqlx::query_as(&format!(
         "SELECT d.service_id, d.id, d.hostname, d.port
          FROM domains d JOIN services s ON s.id = d.service_id
-         WHERE s.project_id = $1 AND d.hostname LIKE '%.' || $2 AND s.slug <> 'relay'
-         ORDER BY (s.slug = 'web') DESC, d.created_at LIMIT 1",
-    )
+         WHERE s.project_id = $1 AND {MANAGED_SQL} AND s.slug <> 'relay'
+         ORDER BY (s.slug = 'web') DESC, d.integration_managed DESC, d.created_at LIMIT 1"
+    ))
     .bind(project_id)
     .bind(base)
     .fetch_optional(&state.db)
@@ -170,15 +271,65 @@ async fn current_domain(
     }))
 }
 
+/// What the caller asked for: a full `hostname` (preferred) or a `subdomain`
+/// under the apps base domain (legacy).
+enum Requested {
+    Hostname(String),
+    Subdomain(String),
+}
+
+impl Requested {
+    fn from(hostname: Option<String>, subdomain: Option<String>) -> Result<Self, ApiAppError> {
+        match (hostname, subdomain) {
+            (Some(h), None) => Ok(Self::Hostname(h)),
+            (None, Some(s)) => Ok(Self::Subdomain(s)),
+            (Some(_), Some(_)) => Err(ApiAppError(AppError::BadRequest(
+                "Send either `hostname` or `subdomain`, not both".into(),
+            ))),
+            (None, None) => Err(ApiAppError(AppError::BadRequest(
+                "Send `hostname` (a full domain, e.g. my-app.example.com)".into(),
+            ))),
+        }
+    }
+
+    fn input(&self) -> &str {
+        match self {
+            Self::Hostname(s) | Self::Subdomain(s) => s,
+        }
+    }
+
+    /// The normalized hostname, or why it can't be used.
+    fn resolve(&self, state: &AppState) -> Result<Result<String, String>, ApiAppError> {
+        let base = base_domain(state);
+        Ok(match self {
+            Self::Hostname(h) => normalize_hostname(h, base.as_deref()),
+            Self::Subdomain(s) => {
+                let base = require_base(state)?;
+                normalize_label(s).map(|l| format!("{l}.{base}"))
+            }
+        })
+    }
+}
+
+/// `subdomain` in responses: the first label when the hostname is directly
+/// under the apps base domain, else null.
+fn subdomain_of(hostname: &str, base: Option<&str>) -> Option<String> {
+    let label = hostname.strip_suffix(&format!(".{}", base?))?;
+    (!label.contains('.')).then(|| label.to_string())
+}
+
 #[derive(Deserialize)]
 struct CheckQuery {
-    subdomain: String,
+    /// Full domain, e.g. `my-app.example.com`.
+    hostname: Option<String>,
+    /// Legacy: first label under the apps base domain.
+    subdomain: Option<String>,
     /// With `app` and `env`: the environment's own current name counts as available.
     app: Option<String>,
     env: Option<String>,
 }
 
-/// GET /orgs/{org}/domains/check?subdomain=my-app[&app=todo&env=production]
+/// GET /orgs/{org}/domains/check?hostname=my-app.example.com[&app=todo&env=production]
 async fn check_domain(
     caller: IntegrationCaller,
     Path(org): Path<String>,
@@ -188,56 +339,49 @@ async fn check_domain(
     caller.require(SCOPE_MANAGE)?;
     // The org must be reachable, but the answer is about the whole platform.
     org_by_external(&state.db, &caller, &org).await?;
-    let base = base_domain(&state)?.0;
+    let base = base_domain(&state);
+    let req = Requested::from(q.hostname, q.subdomain)?;
+    let hostname_mode = matches!(req, Requested::Hostname(_));
 
-    let requested = q.subdomain.trim().to_ascii_lowercase();
-    let label = match normalize_label(&q.subdomain) {
-        Ok(l) => l,
+    let hostname = match req.resolve(&state)? {
+        Ok(h) => h,
         Err(reason) => {
             // Still helpful: offer valid names derived from what was typed.
-            let seed: String = requested
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect::<String>()
-                .trim_matches('-')
-                .to_string();
-            let suggestions = if seed.len() >= 3 {
-                suggest(&state, &base, &seed, 5).await?
-            } else {
-                vec![]
-            };
+            let suggestions = suggest_for_invalid(&state, req.input(), hostname_mode).await?;
             return Ok(Json(ApiResponse::ok(serde_json::json!({
-                "subdomain": requested, "hostname": null, "available": false,
-                "reason": "invalid", "message": reason, "suggestions": suggestions,
+                "hostname": null, "input": req.input().trim().to_ascii_lowercase(),
+                "subdomain": (!hostname_mode).then(|| req.input().trim().to_ascii_lowercase()),
+                "available": false, "reason": "invalid", "message": reason, "suggestions": suggestions,
             }))));
         }
     };
-    let hostname = format!("{label}.{base}");
+    let subdomain = subdomain_of(&hostname, base.as_deref());
 
     let mut own = false;
     if let (Some(app), Some(env)) = (&q.app, &q.env) {
         let app = app_ref(&state.db, &caller, &org, app).await?;
         let project_id = env_project(&state.db, &app, env).await?;
-        own = current_domain(&state, project_id, &base)
+        own = current_domain(&state, project_id, base.as_deref())
             .await?
             .is_some_and(|c| c.hostname == hostname);
     }
     if own {
         return Ok(Json(ApiResponse::ok(serde_json::json!({
-            "subdomain": label, "hostname": hostname, "available": true, "current": true,
+            "hostname": hostname, "subdomain": subdomain, "available": true, "current": true,
             "suggestions": [],
         }))));
     }
     if is_taken(&state, &hostname).await? {
-        let suggestions = suggest(&state, &base, &label, 5).await?;
+        let (label, parent) = split_host(&hostname);
+        let suggestions = suggest(&state, parent, label, 5).await?;
         return Ok(Json(ApiResponse::ok(serde_json::json!({
-            "subdomain": label, "hostname": hostname, "available": false,
-            "reason": "taken", "message": format!("'{label}' is already in use"),
+            "hostname": hostname, "subdomain": subdomain, "available": false,
+            "reason": "taken", "message": format!("'{hostname}' is already in use"),
             "suggestions": suggestions,
         }))));
     }
     Ok(Json(ApiResponse::ok(serde_json::json!({
-        "subdomain": label, "hostname": hostname, "available": true, "suggestions": [],
+        "hostname": hostname, "subdomain": subdomain, "available": true, "suggestions": [],
     }))))
 }
 
@@ -248,15 +392,15 @@ async fn get_domain(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
-    let base = base_domain(&state)?.0;
+    let base = base_domain(&state);
     let app = app_ref(&state.db, &caller, &org, &app_key).await?;
     let project_id = env_project(&state.db, &app, &env).await?;
-    let current = current_domain(&state, project_id, &base).await?;
+    let current = current_domain(&state, project_id, base.as_deref()).await?;
     Ok(Json(ApiResponse::ok(match current {
         Some(c) => serde_json::json!({
-            "hostname": c.hostname,
-            "subdomain": c.hostname.strip_suffix(&format!(".{base}")),
+            "subdomain": subdomain_of(&c.hostname, base.as_deref()),
             "url": format!("https://{}", c.hostname),
+            "hostname": c.hostname,
         }),
         None => serde_json::json!({ "hostname": null, "subdomain": null, "url": null }),
     })))
@@ -264,15 +408,20 @@ async fn get_domain(
 
 #[derive(Deserialize)]
 struct ChangeDomain {
-    subdomain: String,
+    /// Full domain, e.g. `my-app.example.com`.
+    #[serde(default)]
+    hostname: Option<String>,
+    /// Legacy: first label under the apps base domain.
+    #[serde(default)]
+    subdomain: Option<String>,
 }
 
-/// PUT /orgs/{org}/apps/{app}/envs/{env}/domain  `{ "subdomain": "my-app" }`
+/// PUT /orgs/{org}/apps/{app}/envs/{env}/domain  `{ "hostname": "my-app.example.com" }`
 ///
-/// Moves the environment to `<subdomain>.<base>`. The new name is attached
-/// before the old one is removed, so the app never goes unreachable. A name
-/// that is invalid or taken answers 409 with free alternatives and changes
-/// nothing.
+/// Moves the environment to the given hostname (or, legacy, to
+/// `<subdomain>.<base>`). The new name is attached before the old one is
+/// removed, so the app never goes unreachable. A name that is invalid or taken
+/// answers 409 with free alternatives and changes nothing.
 async fn change_domain(
     caller: IntegrationCaller,
     Path((org, app_key, env)): Path<(String, String, String)>,
@@ -280,9 +429,11 @@ async fn change_domain(
     Json(body): Json<ChangeDomain>,
 ) -> Result<Response, ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
-    let base = base_domain(&state)?.0;
+    let base = base_domain(&state);
     let app = app_ref(&state.db, &caller, &org, &app_key).await?;
     let project_id = env_project(&state.db, &app, &env).await?;
+    let req = Requested::from(body.hostname, body.subdomain)?;
+    let hostname_mode = matches!(req, Requested::Hostname(_));
 
     let unavailable = |reason: &str, message: String, suggestions: Vec<serde_json::Value>| {
         (
@@ -295,34 +446,21 @@ async fn change_domain(
             .into_response()
     };
 
-    let label = match normalize_label(&body.subdomain) {
-        Ok(l) => l,
+    let hostname = match req.resolve(&state)? {
+        Ok(h) => h,
         Err(message) => {
-            let seed: String = body
-                .subdomain
-                .trim()
-                .to_ascii_lowercase()
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect::<String>()
-                .trim_matches('-')
-                .to_string();
-            let suggestions = if seed.len() >= 3 {
-                suggest(&state, &base, &seed, 5).await?
-            } else {
-                vec![]
-            };
+            let suggestions = suggest_for_invalid(&state, req.input(), hostname_mode).await?;
             return Ok(unavailable("invalid", message, suggestions));
         }
     };
-    let hostname = format!("{label}.{base}");
 
-    let Some(current) = current_domain(&state, project_id, &base).await? else {
+    let Some(current) = current_domain(&state, project_id, base.as_deref()).await? else {
         return Err(ApiAppError(AppError::Conflict(
             "This environment has no platform address yet. Publish it first.".into(),
         )));
     };
     if current.hostname == hostname {
+        mark_managed(&state, current.domain_id).await?;
         return Ok(Json(ApiResponse::ok(serde_json::json!({
             "hostname": hostname, "url": format!("https://{hostname}"),
             "previous_hostname": hostname, "changed": false,
@@ -330,13 +468,14 @@ async fn change_domain(
         .into_response());
     }
 
-    let taken_msg = format!("'{label}' is already in use");
+    let taken_msg = format!("'{hostname}' is already in use");
+    let (label, parent) = split_host(&hostname);
     if is_taken(&state, &hostname).await? {
-        let suggestions = suggest(&state, &base, &label, 5).await?;
+        let suggestions = suggest(&state, parent, label, 5).await?;
         return Ok(unavailable("taken", taken_msg, suggestions));
     }
 
-    match crate::resources::attach_domain(
+    let attached = match crate::resources::attach_domain(
         &state,
         current.service_id,
         &hostname,
@@ -346,14 +485,15 @@ async fn change_domain(
     )
     .await
     {
-        Ok(_) => {}
+        Ok(d) => d,
         // Lost a race with someone taking the same name.
         Err(ApiAppError(AppError::Conflict(_))) => {
-            let suggestions = suggest(&state, &base, &label, 5).await?;
+            let suggestions = suggest(&state, parent, label, 5).await?;
             return Ok(unavailable("taken", taken_msg, suggestions));
         }
         Err(e) => return Err(e),
-    }
+    };
+    mark_managed(&state, attached.id).await?;
     crate::resources::detach_domain(&state, current.service_id, current.domain_id).await?;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({
@@ -380,6 +520,36 @@ mod tests {
         assert!(normalize_label("www").is_err());
         assert!(normalize_label("preview-abc").is_err());
         assert!(normalize_label("cool-shop").is_ok());
+    }
+
+    #[test]
+    fn normalizes_and_rejects_hostnames() {
+        let base = Some("apps.test");
+        assert_eq!(normalize_hostname(" Shop.Example.COM. ", base).unwrap(), "shop.example.com");
+        assert_eq!(normalize_hostname("my-shop.apps.test", base).unwrap(), "my-shop.apps.test");
+        assert_eq!(normalize_hostname("a.b.apps.test", base).unwrap(), "a.b.apps.test");
+        assert!(normalize_hostname("", base).is_err());
+        assert!(normalize_hostname("localhost", base).is_err());
+        assert!(normalize_hostname("apps.test", base).is_err());
+        assert!(normalize_hostname("www.apps.test", base).is_err());
+        assert!(normalize_hostname("ab.apps.test", base).is_err());
+        assert!(normalize_hostname("bad_name.example.com", base).is_err());
+        assert!(normalize_hostname("-bad.example.com", base).is_err());
+        assert!(normalize_hostname("a..example.com", base).is_err());
+        assert!(normalize_hostname("*.example.com", base).is_err());
+        assert!(normalize_hostname("10.0.0.1", base).is_err());
+        assert!(normalize_hostname(&format!("{}.com", "a".repeat(64)), base).is_err());
+        // Short or reserved labels are fine on a domain that isn't the base.
+        assert!(normalize_hostname("www.example.com", base).is_ok());
+        assert!(normalize_hostname("ab.example.com", None).is_ok());
+    }
+
+    #[test]
+    fn subdomain_only_for_direct_children_of_the_base() {
+        assert_eq!(subdomain_of("shop.apps.test", Some("apps.test")).as_deref(), Some("shop"));
+        assert_eq!(subdomain_of("a.b.apps.test", Some("apps.test")), None);
+        assert_eq!(subdomain_of("shop.example.com", Some("apps.test")), None);
+        assert_eq!(subdomain_of("shop.apps.test", None), None);
     }
 
     #[test]

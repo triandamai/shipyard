@@ -385,6 +385,7 @@
 		font-family: var(--font-mono); font-size: 10px;
 		background: var(--bg-base); padding: 1px 4px; border-radius: 3px;
 		border: 1px solid var(--border);
+		word-break: break-all;
 	}
 
 	.picker-btn {
@@ -392,13 +393,21 @@
 		padding: 8px 10px; background: var(--bg-elevated); border: 1px solid var(--border);
 		border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px;
 		font-family: var(--font-sans); cursor: pointer; text-align: left; width: 100%;
+		max-width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden;
 		transition: border-color var(--transition-fast);
 	}
 	.picker-btn:hover { border-color: var(--accent); }
 	.picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 	:global(.picker-icon) { color: var(--text-dim); flex-shrink: 0; }
 	.picker-placeholder { flex: 1; color: var(--text-dim); font-size: 13px; }
-	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; }
+	.picker-value {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	:global(.picker-chevron) { color: var(--text-dim); flex-shrink: 0; margin-left: auto; }
 
 	.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
 	.chip {

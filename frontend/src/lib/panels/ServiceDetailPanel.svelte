@@ -615,6 +615,39 @@
 	}
 
 	// ── Actions ──────────────────────────────────────────────────────
+	async function attachDeploymentTracking(dep: Deployment) {
+		const depId = dep.id;
+		deployments = [dep, ...deployments];
+		deploymentStore.setActiveDeployment(dep);
+		unsubscribeDeployment?.();
+		unsubscribeDeployment = subscribeToDeployment(orgId, projectId, serviceId, depId);
+
+		// Track all status changes so banner stays accurate.
+		const depStatusTopic = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/deployments/${depId}/status`;
+		const onDepStatus = (payload: MqttPayload) => {
+			const evt = payload.event ?? '';
+			const mqttStatus = (payload.meta as any)?.status as string | undefined;
+			const newStatus: Deployment['status'] | null =
+				(evt.includes('success') || mqttStatus === 'success') ? 'success' :
+				(evt.includes('failed')  || mqttStatus === 'failed')  ? 'failed'  :
+				(evt.includes('cancel')  || mqttStatus === 'cancelled') ? 'cancelled' :
+				(mqttStatus === 'running') ? 'running' : null;
+
+			if (newStatus) {
+				deployments = deployments.map(d => d.id === depId ? { ...d, status: newStatus! } : d);
+			}
+			// Unsubscribe on terminal states only.
+			if (newStatus === 'success' || newStatus === 'failed' || newStatus === 'cancelled') {
+				eventBus.off(depStatusTopic, onDepStatus);
+				void loadDeployments();
+				void loadContainers();
+			}
+		};
+		eventBus.on(depStatusTopic, onDepStatus);
+
+		await loadStepsForLatest();
+	}
+
 	async function triggerDeploy() {
 		if (!service || isDeploying) return;
 		isDeploying = true;
@@ -624,34 +657,7 @@
 
 		const res = await api.post<Deployment>(`/services/${serviceId}/deploy`);
 		if (res.data) {
-			const depId = res.data.id;
-			deployments = [res.data, ...deployments];
-			deploymentStore.setActiveDeployment(res.data);
-			unsubscribeDeployment?.();
-			unsubscribeDeployment = subscribeToDeployment(orgId, projectId, serviceId, depId);
-
-			// Track all status changes so banner stays accurate.
-			const depStatusTopic = `platform/orgs/${orgId}/projects/${projectId}/services/${serviceId}/deployments/${depId}/status`;
-			const onDepStatus = (payload: MqttPayload) => {
-				const evt = payload.event ?? '';
-				const mqttStatus = (payload.meta as any)?.status as string | undefined;
-				const newStatus: Deployment['status'] | null =
-					(evt.includes('success') || mqttStatus === 'success') ? 'success' :
-					(evt.includes('failed')  || mqttStatus === 'failed')  ? 'failed'  :
-					(evt.includes('cancel')  || mqttStatus === 'cancelled') ? 'cancelled' :
-					(mqttStatus === 'running') ? 'running' : null;
-
-				if (newStatus) {
-					deployments = deployments.map(d => d.id === depId ? { ...d, status: newStatus! } : d);
-				}
-				// Unsubscribe on terminal states only.
-				if (newStatus === 'success' || newStatus === 'failed' || newStatus === 'cancelled') {
-					eventBus.off(depStatusTopic, onDepStatus);
-				}
-			};
-			eventBus.on(depStatusTopic, onDepStatus);
-
-			await loadStepsForLatest();
+			await attachDeploymentTracking(res.data);
 		} else {
 			// API call failed — revert canvas optimistic update.
 			topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: service?.status ?? 'stopped' } });
@@ -696,8 +702,13 @@
 	async function triggerRedeploy() {
 		if (!service || isDeploying) return;
 		isDeploying = true;
+		topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: 'deploying' } });
 		const res = await api.post<Deployment>(`/services/${serviceId}/redeploy`);
-		if (res.data) deployments = [res.data, ...deployments];
+		if (res.data) {
+			await attachDeploymentTracking(res.data);
+		} else {
+			topologyStore.refreshNode(`svc_${serviceId}`, { data: { status: service?.status ?? 'stopped' } });
+		}
 		isDeploying = false;
 	}
 
@@ -852,16 +863,20 @@
 			is_secret: false,
 		});
 
-		// Persist the auto-deploy-on-push flag for artifact-source services,
-		// re-sending the unchanged namespace/repo/tag binding.
-		if (artifactSource && editAutoDeployOnPush !== artifactSource.auto_deploy_on_push) {
-			const res = await api.putArtifactSource(serviceId, {
-				namespace_id: artifactSource.namespace_id,
-				repo: artifactSource.repo,
-				tag: artifactSource.tag,
-				auto_deploy_on_push: editAutoDeployOnPush,
-			});
-			if (res.data) artifactSource = res.data;
+		// Persist the auto-deploy-on-push flag and tag for artifact-source services,
+		// syncing tag from the edited image if changed.
+		if (artifactSource) {
+			const tagFromImage = image.includes(':') ? image.split(':').pop()?.trim() : null;
+			const updatedTag = (tagFromImage && tagFromImage.length > 0) ? tagFromImage : artifactSource.tag;
+			if (updatedTag !== artifactSource.tag || editAutoDeployOnPush !== artifactSource.auto_deploy_on_push) {
+				const res = await api.putArtifactSource(serviceId, {
+					namespace_id: artifactSource.namespace_id,
+					repo: artifactSource.repo,
+					tag: updatedTag,
+					auto_deploy_on_push: editAutoDeployOnPush,
+				});
+				if (res.data) artifactSource = res.data;
+			}
 		}
 
 		settingsSaveSuccess = true;

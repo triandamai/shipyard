@@ -48,6 +48,7 @@ pub struct LoginRequest {
 pub struct LoginUserInfo {
     pub id: Uuid,
     pub email: String,
+    pub is_superadmin: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -297,6 +298,7 @@ async fn login(
             user: LoginUserInfo {
                 id: user.id,
                 email: user.email,
+                is_superadmin: user.is_superadmin,
             },
         })),
     ))

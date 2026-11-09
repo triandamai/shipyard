@@ -266,30 +266,33 @@ def main():
         print("\nDomain")
         r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/production/domain")
         cur = data(r) or {}
-        if r[0] == 200 and cur.get("subdomain"):
+        if r[0] == 200 and cur.get("hostname"):
+            host = cur["hostname"]
+            label, parent = host.split(".", 1)
+            moved = f"{label}-x.{parent}"
             check("current domain is reported", bool(cur.get("url")), json.dumps(cur)[:160])
-            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={cur['subdomain']}&app={app}&env=production")
+            r = c.call("GET", f"/orgs/{org}/domains/check?hostname={host}&app={app}&env=production")
             d = data(r) or {}
             check("own name counts as available", d.get("available") is True and d.get("current") is True, json.dumps(d)[:160])
-            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={cur['subdomain']}")
+            r = c.call("GET", f"/orgs/{org}/domains/check?hostname={host}")
             d = data(r) or {}
             check("a name in use is refused with free suggestions", d.get("available") is False and d.get("reason") == "taken" and len(d.get("suggestions", [])) > 0, json.dumps(d)[:200])
             if d.get("suggestions"):
-                s0 = d["suggestions"][0]["subdomain"]
-                r = c.call("GET", f"/orgs/{org}/domains/check?subdomain={s0}")
+                s0 = d["suggestions"][0]["hostname"]
+                r = c.call("GET", f"/orgs/{org}/domains/check?hostname={s0}")
                 check("every suggestion is itself available", (data(r) or {}).get("available") is True, s0)
-            r = c.call("GET", f"/orgs/{org}/domains/check?subdomain=Bad_Name")
+            r = c.call("GET", f"/orgs/{org}/domains/check?hostname=Bad_Name.{parent}")
             d = data(r) or {}
             check("an invalid name is explained", d.get("available") is False and d.get("reason") == "invalid", json.dumps(d)[:160])
-            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"subdomain": cur["subdomain"] + "-x"})
+            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"hostname": moved})
             d = data(r) or {}
-            check("change to a free name", r[0] == 200 and d.get("changed") is True, errmsg(r))
+            check("change to a free full hostname", r[0] == 200 and d.get("changed") is True, errmsg(r))
             r = c.call("GET", f"/orgs/{org}/apps/{app}/envs/production/domain")
-            check("the new name is live in the environment", (data(r) or {}).get("subdomain") == cur["subdomain"] + "-x", json.dumps(data(r))[:160])
-            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"subdomain": "www"})
-            check("a reserved name is refused (409 with suggestions)", r[0] == 409, errmsg(r))
+            check("the new name is live in the environment", (data(r) or {}).get("hostname") == moved, json.dumps(data(r))[:160])
+            r = c.call("PUT", f"/orgs/{org}/apps/{app}/envs/production/domain", {"hostname": "10.0.0.1"})
+            check("an invalid hostname is refused (409)", r[0] == 409, errmsg(r))
         else:
-            skip("domain checks", "no apps base domain configured")
+            skip("domain checks", "the environment has no address")
 
         if args.skip_container:
             skip("container publish, rollback, restart, failure", "--skip-container")
@@ -391,14 +394,24 @@ def main():
 
         print("\nTermination")
         r = c.call("DELETE", f"/orgs/{org}/apps/{app}")
-        check("terminate the app", r[0] == 200, errmsg(r))
-        r = c.call("GET", f"/orgs/{org}/apps/{app}")
+        check("terminate the app (202, runs in the background)", r[0] == 202, errmsg(r))
+        # Termination is asynchronous: poll until the app is gone.
+        for _ in range(60):
+            r = c.call("GET", f"/orgs/{org}/apps/{app}")
+            if r[0] == 404:
+                break
+            time.sleep(2)
         check("the app is gone", r[0] == 404, errmsg(r))
     finally:
         if created and not args.keep:
             r = c.call("DELETE", f"/orgs/{org}")
-            check("delete the test org", r[0] == 200, errmsg(r))
-            r = c.call("GET", f"/orgs/{org}")
+            check("delete the test org (202, runs in the background)", r[0] == 202, errmsg(r))
+            # Teardown is asynchronous: poll until the org is gone.
+            for _ in range(60):
+                r = c.call("GET", f"/orgs/{org}")
+                if r[0] == 404:
+                    break
+                time.sleep(2)
             check("the org is gone", r[0] == 404, errmsg(r))
 
     failed = [x for x in RESULTS if x[0] == "FAIL"]

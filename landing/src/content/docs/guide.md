@@ -310,28 +310,63 @@ Navigate to a project → **Import Compose** to turn a `docker-compose.yml` into
 
 ## Webhook triggers {#webhooks}
 
-Trigger a deployment from any external system (GitHub Actions, GitLab CI, a cron job) without using the dashboard.
+Trigger a deployment from any external system (GitHub Actions, GitLab CI, Docker Hub, a cron job) without using the dashboard.
 
 ### Getting the webhook URL
 
 1. Open a service → **Settings** tab → scroll to *Webhook*
 2. Click **Reveal token** to see your webhook URL
-3. Copy the URL — it looks like `POST /api/projects/:id/services/:id/deploy/webhook?token=...`
+3. Copy the URL — it looks like `POST /api/webhooks/deploy/:service_id/:token`
 
 ### Triggering a deployment
 
 ```bash
-curl -X POST "https://ship.example.com/api/projects/PROJECT_ID/services/SERVICE_ID/deploy/webhook?token=TOKEN"
+curl -X POST "https://ship.example.com/api/webhooks/deploy/SERVICE_ID/TOKEN"
 ```
 
-A `201 Created` response means a deployment was queued. The response body contains the deployment ID.
+A `200 OK` response means a deployment was queued. The response body contains the deployment ID:
+
+```json
+{
+  "data": {
+    "message": "deployment queued",
+    "deployment_id": "0194e012-3456-789a-bcde-f0123456789a",
+    "source_ref": "deploy-webhook"
+  }
+}
+```
+
+### Updating the image tag on deploy
+
+Instead of always deploying `:latest` or whatever tag was previously configured on the service, you can pass a new image tag or a full image reference on each webhook trigger.
+
+#### Via query parameter (`?tag=` or `?image=`)
+
+```bash
+# Update tag only (preserves repository/registry base, e.g. ghcr.io/org/app:v1.2.3)
+curl -X POST "https://ship.example.com/api/webhooks/deploy/SERVICE_ID/TOKEN?tag=v1.2.3"
+
+# Update full image reference
+curl -X POST "https://ship.example.com/api/webhooks/deploy/SERVICE_ID/TOKEN?image=ghcr.io/org/app:v1.2.3"
+```
+
+#### Via JSON body
+
+```bash
+curl -X POST "https://ship.example.com/api/webhooks/deploy/SERVICE_ID/TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tag": "v1.2.3"}'
+```
+
+Docker Hub automated webhooks are also supported directly — when Docker Hub sends its `{"push_data": {"tag": "..."}}` payload, Shipyard automatically updates the tag and deploys the newly pushed image.
 
 ### GitHub Actions example
 
 ```yaml
-- name: Deploy to Shipyard
+- name: Deploy to Shipyard with tag
   run: |
-    curl -fsS -X POST "${{ secrets.SHIPYARD_WEBHOOK_URL }}"
+    curl -fsS -X POST \
+      "https://ship.example.com/api/webhooks/deploy/${{ secrets.SHIPYARD_SERVICE_ID }}/${{ secrets.SHIPYARD_WEBHOOK_TOKEN }}?tag=${{ github.ref_name }}"
 ```
 
 ## Rollback {#rollback}

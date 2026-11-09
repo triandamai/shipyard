@@ -10,6 +10,8 @@ use uuid::Uuid;
 use shipyard_common::{error::AppError, types::ApiResponse};
 use crate::{auth::AuthUser, error::ApiAppError, AppState};
 
+pub mod orphans;
+
 // ─── Admin access guards ──────────────────────────────────────────────────────
 
 pub async fn require_superadmin(
@@ -117,6 +119,7 @@ pub fn routes() -> Router<AppState> {
         .route("/storage/download", get(download_storage))
         .route("/storage/download-archive", get(download_storage))
         .route("/storage/test", get(test_storage))
+        .nest("/orphans", orphans::routes())
 }
 
 // ─── GET /admin/stats ─────────────────────────────────────────────────────────
