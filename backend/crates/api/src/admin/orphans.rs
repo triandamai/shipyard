@@ -13,13 +13,17 @@ use crate::AppState;
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use shipyard_docker_worker::orphans::{
-    delete_orphan, list_orphans, scan_and_reconcile_orphans, OrphanResource,
+    cleanup_unused_registry_artifacts, delete_orphan, get_cleanup_settings, list_orphans,
+    save_cleanup_settings, scan_and_reconcile_orphans, CleanupSettings, OrphanResource,
+    RegistryCleanupReport,
 };
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(get_orphans))
         .route("/scan", post(trigger_scan))
+        .route("/settings", get(get_settings).put(update_settings))
+        .route("/cleanup-registry", post(trigger_registry_cleanup))
         .route("/delete-batch", post(delete_batch))
         .route("/:id", delete(delete_single))
 }
@@ -93,6 +97,40 @@ async fn trigger_scan(
     })))
 }
 
+/// GET /admin/orphans/settings
+async fn get_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<CleanupSettings>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:infra:view").await?;
+    let settings = get_cleanup_settings(&state.db).await;
+    Ok(Json(ApiResponse::ok(settings)))
+}
+
+/// PUT /admin/orphans/settings
+async fn update_settings(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(body): Json<CleanupSettings>,
+) -> Result<Json<ApiResponse<CleanupSettings>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:infra:manage").await?;
+    save_cleanup_settings(&state.db, &body).await.map_err(ApiAppError)?;
+    Ok(Json(ApiResponse::ok(body)))
+}
+
+/// POST /admin/orphans/cleanup-registry
+async fn trigger_registry_cleanup(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<RegistryCleanupReport>>, ApiAppError> {
+    require_admin_access(&state.db, auth.user_id, "shipyard:admin:infra:manage").await?;
+    let settings = get_cleanup_settings(&state.db).await;
+    let report = cleanup_unused_registry_artifacts(&state.db, settings.registry_unused_retention_days)
+        .await
+        .map_err(ApiAppError)?;
+    Ok(Json(ApiResponse::ok(report)))
+}
+
 /// DELETE /admin/orphans/:id
 async fn delete_single(
     auth: AuthUser,
@@ -162,15 +200,17 @@ mod tests {
 
     #[test]
     fn test_orphan_response_serialization() {
+        let now = chrono::Utc::now();
         let item = OrphanResource {
             id: Uuid::now_v7(),
-            orphan_type: shipyard_docker_worker::orphans::OrphanType::Org,
-            identifier: "0190a4b2-0000-7000-8000-000000000001".to_string(),
-            path: "/opt/shipyard/data/0190a4b2-0000-7000-8000-000000000001".to_string(),
+            orphan_type: shipyard_docker_worker::orphans::OrphanType::Git,
+            identifier: "0190a4b2-0000-7000-8000-000000000001.git".to_string(),
+            path: "/opt/shipyard/data/sources/0190a4b2-0000-7000-8000-000000000001.git".to_string(),
             size_bytes: 4096,
-            details: Some("Orphan org directory".to_string()),
-            detected_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            details: Some("Orphan git repository".to_string()),
+            detected_at: now,
+            auto_destruct_at: now + chrono::Duration::days(30),
+            updated_at: now,
         };
 
         let resp = OrphanListResponse {
@@ -181,7 +221,22 @@ mod tests {
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("orphan_type"));
-        assert!(json.contains("org"));
+        assert!(json.contains("git"));
+        assert!(json.contains("auto_destruct_at"));
         assert!(json.contains("4096"));
+    }
+
+    #[test]
+    fn test_cleanup_settings_serialization() {
+        let settings = CleanupSettings {
+            orphan_retention_days: 14,
+            orphan_auto_destruct_enabled: true,
+            registry_unused_retention_days: 60,
+            registry_auto_removal_enabled: false,
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("14"));
+        assert!(json.contains("60"));
+        assert!(json.contains("registry_auto_removal_enabled"));
     }
 }
