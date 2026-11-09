@@ -10,8 +10,10 @@ CREATE TABLE IF NOT EXISTS orphans (
     size_bytes BIGINT NOT NULL DEFAULT 0,
     details TEXT,
     detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    auto_destruct_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_orphans_type ON orphans(orphan_type);
 CREATE INDEX IF NOT EXISTS idx_orphans_detected ON orphans(detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orphans_auto_destruct ON orphans(auto_destruct_at);

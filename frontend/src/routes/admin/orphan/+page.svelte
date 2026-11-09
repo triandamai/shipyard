@@ -14,11 +14,36 @@
 		Spinner,
 		SearchInput,
 		Tabs,
+		Modal,
+		Toggle,
+		FormField,
+		TextField,
 		type TabItem
 	} from '$lib/components/ui';
-	import { Trash2, RefreshCw, FolderX, HardDrive, Building2, FolderKanban, Box, Layers } from '@lucide/svelte';
+	import {
+		Trash2,
+		RefreshCw,
+		FolderX,
+		HardDrive,
+		Building2,
+		FolderKanban,
+		Box,
+		Layers,
+		GitBranch,
+		FileText,
+		Clock,
+		Settings,
+		Archive
+	} from '@lucide/svelte';
 
-	export type OrphanType = 'org' | 'project' | 'service' | 'volume' | 'directory';
+	export type OrphanType = 'org' | 'project' | 'service' | 'volume' | 'directory' | 'git' | 'file' | 'static_file' | 'registry';
+
+	export interface CleanupSettings {
+		orphan_retention_days: number;
+		orphan_auto_destruct_enabled: boolean;
+		registry_unused_retention_days: number;
+		registry_auto_removal_enabled: boolean;
+	}
 
 	export interface OrphanResource {
 		id: string;
@@ -28,6 +53,7 @@
 		size_bytes: number;
 		details: string | null;
 		detected_at: string;
+		auto_destruct_at: string;
 		updated_at: string;
 	}
 
@@ -69,13 +95,37 @@
 		return `${Math.floor(s / 86400)}d ago`;
 	}
 
-	function typeTone(t: OrphanType): 'purple' | 'blue' | 'green' | 'yellow' | 'neutral' {
+	function autoDestructCountdown(destructDateStr: string): { label: string; tone: 'danger' | 'yellow' | 'neutral'; expired: boolean } {
+		const ms = new Date(destructDateStr).getTime() - Date.now();
+		if (ms <= 0) {
+			return { label: 'Expired', tone: 'danger', expired: true };
+		}
+		const hours = Math.floor(ms / (1000 * 60 * 60));
+		const days = Math.floor(hours / 24);
+		if (days > 1) {
+			return { label: `${days}d left`, tone: days <= 3 ? 'danger' : 'neutral', expired: false };
+		}
+		if (days === 1) {
+			return { label: '1d left', tone: 'yellow', expired: false };
+		}
+		if (hours > 0) {
+			return { label: `${hours}h left`, tone: 'danger', expired: false };
+		}
+		const mins = Math.floor(ms / (1000 * 60));
+		return { label: `${mins}m left`, tone: 'danger', expired: false };
+	}
+
+	function typeTone(t: OrphanType): 'purple' | 'blue' | 'green' | 'yellow' | 'neutral' | 'red' {
 		switch (t) {
 			case 'org': return 'purple';
 			case 'project': return 'blue';
 			case 'service': return 'green';
 			case 'volume': return 'yellow';
+			case 'git': return 'purple';
+			case 'static_file': return 'blue';
+			case 'file': return 'yellow';
 			case 'directory': return 'neutral';
+			case 'registry': return 'red';
 			default: return 'neutral';
 		}
 	}
@@ -86,8 +136,115 @@
 			case 'project': return 'Project';
 			case 'service': return 'Service';
 			case 'volume': return 'Volume';
+			case 'git': return 'Git Repo';
+			case 'static_file': return 'Static File';
+			case 'file': return 'File';
 			case 'directory': return 'Directory';
+			case 'registry': return 'Registry Image';
 			default: return t;
+		}
+	}
+
+	// Retention & cleanup settings state
+	let settings = $state<CleanupSettings>({
+		orphan_retention_days: 30,
+		orphan_auto_destruct_enabled: true,
+		registry_unused_retention_days: 90,
+		registry_auto_removal_enabled: true
+	});
+	let showSettingsModal = $state(false);
+	let savingSettings = $state(false);
+	let cleaningRegistry = $state(false);
+
+	let editOrphanRetention = $state('30');
+	let editOrphanDestructEnabled = $state(true);
+	let editRegistryRetention = $state('90');
+	let editRegistryRemovalEnabled = $state(true);
+
+	function openSettingsModal() {
+		editOrphanRetention = String(settings.orphan_retention_days);
+		editOrphanDestructEnabled = settings.orphan_auto_destruct_enabled;
+		editRegistryRetention = String(settings.registry_unused_retention_days);
+		editRegistryRemovalEnabled = settings.registry_auto_removal_enabled;
+		showSettingsModal = true;
+	}
+
+	async function loadSettings() {
+		try {
+			const res = await api.get<CleanupSettings>('/admin/orphans/settings');
+			if (res.data) {
+				settings = res.data;
+			}
+		} catch (e: any) {
+			console.error('Failed to load cleanup settings', e);
+		}
+	}
+
+	async function saveSettings() {
+		const orphanDays = parseInt(editOrphanRetention, 10);
+		const regDays = parseInt(editRegistryRetention, 10);
+
+		if (isNaN(orphanDays) || orphanDays < 1) {
+			toastStore.add({ type: 'error', title: 'Invalid input', message: 'Orphan retention days must be at least 1 day' });
+			return;
+		}
+		if (isNaN(regDays) || regDays < 1) {
+			toastStore.add({ type: 'error', title: 'Invalid input', message: 'Registry retention days must be at least 1 day' });
+			return;
+		}
+
+		savingSettings = true;
+		try {
+			const payload: CleanupSettings = {
+				orphan_retention_days: orphanDays,
+				orphan_auto_destruct_enabled: editOrphanDestructEnabled,
+				registry_unused_retention_days: regDays,
+				registry_auto_removal_enabled: editRegistryRemovalEnabled
+			};
+			const res = await api.put<CleanupSettings>('/admin/orphans/settings', payload);
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Settings save failed', message: res.error.message });
+			} else {
+				if (res.data) settings = res.data;
+				toastStore.add({
+					type: 'success',
+					title: 'Settings saved',
+					message: 'Cleanup & retention settings updated successfully'
+				});
+				showSettingsModal = false;
+				await loadOrphans();
+			}
+		} catch (e: any) {
+			toastStore.add({ type: 'error', title: 'Settings error', message: e.message });
+		} finally {
+			savingSettings = false;
+		}
+	}
+
+	async function triggerRegistryCleanup() {
+		cleaningRegistry = true;
+		try {
+			const res = await api.post<{
+				unused_artifacts_deleted: number;
+				manifests_deleted: number;
+				blobs_deleted: number;
+				freed_blob_bytes: number;
+			}>('/admin/orphans/cleanup-registry');
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Registry cleanup failed', message: res.error.message });
+			} else {
+				const d = res.data;
+				toastStore.add({
+					type: 'success',
+					title: 'Registry cleaned',
+					message: `Deleted ${d?.unused_artifacts_deleted ?? 0} unused artifacts, freed ${fmtBytes(d?.freed_blob_bytes ?? 0)}`
+				});
+				await loadOrphans();
+			}
+		} catch (e: any) {
+			toastStore.add({ type: 'error', title: 'Registry cleanup error', message: e.message });
+		} finally {
+			cleaningRegistry = false;
 		}
 	}
 
@@ -212,26 +369,67 @@
 	let projectCount = $derived(orphans.filter((o) => o.orphan_type === 'project').length);
 	let serviceCount = $derived(orphans.filter((o) => o.orphan_type === 'service').length);
 	let volumeCount = $derived(orphans.filter((o) => o.orphan_type === 'volume').length);
+	let gitCount = $derived(orphans.filter((o) => o.orphan_type === 'git').length);
+	let staticFileCount = $derived(orphans.filter((o) => o.orphan_type === 'static_file').length);
+	let fileCount = $derived(orphans.filter((o) => o.orphan_type === 'file').length);
 	let directoryCount = $derived(orphans.filter((o) => o.orphan_type === 'directory').length);
+	let registryCount = $derived(orphans.filter((o) => o.orphan_type === 'registry').length);
+	let expiringSoonCount = $derived(
+		orphans.filter((o) => {
+			const ms = new Date(o.auto_destruct_at).getTime() - Date.now();
+			return ms <= 3 * 24 * 60 * 60 * 1000;
+		}).length
+	);
 
 	let tabs: TabItem[] = $derived([
 		{ id: 'all', label: `All (${orphans.length})` },
-		{ id: 'org', label: `Organizations (${orgCount})` },
-		{ id: 'project', label: `Projects (${projectCount})` },
+		{ id: 'registry', label: `Registry (${registryCount})` },
+		{ id: 'git', label: `Git (${gitCount})` },
+		{ id: 'static_file', label: `Static Files (${staticFileCount})` },
+		{ id: 'file', label: `Files (${fileCount})` },
 		{ id: 'service', label: `Services (${serviceCount})` },
 		{ id: 'volume', label: `Volumes (${volumeCount})` },
-		{ id: 'directory', label: `Directories (${directoryCount})` }
+		{ id: 'directory', label: `Directories (${directoryCount})` },
+		{ id: 'org', label: `Orgs (${orgCount})` },
+		{ id: 'project', label: `Projects (${projectCount})` }
 	]);
 
-	onMount(loadOrphans);
+	onMount(() => {
+		loadOrphans();
+		loadSettings();
+	});
 </script>
 
 <div class="orphan-page">
 	<PageHeader
 		title="Orphan Resources"
-		description="Unused directories, orgs, projects, services, and volumes under /shipyard. Review and decide whether to delete them."
+		description="Unused directories, git repos, static files, volumes, and registry images. Review to delete manually or configure auto-destruct and auto-removal retention."
 	>
 		{#snippet actions()}
+			<Button
+				variant="secondary"
+				size="sm"
+				onclick={openSettingsModal}
+			>
+				<Settings size={13} />
+				<span>Retention Settings</span>
+			</Button>
+
+			<Button
+				variant="secondary"
+				size="sm"
+				disabled={cleaningRegistry}
+				onclick={triggerRegistryCleanup}
+			>
+				{#if cleaningRegistry}
+					<Spinner size={13} />
+					<span>Cleaning Registry…</span>
+				{:else}
+					<Archive size={13} />
+					<span>Clean Unused Registry</span>
+				{/if}
+			</Button>
+
 			<Button
 				variant="secondary"
 				size="sm"
@@ -284,18 +482,18 @@
 			{#snippet icon()}<HardDrive size={18} />{/snippet}
 		</StatCard>
 		<StatCard
-			value={`${serviceCount} svc / ${volumeCount} vol`}
-			label="Services & Volumes"
+			value={`${gitCount} git / ${staticFileCount} static / ${registryCount} images`}
+			label="Git, Static & Registry"
 			tone="neutral"
 		>
-			{#snippet icon()}<Box size={18} />{/snippet}
+			{#snippet icon()}<GitBranch size={18} />{/snippet}
 		</StatCard>
 		<StatCard
-			value={`${orgCount} org / ${projectCount} proj`}
-			label="Orgs & Projects"
-			tone="neutral"
+			value={settings.orphan_auto_destruct_enabled ? `${expiringSoonCount} soon / ${settings.orphan_retention_days}d window` : 'Auto-Destruct Disabled'}
+			label="Auto-Destruct Schedule"
+			tone={expiringSoonCount > 0 ? 'yellow' : 'neutral'}
 		>
-			{#snippet icon()}<Building2 size={18} />{/snippet}
+			{#snippet icon()}<Clock size={18} />{/snippet}
 		</StatCard>
 	</div>
 
@@ -337,13 +535,15 @@
 				{ key: 'orphan_type', label: 'Type', width: '130px' },
 				{ key: 'identifier', label: 'Resource / Identifier', width: '220px' },
 				{ key: 'path', label: 'Host Path' },
-				{ key: 'size_bytes', label: 'Size', width: '100px' },
+				{ key: 'size_bytes', label: 'Size', width: '90px' },
 				{ key: 'details', label: 'Details / Reason' },
-				{ key: 'detected_at', label: 'Detected', width: '110px' },
-				{ key: 'actions', label: '', width: '80px' }
+				{ key: 'auto_destruct_at', label: 'Auto-Destruct', width: '130px' },
+				{ key: 'detected_at', label: 'Detected', width: '100px' },
+				{ key: 'actions', label: '', width: '70px' }
 			]}
 		>
 			{#snippet row(item: OrphanResource)}
+				{@const countdown = autoDestructCountdown(item.auto_destruct_at)}
 				<tr class="orphan-row">
 					<td>
 						<Badge tone={typeTone(item.orphan_type)}>{typeLabel(item.orphan_type)}</Badge>
@@ -363,6 +563,11 @@
 					</td>
 					<td>
 						<span class="details-text" title={item.details ?? ''}>{item.details || '—'}</span>
+					</td>
+					<td>
+						<div class="destruct-cell" title={`Permanently deleted on ${new Date(item.auto_destruct_at).toLocaleString()}`}>
+							<Badge tone={countdown.tone}>{countdown.label}</Badge>
+						</div>
 					</td>
 					<td>
 						<span class="muted-text">{timeAgo(item.detected_at)}</span>
@@ -410,6 +615,100 @@
 	onConfirm={confirmBatchDelete}
 	onCancel={() => (showBatchDeleteConfirm = false)}
 />
+
+<!-- ── Cleanup & Retention Settings Modal ── -->
+<Modal
+	bind:open={showSettingsModal}
+	title="Cleanup & Retention Settings"
+>
+	<div class="settings-modal-content">
+		<p class="settings-desc">
+			Configure automatic cleanup and retention schedules for orphan resources and unused Shipyard Registry artifacts. All settings are stored in the database.
+		</p>
+
+		<!-- Orphan Auto-Destruct Policy -->
+		<div class="settings-card">
+			<div class="settings-card-header">
+				<div class="settings-card-title">
+					<Clock size={16} />
+					<span>Orphan Files & Resources Auto-Destruct</span>
+				</div>
+				<Toggle
+					bind:checked={editOrphanDestructEnabled}
+					label="Enable orphan auto-destruct"
+				/>
+			</div>
+			<p class="settings-card-desc">
+				Permanently delete unattached directories, git repositories, static bundles, and volumes after retention period expires.
+			</p>
+			{#if editOrphanDestructEnabled}
+				<div class="settings-input-group">
+					<FormField
+						label="Auto-Destruct Retention Period (days)"
+						hint="Default: 30 days. Orphan resources older than this threshold will be permanently deleted."
+					>
+						<TextField
+							type="number"
+							min="1"
+							max="365"
+							bind:value={editOrphanRetention}
+							placeholder="30"
+						/>
+					</FormField>
+				</div>
+			{/if}
+		</div>
+
+		<!-- Shipyard Registry Auto-Removal Policy -->
+		<div class="settings-card">
+			<div class="settings-card-header">
+				<div class="settings-card-title">
+					<Archive size={16} />
+					<span>Shipyard Registry Unused Images Auto-Removal</span>
+				</div>
+				<Toggle
+					bind:checked={editRegistryRemovalEnabled}
+					label="Enable unused registry images auto-removal"
+				/>
+			</div>
+			<p class="settings-card-desc">
+				Automatically detect and remove container images, edge functions, and build artifacts from the registry when not referenced by any service or container.
+			</p>
+			{#if editRegistryRemovalEnabled}
+				<div class="settings-input-group">
+					<FormField
+						label="Unused Image Retention Threshold (days)"
+						hint="Default: 90 days (3 months). Images not referenced or deployed for this duration will be safely pruned."
+					>
+						<TextField
+							type="number"
+							min="1"
+							max="730"
+							bind:value={editRegistryRetention}
+							placeholder="90"
+						/>
+					</FormField>
+				</div>
+			{/if}
+		</div>
+	</div>
+
+	{#snippet footer()}
+		<div class="modal-footer">
+			<Button variant="secondary" onclick={() => (showSettingsModal = false)}>
+				Cancel
+			</Button>
+			<Button variant="primary" disabled={savingSettings} onclick={saveSettings}>
+				{#if savingSettings}
+					<Spinner size={13} />
+					<span>Saving…</span>
+				{:else}
+					<span>Save Settings</span>
+				{/if}
+			</Button>
+		</div>
+	{/snippet}
+</Modal>
 
 <style>
 	.orphan-page {
@@ -516,12 +815,75 @@
 		white-space: nowrap;
 	}
 
+	.destruct-cell {
+		display: inline-flex;
+		align-items: center;
+	}
+
 	.action-cell {
 		text-align: right;
 	}
 
 	.font-mono {
 		font-family: var(--font-mono);
+	}
+
+	.settings-modal-content {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.settings-desc {
+		font-size: 13px;
+		color: var(--text-secondary);
+		line-height: 1.5;
+		margin: 0;
+	}
+
+	.settings-card {
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.settings-card-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.settings-card-title {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 13.5px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+
+	.settings-card-desc {
+		font-size: 12px;
+		color: var(--text-muted);
+		line-height: 1.4;
+		margin: 0;
+	}
+
+	.settings-input-group {
+		margin-top: 4px;
+	}
+
+	.modal-footer {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 10px;
+		width: 100%;
 	}
 
 	@media (max-width: 768px) {

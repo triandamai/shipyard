@@ -44,7 +44,18 @@
 		hostname: string;
 		storage_type: string;
 	}
-	let stats = $state<RegistryStats | null>(null);
+
+	interface CleanupSettings {
+		orphan_retention_days: number;
+		orphan_auto_destruct_enabled: boolean;
+		registry_unused_retention_days: number;
+		registry_auto_removal_enabled: boolean;
+	}
+
+	let stats           = $state<RegistryStats | null>(null);
+	let cleanupSettings = $state<CleanupSettings | null>(null);
+	let cleaningUnused  = $state(false);
+	let cleanupSuccessMsg = $state('');
 
 	let namespaces = $state<NsRow[]>([]);
 	let loading    = $state(true);
@@ -88,13 +99,40 @@
 	// ── Data loading ──────────────────────────────────────────────────────────────
 	async function load() {
 		loading = true;
-		const [sRes, nRes] = await Promise.all([
+		const [sRes, nRes, cRes] = await Promise.all([
 			api.get<RegistryStats>('/admin/registry/stats'),
 			api.get<NsRow[]>('/admin/registry/namespaces'),
+			api.get<CleanupSettings>('/admin/orphans/settings')
 		]);
-		stats      = sRes.data ?? null;
-		namespaces = nRes.data ?? [];
-		loading    = false;
+		stats           = sRes.data ?? null;
+		namespaces      = nRes.data ?? [];
+		cleanupSettings = cRes.data ?? null;
+		loading         = false;
+	}
+
+	async function runRegistryCleanup() {
+		cleaningUnused = true;
+		cleanupSuccessMsg = '';
+		deleteError = '';
+		try {
+			const res = await api.post<{
+				unused_artifacts_deleted: number;
+				manifests_deleted: number;
+				blobs_deleted: number;
+				freed_blob_bytes: number;
+			}>('/admin/orphans/cleanup-registry');
+			if (res.error) {
+				deleteError = res.error.message;
+			} else {
+				const d = res.data;
+				cleanupSuccessMsg = `Cleanup completed: ${d?.unused_artifacts_deleted ?? 0} unused artifacts deleted, ${fmtBytes(d?.freed_blob_bytes ?? 0)} storage reclaimed.`;
+				await load();
+			}
+		} catch (e: any) {
+			deleteError = e.message;
+		} finally {
+			cleaningUnused = false;
+		}
 	}
 
 	async function loadRepos(nsId: string) {
@@ -168,6 +206,15 @@
 <div class="page">
 	<PageHeader title="Registry" subtitle="Artifact storage — blobs, manifests, namespaces">
 		{#snippet actions()}
+			<Button
+				variant="secondary"
+				size="sm"
+				loading={cleaningUnused}
+				onclick={runRegistryCleanup}
+			>
+				<Trash2 size={13} />
+				<span>Clean Unused ({cleanupSettings?.registry_unused_retention_days ?? 90}d+)</span>
+			</Button>
 			<Button variant="secondary" size="icon" onclick={load}>
 				<RefreshCw size={14} />
 			</Button>
@@ -176,6 +223,9 @@
 
 	{#if deleteError}
 		<InlineAlert tone="error">{deleteError}</InlineAlert>
+	{/if}
+	{#if cleanupSuccessMsg}
+		<InlineAlert tone="success">{cleanupSuccessMsg}</InlineAlert>
 	{/if}
 
 	{#if loading}
@@ -210,6 +260,19 @@
 				<Badge tone={stats.storage_type === 's3' ? 'blue' : 'neutral'}>
 					{stats.storage_type === 's3' ? 'S3 / MinIO' : 'Local Disk'}
 				</Badge>
+			</div>
+			<div class="reg-config-row">
+				<span class="reg-config-key">Unused Image Retention</span>
+				<div class="reg-config-policy">
+					{#if cleanupSettings?.registry_auto_removal_enabled}
+						<Badge tone="green">
+							Auto-removes unused images after {cleanupSettings.registry_unused_retention_days} days (3 months)
+						</Badge>
+					{:else}
+						<Badge tone="neutral">Auto-removal disabled</Badge>
+					{/if}
+					<a href="/admin/orphan" class="reg-config-link">Configure Retention</a>
+				</div>
 			</div>
 			{#if stats.hostname}
 				<div class="reg-config-row">
@@ -335,6 +398,9 @@
 	.reg-config-row:last-child { border-bottom: none; }
 	.reg-config-key { width: 140px; flex-shrink: 0; color: var(--text-secondary); font-weight: 500; }
 	.reg-config-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); background: var(--bg-elevated); padding: 2px 8px; border-radius: var(--radius-sm); }
+	.reg-config-policy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+	.reg-config-link { font-size: 12px; color: var(--accent); text-decoration: none; font-weight: 500; }
+	.reg-config-link:hover { text-decoration: underline; }
 
 	/* ── Section ── */
 	.reg-section { display: flex; flex-direction: column; gap: 10px; }

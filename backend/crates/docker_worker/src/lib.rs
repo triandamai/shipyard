@@ -21,5 +21,10 @@
 pub mod orphans;
 pub mod worker;
 
-pub use orphans::{delete_orphan, list_orphans, scan_and_reconcile_orphans, OrphanResource, OrphanType};
+pub use orphans::{
+    auto_destruct_expired_orphans, cleanup_unused_registry_artifacts, delete_orphan,
+    get_cleanup_settings, list_orphans, save_cleanup_settings, scan_and_reconcile_orphans,
+    scan_unused_registry_artifacts, CleanupSettings, OrphanResource, OrphanType,
+    RegistryCleanupReport,
+};
 pub use worker::DockerEventWorker;

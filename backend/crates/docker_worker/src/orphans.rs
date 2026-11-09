@@ -16,6 +16,10 @@ pub enum OrphanType {
     Service,
     Volume,
     Directory,
+    Git,
+    File,
+    StaticFile,
+    Registry,
 }
 
 impl OrphanType {
@@ -26,6 +30,10 @@ impl OrphanType {
             OrphanType::Service => "service",
             OrphanType::Volume => "volume",
             OrphanType::Directory => "directory",
+            OrphanType::Git => "git",
+            OrphanType::File => "file",
+            OrphanType::StaticFile => "static_file",
+            OrphanType::Registry => "registry",
         }
     }
 
@@ -36,9 +44,80 @@ impl OrphanType {
             "service" => Some(OrphanType::Service),
             "volume" => Some(OrphanType::Volume),
             "directory" => Some(OrphanType::Directory),
+            "git" => Some(OrphanType::Git),
+            "file" => Some(OrphanType::File),
+            "static_file" | "static" => Some(OrphanType::StaticFile),
+            "registry" => Some(OrphanType::Registry),
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CleanupSettings {
+    pub orphan_retention_days: i32,
+    pub orphan_auto_destruct_enabled: bool,
+    pub registry_unused_retention_days: i32,
+    pub registry_auto_removal_enabled: bool,
+}
+
+impl Default for CleanupSettings {
+    fn default() -> Self {
+        Self {
+            orphan_retention_days: 30,
+            orphan_auto_destruct_enabled: true,
+            registry_unused_retention_days: 90, // 3 months default
+            registry_auto_removal_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegistryCleanupReport {
+    pub deleted_artifacts: usize,
+    pub reclaimed_bytes: i64,
+}
+
+pub async fn get_cleanup_settings(db: &PgPool) -> CleanupSettings {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT value FROM system_config WHERE key = 'cleanup_settings'"
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+
+    match row {
+        Some((val,)) => serde_json::from_value(val).unwrap_or_default(),
+        None => CleanupSettings::default(),
+    }
+}
+
+pub async fn save_cleanup_settings(db: &PgPool, settings: &CleanupSettings) -> AppResult<()> {
+    let val = serde_json::to_value(settings)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO system_config (key, value, updated_at)
+        VALUES ('cleanup_settings', $1, NOW())
+        ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = NOW()
+        "#
+    )
+    .bind(val)
+    .execute(db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    // Update pending orphans' auto_destruct_at to match the newly configured retention days
+    let _ = sqlx::query(
+        "UPDATE orphans SET auto_destruct_at = detected_at + ($1 || ' days')::INTERVAL WHERE auto_destruct_at > NOW()"
+    )
+    .bind(settings.orphan_retention_days)
+    .execute(db)
+    .await;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +129,7 @@ pub struct OrphanResource {
     pub size_bytes: i64,
     pub details: Option<String>,
     pub detected_at: DateTime<Utc>,
+    pub auto_destruct_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -110,6 +190,11 @@ pub fn is_safe_to_delete(path_str: &str, data_dir: &str) -> bool {
             && !vol_name.contains('/')
             && !vol_name.contains('\\')
             && !vol_name.contains("..");
+    }
+
+    if path_str.starts_with("registry:") {
+        let reg_id = path_str.trim_start_matches("registry:");
+        return !reg_id.is_empty() && !reg_id.contains("..");
     }
 
     let candidate = PathBuf::from(path_str);
@@ -239,11 +324,31 @@ pub async fn scan_filesystem_orphans_with_sets(
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let entry_path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+
         if !entry_path.is_dir() {
+            if file_name.starts_with('.') {
+                continue;
+            }
+            let size = dir_size_bytes(&entry_path).await;
+            let o_type = if file_name.ends_with(".git") {
+                OrphanType::Git
+            } else if file_name.ends_with(".zip") || file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") || file_name.ends_with(".tar") {
+                OrphanType::StaticFile
+            } else {
+                OrphanType::File
+            };
+            orphans.push(DiscoveredOrphan {
+                orphan_type: o_type,
+                identifier: file_name,
+                path: entry_path.to_string_lossy().to_string(),
+                size_bytes: size,
+                details: Some("Loose file in shipyard data directory".to_string()),
+            });
             continue;
         }
 
-        let dir_name = entry.file_name().to_string_lossy().to_string();
+        let dir_name = file_name;
 
         // Check well-known system dirs under data_dir
         match dir_name.as_str() {
@@ -255,8 +360,12 @@ pub async fn scan_filesystem_orphans_with_sets(
                 scan_edge_artifacts(&entry_path, &active_edge_set, &mut orphans).await;
                 continue;
             }
-            "sources" => {
+            "sources" | "git" => {
                 scan_source_repos(&entry_path, &active_service_set, &mut orphans).await;
+                continue;
+            }
+            "files" | "uploads" => {
+                scan_file_artifacts(&entry_path, &active_service_set, active_org_set, &mut orphans).await;
                 continue;
             }
             "registry" | "traefik" | "backups" | "lost+found" | "logs" => {
@@ -309,7 +418,7 @@ pub async fn scan_filesystem_orphans_with_sets(
     }
 
     // 2. Also check base /shipyard or /opt/shipyard for unused top-level directories
-    check_shipyard_root_directories(data_dir, &mut orphans).await;
+    check_shipyard_root_directories(data_dir, active_service_set, active_org_set, &mut orphans).await;
 
     Ok(orphans)
 }
@@ -484,12 +593,55 @@ async fn scan_static_artifacts(
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let entry_path = entry.path();
-        if !entry_path.is_dir() {
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == "logs" || name.starts_with('.') {
             continue;
         }
 
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == "logs" || name == "uploads" {
+        if name == "uploads" && entry_path.is_dir() {
+            if let Ok(mut upload_entries) = tokio::fs::read_dir(&entry_path).await {
+                while let Ok(Some(up_entry)) = upload_entries.next_entry().await {
+                    let up_path = up_entry.path();
+                    let up_name = up_entry.file_name().to_string_lossy().to_string();
+                    if up_name.starts_with('.') {
+                        continue;
+                    }
+                    if let Ok(svc_uuid) = Uuid::parse_str(&up_name) {
+                        if !active_service_set.contains_key(&svc_uuid) {
+                            let size = dir_size_bytes(&up_path).await;
+                            orphans.push(DiscoveredOrphan {
+                                orphan_type: OrphanType::StaticFile,
+                                identifier: format!("uploads/{up_name}"),
+                                path: up_path.to_string_lossy().to_string(),
+                                size_bytes: size,
+                                details: Some("Static site uploaded artifact belongs to deleted service".to_string()),
+                            });
+                        }
+                    } else {
+                        let size = dir_size_bytes(&up_path).await;
+                        orphans.push(DiscoveredOrphan {
+                            orphan_type: OrphanType::StaticFile,
+                            identifier: format!("uploads/{up_name}"),
+                            path: up_path.to_string_lossy().to_string(),
+                            size_bytes: size,
+                            details: Some("Untracked artifact in static uploads".to_string()),
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
+        if entry_path.is_file() {
+            let size = dir_size_bytes(&entry_path).await;
+            orphans.push(DiscoveredOrphan {
+                orphan_type: OrphanType::StaticFile,
+                identifier: name,
+                path: entry_path.to_string_lossy().to_string(),
+                size_bytes: size,
+                details: Some("Loose file in static files directory".to_string()),
+            });
             continue;
         }
 
@@ -497,13 +649,22 @@ async fn scan_static_artifacts(
             if !active_service_set.contains_key(&svc_uuid) {
                 let size = dir_size_bytes(&entry_path).await;
                 orphans.push(DiscoveredOrphan {
-                    orphan_type: OrphanType::Service,
+                    orphan_type: OrphanType::StaticFile,
                     identifier: name,
                     path: entry_path.to_string_lossy().to_string(),
                     size_bytes: size,
                     details: Some("Static site deployed artifact belongs to deleted service".to_string()),
                 });
             }
+        } else {
+            let size = dir_size_bytes(&entry_path).await;
+            orphans.push(DiscoveredOrphan {
+                orphan_type: OrphanType::StaticFile,
+                identifier: name,
+                path: entry_path.to_string_lossy().to_string(),
+                size_bytes: size,
+                details: Some("Untracked directory in static directory".to_string()),
+            });
         }
     }
 }
@@ -554,52 +715,218 @@ async fn scan_source_repos(
         let entry_path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if name == "work" && entry_path.is_dir() {
+            if let Ok(mut work_entries) = tokio::fs::read_dir(&entry_path).await {
+                while let Ok(Some(w_entry)) = work_entries.next_entry().await {
+                    let w_path = w_entry.path();
+                    let w_name = w_entry.file_name().to_string_lossy().to_string();
+                    if w_name.starts_with('.') {
+                        continue;
+                    }
+                    if let Ok(svc_uuid) = Uuid::parse_str(&w_name) {
+                        if !active_service_set.contains_key(&svc_uuid) {
+                            let size = dir_size_bytes(&w_path).await;
+                            orphans.push(DiscoveredOrphan {
+                                orphan_type: OrphanType::Git,
+                                identifier: format!("work/{w_name}"),
+                                path: w_path.to_string_lossy().to_string(),
+                                size_bytes: size,
+                                details: Some("Git working tree belongs to deleted service".to_string()),
+                            });
+                        }
+                    } else {
+                        let size = dir_size_bytes(&w_path).await;
+                        orphans.push(DiscoveredOrphan {
+                            orphan_type: OrphanType::Git,
+                            identifier: format!("work/{w_name}"),
+                            path: w_path.to_string_lossy().to_string(),
+                            size_bytes: size,
+                            details: Some("Untracked working tree directory in sources/work".to_string()),
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
         if let Some(svc_id_str) = name.strip_suffix(".git") {
             if let Ok(svc_uuid) = Uuid::parse_str(svc_id_str) {
                 if !active_service_set.contains_key(&svc_uuid) {
                     let size = dir_size_bytes(&entry_path).await;
                     orphans.push(DiscoveredOrphan {
-                        orphan_type: OrphanType::Service,
+                        orphan_type: OrphanType::Git,
                         identifier: name,
                         path: entry_path.to_string_lossy().to_string(),
                         size_bytes: size,
                         details: Some("Git source repository belongs to deleted service".to_string()),
                     });
                 }
+            } else {
+                let size = dir_size_bytes(&entry_path).await;
+                orphans.push(DiscoveredOrphan {
+                    orphan_type: OrphanType::Git,
+                    identifier: name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    details: Some("Untracked .git directory in sources".to_string()),
+                });
             }
+        } else if let Ok(svc_uuid) = Uuid::parse_str(&name) {
+            if !active_service_set.contains_key(&svc_uuid) {
+                let size = dir_size_bytes(&entry_path).await;
+                orphans.push(DiscoveredOrphan {
+                    orphan_type: OrphanType::Git,
+                    identifier: name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    details: Some("Git source directory belongs to deleted service".to_string()),
+                });
+            }
+        } else {
+            let size = dir_size_bytes(&entry_path).await;
+            orphans.push(DiscoveredOrphan {
+                orphan_type: OrphanType::Git,
+                identifier: name,
+                path: entry_path.to_string_lossy().to_string(),
+                size_bytes: size,
+                details: Some("Untracked repository/directory in sources".to_string()),
+            });
         }
     }
 }
 
-async fn check_shipyard_root_directories(data_dir: &str, orphans: &mut Vec<DiscoveredOrphan>) {
-    let shipyard_root = match Path::new(data_dir).parent() {
-        Some(p) if p.exists() && (p.ends_with("shipyard") || p.to_string_lossy() == "/shipyard") => p,
-        _ => return,
-    };
-
-    let mut entries = match tokio::fs::read_dir(shipyard_root).await {
+async fn scan_file_artifacts(
+    files_path: &Path,
+    active_service_set: &std::collections::HashMap<Uuid, Uuid>,
+    active_org_set: &std::collections::HashSet<Uuid>,
+    orphans: &mut Vec<DiscoveredOrphan>,
+) {
+    let mut entries = match tokio::fs::read_dir(files_path).await {
         Ok(e) => e,
         Err(_) => return,
     };
 
-    let known_root_dirs = ["data", "traefik", "backups", "ssl", "certs", "config", "logs"];
-
     while let Ok(Some(entry)) = entries.next_entry().await {
         let entry_path = entry.path();
-        if !entry_path.is_dir() {
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name.starts_with('.') {
             continue;
         }
 
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !known_root_dirs.contains(&name.as_str()) && !name.starts_with('.') {
+        if let Ok(uuid) = Uuid::parse_str(&name) {
+            if !active_service_set.contains_key(&uuid) && !active_org_set.contains(&uuid) {
+                let size = dir_size_bytes(&entry_path).await;
+                orphans.push(DiscoveredOrphan {
+                    orphan_type: OrphanType::File,
+                    identifier: name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    details: Some("File artifact belongs to deleted service or organization".to_string()),
+                });
+            }
+        } else {
             let size = dir_size_bytes(&entry_path).await;
             orphans.push(DiscoveredOrphan {
-                orphan_type: OrphanType::Directory,
+                orphan_type: OrphanType::File,
                 identifier: name,
                 path: entry_path.to_string_lossy().to_string(),
                 size_bytes: size,
-                details: Some("Unrecognized directory directly under shipyard installation root".to_string()),
+                details: Some("Untracked file or folder in uploads/files".to_string()),
             });
+        }
+    }
+}
+
+async fn check_shipyard_root_directories(
+    data_dir: &str,
+    active_service_set: &std::collections::HashMap<Uuid, Uuid>,
+    active_org_set: &std::collections::HashSet<Uuid>,
+    orphans: &mut Vec<DiscoveredOrphan>,
+) {
+    let mut candidate_roots = Vec::new();
+
+    if let Some(parent) = Path::new(data_dir).parent() {
+        if parent.exists() && (parent.ends_with("shipyard") || parent.to_string_lossy() == "/shipyard") {
+            candidate_roots.push(parent.to_path_buf());
+        }
+    }
+
+    let explicit_roots = [Path::new("/shipyard"), Path::new("/opt/shipyard")];
+    for r in explicit_roots {
+        if r.exists() && !candidate_roots.contains(&r.to_path_buf()) {
+            candidate_roots.push(r.to_path_buf());
+        }
+    }
+
+    let known_root_dirs = ["data", "traefik", "backups", "ssl", "certs", "config", "logs"];
+
+    for root in candidate_roots {
+        let mut entries = match tokio::fs::read_dir(&root).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let entry_path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if entry_path.is_dir() {
+                if known_root_dirs.contains(&name.as_str()) {
+                    continue;
+                }
+                if name == "sources" || name == "git" {
+                    scan_source_repos(&entry_path, active_service_set, orphans).await;
+                    continue;
+                }
+                if name == "static" {
+                    scan_static_artifacts(&entry_path, active_service_set, orphans).await;
+                    continue;
+                }
+                if name == "files" || name == "uploads" {
+                    scan_file_artifacts(&entry_path, active_service_set, active_org_set, orphans).await;
+                    continue;
+                }
+
+                let size = dir_size_bytes(&entry_path).await;
+                let o_type = if name.ends_with(".git") || entry_path.join(".git").exists() || entry_path.join("HEAD").exists() {
+                    OrphanType::Git
+                } else {
+                    OrphanType::Directory
+                };
+                orphans.push(DiscoveredOrphan {
+                    orphan_type: o_type,
+                    identifier: name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    details: Some("Unrecognized directory directly under shipyard installation root".to_string()),
+                });
+            } else {
+                // Loose file under shipyard root
+                let size = dir_size_bytes(&entry_path).await;
+                let o_type = if name.ends_with(".git") {
+                    OrphanType::Git
+                } else if name.ends_with(".zip") || name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+                    OrphanType::StaticFile
+                } else {
+                    OrphanType::File
+                };
+                orphans.push(DiscoveredOrphan {
+                    orphan_type: o_type,
+                    identifier: name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    size_bytes: size,
+                    details: Some("Loose file directly under shipyard installation root".to_string()),
+                });
+            }
         }
     }
 }
@@ -640,6 +967,105 @@ pub async fn scan_docker_orphan_volumes(
     }
 }
 
+/// Scans for unused registry artifacts older than `unused_days` threshold.
+pub async fn scan_unused_registry_artifacts(
+    db: &PgPool,
+    unused_days: i32,
+) -> AppResult<Vec<DiscoveredOrphan>> {
+    let query_str = r#"
+        SELECT a.id, a.repo, a.tag, a.kind, a.size_bytes, a.pushed_at, ns.slug as namespace_slug
+        FROM artifacts a
+        JOIN registry_namespaces ns ON ns.id = a.namespace_id
+        WHERE a.pushed_at <= NOW() - ($1 || ' days')::INTERVAL
+          AND NOT EXISTS (
+              SELECT 1 FROM service_artifact_sources sas
+              WHERE sas.namespace_id = a.namespace_id
+                AND sas.repo = a.repo
+                AND sas.tag = a.tag
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM services s
+              WHERE s.image IS NOT NULL
+                AND (
+                    s.image LIKE '%' || a.repo || ':' || a.tag
+                    OR s.image LIKE '%' || ns.slug || '/' || a.repo || ':' || a.tag
+                )
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM containers c
+              WHERE c.image LIKE '%' || a.repo || ':' || a.tag
+                 OR c.image LIKE '%' || ns.slug || '/' || a.repo || ':' || a.tag
+          )
+        ORDER BY a.pushed_at ASC
+    "#;
+
+    let rows: Vec<(Uuid, String, String, String, i64, DateTime<Utc>, String)> = sqlx::query_as(query_str)
+        .bind(unused_days)
+        .fetch_all(db)
+        .await
+        .unwrap_or_default();
+
+    let mut orphans = Vec::new();
+    for (id, repo, tag, kind, size_bytes, pushed_at, ns_slug) in rows {
+        let age_days = (Utc::now() - pushed_at).num_days();
+        orphans.push(DiscoveredOrphan {
+            orphan_type: OrphanType::Registry,
+            identifier: format!("{ns_slug}/{repo}:{tag}"),
+            path: format!("registry:{id}"),
+            size_bytes,
+            details: Some(format!(
+                "Registry {kind} image '{ns_slug}/{repo}:{tag}' has not been used by any service for {age_days} days"
+            )),
+        });
+    }
+
+    Ok(orphans)
+}
+
+/// Automatically removes unused registry artifacts older than the configured threshold.
+pub async fn cleanup_unused_registry_artifacts(
+    db: &PgPool,
+    unused_days: i32,
+) -> AppResult<RegistryCleanupReport> {
+    let unused = scan_unused_registry_artifacts(db, unused_days).await?;
+    let mut deleted_artifacts = 0;
+    let mut reclaimed_bytes: i64 = 0;
+
+    for item in unused {
+        let artifact_id_str = item.path.trim_start_matches("registry:");
+        if let Ok(art_uuid) = Uuid::parse_str(artifact_id_str) {
+            info!("Auto-removing unused registry artifact {art_uuid} ({})", item.identifier);
+            let res = sqlx::query("DELETE FROM artifacts WHERE id = $1")
+                .bind(art_uuid)
+                .execute(db)
+                .await;
+            if let Ok(r) = res {
+                if r.rows_affected() > 0 {
+                    deleted_artifacts += 1;
+                    reclaimed_bytes += item.size_bytes;
+                }
+            }
+        }
+    }
+
+    let _ = sqlx::query(
+        "DELETE FROM registry_manifests WHERE digest NOT IN (SELECT manifest_digest FROM artifacts)"
+    )
+    .execute(db)
+    .await;
+
+    let _ = sqlx::query(
+        "DELETE FROM registry_blobs WHERE ref_count <= 0"
+    )
+    .execute(db)
+    .await;
+
+    Ok(RegistryCleanupReport {
+        deleted_artifacts,
+        reclaimed_bytes,
+    })
+}
+
 /// Walks the filesystem, checks Docker volumes, synchronizes with the `orphans` table,
 /// and returns the current set of orphaned resources.
 pub async fn scan_and_reconcile_orphans(
@@ -647,10 +1073,15 @@ pub async fn scan_and_reconcile_orphans(
     data_dir: &str,
     docker: Option<(&dyn DockerEngine, &str)>,
 ) -> AppResult<Vec<OrphanResource>> {
+    let settings = get_cleanup_settings(db).await;
     let mut discovered = scan_filesystem_orphans(db, data_dir).await?;
 
     if let Some((d, prefix)) = docker {
         scan_docker_orphan_volumes(db, d, prefix, &mut discovered).await;
+    }
+
+    if let Ok(mut reg_orphans) = scan_unused_registry_artifacts(db, settings.registry_unused_retention_days).await {
+        discovered.append(&mut reg_orphans);
     }
 
     let mut current_paths = std::collections::HashSet::new();
@@ -659,10 +1090,16 @@ pub async fn scan_and_reconcile_orphans(
         current_paths.insert(item.path.clone());
         let o_type = item.orphan_type.as_str();
 
+        let retention_days = if item.orphan_type == OrphanType::Registry {
+            settings.registry_unused_retention_days
+        } else {
+            settings.orphan_retention_days
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO orphans (id, orphan_type, identifier, path, size_bytes, details, detected_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+            INSERT INTO orphans (id, orphan_type, identifier, path, size_bytes, details, detected_at, auto_destruct_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW() + ($7 || ' days')::INTERVAL, NOW())
             ON CONFLICT (path)
             DO UPDATE SET
                 size_bytes = EXCLUDED.size_bytes,
@@ -676,6 +1113,7 @@ pub async fn scan_and_reconcile_orphans(
         .bind(&item.path)
         .bind(item.size_bytes)
         .bind(&item.details)
+        .bind(retention_days)
         .execute(db)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -696,6 +1134,16 @@ pub async fn scan_and_reconcile_orphans(
         }
     }
 
+    // Clean up unused registry artifacts if registry auto removal is enabled
+    if settings.registry_auto_removal_enabled {
+        let _ = cleanup_unused_registry_artifacts(db, settings.registry_unused_retention_days).await;
+    }
+
+    // Run auto-destruct on any orphans older than retention days if auto destruct is enabled
+    if settings.orphan_auto_destruct_enabled {
+        let _ = auto_destruct_expired_orphans(db, data_dir, docker.map(|(d, _)| d)).await;
+    }
+
     list_orphans(db, None, None).await
 }
 
@@ -705,7 +1153,7 @@ pub async fn list_orphans(
     orphan_type: Option<&str>,
     search: Option<&str>,
 ) -> AppResult<Vec<OrphanResource>> {
-    let mut q = "SELECT id, orphan_type, identifier, path, size_bytes, details, detected_at, updated_at FROM orphans WHERE 1=1".to_string();
+    let mut q = "SELECT id, orphan_type, identifier, path, size_bytes, details, detected_at, auto_destruct_at, updated_at FROM orphans WHERE 1=1".to_string();
 
     if orphan_type.is_some() {
         q.push_str(" AND orphan_type = $1");
@@ -726,6 +1174,7 @@ pub async fn list_orphans(
         String,
         i64,
         Option<String>,
+        DateTime<Utc>,
         DateTime<Utc>,
         DateTime<Utc>,
     )> = match (orphan_type, search) {
@@ -763,7 +1212,7 @@ pub async fn list_orphans(
 
     let items = rows
         .into_iter()
-        .map(|(id, ot, identifier, path, size_bytes, details, detected_at, updated_at)| {
+        .map(|(id, ot, identifier, path, size_bytes, details, detected_at, auto_destruct_at, updated_at)| {
             OrphanResource {
                 id,
                 orphan_type: OrphanType::from_str(&ot).unwrap_or(OrphanType::Directory),
@@ -772,6 +1221,7 @@ pub async fn list_orphans(
                 size_bytes,
                 details,
                 detected_at,
+                auto_destruct_at,
                 updated_at,
             }
         })
@@ -780,7 +1230,38 @@ pub async fn list_orphans(
     Ok(items)
 }
 
-/// Deletes an orphan resource from disk (or Docker) and removes its record from the database.
+/// Permanently deletes all orphans that have passed their auto-destruct window.
+pub async fn auto_destruct_expired_orphans(
+    db: &PgPool,
+    data_dir: &str,
+    docker: Option<&dyn DockerEngine>,
+) -> AppResult<usize> {
+    let settings = get_cleanup_settings(db).await;
+    if !settings.orphan_auto_destruct_enabled {
+        info!("Orphan auto-destruct is disabled in admin settings");
+        return Ok(0);
+    }
+
+    let expired: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, path FROM orphans WHERE auto_destruct_at <= NOW() ORDER BY auto_destruct_at ASC",
+    )
+    .fetch_all(db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    let mut count = 0;
+    for (id, path) in expired {
+        info!("Auto-destructing orphan {id} ({path}) after retention window");
+        match delete_orphan(db, id, data_dir, docker).await {
+            Ok(()) => count += 1,
+            Err(e) => warn!("Failed to auto-destruct orphan {id} ({path}): {e}"),
+        }
+    }
+
+    Ok(count)
+}
+
+/// Deletes an orphan resource from disk (or Docker / Registry) and removes its record from the database.
 pub async fn delete_orphan(
     db: &PgPool,
     orphan_id: Uuid,
@@ -810,6 +1291,23 @@ pub async fn delete_orphan(
         if let Some(d) = docker {
             info!("Removing orphaned Docker volume: {vol_name}");
             let _ = d.remove_volume(vol_name).await;
+        }
+    } else if path.starts_with("registry:") {
+        let art_id_str = path.trim_start_matches("registry:");
+        if let Ok(art_uuid) = Uuid::parse_str(art_id_str) {
+            info!("Removing orphaned registry artifact {art_uuid}");
+            let _ = sqlx::query("DELETE FROM artifacts WHERE id = $1")
+                .bind(art_uuid)
+                .execute(db)
+                .await;
+            let _ = sqlx::query(
+                "DELETE FROM registry_manifests WHERE digest NOT IN (SELECT manifest_digest FROM artifacts)"
+            )
+            .execute(db)
+            .await;
+            let _ = sqlx::query("DELETE FROM registry_blobs WHERE ref_count <= 0")
+                .execute(db)
+                .await;
         }
     } else {
         let p = Path::new(&path);
@@ -863,6 +1361,10 @@ mod tests {
         assert!(!is_safe_to_delete("docker:", data_dir));
         assert!(!is_safe_to_delete("docker:../volume", data_dir));
         assert!(!is_safe_to_delete("docker:my/volume", data_dir));
+
+        // Malicious registry names
+        assert!(!is_safe_to_delete("registry:", data_dir));
+        assert!(!is_safe_to_delete("registry:../escape", data_dir));
     }
 
     #[test]
@@ -873,8 +1375,26 @@ mod tests {
         assert!(is_safe_to_delete("/opt/shipyard/data/0190a4b2-0000-7000-8000-000000000001", data_dir));
         assert!(is_safe_to_delete("/opt/shipyard/data/0190a4b2-0000-7000-8000-000000000001/proj-1", data_dir));
         assert!(is_safe_to_delete("/opt/shipyard/data/0190a4b2-0000-7000-8000-000000000001/proj-1/svc-data", data_dir));
+        assert!(is_safe_to_delete("/opt/shipyard/data/sources/my-service.git", data_dir));
+        assert!(is_safe_to_delete("/opt/shipyard/data/static/uploads/my-service/bundle.zip", data_dir));
+        assert!(is_safe_to_delete("/shipyard/files/stray.pdf", data_dir));
         assert!(is_safe_to_delete("/shipyard/unused_cache", data_dir));
         assert!(is_safe_to_delete("docker:platform-volume-123", data_dir));
+        assert!(is_safe_to_delete("registry:0190a4b2-0000-7000-8000-000000000001", data_dir));
+        assert!(is_safe_to_delete("registry:acme/web:v1.0.0", data_dir));
+    }
+
+    #[test]
+    fn test_cleanup_settings_defaults_and_serialization() {
+        let default_settings = CleanupSettings::default();
+        assert_eq!(default_settings.orphan_retention_days, 30);
+        assert!(default_settings.orphan_auto_destruct_enabled);
+        assert_eq!(default_settings.registry_unused_retention_days, 90);
+        assert!(default_settings.registry_auto_removal_enabled);
+
+        let json = serde_json::to_string(&default_settings).unwrap();
+        let parsed: CleanupSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, default_settings);
     }
 
     #[tokio::test]
@@ -999,14 +1519,89 @@ mod tests {
         assert!(vol_orphans[0].identifier.contains("untrackedvol"));
 
         let svc_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::Service).collect();
-        // 3 service orphans: orphan_svc in project, orphan static site, and orphan edge function
-        assert_eq!(svc_orphans.len(), 3);
+        // 2 service orphans: orphan_svc in project, and orphan edge function
+        assert_eq!(svc_orphans.len(), 2);
+
+        let static_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::StaticFile).collect();
+        assert_eq!(static_orphans.len(), 1);
+        assert_eq!(static_orphans[0].identifier, orphan_svc.to_string());
 
         let dir_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::Directory).collect();
         assert_eq!(dir_orphans.len(), 1);
         assert_eq!(dir_orphans[0].identifier, "random_old_backup");
 
         // Clean up tempdir
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_filesystem_orphans_detects_git_files_and_static_files() {
+        let tmp = std::env::temp_dir().join(format!("shipyard-git-file-test-{}", Uuid::now_v7()));
+        tokio::fs::create_dir_all(&tmp).await.unwrap();
+
+        let orphan_svc = Uuid::now_v7();
+        let valid_svc = Uuid::now_v7();
+
+        // 1. Git orphan in sources
+        let git_orphan_path = tmp.join("sources").join(format!("{orphan_svc}.git"));
+        tokio::fs::create_dir_all(&git_orphan_path).await.unwrap();
+        tokio::fs::write(git_orphan_path.join("HEAD"), b"ref: refs/heads/main").await.unwrap();
+
+        // 2. Git valid repo in sources
+        let git_valid_path = tmp.join("sources").join(format!("{valid_svc}.git"));
+        tokio::fs::create_dir_all(&git_valid_path).await.unwrap();
+        tokio::fs::write(git_valid_path.join("HEAD"), b"ref: refs/heads/main").await.unwrap();
+
+        // 3. Git worktree orphan in sources/work
+        let git_work_orphan = tmp.join("sources").join("work").join(format!("{orphan_svc}"));
+        tokio::fs::create_dir_all(&git_work_orphan).await.unwrap();
+
+        // 4. Static uploads orphan
+        let static_upload_orphan = tmp.join("static").join("uploads").join(format!("{orphan_svc}"));
+        tokio::fs::create_dir_all(&static_upload_orphan).await.unwrap();
+        tokio::fs::write(static_upload_orphan.join("archive.zip"), b"PK0304").await.unwrap();
+
+        // 5. Loose static bundle file
+        tokio::fs::write(tmp.join("static").join("bundle.tar.gz"), b"tar-content").await.unwrap();
+
+        // 6. Loose file in files dir
+        let file_dir = tmp.join("files");
+        tokio::fs::create_dir_all(&file_dir).await.unwrap();
+        tokio::fs::write(file_dir.join("orphaned-document.pdf"), b"%PDF-1.4").await.unwrap();
+
+        // 7. Loose file directly under data_dir
+        tokio::fs::write(tmp.join("stray_dump.sql"), b"SELECT 1;").await.unwrap();
+
+        let active_org_set = std::collections::HashSet::new();
+        let active_project_set = std::collections::HashMap::new();
+        let mut active_service_set = std::collections::HashMap::new();
+        active_service_set.insert(valid_svc, Uuid::now_v7());
+        let active_volume_set = std::collections::HashSet::new();
+        let active_edge_set = std::collections::HashSet::new();
+
+        let res = scan_filesystem_orphans_with_sets(
+            &active_org_set,
+            &active_project_set,
+            &active_service_set,
+            &active_volume_set,
+            &active_edge_set,
+            tmp.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Git orphans
+        let git_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::Git).collect();
+        assert_eq!(git_orphans.len(), 2, "Expected 2 git orphans (sources repo + worktree)");
+
+        // Static file orphans
+        let static_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::StaticFile).collect();
+        assert_eq!(static_orphans.len(), 2, "Expected 2 static file orphans (uploads/<id> + bundle.tar.gz)");
+
+        // File orphans
+        let file_orphans: Vec<_> = res.iter().filter(|o| o.orphan_type == OrphanType::File).collect();
+        assert_eq!(file_orphans.len(), 2, "Expected 2 file orphans (files/doc + stray_dump.sql)");
+
         let _ = tokio::fs::remove_dir_all(&tmp).await;
     }
 }
