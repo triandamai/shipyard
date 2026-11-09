@@ -144,17 +144,17 @@
 </div>
 
 <style>
-	.picker { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+	.picker { display: flex; flex-direction: column; height: 100%; overflow: hidden; min-width: 0; }
 	.search-bar {
 		display: flex; align-items: center; gap: 8px;
 		padding: 10px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
 	}
 	.search-grow { flex: 1; min-width: 0; }
 	.kind-badge { margin: 8px 14px 0; flex-shrink: 0; }
-	.results { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+	.results { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; min-width: 0; }
 	.state-msg {
 		display: flex; flex-direction: column; align-items: center; gap: 10px;
 		padding: 48px 20px; color: var(--text-muted); font-size: 13px; text-align: center;
 	}
-	.list { padding: 0 14px 14px; }
+	.list { padding: 0 14px 14px; min-width: 0; overflow: hidden; }
 </style>

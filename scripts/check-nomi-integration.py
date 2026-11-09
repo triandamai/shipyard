@@ -394,14 +394,24 @@ def main():
 
         print("\nTermination")
         r = c.call("DELETE", f"/orgs/{org}/apps/{app}")
-        check("terminate the app", r[0] == 200, errmsg(r))
-        r = c.call("GET", f"/orgs/{org}/apps/{app}")
+        check("terminate the app (202, runs in the background)", r[0] == 202, errmsg(r))
+        # Termination is asynchronous: poll until the app is gone.
+        for _ in range(60):
+            r = c.call("GET", f"/orgs/{org}/apps/{app}")
+            if r[0] == 404:
+                break
+            time.sleep(2)
         check("the app is gone", r[0] == 404, errmsg(r))
     finally:
         if created and not args.keep:
             r = c.call("DELETE", f"/orgs/{org}")
-            check("delete the test org", r[0] == 200, errmsg(r))
-            r = c.call("GET", f"/orgs/{org}")
+            check("delete the test org (202, runs in the background)", r[0] == 202, errmsg(r))
+            # Teardown is asynchronous: poll until the org is gone.
+            for _ in range(60):
+                r = c.call("GET", f"/orgs/{org}")
+                if r[0] == 404:
+                    break
+                time.sleep(2)
             check("the org is gone", r[0] == 404, errmsg(r))
 
     failed = [x for x in RESULTS if x[0] == "FAIL"]

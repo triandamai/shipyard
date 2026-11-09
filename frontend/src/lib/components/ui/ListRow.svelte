@@ -30,8 +30,8 @@
 	>
 		<IconBadge tone={iconTone} size={30}>{@render icon()}</IconBadge>
 		<span class="ui-list-row-text">
-			<span class="ui-list-row-title">{title}</span>
-			{#if meta}<span class="ui-list-row-meta">{meta}</span>{/if}
+			<span class="ui-list-row-title" title={title}>{title}</span>
+			{#if meta}<span class="ui-list-row-meta" title={meta}>{meta}</span>{/if}
 		</span>
 		{#if trailing}
 			<span class="ui-list-row-trailing">{@render trailing()}</span>
@@ -41,8 +41,8 @@
 	<div class="ui-list-row">
 		<IconBadge tone={iconTone} size={30}>{@render icon()}</IconBadge>
 		<div class="ui-list-row-text">
-			<span class="ui-list-row-title">{title}</span>
-			{#if meta}<span class="ui-list-row-meta">{meta}</span>{/if}
+			<span class="ui-list-row-title" title={title}>{title}</span>
+			{#if meta}<span class="ui-list-row-meta" title={meta}>{meta}</span>{/if}
 		</div>
 		{#if trailing}
 			<div class="ui-list-row-trailing">{@render trailing()}</div>
@@ -57,12 +57,17 @@
 		gap: 12px;
 		padding: 10px 0;
 		border-bottom: 1px solid var(--border);
+		min-width: 0;
+		max-width: 100%;
+		box-sizing: border-box;
 	}
 	.ui-list-row:last-child { border-bottom: none; }
 	.ui-list-row-text {
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
+		flex: 1;
+		overflow: hidden;
 	}
 	.ui-list-row-title {
 		font-size: 12.5px;
@@ -71,11 +76,19 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		max-width: 100%;
+		width: 100%;
+		display: block;
 	}
 	.ui-list-row-meta {
 		font-size: 10.5px;
 		color: var(--text-dim);
 		margin-top: 1px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 100%;
+		display: block;
 	}
 	.ui-list-row-trailing { margin-left: auto; flex-shrink: 0; }
 
@@ -83,6 +96,7 @@
 	.ui-list-row--clickable {
 		box-sizing: border-box;
 		width: calc(100% + 16px);
+		max-width: calc(100% + 16px);
 		margin: 0 -8px;
 		padding: 10px 8px;
 		background: transparent;
@@ -93,9 +107,10 @@
 		text-align: left;
 		cursor: pointer;
 		transition: background var(--transition-fast);
+		overflow: hidden;
 	}
 	.ui-list-row--clickable:last-child { border-bottom: none; }
 	.ui-list-row--clickable:hover { background: var(--bg-hover); }
 	.ui-list-row--clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-	.ui-list-row--clickable .ui-list-row-text { flex: 1; align-items: flex-start; }
+	.ui-list-row--clickable .ui-list-row-text { flex: 1; min-width: 0; align-items: stretch; }
 </style>

@@ -490,11 +490,25 @@ What you should know:
 
 ### DELETE /openapi/v1/integration/orgs/{org}/apps/{app}
 
-Terminates the app everywhere: every environment (workloads, data, volumes, domains, DNS records, source), the dev database and its roles, and all secrets. Emits `app.terminated`. Irreversible: ask the user to confirm in Nomi first.
+Terminates the app everywhere: every environment (workloads, data, volumes, domains, DNS records, source), the dev database and its roles, and all secrets. Irreversible: ask the user to confirm in Nomi first.
+
+Answers `202 Accepted` right away and runs the termination in the background, because stopping every environment can take longer than a proxy waits for a response:
+
+```json
+{ "data": { "app": "todo", "status": "terminating", "environments": ["preview", "production"] } }
+```
+
+Shipyard emits `app.terminated` when the termination finishes. Until then, `GET /orgs/{org}/apps/{app}` still returns the app. Poll it until it returns `404`, or wait for the webhook. Sending `DELETE` again while the termination runs returns `202` again. If the termination fails partway, the app stays and the next `DELETE` resumes it.
 
 ### DELETE /openapi/v1/integration/orgs/{org}
 
-Terminates every app of the org, then deletes the org. Emits `org.deleted`.
+Terminates every app of the org, then deletes the org. Answers `202 Accepted` right away and runs the teardown in the background, because stopping every stack of a large org can take minutes:
+
+```json
+{ "data": { "deleted": "acme", "status": "deleting", "apps_terminated": ["todo", "blog"] } }
+```
+
+Shipyard emits `org.deleted` when the teardown finishes. Until then, `GET /orgs/{org}` still returns the org. Poll it until it returns `404`, or wait for the webhook. Sending `DELETE` again while the teardown runs returns `202` again. If the teardown fails partway, the org stays and the next `DELETE` resumes it.
 
 ## Secrets {#secrets}
 

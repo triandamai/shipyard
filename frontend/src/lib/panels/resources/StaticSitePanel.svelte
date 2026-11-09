@@ -513,15 +513,15 @@
 	.picker-btn:disabled { opacity: 0.45; cursor: default; }
 	.picker-btn.loading { cursor: default; }
 
-	.picker-placeholder { color: var(--text-dim); flex: 1; }
+	.picker-placeholder { color: var(--text-dim); flex: 1; min-width: 0; }
 	.auto-deploy {
 		display: flex; flex-direction: column; gap: 4px;
 		padding: 8px 10px; background: var(--bg-elevated);
 		border: 1px solid var(--border); border-radius: var(--radius-sm);
 	}
 	.checkbox-hint { font-size: 11px; color: var(--text-dim); line-height: 1.4; padding-left: 24px; }
-	.checkbox-hint code { font-family: var(--font-mono); font-size: 10px; }
-	.picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.checkbox-hint code { font-family: var(--font-mono); font-size: 10px; word-break: break-all; }
+	.picker-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	.selected-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
