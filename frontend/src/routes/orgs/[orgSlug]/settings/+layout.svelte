@@ -92,6 +92,9 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		overflow-x: hidden;
+		width: 100%;
+		max-width: 100%;
 	}
 
 	.settings-header {
@@ -100,6 +103,9 @@
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
 	}
 
 	.settings-header :global(.ui-page-header) { margin-bottom: 0; }
@@ -107,12 +113,16 @@
 	.settings-content {
 		flex: 1;
 		overflow-y: auto;
+		overflow-x: hidden;
 		padding: 24px 32px 32px;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
 	}
 
 	@media (max-width: 639px) {
-		.settings-header { padding: 16px 16px 0; }
-		.settings-content { padding: 16px 16px 80px; }
+		.settings-header { padding: 16px 14px 0; }
+		.settings-content { padding: 16px 14px calc(56px + env(safe-area-inset-bottom, 0px) + 16px); }
 	}
 
 </style>

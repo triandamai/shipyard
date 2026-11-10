@@ -127,4 +127,17 @@
 		color: var(--text-muted);
 		line-height: 1.4;
 	}
+
+	@media (max-width: 639px) {
+		.alert-stack {
+			right: 14px;
+			left: 14px;
+			bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 12px);
+		}
+		.alert-toast {
+			max-width: 100%;
+			min-width: 0;
+			width: 100%;
+		}
+	}
 </style>

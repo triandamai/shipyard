@@ -211,6 +211,10 @@
 	.projects-scroll {
 		padding: 32px;
 		overflow-y: auto;
+		overflow-x: hidden;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
 		-webkit-overflow-scrolling: touch;
 		overscroll-behavior: contain;
 		flex: 1;
@@ -220,13 +224,15 @@
 	.projects-inner {
 		max-width: 900px;
 		margin: 0 auto;
+		width: 100%;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
 	}
 
 	@media (max-width: 639px) {
-		.projects-scroll { padding: 16px 16px 72px; }
+		.projects-scroll { padding: 16px 14px calc(56px + env(safe-area-inset-bottom, 0px) + 16px); }
 	}
 
 	.loading-wrap {

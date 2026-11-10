@@ -29,6 +29,12 @@
 		justify-content: space-between;
 		gap: 16px;
 		margin-bottom: 24px;
+		min-width: 0;
+		max-width: 100%;
+	}
+	.ui-page-header-text {
+		min-width: 0;
+		flex: 1;
 	}
 	.ui-page-header-eyebrow {
 		font-size: 11px;
@@ -43,16 +49,29 @@
 		letter-spacing: -0.02em;
 		margin: 0;
 		line-height: 1.25;
+		overflow-wrap: anywhere;
 	}
 	.ui-page-header-subtitle {
 		font-size: 12.5px;
 		color: var(--text-muted);
 		margin: 4px 0 0;
+		overflow-wrap: anywhere;
 	}
 	.ui-page-header-actions {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		flex-shrink: 0;
+	}
+	@media (max-width: 639px) {
+		.ui-page-header {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 12px;
+		}
+		.ui-page-header-actions {
+			flex-wrap: wrap;
+			width: 100%;
+		}
 	}
 </style>

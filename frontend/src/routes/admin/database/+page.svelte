@@ -629,7 +629,7 @@
 </div>
 
 <style>
-	.db-page { max-width: 1100px; margin: 0 auto; padding: 40px 36px; }
+	.db-page { max-width: 1100px; margin: 0 auto; padding: 40px 36px; width: 100%; min-width: 0; }
 	.db-hdr { margin-bottom: 16px; }
 	.db-ttl { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px; letter-spacing: -0.02em; }
 	.db-sub { font-size: 12.5px; color: var(--text-muted); margin: 0; }
@@ -702,5 +702,7 @@
 		.db-page { padding: 16px 12px; }
 		.db-shell { grid-template-columns: 1fr; }
 		.db-tlist { max-height: 260px; }
+		.clear-logs-custom-range { grid-template-columns: 1fr; }
+		.tabs { width: 100%; max-width: 100%; -webkit-overflow-scrolling: touch; }
 	}
 </style>

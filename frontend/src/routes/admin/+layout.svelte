@@ -161,16 +161,30 @@
 
 	.shell {
 		display:flex;
+		width: 100%;
+		max-width: 100%;
 		height:100vh;
 		height:100dvh;
 		overflow:hidden;
+		overflow-x:hidden;
 		font-family:var(--font-sans);
 		font-size:13px;
 		-webkit-font-smoothing:antialiased;
 	}
 
 	/* ── Main ─────────────────────────────── */
-	.main { flex:1; overflow-y:auto; background:var(--bg-base); transition:background 0.18s; display:flex; flex-direction:column; min-width:0; padding: 24px 28px; }
+	.main {
+		flex:1;
+		overflow-y:auto;
+		overflow-x:hidden;
+		background:var(--bg-base);
+		transition:background 0.18s;
+		display:flex;
+		flex-direction:column;
+		min-width:0;
+		max-width:100%;
+		padding: 24px 28px;
+	}
 	/* Page blocks must keep their natural height so .main scrolls. Without
 	   this, an overflow:hidden child (e.g. DataTable) gets a min-height of 0
 	   and shrinks to the viewport, clipping its own rows. */
@@ -178,12 +192,12 @@
 	   auto margins in a column flex container disable stretching, so the
 	   wrapper would otherwise shrink to its content and change width as
 	   content changes (empty → loaded, detail panel opening, row expanding). */
-	.main > :global(*) { flex-shrink: 0; width: 100%; }
+	.main > :global(*) { flex-shrink: 0; width: 100%; max-width: 100%; min-width: 0; }
 
 	/* ── Phone ────────────────────────────── */
-	/* NavRail turns into a fixed 56px bottom bar at ≤639px, so the page needs
-	   room beneath it and tighter side padding. */
+	/* NavRail turns into a fixed bottom bar at ≤639px, so the page needs
+	   room beneath it (including safe area) and tighter side padding. */
 	@media (max-width: 639px) {
-		.main { padding: 16px 14px calc(56px + 20px); }
+		.main { padding: 16px 14px calc(56px + env(safe-area-inset-bottom, 0px) + 16px); }
 	}
 </style>

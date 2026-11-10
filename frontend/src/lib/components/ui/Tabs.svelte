@@ -98,6 +98,9 @@
 		overflow-x: auto;
 		scrollbar-width: none;
 		outline: none;
+		min-width: 0;
+		max-width: 100%;
+		-webkit-overflow-scrolling: touch;
 	}
 	.ui-tabs::-webkit-scrollbar { display: none; }
 	.ui-tab {

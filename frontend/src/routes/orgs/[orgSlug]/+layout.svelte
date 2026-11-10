@@ -101,21 +101,26 @@
 <style>
 	.app-shell {
 		display: flex;
+		width: 100%;
+		max-width: 100%;
 		height: 100vh;
 		height: 100dvh;
 		overflow: hidden;
+		overflow-x: hidden;
 		background: var(--bg-base);
 	}
 	.main-content {
 		flex: 1;
 		min-width: 0;
+		max-width: 100%;
 		height: 100vh;
 		height: 100dvh;
 		overflow: hidden;
+		overflow-x: hidden;
 		display: flex;
 		flex-direction: column;
 	}
 	@media (max-width: 639px) {
-		.main-content { padding-bottom: 56px; }
+		.main-content { padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
 	}
 </style>

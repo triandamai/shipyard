@@ -299,13 +299,20 @@
 		padding: 28px 32px;
 		height: 100%;
 		overflow-y: auto;
+		overflow-x: hidden;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 20px;
 	}
 
 	@media (max-width: 639px) {
-		.dash { padding: 16px 16px 80px; }
+		.dash { padding: 16px 14px calc(56px + env(safe-area-inset-bottom, 0px) + 16px); }
+		.dash-header { flex-direction: column; gap: 12px; }
+		.stats-grid { grid-template-columns: 1fr 1fr; }
+		.qa-grid { grid-template-columns: 1fr; }
 	}
 
 	.dash-header {

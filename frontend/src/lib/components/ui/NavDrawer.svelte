@@ -172,16 +172,17 @@
 
 	@media (max-width: 639px) {
 		.ui-nav-drawer--hide-phone { display: none; }
-		/* The rail is a 56px bottom bar on phones, so a modal drawer opens as a
+		/* The rail is a bottom bar on phones, so a modal drawer opens as a
 		   full-width panel above it instead of beside the side rail. */
 		.ui-nav-drawer:not(.ui-nav-drawer--persistent) {
 			position: fixed;
 			left: 0;
 			top: 0;
-			bottom: 56px;
+			bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+			max-width: 100%;
 			z-index: 59;
 		}
 		.ui-nav-drawer--open:not(.ui-nav-drawer--persistent) { width: min(100%, 320px); }
-		.ui-nav-drawer-scrim { left: 0; bottom: 56px; z-index: 58; }
+		.ui-nav-drawer-scrim { left: 0; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); z-index: 58; }
 	}
 </style>
