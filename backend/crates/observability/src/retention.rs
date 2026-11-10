@@ -61,6 +61,20 @@ pub fn partition_name_for_date(date: NaiveDate) -> String {
     format!("log_entries_y{}m{:02}d{:02}", date.year(), date.month(), date.day())
 }
 
+/// Parses the UTC date from a partition table name `log_entries_yYYYYmMMdDD`.
+pub fn parse_date_from_partition_name(name: &str) -> Option<NaiveDate> {
+    let date_part = name.strip_prefix("log_entries_y")?;
+    let parts: Vec<&str> = date_part.split(['m', 'd']).collect();
+    if parts.len() == 3 {
+        let y: i32 = parts[0].parse().ok()?;
+        let m: u32 = parts[1].parse().ok()?;
+        let d: u32 = parts[2].parse().ok()?;
+        NaiveDate::from_ymd_opt(y, m, d)
+    } else {
+        None
+    }
+}
+
 /// Start (inclusive) and end (exclusive) timestamps for a date's partition.
 pub fn partition_bounds(date: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
     let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
@@ -95,6 +109,10 @@ mod tests {
     fn partition_name_formatting() {
         let d = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
         assert_eq!(partition_name_for_date(d), "log_entries_y2026m10d29");
+        assert_eq!(parse_date_from_partition_name("log_entries_y2026m10d29"), Some(d));
+        assert_eq!(parse_date_from_partition_name("log_entries_default"), None);
+        assert_eq!(parse_date_from_partition_name("log_entries"), None);
+        assert_eq!(parse_date_from_partition_name("users"), None);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$lib/api/client';
-	import { Table2, KeyRound, RefreshCw, Trash2 } from '@lucide/svelte';
+	import { Table2, KeyRound, RefreshCw, Trash2, Layers } from '@lucide/svelte';
 	import {
 		SearchInput,
 		ActivityList,
@@ -13,6 +13,7 @@
 		Badge,
 		FormField,
 		TextField,
+		Select,
 		InlineAlert,
 		EmptyState,
 		Skeleton
@@ -100,16 +101,104 @@
 
 	let dropConfirmOpen = $state(false);
 
-	let filteredTables = $derived(
-		search.trim() ? tables.filter((t) => t.toLowerCase().includes(search.toLowerCase())) : tables
+	interface TableItem {
+		name: string;
+		row_count: number;
+		is_partition?: boolean;
+		parent_table?: string;
+	}
+
+	let tableItems = $state<TableItem[]>([]);
+	let hidePartitions = $state(true);
+
+	let partitionCount = $derived(tableItems.filter((t) => t.is_partition).length);
+	let parentPartitionCounts = $derived(
+		tableItems.reduce((acc, t) => {
+			if (t.parent_table) acc[t.parent_table] = (acc[t.parent_table] || 0) + 1;
+			return acc;
+		}, {} as Record<string, number>)
 	);
+
+	let visibleTables = $derived(
+		tableItems.filter((t) => !hidePartitions || !t.is_partition)
+	);
+
+	let filteredTables = $derived(
+		search.trim()
+			? visibleTables.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()))
+			: visibleTables
+	);
+
+	function isLogTable(name: string | null): boolean {
+		return !!name && (name === 'log_entries' || name.startsWith('log_entries_'));
+	}
+
+	// Clear logs modal state
+	let clearLogsModalOpen = $state(false);
+	let clearPreset = $state('older_than_7d');
+	let customFrom = $state('');
+	let customTo = $state('');
+	let clearingLogs = $state(false);
+	let clearError = $state('');
+	let clearSuccess = $state('');
+
+	async function executeClearLogs() {
+		clearingLogs = true;
+		clearError = '';
+		clearSuccess = '';
+		try {
+			let payload: Record<string, any> = { preset: clearPreset };
+			if (clearPreset === 'custom') {
+				payload = {
+					preset: 'custom',
+					from: customFrom ? new Date(customFrom).toISOString() : undefined,
+					to: customTo ? new Date(customTo).toISOString() : undefined
+				};
+			}
+			const res = await api.post<{ partitions_dropped: number; rows_deleted: number; message: string }>(
+				'/admin/db/logs/clear',
+				payload
+			);
+			if (res.error) {
+				clearError = res.error.message;
+				return;
+			}
+			clearSuccess = res.data?.message || 'Logs successfully cleared.';
+			await loadTables();
+			if (isLogTable(selected)) {
+				rowsNonce++;
+				if (selected !== 'log_entries' && !tableItems.some((t) => t.name === selected)) {
+					selected = 'log_entries';
+					await loadColumns('log_entries');
+				}
+			}
+			setTimeout(() => {
+				if (!clearError) clearLogsModalOpen = false;
+			}, 1500);
+		} catch (e) {
+			clearError = e instanceof Error ? e.message : 'Failed to clear logs.';
+		} finally {
+			clearingLogs = false;
+		}
+	}
 
 	async function loadTables() {
 		tablesLoading = true;
 		tablesError = '';
-		const r = await api.get<any[]>('/admin/db/tables');
-		if (r.data) tables = r.data.map((t: any) => (typeof t === 'string' ? t : (t.name ?? String(t))));
-		else tablesError = r.error?.message ?? 'Failed to load tables';
+		const r = await api.get<TableItem[]>('/admin/db/tables');
+		if (r.data) {
+			tableItems = Array.isArray(r.data)
+				? r.data.map((t: any) => ({
+						name: typeof t === 'string' ? t : (t.name ?? String(t)),
+						row_count: typeof t === 'object' && t.row_count != null ? t.row_count : 0,
+						is_partition: !!t.is_partition,
+						parent_table: t.parent_table
+				  }))
+				: [];
+			tables = tableItems.map((t) => t.name);
+		} else {
+			tablesError = r.error?.message ?? 'Failed to load tables';
+		}
 		tablesLoading = false;
 	}
 
@@ -261,6 +350,64 @@
 	onConfirm={dropTable}
 />
 
+<Modal bind:open={clearLogsModalOpen} title="Clear Observability Logs">
+	<div class="clear-logs-body">
+		<p class="clear-logs-desc">
+			Clear observability log entries and permanently drop expired daily partition tables (<span class="db-mono">log_entries_y*</span>) to reclaim disk space.
+		</p>
+
+		<FormField label="Range Preset" for="log-preset">
+			<Select
+				id="log-preset"
+				bind:value={clearPreset}
+				options={[
+					{ value: 'older_than_24h', label: 'Older than 24 hours' },
+					{ value: 'older_than_7d', label: 'Older than 7 days (Recommended)' },
+					{ value: 'older_than_14d', label: 'Older than 14 days' },
+					{ value: 'older_than_30d', label: 'Older than 30 days' },
+					{ value: 'older_than_90d', label: 'Older than 90 days' },
+					{ value: 'custom', label: 'Custom Date Range…' },
+					{ value: 'all', label: 'All logs (Drop all daily partitions)' }
+				]}
+			/>
+		</FormField>
+
+		{#if clearPreset === 'custom'}
+			<div class="clear-logs-custom-range">
+				<FormField label="From (UTC)" for="log-from">
+					<TextField id="log-from" type="datetime-local" bind:value={customFrom} />
+				</FormField>
+				<FormField label="To (UTC)" for="log-to">
+					<TextField id="log-to" type="datetime-local" bind:value={customTo} />
+				</FormField>
+			</div>
+		{/if}
+
+		<InlineAlert tone={clearPreset === 'all' ? 'error' : 'info'}>
+			{#if clearPreset === 'all'}
+				Warning: All existing daily log partition tables and records will be dropped. Current and tomorrow's partitions will be recreated automatically for ongoing logging.
+			{:else if clearPreset === 'custom'}
+				Partitions fully within this date range will be dropped instantaneously. Partial days and default partition rows will be deleted.
+			{:else}
+				Daily partition tables older than the selected threshold will be dropped, freeing disk space immediately without table bloat.
+			{/if}
+		</InlineAlert>
+
+		{#if clearError}
+			<InlineAlert tone="error">{clearError}</InlineAlert>
+		{/if}
+		{#if clearSuccess}
+			<InlineAlert tone="success">{clearSuccess}</InlineAlert>
+		{/if}
+	</div>
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (clearLogsModalOpen = false)}>Cancel</Button>
+		<Button variant="danger" disabled={clearingLogs} onclick={executeClearLogs}>
+			{clearingLogs ? 'Clearing…' : 'Clear Logs'}
+		</Button>
+	{/snippet}
+</Modal>
+
 <div class="db-page">
 	<header class="db-hdr">
 		<h1 class="db-ttl">Database</h1>
@@ -307,8 +454,26 @@
 			<!-- Table list -->
 			<div class="db-tlist">
 				<div class="db-tlist-hdr">
-					<span class="db-tlist-title">Tables</span>
-					<Badge tone="neutral">{tables.length}</Badge>
+					<div class="db-tlist-hdr-left">
+						<span class="db-tlist-title">Tables</span>
+						<Badge tone="neutral">{visibleTables.length}</Badge>
+						{#if partitionCount > 0}
+							<button
+								type="button"
+								class="db-part-btn"
+								class:active={!hidePartitions}
+								onclick={() => (hidePartitions = !hidePartitions)}
+								title={hidePartitions ? `Show ${partitionCount} partition tables` : 'Group partition tables'}
+							>
+								<Layers size={11} />
+								<span>{hidePartitions ? `+${partitionCount} parts` : 'Hide parts'}</span>
+							</button>
+						{/if}
+					</div>
+					<Button variant="ghost" size="sm" onclick={() => (clearLogsModalOpen = true)} title="Clear logs with range">
+						<Trash2 size={11} />
+						Clear Logs
+					</Button>
 				</div>
 				<div class="db-tlist-search">
 					<SearchInput bind:value={search} placeholder="Filter tables…" />
@@ -324,14 +489,21 @@
 						<EmptyState message="No tables found." />
 					{:else}
 						<ActivityList>
-							{#each filteredTables as t (t)}
+							{#each filteredTables as t (t.name)}
 								<button
 									type="button"
-									class={selected === t ? 'db-tlist-item db-tlist-item-sel' : 'db-tlist-item'}
-									onclick={() => selectTable(t)}
+									class={selected === t.name ? 'db-tlist-item db-tlist-item-sel' : 'db-tlist-item'}
+									onclick={() => selectTable(t.name)}
 								>
-									<ListRow iconTone="blue" title={t}>
+									<ListRow iconTone={t.is_partition ? 'yellow' : 'blue'} title={t.name}>
 										{#snippet icon()}<Table2 size={13} />{/snippet}
+										{#snippet trailing()}
+											{#if parentPartitionCounts[t.name]}
+												<Badge tone="neutral">{parentPartitionCounts[t.name]} parts</Badge>
+											{:else if t.is_partition}
+												<Badge tone="yellow">part</Badge>
+											{/if}
+										{/snippet}
 									</ListRow>
 								</button>
 							{/each}
@@ -346,18 +518,35 @@
 					<div class="db-detail-placeholder">Select a table to inspect</div>
 				{:else}
 					<div class="db-detail-hdr">
-						<span class="db-detail-table db-mono">{selected}</span>
-						<Button
-							variant="danger-outline"
-							size="sm"
-							onclick={() => {
-								deleteTarget = selected;
-								dropConfirmOpen = true;
-							}}
-						>
-							<Trash2 size={12} />
-							Drop
-						</Button>
+						<div class="db-detail-hdr-left">
+							<span class="db-detail-table db-mono">{selected}</span>
+							{#if isLogTable(selected)}
+								<Badge tone="blue">Logs</Badge>
+							{/if}
+						</div>
+						<div class="db-detail-hdr-actions">
+							{#if isLogTable(selected)}
+								<Button
+									variant="secondary"
+									size="sm"
+									onclick={() => (clearLogsModalOpen = true)}
+								>
+									<Trash2 size={12} />
+									Clear Logs
+								</Button>
+							{/if}
+							<Button
+								variant="danger-outline"
+								size="sm"
+								onclick={() => {
+									deleteTarget = selected;
+									dropConfirmOpen = true;
+								}}
+							>
+								<Trash2 size={12} />
+								Drop
+							</Button>
+						</div>
 					</div>
 
 					<div class="tabs db-subtabs">
@@ -458,12 +647,35 @@
 	.db-redis-toolbar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
 	.db-redis-skeleton { display: flex; flex-direction: column; gap: 8px; }
 
-	.db-shell { display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: start; }
+	.db-shell { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: start; }
+
+	.clear-logs-body { display: flex; flex-direction: column; gap: 14px; }
+	.clear-logs-desc { font-size: 13px; color: var(--text-muted); margin: 0; line-height: 1.5; }
+	.clear-logs-custom-range { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 	/* Table list */
 	.db-tlist { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; max-height: 640px; }
-	.db-tlist-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
+	.db-tlist-hdr { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); gap: 6px; }
+	.db-tlist-hdr-left { display: flex; align-items: center; gap: 6px; }
 	.db-tlist-title { font-size: 10.5px; font-weight: 700; color: var(--text-dim); }
+	.db-part-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		padding: 2px 6px;
+		font-size: 10px;
+		font-weight: 500;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-family: var(--font-sans);
+		transition: all var(--transition-fast);
+	}
+	.db-part-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+	.db-part-btn.active { background: var(--accent-subtle); color: var(--accent); border-color: var(--accent); }
+
 	.db-tlist-search { padding: 8px; border-bottom: 1px solid var(--border); }
 	.db-tlist-body { overflow-y: auto; flex: 1; padding: 6px 10px; }
 	.db-tlist-skeleton { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }
@@ -475,7 +687,9 @@
 	/* Detail panel */
 	.db-detail { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; min-height: 500px; min-width: 0; }
 	.db-detail-placeholder { display: flex; align-items: center; justify-content: center; min-height: 460px; color: var(--text-dim); font-size: 13px; }
-	.db-detail-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+	.db-detail-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+	.db-detail-hdr-left { display: flex; align-items: center; gap: 8px; }
+	.db-detail-hdr-actions { display: flex; align-items: center; gap: 8px; }
 	.db-detail-table { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 
 	.db-rows-meta { font-size: 11.5px; color: var(--text-dim); margin-bottom: 10px; }

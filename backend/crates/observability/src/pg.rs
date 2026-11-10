@@ -7,7 +7,9 @@ use uuid::Uuid;
 
 use crate::mask::{MaskedJson, MaskedText};
 use crate::query::{Bind, LogPage, LogQuery, SqlQuery};
-use crate::retention::{partition_bounds, partition_name_for_date, RetentionPolicy};
+use crate::retention::{
+    parse_date_from_partition_name, partition_bounds, partition_name_for_date, RetentionPolicy,
+};
 use crate::stats::{LogCountPoint, LogStatsQuery, LogStatsResult, StatBucket};
 use crate::store::{LogStore, MetricStore, PruneSummary, StoreError};
 use crate::types::{LogEntry, LogLevel, LogSource, StoredLogEntry, Stream};
@@ -256,23 +258,13 @@ impl LogStore for PgLogStore {
         let mut partitions_dropped = 0;
         for row in rows {
             let tablename: String = row.try_get("tablename").map_err(|e| StoreError::Database(e.to_string()))?;
-            // Table name format: log_entries_yYYYYmMMdDD
-            if let Some(date_part) = tablename.strip_prefix("log_entries_y") {
-                if date_part.len() == 11 && date_part.contains('m') && date_part.contains('d') {
-                    let parts: Vec<&str> = date_part.split(['m', 'd']).collect();
-                    if parts.len() == 3 {
-                        if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
-                            if let Some(date) = NaiveDate::from_ymd_opt(y, m, d) {
-                                if date < cutoff_date {
-                                    let drop_sql = format!("DROP TABLE IF EXISTS {tablename}");
-                                    if let Err(e) = sqlx::query(&drop_sql).execute(&self.pool).await {
-                                        tracing::warn!("Failed to drop partition {tablename}: {e}");
-                                    } else {
-                                        partitions_dropped += 1;
-                                    }
-                                }
-                            }
-                        }
+            if let Some(date) = parse_date_from_partition_name(&tablename) {
+                if date < cutoff_date {
+                    let drop_sql = format!("DROP TABLE IF EXISTS {tablename}");
+                    if let Err(e) = sqlx::query(&drop_sql).execute(&self.pool).await {
+                        tracing::warn!("Failed to drop partition {tablename}: {e}");
+                    } else {
+                        partitions_dropped += 1;
                     }
                 }
             }
