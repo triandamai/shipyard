@@ -205,8 +205,12 @@ pub trait DockerEngine: Send + Sync {
     /// List all local Docker images.
     async fn list_all_images(&self) -> AppResult<Vec<ImageSummary>>;
 
-    /// Remove dangling and unused images; returns count of images deleted.
+    /// Remove dangling images; returns count of images deleted.
     async fn prune_images(&self) -> AppResult<u64>;
+
+    /// Remove all unused images (dangling=false, removing unreferenced tagged and untagged images).
+    /// Returns count of images deleted.
+    async fn prune_unused_images(&self) -> AppResult<u64>;
 
     /// Remove unused volumes; returns count of volumes removed.
     async fn prune_volumes(&self) -> AppResult<u64>;
@@ -2001,6 +2005,21 @@ impl DockerEngine for BollardDockerEngine {
             .await
             .map_err(|e| AppError::Docker(format!("prune_images failed: {e}")))?;
         Ok(result.images_deleted.map(|v| v.len() as u64).unwrap_or(0))
+    }
+
+    async fn prune_unused_images(&self) -> AppResult<u64> {
+        use bollard::image::PruneImagesOptions;
+        let mut filters = HashMap::new();
+        filters.insert("dangling".to_string(), vec!["false".to_string()]);
+        let options = PruneImagesOptions { filters };
+        let result = self.client
+            .prune_images(Some(options))
+            .await
+            .map_err(|e| AppError::Docker(format!("prune_unused_images failed: {e}")))?;
+        let count = result.images_deleted.as_ref().map(|v| v.len() as u64).unwrap_or(0);
+        let space = result.space_reclaimed.unwrap_or(0);
+        tracing::info!(count, space_reclaimed_bytes = space, "prune_unused_images finished");
+        Ok(count)
     }
 
     async fn prune_volumes(&self) -> AppResult<u64> {

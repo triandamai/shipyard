@@ -23,8 +23,9 @@ pub mod worker;
 
 pub use orphans::{
     auto_destruct_expired_orphans, cleanup_unused_registry_artifacts, delete_orphan,
-    get_cleanup_settings, list_orphans, save_cleanup_settings, scan_and_reconcile_orphans,
-    scan_unused_registry_artifacts, CleanupSettings, OrphanResource, OrphanType,
-    RegistryCleanupReport,
+    get_cleanup_settings, get_last_docker_image_prune_at, is_docker_image_prune_due, list_orphans,
+    prune_unused_docker_images_if_due, record_docker_image_prune, save_cleanup_settings,
+    scan_and_reconcile_orphans, scan_unused_registry_artifacts, CleanupSettings, OrphanResource,
+    OrphanType, RegistryCleanupReport,
 };
 pub use worker::DockerEventWorker;

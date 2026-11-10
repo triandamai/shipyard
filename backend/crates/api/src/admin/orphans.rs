@@ -246,10 +246,13 @@ mod tests {
             orphan_auto_destruct_enabled: true,
             registry_unused_retention_days: 60,
             registry_auto_removal_enabled: false,
+            docker_image_prune_enabled: true,
+            docker_image_prune_interval_days: 1,
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("14"));
         assert!(json.contains("60"));
         assert!(json.contains("registry_auto_removal_enabled"));
+        assert!(json.contains("docker_image_prune_enabled"));
     }
 }

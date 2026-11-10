@@ -564,8 +564,9 @@ async fn async_main() {
         });
     }
 
-    // Spawn periodic orphan directory scanner — walks data_dir and /shipyard
-    // to detect orphaned orgs, projects, services, volumes, and directories.
+    // Spawn periodic orphan directory scanner & scheduled docker image pruner —
+    // walks data_dir and /shipyard to detect orphaned resources, and runs daily
+    // unused Docker image pruning.
     {
         let orphan_worker = event_worker.clone();
         let orphan_data_dir = state.config.data_dir.clone();
@@ -574,6 +575,9 @@ async fn async_main() {
             loop {
                 if let Err(e) = orphan_worker.scan_orphans(&orphan_data_dir).await {
                     tracing::warn!("Periodic orphan directory scan failed: {e}");
+                }
+                if let Err(e) = orphan_worker.prune_unused_docker_images_if_due().await {
+                    tracing::warn!("Periodic Docker image prune check failed: {e}");
                 }
                 tokio::time::sleep(Duration::from_secs(3600)).await;
             }

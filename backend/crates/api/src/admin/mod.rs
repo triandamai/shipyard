@@ -1344,8 +1344,12 @@ async fn docker_prune(
             .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?,
         "volumes" => state.docker.prune_volumes().await
             .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?,
-        "images" => state.docker.prune_images().await
-            .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?,
+        "images" => {
+            let count = state.docker.prune_unused_images().await
+                .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+            let _ = shipyard_docker_worker::orphans::record_docker_image_prune(&state.db).await;
+            count
+        }
         _ => return Err(ApiAppError(AppError::BadRequest(
             format!("Unknown prune target: {}. Use containers, volumes, or images", what)
         ))),

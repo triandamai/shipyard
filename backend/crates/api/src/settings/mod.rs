@@ -1761,8 +1761,9 @@ async fn docker_prune_images(
     Query(q): Query<OrgPermQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
     require_docker_write(&state.db, &auth, q.org_id).await?;
-    let removed = state.docker.prune_images().await
+    let removed = state.docker.prune_unused_images().await
         .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+    let _ = shipyard_docker_worker::orphans::record_docker_image_prune(&state.db).await;
     Ok(Json(ApiResponse::ok(serde_json::json!({ "removed": removed }))))
 }
 
