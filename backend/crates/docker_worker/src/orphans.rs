@@ -380,6 +380,13 @@ pub async fn scan_filesystem_orphans_with_sets(
                 scan_file_artifacts(&entry_path, &active_service_set, active_org_set, &mut orphans).await;
                 continue;
             }
+            "builds" => {
+                // Ephemeral per-deployment build workspaces. Normally removed
+                // when the deployment finishes; anything older than the grace
+                // period is a leftover from a crashed/killed deploy.
+                scan_build_workspaces(&entry_path, BUILD_WORKSPACE_GRACE, &mut orphans).await;
+                continue;
+            }
             "registry" | "traefik" | "backups" | "lost+found" | "logs" => {
                 // Known platform infrastructure directories
                 continue;
@@ -433,6 +440,91 @@ pub async fn scan_filesystem_orphans_with_sets(
     check_shipyard_root_directories(data_dir, active_service_set, active_org_set, &mut orphans).await;
 
     Ok(orphans)
+}
+
+/// Build workspaces (`<data_dir>/builds/<deployment_id>`) younger than this are
+/// assumed to belong to a deployment that is still running and are skipped.
+pub const BUILD_WORKSPACE_GRACE: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
+/// Flag build workspaces older than `grace` as git orphans. They are clones
+/// left behind by a deployment that crashed before it could clean up.
+async fn scan_build_workspaces(
+    builds_path: &Path,
+    grace: std::time::Duration,
+    orphans: &mut Vec<DiscoveredOrphan>,
+) {
+    let mut entries = match tokio::fs::read_dir(builds_path).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let entry_path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let age = entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .unwrap_or_default();
+        if age < grace {
+            continue;
+        }
+
+        let size = dir_size_bytes(&entry_path).await;
+        orphans.push(DiscoveredOrphan {
+            orphan_type: OrphanType::Git,
+            identifier: format!("builds/{name}"),
+            path: entry_path.to_string_lossy().to_string(),
+            size_bytes: size,
+            details: Some(format!(
+                "Leftover build workspace (cloned source) for deployment {name}; the deployment did not clean it up"
+            )),
+        });
+    }
+}
+
+/// Flag git working copies (directories containing `.git`) found inside an
+/// active service directory. Deployments now clone into ephemeral build
+/// workspaces, so any checkout here was left by the previous deploy flow.
+async fn scan_service_dir_for_legacy_checkouts(
+    service_path: &Path,
+    service_id: Uuid,
+    orphans: &mut Vec<DiscoveredOrphan>,
+) {
+    let mut candidates = vec![service_path.to_path_buf()];
+    if let Ok(mut entries) = tokio::fs::read_dir(service_path).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let p = entry.path();
+            if p.is_dir() {
+                candidates.push(p);
+            }
+        }
+    }
+
+    for dir in candidates {
+        if !dir.join(".git").exists() {
+            continue;
+        }
+        let size = dir_size_bytes(&dir).await;
+        orphans.push(DiscoveredOrphan {
+            orphan_type: OrphanType::Git,
+            identifier: dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| service_id.to_string()),
+            path: dir.to_string_lossy().to_string(),
+            size_bytes: size,
+            details: Some(format!(
+                "Legacy git checkout for service {service_id}; deployments now clone into a temporary workspace, so this copy is no longer used"
+            )),
+        });
+    }
 }
 
 async fn scan_org_projects(
@@ -577,6 +669,8 @@ async fn scan_project_contents(
                         "Service directory on disk not found in project {project_id}"
                     )),
                 });
+            } else {
+                scan_service_dir_for_legacy_checkouts(&entry_path, svc_uuid, orphans).await;
             }
             continue;
         }
@@ -667,6 +761,22 @@ async fn scan_static_artifacts(
                     size_bytes: size,
                     details: Some("Static site deployed artifact belongs to deleted service".to_string()),
                 });
+            } else {
+                // Old static deploy flow kept a git clone cache at static/<svc>/repo.
+                // Builds now use ephemeral workspaces, so it is no longer used.
+                let repo_cache = entry_path.join("repo");
+                if repo_cache.join(".git").exists() {
+                    let size = dir_size_bytes(&repo_cache).await;
+                    orphans.push(DiscoveredOrphan {
+                        orphan_type: OrphanType::Git,
+                        identifier: format!("{name}/repo"),
+                        path: repo_cache.to_string_lossy().to_string(),
+                        size_bytes: size,
+                        details: Some(format!(
+                            "Legacy static site clone cache for service {svc_uuid}; deployments now clone into a temporary workspace, so this copy is no longer used"
+                        )),
+                    });
+                }
             }
         } else {
             let size = dir_size_bytes(&entry_path).await;
@@ -1689,6 +1799,121 @@ mod tests {
 
         // Verify static file found
         assert!(res.iter().any(|o| o.orphan_type == OrphanType::StaticFile && o.identifier == "app.tar.gz"));
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_flags_legacy_git_checkouts_of_active_services() {
+        let tmp = std::env::temp_dir().join(format!("shipyard-legacy-clone-test-{}", Uuid::now_v7()));
+        let org = Uuid::now_v7();
+        let project = Uuid::now_v7();
+        let git_svc = Uuid::now_v7();
+        let compose_svc = Uuid::now_v7();
+        let static_svc = Uuid::now_v7();
+
+        // Old deploy flow kept a full clone at <org>/<project>/<svc>/<slug>
+        let legacy_clone = tmp.join(org.to_string()).join(project.to_string()).join(git_svc.to_string()).join("my-app");
+        tokio::fs::create_dir_all(legacy_clone.join(".git")).await.unwrap();
+        tokio::fs::write(legacy_clone.join("Dockerfile"), b"FROM scratch").await.unwrap();
+
+        // Compose service dir holds compose files only (no .git) -> must be left alone
+        let compose_dir = tmp.join(org.to_string()).join(project.to_string()).join(compose_svc.to_string()).join("stack");
+        tokio::fs::create_dir_all(&compose_dir).await.unwrap();
+        tokio::fs::write(compose_dir.join("docker-compose.yml"), b"services: {}").await.unwrap();
+
+        // Old static flow kept a clone cache at static/<svc>/repo
+        let static_repo = tmp.join("static").join(static_svc.to_string()).join("repo");
+        tokio::fs::create_dir_all(static_repo.join(".git")).await.unwrap();
+        // ...next to the live, published version which must NOT be flagged
+        tokio::fs::create_dir_all(tmp.join("static").join(static_svc.to_string()).join("versions")).await.unwrap();
+
+        let mut active_org_set = std::collections::HashSet::new();
+        active_org_set.insert(org);
+        let mut active_project_set = std::collections::HashMap::new();
+        active_project_set.insert(project, org);
+        let mut active_service_set = std::collections::HashMap::new();
+        active_service_set.insert(git_svc, project);
+        active_service_set.insert(compose_svc, project);
+        active_service_set.insert(static_svc, project);
+        let active_volume_set = std::collections::HashSet::new();
+        let active_edge_set = std::collections::HashSet::new();
+
+        let res = scan_filesystem_orphans_with_sets(
+            &active_org_set,
+            &active_project_set,
+            &active_service_set,
+            &active_volume_set,
+            &active_edge_set,
+            tmp.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let paths: Vec<&str> = res.iter().map(|o| o.path.as_str()).collect();
+        assert!(
+            res.iter().any(|o| o.orphan_type == OrphanType::Git && o.path == legacy_clone.to_string_lossy()),
+            "legacy service checkout must be flagged as git orphan, got {paths:?}"
+        );
+        assert!(
+            res.iter().any(|o| o.orphan_type == OrphanType::Git && o.path == static_repo.to_string_lossy()),
+            "legacy static clone cache must be flagged as git orphan, got {paths:?}"
+        );
+        assert!(
+            !res.iter().any(|o| o.path.starts_with(&*compose_dir.to_string_lossy())),
+            "compose service files must not be flagged, got {paths:?}"
+        );
+        assert!(
+            !res.iter().any(|o| o.path.ends_with("versions")),
+            "published static versions must not be flagged, got {paths:?}"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_build_workspaces_flags_stale_and_skips_in_progress() {
+        let tmp = std::env::temp_dir().join(format!("shipyard-builds-test-{}", Uuid::now_v7()));
+        let builds = tmp.join("builds");
+        let dep = Uuid::now_v7();
+        tokio::fs::create_dir_all(builds.join(dep.to_string()).join(".git")).await.unwrap();
+
+        // Fresh workspace (deployment may still be running) -> skipped
+        let mut orphans = Vec::new();
+        scan_build_workspaces(&builds, std::time::Duration::from_secs(3600), &mut orphans).await;
+        assert!(orphans.is_empty(), "in-progress build workspace must not be flagged");
+
+        // Older than the grace period -> leftover from a crashed deploy -> flagged
+        let mut orphans = Vec::new();
+        scan_build_workspaces(&builds, std::time::Duration::ZERO, &mut orphans).await;
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].orphan_type, OrphanType::Git);
+        assert_eq!(orphans[0].identifier, format!("builds/{dep}"));
+
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+    }
+
+    #[tokio::test]
+    async fn test_scan_filesystem_does_not_flag_fresh_build_workspaces() {
+        let tmp = std::env::temp_dir().join(format!("shipyard-builds-root-test-{}", Uuid::now_v7()));
+        tokio::fs::create_dir_all(tmp.join("builds").join(Uuid::now_v7().to_string()).join(".git")).await.unwrap();
+
+        let res = scan_filesystem_orphans_with_sets(
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            tmp.to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !res.iter().any(|o| o.path.contains("/builds")),
+            "builds/ dir and in-progress workspaces must not be flagged: {:?}",
+            res.iter().map(|o| &o.path).collect::<Vec<_>>()
+        );
 
         let _ = tokio::fs::remove_dir_all(&tmp).await;
     }

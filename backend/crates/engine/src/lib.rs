@@ -7,6 +7,7 @@ pub mod edge_fn_config;
 pub mod edge_fn_detector;
 pub mod artifact;
 pub mod sandbox_probe;
+pub mod build_workspace;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -623,10 +624,17 @@ impl DeploymentEngine {
 
         let store = StaticArtifact::new(&self.data_dir);
 
-        // Paths that are not artifact concerns (nginx config, git clone cache).
+        // Paths that are not artifact concerns (nginx config).
         let sites_base = format!("{}/static", self.data_dir);
-        let repo_path  = format!("{sites_base}/{service_id}/repo");
         let conf_dir   = format!("{sites_base}/conf.d");
+
+        // Ephemeral per-deployment checkout (`<data_dir>/builds/<deployment_id>`).
+        // Removed once the build output is published, or by `Drop` on any
+        // error / early return — no permanent clone is kept on disk.
+        let workspace = crate::build_workspace::BuildWorkspace::prepare(&self.data_dir, deployment_id)
+            .await
+            .map_err(|e| AppError::Internal(format!("prepare build workspace: {e}")))?;
+        let repo_path = workspace.path_string();
 
         // Artifact paths — derived from the store.
         let version_dir = store.version_path(service_id, deployment_id);
@@ -837,8 +845,13 @@ impl DeploymentEngine {
         ).await;
         self.finish_step(org_id, project_id, service_id, deployment_id, step_id, r).await?;
 
-        // Clean up the build output dir — contents are now in public_dir; keep the repo for incremental pulls.
-        let _ = tokio::fs::remove_dir_all(&built_output_path).await;
+        // Build output now lives in public_dir — remove the whole checkout
+        // (source, node_modules, build output) so no clone stays on disk.
+        if let Err(e) = workspace.cleanup().await {
+            tracing::warn!(%deployment_id, path = %repo_path, "failed to remove build workspace: {e}");
+        } else {
+            self.insert_log(deployment_id, None, "info", "Removed build workspace (cloned source)").await;
+        }
 
         // Step 4: go_live — swap `current` symlink (must run before write_nginx_conf so
         // `current/public` exists when nginx reloads, avoiding a transient 404 window).
@@ -3077,12 +3090,24 @@ impl DeploymentEngine {
                 Ok(resolved)
             }
 
-            ImageSource::Git { repo_url, branch, repo_path, .. } => {
+            ImageSource::Git { repo_url, branch, repo_path: service_dir, .. } => {
                 let target_ref = if source_ref.is_empty() || source_ref == "manual" || source_ref == "webhook" {
                     branch
                 } else {
                     source_ref
                 };
+
+                // Clone into an ephemeral per-deployment workspace
+                // (`<data_dir>/builds/<deployment_id>`) instead of keeping a
+                // permanent checkout in the service directory. The workspace is
+                // removed when this arm finishes — explicitly on success, or by
+                // `Drop` on any error / early return.
+                let workspace = crate::build_workspace::BuildWorkspace::prepare(&self.data_dir, deployment_id)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("prepare build workspace: {e}")))?;
+                let workspace_path = workspace.path_string();
+                let repo_path = workspace_path.as_str();
+
                 self.step_clone_or_pull(
                     org_id, project_id, service_id, deployment_id, step_id,
                     repo_url, branch, target_ref, repo_path,
@@ -3093,7 +3118,9 @@ impl DeploymentEngine {
                 let sha_len = 7.min(commit_info.sha.len());
                 let short_sha = &commit_info.sha[..sha_len];
 
-                let slug = std::path::Path::new(repo_path)
+                // Image name comes from the service directory (its slug), not the
+                // ephemeral workspace, so tags stay stable across deployments.
+                let slug = std::path::Path::new(service_dir)
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("service")
@@ -3227,6 +3254,18 @@ impl DeploymentEngine {
                     if !line.trim().is_empty() {
                         self.insert_log(deployment_id, Some(step_id), "info", line).await;
                         self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", line).await;
+                    }
+                }
+
+                // The image is built — the source checkout is no longer needed.
+                match workspace.cleanup().await {
+                    Ok(()) => {
+                        let msg = "Removed build workspace (cloned source)".to_string();
+                        self.insert_log(deployment_id, Some(step_id), "info", &msg).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &msg).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(%deployment_id, path = %workspace_path, "failed to remove build workspace: {e}");
                     }
                 }
 
