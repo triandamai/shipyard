@@ -69,6 +69,12 @@ impl DockerEventWorker {
         crate::orphans::scan_and_reconcile_orphans(&self.db, data_dir, Some((&*self.engine, &self.label_prefix))).await
     }
 
+    /// Check whether the scheduled unused Docker image prune is due and run it.
+    pub async fn prune_unused_docker_images_if_due(&self) -> AppResult<Option<u64>> {
+        let settings = crate::orphans::get_cleanup_settings(&self.db).await;
+        crate::orphans::prune_unused_docker_images_if_due(&self.db, &*self.engine, &settings).await
+    }
+
     // ─── Startup reconciliation ───────────────────────────────────────────────
 
     /// Walk all swarm services and tasks, upserting managed containers into

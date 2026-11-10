@@ -54,6 +54,8 @@
 		orphan_auto_destruct_enabled: boolean;
 		registry_unused_retention_days: number;
 		registry_auto_removal_enabled: boolean;
+		docker_image_prune_enabled?: boolean;
+		docker_image_prune_interval_days?: number;
 	}
 
 	let stats           = $state<RegistryStats | null>(null);
@@ -150,7 +152,9 @@
 				orphan_retention_days: orphanDays,
 				orphan_auto_destruct_enabled: editOrphanDestructEnabled,
 				registry_unused_retention_days: regDays,
-				registry_auto_removal_enabled: editRegistryRemovalEnabled
+				registry_auto_removal_enabled: editRegistryRemovalEnabled,
+				docker_image_prune_enabled: cleanupSettings?.docker_image_prune_enabled ?? true,
+				docker_image_prune_interval_days: cleanupSettings?.docker_image_prune_interval_days ?? 1
 			};
 			const res = await api.put<CleanupSettings>('/admin/orphans/settings', payload);
 			if (res.error) {

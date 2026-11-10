@@ -43,6 +43,8 @@
 		orphan_auto_destruct_enabled: boolean;
 		registry_unused_retention_days: number;
 		registry_auto_removal_enabled: boolean;
+		docker_image_prune_enabled: boolean;
+		docker_image_prune_interval_days: number;
 	}
 
 	export interface OrphanResource {
@@ -150,7 +152,9 @@
 		orphan_retention_days: 30,
 		orphan_auto_destruct_enabled: true,
 		registry_unused_retention_days: 90,
-		registry_auto_removal_enabled: true
+		registry_auto_removal_enabled: true,
+		docker_image_prune_enabled: true,
+		docker_image_prune_interval_days: 1
 	});
 	let showSettingsModal = $state(false);
 	let savingSettings = $state(false);
@@ -160,12 +164,14 @@
 	let editOrphanDestructEnabled = $state(true);
 	let editRegistryRetention = $state('90');
 	let editRegistryRemovalEnabled = $state(true);
+	let editDockerImagePruneEnabled = $state(true);
 
 	function openSettingsModal() {
 		editOrphanRetention = String(settings.orphan_retention_days);
 		editOrphanDestructEnabled = settings.orphan_auto_destruct_enabled;
 		editRegistryRetention = String(settings.registry_unused_retention_days);
 		editRegistryRemovalEnabled = settings.registry_auto_removal_enabled;
+		editDockerImagePruneEnabled = settings.docker_image_prune_enabled ?? true;
 		showSettingsModal = true;
 	}
 
@@ -199,7 +205,9 @@
 				orphan_retention_days: orphanDays,
 				orphan_auto_destruct_enabled: editOrphanDestructEnabled,
 				registry_unused_retention_days: regDays,
-				registry_auto_removal_enabled: editRegistryRemovalEnabled
+				registry_auto_removal_enabled: editRegistryRemovalEnabled,
+				docker_image_prune_enabled: editDockerImagePruneEnabled,
+				docker_image_prune_interval_days: settings.docker_image_prune_interval_days || 1
 			};
 			const res = await api.put<CleanupSettings>('/admin/orphans/settings', payload);
 			if (res.error) {
@@ -714,6 +722,23 @@
 					</FormField>
 				</div>
 			{/if}
+		</div>
+
+		<!-- Docker Host Unused Images Daily Prune Policy -->
+		<div class="settings-card">
+			<div class="settings-card-header">
+				<div class="settings-card-title">
+					<Box size={16} />
+					<span>Docker Engine Daily Unused Images Prune</span>
+				</div>
+				<Toggle
+					bind:checked={editDockerImagePruneEnabled}
+					label="Enable daily unused Docker image prune"
+				/>
+			</div>
+			<p class="settings-card-desc">
+				Automatically schedule daily pruning of unused container images from the host Docker daemon via the worker once every 24 hours to reclaim disk space.
+			</p>
 		</div>
 	</div>
 

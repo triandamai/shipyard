@@ -53,12 +53,24 @@ impl OrphanType {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_docker_image_prune_interval_days() -> i32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CleanupSettings {
     pub orphan_retention_days: i32,
     pub orphan_auto_destruct_enabled: bool,
     pub registry_unused_retention_days: i32,
     pub registry_auto_removal_enabled: bool,
+    #[serde(default = "default_true")]
+    pub docker_image_prune_enabled: bool,
+    #[serde(default = "default_docker_image_prune_interval_days")]
+    pub docker_image_prune_interval_days: i32,
 }
 
 impl Default for CleanupSettings {
@@ -68,6 +80,8 @@ impl Default for CleanupSettings {
             orphan_auto_destruct_enabled: true,
             registry_unused_retention_days: 90, // 3 months default
             registry_auto_removal_enabled: true,
+            docker_image_prune_enabled: true,
+            docker_image_prune_interval_days: 1,
         }
     }
 }
@@ -129,6 +143,80 @@ pub async fn save_cleanup_settings(db: &PgPool, settings: &CleanupSettings) -> A
     .await;
 
     Ok(())
+}
+
+pub fn is_docker_image_prune_due(
+    last_pruned: Option<DateTime<Utc>>,
+    interval_days: i32,
+    now: DateTime<Utc>,
+) -> bool {
+    let interval_hours = (interval_days.max(1) as i64) * 24;
+    match last_pruned {
+        Some(dt) => (now - dt).num_hours() >= interval_hours,
+        None => true,
+    }
+}
+
+pub async fn get_last_docker_image_prune_at(db: &PgPool) -> Option<DateTime<Utc>> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT value FROM system_config WHERE key = 'last_docker_image_prune_at'"
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+
+    row.and_then(|(val,)| serde_json::from_value::<DateTime<Utc>>(val).ok())
+}
+
+pub async fn record_docker_image_prune(db: &PgPool) -> AppResult<()> {
+    let now_val = serde_json::to_value(Utc::now())
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO system_config (key, value, updated_at)
+        VALUES ('last_docker_image_prune_at', $1, NOW())
+        ON CONFLICT (key) DO UPDATE
+        SET value = EXCLUDED.value, updated_at = NOW()
+        "#
+    )
+    .bind(now_val)
+    .execute(db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(())
+}
+
+pub async fn prune_unused_docker_images_if_due(
+    db: &PgPool,
+    docker: &dyn DockerEngine,
+    settings: &CleanupSettings,
+) -> AppResult<Option<u64>> {
+    if !settings.docker_image_prune_enabled {
+        return Ok(None);
+    }
+
+    let last_pruned = get_last_docker_image_prune_at(db).await;
+    let now = Utc::now();
+    if !is_docker_image_prune_due(last_pruned, settings.docker_image_prune_interval_days, now) {
+        return Ok(None);
+    }
+
+    info!("Starting scheduled daily prune of unused Docker images...");
+    match docker.prune_unused_images().await {
+        Ok(count) => {
+            info!(count, "Scheduled Docker image prune completed successfully");
+            if let Err(e) = record_docker_image_prune(db).await {
+                warn!("Failed to record last_docker_image_prune_at in system_config: {e}");
+            }
+            Ok(Some(count))
+        }
+        Err(e) => {
+            warn!("Failed to prune unused Docker images: {e}");
+            Err(e)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1287,6 +1375,13 @@ pub async fn scan_and_reconcile_orphans(
         let _ = auto_destruct_expired_orphans(db, data_dir, docker.map(|(d, _)| d)).await;
     }
 
+    // Prune unused Docker images on schedule if enabled and due
+    if settings.docker_image_prune_enabled {
+        if let Some((d, _)) = docker {
+            let _ = prune_unused_docker_images_if_due(db, d, &settings).await;
+        }
+    }
+
     list_orphans(db, None, None).await
 }
 
@@ -1534,10 +1629,60 @@ mod tests {
         assert!(default_settings.orphan_auto_destruct_enabled);
         assert_eq!(default_settings.registry_unused_retention_days, 90);
         assert!(default_settings.registry_auto_removal_enabled);
+        assert!(default_settings.docker_image_prune_enabled);
+        assert_eq!(default_settings.docker_image_prune_interval_days, 1);
 
         let json = serde_json::to_string(&default_settings).unwrap();
         let parsed: CleanupSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, default_settings);
+    }
+
+    #[test]
+    fn test_legacy_cleanup_settings_deserialization() {
+        let legacy_json = r#"{
+            "orphan_retention_days": 14,
+            "orphan_auto_destruct_enabled": false,
+            "registry_unused_retention_days": 45,
+            "registry_auto_removal_enabled": false
+        }"#;
+        let parsed: CleanupSettings = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.orphan_retention_days, 14);
+        assert!(!parsed.orphan_auto_destruct_enabled);
+        assert_eq!(parsed.registry_unused_retention_days, 45);
+        assert!(!parsed.registry_auto_removal_enabled);
+        assert!(parsed.docker_image_prune_enabled);
+        assert_eq!(parsed.docker_image_prune_interval_days, 1);
+    }
+
+    #[test]
+    fn test_is_docker_image_prune_due() {
+        let now = Utc::now();
+
+        // Never pruned before -> due
+        assert!(is_docker_image_prune_due(None, 1, now));
+
+        // Pruned 12 hours ago with 1 day interval -> not due
+        let twelve_hours_ago = now - chrono::Duration::hours(12);
+        assert!(!is_docker_image_prune_due(Some(twelve_hours_ago), 1, now));
+
+        // Pruned 24 hours ago with 1 day interval -> due
+        let twenty_four_hours_ago = now - chrono::Duration::hours(24);
+        assert!(is_docker_image_prune_due(Some(twenty_four_hours_ago), 1, now));
+
+        // Pruned 36 hours ago with 1 day interval -> due
+        let thirty_six_hours_ago = now - chrono::Duration::hours(36);
+        assert!(is_docker_image_prune_due(Some(thirty_six_hours_ago), 1, now));
+
+        // Pruned 36 hours ago with 2 days (48h) interval -> not due
+        assert!(!is_docker_image_prune_due(Some(thirty_six_hours_ago), 2, now));
+
+        // Pruned 49 hours ago with 2 days interval -> due
+        let forty_nine_hours_ago = now - chrono::Duration::hours(49);
+        assert!(is_docker_image_prune_due(Some(forty_nine_hours_ago), 2, now));
+
+        // 0 or negative interval_days clamped to 1 day minimum (24h)
+        assert!(!is_docker_image_prune_due(Some(twelve_hours_ago), 0, now));
+        assert!(is_docker_image_prune_due(Some(twenty_four_hours_ago), -5, now));
     }
 
     #[tokio::test]
