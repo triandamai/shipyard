@@ -102,7 +102,7 @@
 
 @media (max-width: 639px) {
   :root {
-    --slide-panel-width: 100vw;
+    --slide-panel-width: 100%;
   }
 }
 
@@ -163,10 +163,15 @@ html {
   background-color: var(--bg-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
+  width: 100%;
+  max-width: 100%;
   min-height: 100vh;
   min-height: 100dvh;
   /* Full-height app shells clip themselves; plain pages (login, org list)

@@ -196,6 +196,9 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-lg);
 		overflow: hidden;
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
 	}
 	.ui-data-table-toolbar {
 		display: flex;
@@ -209,7 +212,11 @@
 		gap: 8px;
 		padding: 12px 16px;
 	}
-	.ui-data-table-scroll { overflow-x: auto; }
+	.ui-data-table-scroll {
+		overflow-x: auto;
+		max-width: 100%;
+		-webkit-overflow-scrolling: touch;
+	}
 	.ui-data-table-el {
 		width: 100%;
 		border-collapse: collapse;

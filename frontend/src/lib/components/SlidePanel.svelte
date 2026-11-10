@@ -73,7 +73,8 @@
 
 	@media (max-width: 639px) {
 		.slide-panel {
-			width: 100vw;
+			width: 100%;
+			max-width: 100%;
 			left: 0;
 			border-left: none;
 		}

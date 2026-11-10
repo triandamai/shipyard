@@ -393,7 +393,7 @@
 </div>
 
 <style>
-	.page-wrap { max-width: 980px; margin: 0 auto; padding: 40px 36px; }
+	.page-wrap { max-width: 980px; margin: 0 auto; padding: 40px 36px; width: 100%; min-width: 0; }
 
 	.hdr-status { display: flex; align-items: center; gap: 6px; }
 	.conn-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
@@ -416,10 +416,10 @@
 
 	.disk-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 	.disk-row:last-child { border-bottom: none; }
-	.disk-mount { flex: 1.5; font-size: 12px; }
-	.disk-bar { flex: 3; }
+	.disk-mount { flex: 1.5; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+	.disk-bar { flex: 3; min-width: 60px; }
 	.disk-pct { flex: 1; text-align: right; }
-	.disk-size { flex: 1.5; text-align: right; font-size: 11.5px; }
+	.disk-size { flex: 1.5; text-align: right; font-size: 11.5px; white-space: nowrap; }
 
 	.net-wrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 8px; }
 	.net-scroll { overflow-x: auto; }

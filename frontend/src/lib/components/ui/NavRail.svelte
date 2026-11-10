@@ -203,26 +203,44 @@
 			right: 0;
 			bottom: 0;
 			width: 100%;
-			height: 56px;
+			max-width: 100%;
+			height: calc(56px + env(safe-area-inset-bottom, 0px));
 			flex-direction: row;
-			padding: 0 4px;
+			padding: 0 4px env(safe-area-inset-bottom, 0px);
 			border-right: none;
 			border-top: 1px solid var(--rail-hover-bg);
 			z-index: 60;
+			box-sizing: border-box;
 		}
 		.ui-nav-rail--phone-bar .ui-nav-rail-logo { display: none; }
 		.ui-nav-rail--phone-bar .ui-nav-rail-items {
 			flex-direction: row;
 			justify-content: space-around;
 			flex: 1;
+			min-width: 0;
 			gap: 0;
 			margin: 0;
 			padding: 0;
 			border: none;
 			height: 100%;
 		}
-		.ui-nav-rail--phone-bar .ui-nav-rail-item { width: auto; flex: 1; justify-content: center; height: 100%; gap: 2px; }
-		.ui-nav-rail--phone-bar .ui-nav-rail-icon { width: 36px; height: 26px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-item {
+			width: auto;
+			flex: 1;
+			min-width: 0;
+			justify-content: center;
+			height: 100%;
+			gap: 2px;
+			padding: 4px 2px;
+		}
+		.ui-nav-rail--phone-bar .ui-nav-rail-icon { width: 32px; height: 24px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-label {
+			font-size: 9.5px;
+			max-width: 100%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
 		/* Indicator moves to the top edge of the bar. */
 		.ui-nav-rail--phone-bar .ui-nav-rail-item::before {
 			left: 50%;
@@ -243,6 +261,7 @@
 			border: none;
 			width: auto;
 			gap: 2px;
+			flex-shrink: 0;
 		}
 	}
 </style>
