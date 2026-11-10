@@ -186,6 +186,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/db/tables/:table_name/columns", get(list_table_columns))
         .route("/admin/db/tables/:table_name/rows", get(list_table_rows))
         .route("/admin/db/tables/:table_name/rows/:pk_value", axum::routing::patch(update_table_row).delete(delete_table_row))
+        .route("/admin/db/logs/clear", post(clear_db_logs))
         .route("/admin/sandbox/preview-dns", get(get_sandbox_preview_dns).put(set_sandbox_preview_dns_owner))
         .route("/admin/sandbox/preview-dns/sync", post(sync_sandbox_preview_dns))
 }
@@ -1297,12 +1298,116 @@ async fn mqtt_topics(
 
 // ── System metrics ───────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct DiskInfo {
-    mount: String,
-    total_gb: f64,
-    used_gb: f64,
-    used_pct: f64,
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct DiskInfo {
+    pub mount: String,
+    pub total_gb: f64,
+    pub used_gb: f64,
+    pub used_pct: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RawDiskStat {
+    pub mount: String,
+    pub is_file: bool,
+    pub total_bytes: u64,
+    pub avail_bytes: u64,
+}
+
+pub(crate) fn filter_raw_disks(raw: &[RawDiskStat]) -> Vec<DiskInfo> {
+    // 1. Filter out files, zero total space, and container config/virtual mounts
+    let candidates: Vec<&RawDiskStat> = raw
+        .iter()
+        .filter(|d| {
+            if d.is_file || d.total_bytes == 0 {
+                return false;
+            }
+            let m = d.mount.as_str();
+            // In Linux / Docker containers, ignore system configuration / pseudo mounts
+            if m.starts_with("/etc")
+                || m.starts_with("/proc")
+                || m.starts_with("/sys")
+                || m.starts_with("/dev")
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    // 2. Identify root mount "/" if present
+    let root_opt = candidates.iter().find(|d| d.mount == "/").copied();
+
+    let mut result: Vec<DiskInfo> = Vec::new();
+    let mut seen_sizes: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+
+    if let Some(root) = root_opt {
+        let total = root.total_bytes;
+        let avail = root.avail_bytes;
+        let used = total.saturating_sub(avail);
+        result.push(DiskInfo {
+            mount: "/".to_string(),
+            total_gb: total as f64 / 1_073_741_824.0,
+            used_gb: used as f64 / 1_073_741_824.0,
+            used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
+        });
+        seen_sizes.insert((total, avail));
+    }
+
+    // 3. Add other non-root mounts only if they represent distinct storage (different total or available space)
+    for d in candidates {
+        if d.mount == "/" {
+            continue;
+        }
+        if seen_sizes.contains(&(d.total_bytes, d.avail_bytes)) {
+            continue;
+        }
+        seen_sizes.insert((d.total_bytes, d.avail_bytes));
+        let total = d.total_bytes;
+        let avail = d.avail_bytes;
+        let used = total.saturating_sub(avail);
+        result.push(DiskInfo {
+            mount: d.mount.clone(),
+            total_gb: total as f64 / 1_073_741_824.0,
+            used_gb: used as f64 / 1_073_741_824.0,
+            used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
+        });
+    }
+
+    if result.is_empty() {
+        for d in raw.iter().filter(|d| !d.is_file && d.total_bytes > 0) {
+            let total = d.total_bytes;
+            let avail = d.avail_bytes;
+            let used = total.saturating_sub(avail);
+            result.push(DiskInfo {
+                mount: d.mount.clone(),
+                total_gb: total as f64 / 1_073_741_824.0,
+                used_gb: used as f64 / 1_073_741_824.0,
+                used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
+            });
+            break;
+        }
+    }
+
+    result
+}
+
+fn collect_system_disks() -> Vec<DiskInfo> {
+    use sysinfo::Disks;
+    let disks = Disks::new_with_refreshed_list();
+    let raw: Vec<RawDiskStat> = disks
+        .iter()
+        .map(|d| {
+            let p = d.mount_point();
+            RawDiskStat {
+                mount: p.to_string_lossy().into_owned(),
+                is_file: p.is_file(),
+                total_bytes: d.total_space(),
+                avail_bytes: d.available_space(),
+            }
+        })
+        .collect();
+    filter_raw_disks(&raw)
 }
 
 #[derive(Serialize)]
@@ -1329,7 +1434,7 @@ struct SystemInfo {
 async fn system_info(
     _auth: AuthUser,
 ) -> Result<Json<ApiResponse<SystemInfo>>, ApiAppError> {
-    use sysinfo::{Disks, Networks, System};
+    use sysinfo::{Networks, System};
 
     let info = tokio::task::spawn_blocking(|| {
         let mut sys = System::new_all();
@@ -1352,20 +1457,7 @@ async fn system_info(
         let swap_total = sys.total_swap();
         let swap_used  = sys.used_swap();
 
-        let disks: Vec<DiskInfo> = Disks::new_with_refreshed_list()
-            .iter()
-            .map(|d| {
-                let total = d.total_space();
-                let avail = d.available_space();
-                let used  = total.saturating_sub(avail);
-                DiskInfo {
-                    mount:    d.mount_point().to_string_lossy().into_owned(),
-                    total_gb: total as f64 / 1_073_741_824.0,
-                    used_gb:  used  as f64 / 1_073_741_824.0,
-                    used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
-                }
-            })
-            .collect();
+        let disks = collect_system_disks();
 
         let networks: Vec<NetInfo> = Networks::new_with_refreshed_list()
             .iter()
@@ -1408,7 +1500,7 @@ async fn system_info_stream(
     let docker = state.docker.clone();
 
     tokio::spawn(async move {
-        use sysinfo::{Disks, Networks, System};
+        use sysinfo::{Networks, System};
         let mut sys = System::new_all();
 
         loop {
@@ -1430,20 +1522,7 @@ async fn system_info_stream(
                 let swap_total = sys.total_swap();
                 let swap_used  = sys.used_swap();
 
-                let disks: Vec<DiskInfo> = Disks::new_with_refreshed_list()
-                    .iter()
-                    .map(|d| {
-                        let total = d.total_space();
-                        let avail = d.available_space();
-                        let used  = total.saturating_sub(avail);
-                        DiskInfo {
-                            mount:    d.mount_point().to_string_lossy().into_owned(),
-                            total_gb: total as f64 / 1_073_741_824.0,
-                            used_gb:  used  as f64 / 1_073_741_824.0,
-                            used_pct: if total > 0 { used as f64 / total as f64 * 100.0 } else { 0.0 },
-                        }
-                    })
-                    .collect();
+                let disks = collect_system_disks();
 
                 let networks: Vec<NetInfo> = Networks::new_with_refreshed_list()
                     .iter()
@@ -2513,6 +2592,10 @@ async fn revoke_api_key(
 struct DbTableInfo {
     name: String,
     row_count: i64,
+    #[serde(default)]
+    is_partition: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_table: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -2852,10 +2935,18 @@ async fn list_db_tables(
 ) -> Result<Json<ApiResponse<Vec<DbTableInfo>>>, ApiAppError> {
     require_owner(auth.user_id, &state.db).await?;
 
-    let rows: Vec<(String, i64)> = sqlx::query_as::<_, (String, i64)>(
-        "SELECT t.table_name, COALESCE(s.n_live_tup, 0)::bigint
+    let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as::<_, (String, i64, Option<String>)>(
+        "SELECT
+            t.table_name,
+            COALESCE(s.n_live_tup, 0)::bigint AS row_count,
+            c.relname::text AS parent_table
          FROM information_schema.tables t
          LEFT JOIN pg_stat_user_tables s ON s.relname = t.table_name
+         LEFT JOIN (
+             SELECT i.inhrelid, p.relname
+             FROM pg_inherits i
+             JOIN pg_class p ON p.oid = i.inhparent
+         ) c ON c.inhrelid = (quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass
          WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
          ORDER BY t.table_name",
     )
@@ -2865,7 +2956,15 @@ async fn list_db_tables(
 
     let tables = rows
         .into_iter()
-        .map(|(name, row_count)| DbTableInfo { name, row_count })
+        .map(|(name, row_count, parent_table)| {
+            let is_partition = parent_table.is_some();
+            DbTableInfo {
+                name,
+                row_count,
+                is_partition,
+                parent_table,
+            }
+        })
         .collect();
 
     Ok(Json(ApiResponse::ok(tables)))
@@ -2908,6 +3007,159 @@ async fn drop_db_table(
     Ok(Json(ApiResponse::ok(serde_json::json!({
         "message": format!("Table '{}' dropped", table_name)
     }))))
+}
+
+// ── Log entries range cleanup ─────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ClearLogsRequest {
+    #[serde(default)]
+    from: Option<DateTime<Utc>>,
+    #[serde(default)]
+    to: Option<DateTime<Utc>>,
+    #[serde(default)]
+    preset: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct ClearLogsResponse {
+    partitions_dropped: usize,
+    rows_deleted: u64,
+    message: String,
+}
+
+pub(crate) fn calculate_partitions_to_drop(
+    partition_names: &[String],
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Vec<String> {
+    let mut to_drop = Vec::new();
+    for name in partition_names {
+        if let Some(date) = shipyard_observability::retention::parse_date_from_partition_name(name) {
+            let (part_start, part_end) = shipyard_observability::retention::partition_bounds(date);
+            let in_from = from.map_or(true, |f| part_start >= f);
+            let in_to = to.map_or(true, |t| part_end <= t);
+            if in_from && in_to {
+                to_drop.push(name.clone());
+            }
+        }
+    }
+    to_drop
+}
+
+async fn execute_clear_logs(
+    db: &sqlx::PgPool,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+) -> Result<(usize, u64), sqlx::Error> {
+    use sqlx::Row;
+
+    // 1. Query child partition tables of log_entries
+    let rows = sqlx::query(
+        "SELECT inhrelid::regclass::text AS tablename \
+         FROM pg_inherits \
+         WHERE inhparent = 'log_entries'::regclass"
+    )
+    .fetch_all(db)
+    .await?;
+
+    let partition_names: Vec<String> = rows
+        .into_iter()
+        .filter_map(|r| r.try_get::<String, _>("tablename").ok())
+        .collect();
+
+    let to_drop = calculate_partitions_to_drop(&partition_names, from, to);
+    let mut partitions_dropped = 0;
+    for tablename in to_drop {
+        let quoted = tablename.replace('"', "\"\"");
+        let drop_sql = format!("DROP TABLE IF EXISTS \"{quoted}\" CASCADE");
+        if sqlx::query(&drop_sql).execute(db).await.is_ok() {
+            partitions_dropped += 1;
+        }
+    }
+
+    // 2. Delete remaining records within [from, to] (handles partial days, log_entries_default)
+    let del_res = sqlx::query(
+        "DELETE FROM log_entries \
+         WHERE ($1::timestamptz IS NULL OR ts >= $1) \
+           AND ($2::timestamptz IS NULL OR ts <= $2)"
+    )
+    .bind(from)
+    .bind(to)
+    .execute(db)
+    .await?;
+
+    let rows_deleted = del_res.rows_affected();
+
+    // 3. Delete matching aggregated hourly counts
+    let _ = sqlx::query(
+        "DELETE FROM log_counts_1h \
+         WHERE ($1::timestamptz IS NULL OR bucket_start >= $1) \
+           AND ($2::timestamptz IS NULL OR bucket_start <= $2)"
+    )
+    .bind(from)
+    .bind(to)
+    .execute(db)
+    .await;
+
+    // 4. Ensure current and next day partitions exist so ongoing log ingestion continues seamlessly
+    let today = Utc::now().date_naive();
+    let dates = shipyard_observability::retention::required_partition_dates(today, 1);
+    for &d in &dates {
+        let name = shipyard_observability::retention::partition_name_for_date(d);
+        let (start, end) = shipyard_observability::retention::partition_bounds(d);
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS {name} PARTITION OF log_entries \
+             FOR VALUES FROM ('{}') TO ('{}')",
+            start.to_rfc3339(),
+            end.to_rfc3339()
+        );
+        let _ = sqlx::query(&sql).execute(db).await;
+    }
+
+    Ok((partitions_dropped, rows_deleted))
+}
+
+/// POST /admin/db/logs/clear — prune or clear logs within a time range.
+async fn clear_db_logs(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(payload): Json<ClearLogsRequest>,
+) -> Result<Json<ApiResponse<ClearLogsResponse>>, ApiAppError> {
+    require_owner(auth.user_id, &state.db).await?;
+
+    let now = Utc::now();
+    let (from, to) = match payload.preset.as_deref() {
+        Some("older_than_24h") => (None, Some(now - chrono::Duration::hours(24))),
+        Some("older_than_7d")  => (None, Some(now - chrono::Duration::days(7))),
+        Some("older_than_14d") => (None, Some(now - chrono::Duration::days(14))),
+        Some("older_than_30d") => (None, Some(now - chrono::Duration::days(30))),
+        Some("older_than_90d") => (None, Some(now - chrono::Duration::days(90))),
+        Some("all")            => (None, Some(now + chrono::Duration::days(365))),
+        _ => (payload.from, payload.to.or(Some(now))),
+    };
+
+    let (partitions_dropped, rows_deleted) = execute_clear_logs(&state.db, from, to).await
+        .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let message = format!(
+        "Successfully cleared logs: {partitions_dropped} partition tables dropped, {rows_deleted} log entries deleted."
+    );
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        partitions_dropped,
+        rows_deleted,
+        ?from,
+        ?to,
+        "Admin cleared logs with range"
+    );
+
+    Ok(Json(ApiResponse::ok(ClearLogsResponse {
+        partitions_dropped,
+        rows_deleted,
+        message,
+    })))
 }
 
 // ── Nginx-static conf endpoints ───────────────────────────────────────────────
@@ -3276,5 +3528,112 @@ mod release_tests {
         );
         // Idempotent.
         assert_eq!(pin_dotenv_images(&out, &["BACKEND_IMAGE"], "1.4.2"), out);
+    }
+
+    #[test]
+    fn filter_raw_disks_deduplicates_container_bind_mounts_and_filters_files() {
+        let total = 63243911168; // 58.9 GB
+        let avail = 16428236800; // 15.3 GB
+
+        let raw = vec![
+            RawDiskStat {
+                mount: "/".to_string(),
+                is_file: false,
+                total_bytes: total,
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/opt/shipyard".to_string(),
+                is_file: false,
+                total_bytes: total, // identical to root / -> duplicate bind mount
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/etc/resolv.conf".to_string(),
+                is_file: true, // single file bind mount
+                total_bytes: total,
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/etc/hostname".to_string(),
+                is_file: true, // single file bind mount
+                total_bytes: total,
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/etc/hosts".to_string(),
+                is_file: true, // single file bind mount
+                total_bytes: total,
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/etc/traefik/dynamic".to_string(),
+                is_file: false,
+                total_bytes: total,
+                avail_bytes: avail,
+            },
+            RawDiskStat {
+                mount: "/mnt/data".to_string(),
+                is_file: false,
+                total_bytes: 107374182400, // 100 GB -> distinct separate volume!
+                avail_bytes: 53687091200,
+            },
+        ];
+
+        let filtered = filter_raw_disks(&raw);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].mount, "/");
+        assert!((filtered[0].used_pct - 74.0).abs() < 1.0);
+        assert_eq!(filtered[1].mount, "/mnt/data");
+        assert!((filtered[1].total_gb - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn calculate_partitions_to_drop_matches_date_ranges() {
+        use chrono::TimeZone;
+
+        let partitions = vec![
+            "log_entries_y2026m10d28".to_string(),
+            "log_entries_y2026m10d29".to_string(),
+            "log_entries_y2026m10d30".to_string(),
+            "log_entries_y2026m10d31".to_string(),
+            "log_entries_default".to_string(),
+        ];
+
+        // Case 1: Drop everything up to 2026-10-30 00:00:00 UTC (exclusive of 30th)
+        let cutoff = Utc.with_ymd_and_hms(2026, 10, 30, 0, 0, 0).unwrap();
+        let to_drop = calculate_partitions_to_drop(&partitions, None, Some(cutoff));
+        assert_eq!(
+            to_drop,
+            vec![
+                "log_entries_y2026m10d28".to_string(),
+                "log_entries_y2026m10d29".to_string(),
+            ]
+        );
+
+        // Case 2: Specific range [2026-10-29 00:00:00, 2026-10-31 00:00:00]
+        let from = Utc.with_ymd_and_hms(2026, 10, 29, 0, 0, 0).unwrap();
+        let to = Utc.with_ymd_and_hms(2026, 10, 31, 0, 0, 0).unwrap();
+        let to_drop_range = calculate_partitions_to_drop(&partitions, Some(from), Some(to));
+        assert_eq!(
+            to_drop_range,
+            vec![
+                "log_entries_y2026m10d29".to_string(),
+                "log_entries_y2026m10d30".to_string(),
+            ]
+        );
+
+        // Case 3: Drop all
+        let future = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+        let to_drop_all = calculate_partitions_to_drop(&partitions, None, Some(future));
+        assert_eq!(
+            to_drop_all,
+            vec![
+                "log_entries_y2026m10d28".to_string(),
+                "log_entries_y2026m10d29".to_string(),
+                "log_entries_y2026m10d30".to_string(),
+                "log_entries_y2026m10d31".to_string(),
+            ]
+        );
     }
 }
