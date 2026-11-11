@@ -64,6 +64,8 @@ function toFlowNode(node: TopologyNode, position?: { x: number; y: number }): Fl
 function toFlowEdge(edge: TopologyEdge): FlowEdge {
 	const isEnvRef = edge.type === 'env_ref';
 	const isConnection = edge.type === 'connection';
+	const isDomain = edge.type === 'domain';
+	const isVolume = edge.type === 'volume';
 	return {
 		id: edge.id,
 		source: edge.source,
@@ -74,6 +76,16 @@ function toFlowEdge(edge: TopologyEdge): FlowEdge {
 		...(isEnvRef && {
 			style: 'stroke: var(--accent-purple); stroke-dasharray: 6,3;',
 			labelStyle: 'fill: var(--accent-purple); font-size: 9px; font-weight: 600;',
+			labelBgStyle: 'fill: transparent;',
+		}),
+		...(isDomain && {
+			style: 'stroke: var(--accent-green); stroke-width: 1.5;',
+			labelStyle: 'fill: var(--accent-green); font-size: 9px; font-weight: 600;',
+			labelBgStyle: 'fill: transparent;',
+		}),
+		...(isVolume && {
+			style: 'stroke: var(--accent-yellow); stroke-width: 1.5;',
+			labelStyle: 'fill: var(--accent-yellow); font-size: 9px; font-weight: 600;',
 			labelBgStyle: 'fill: transparent;',
 		}),
 		...(isConnection && {
@@ -215,6 +227,11 @@ function autoLayoutPositions(
 		const parentId = d?.service_parent_id as string | undefined;
 		if (parentId && result[parentId]) {
 			return { anchorId: parentId, pos: result[parentId] };
+		}
+
+		const serviceId = d?.service_id as string | undefined;
+		if (serviceId && result[serviceId]) {
+			return { anchorId: serviceId, pos: result[serviceId] };
 		}
 
 		// Check direct connections via edges

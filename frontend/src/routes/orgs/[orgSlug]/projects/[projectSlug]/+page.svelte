@@ -20,6 +20,7 @@
 	import ServiceNode from '$lib/flows/ServiceNode.svelte';
 	import NetworkNode from '$lib/flows/NetworkNode.svelte';
 	import VolumeNode from '$lib/flows/VolumeNode.svelte';
+	import DomainNode from '$lib/flows/DomainNode.svelte';
 	import StaticSiteNode from '$lib/flows/StaticSiteNode.svelte';
 	import PortalNode from '$lib/flows/PortalNode.svelte';
 	import AddResourceNode from '$lib/flows/AddResourceNode.svelte';
@@ -88,6 +89,7 @@
 		service:       ServiceNode as any,
 		network:       NetworkNode as any,
 		volume:        VolumeNode as any,
+		domain:        DomainNode as any,
 		static_site:   StaticSiteNode as any,
 		portal:        PortalNode as any,
 		add_resource:  AddResourceNode as any,
@@ -111,8 +113,6 @@
 			const target = event.target instanceof Element ? event.target : null;
 			let initialTab: 'replicas' | 'volumes' | 'domains' | undefined;
 			if (target?.closest('.replica-stack-peek')) initialTab = 'replicas';
-			else if (target?.closest('.volume-stack-peek')) initialTab = 'volumes';
-			else if (target?.closest('.domain-stack-peek')) initialTab = 'domains';
 			uiStore.pushPanel({
 				key: `service:${serviceId}`,
 				component: ServiceDetailPanel,
@@ -128,6 +128,55 @@
 				},
 				title: (node.data?.name as string) || 'Service'
 			});
+		} else if (node.type === 'domain') {
+			const serviceId = ((node.data?.service_id as string) ?? node.id).replace(/^dom_svc_/, '').replace(/^svc_/, '');
+			uiStore.pushPanel({
+				key: `service:${serviceId}`,
+				component: ServiceDetailPanel,
+				props: {
+					serviceId,
+					projectId,
+					orgId,
+					initialTab: 'domains',
+					onDeleted: () => {
+						uiStore.popPanel();
+						syncTopology(orgId, projectId);
+					}
+				},
+				title: 'Domains'
+			});
+		} else if (node.type === 'volume') {
+			const isServiceVolume = node.id.startsWith('vol_svc_') || Boolean(node.data?.service_id);
+			if (isServiceVolume) {
+				const serviceId = ((node.data?.service_id as string) ?? node.id).replace(/^vol_svc_/, '').replace(/^svc_/, '');
+				uiStore.pushPanel({
+					key: `service:${serviceId}`,
+					component: ServiceDetailPanel,
+					props: {
+						serviceId,
+						projectId,
+						orgId,
+						initialTab: 'volumes',
+						onDeleted: () => {
+							uiStore.popPanel();
+							syncTopology(orgId, projectId);
+						}
+					},
+					title: 'Volumes'
+				});
+			} else {
+				const volumeId = node.id.replace(/^vol_/, '');
+				uiStore.pushPanel({
+					key: `volume:${volumeId}`,
+					component: VolumeDetailPanel,
+					props: {
+						volumeId,
+						projectId,
+						onDeleted: () => syncTopology(orgId, projectId),
+					},
+					title: (node.data?.name as string) || 'Volume'
+				});
+			}
 		} else if (node.type === 'network') {
 			const networkId = node.id.replace(/^net_/, '');
 			uiStore.pushPanel({
