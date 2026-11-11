@@ -25,10 +25,7 @@
 	let svcType         = $derived((data.type as string)            ?? '');
 	let ports           = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
 
-	// Sneak-peek cards behind the node, one per resource category, stacked in
-	// a fixed order (nearest → furthest): replicas, volumes, domains. Each is
-	// hidden when its count is 0 and always carries a count label — no hover
-	// needed to read it.
+	// Stack cards behind the node for attached resources
 	let showReplicaStack = $derived(replicas > 0);
 	let showVolumeStack  = $derived(volumeCount > 0);
 	let showDomainStack  = $derived(domainCount > 0);
@@ -53,14 +50,38 @@
 			stopped:        'Stopped'
 		} as Record<string, string>)[s] ?? s;
 	}
+
+	function statusTone(s: string): 'green' | 'blue' | 'yellow' | 'red' | 'neutral' {
+		switch (s) {
+			case 'running': return 'green';
+			case 'deploying':
+			case 'queued':
+			case 'pending':
+			case 'preparing': return 'blue';
+			case 'stopping':
+			case 'need_attention': return 'yellow';
+			case 'failed':
+			case 'rejected': return 'red';
+			default: return 'neutral';
+		}
+	}
+
+	let tone = $derived(statusTone(status));
 </script>
 
-<Handle type="target" position={Position.Left} />
+<!-- Input connection handle (left) -->
+<Handle
+	type="target"
+	position={Position.Left}
+	class="flow-handle flow-handle-target"
+	title="Connect input (e.g. from network or service)"
+/>
 
 <div class="node-stack-wrapper">
+	<!-- Stack layers peeking from beneath -->
 	{#if showDomainStack}
 		<div class="stack-layer domain-stack-peek" title={domainStackTitle}>
-			<Globe size={10} style="flex-shrink:0" />
+			<Globe size={11} class="stack-icon" />
 			<span class="stack-count-label">{firstDomain ?? domainCountLabel}</span>
 			{#if firstDomainUrl}
 				<a
@@ -77,54 +98,69 @@
 			{/if}
 		</div>
 	{/if}
+
 	{#if showVolumeStack}
 		<div class="stack-layer volume-stack-peek" title={volumeStackTitle}>
-			<HardDrive size={10} style="flex-shrink:0" />
+			<HardDrive size={11} class="stack-icon" />
 			<span class="stack-count-label">{volumeCountLabel}</span>
 		</div>
 	{/if}
+
 	{#if showReplicaStack}
 		<div class="stack-layer replica-stack-peek" title={replicaStackTitle}>
-			<Layers size={10} style="flex-shrink:0" />
+			<Layers size={11} class="stack-icon" />
 			<span class="stack-count-label">{replicaCountLabel}</span>
 		</div>
 	{/if}
 
-	<div class="service-node"
+	<!-- Main Service Card -->
+	<div
+		class="service-node"
 		class:selected
 		class:deploying={status === 'deploying'}
 		class:stopping={status === 'stopping'}
 		class:need-attention={status === 'need_attention'}
+		class:failed={status === 'failed'}
+		data-tone={tone}
 	>
+		<!-- Card Top / Header -->
 		<div class="node-header">
-			<BrandLogo icon={data.icon as string | null} type={svcType} size={24} iconSize={13} class="node-icon" />
-			<div class="node-title">
-				<span class="node-name" title={name}>{name}</span>
+			<div class="node-icon-box">
+				<BrandLogo icon={data.icon as string | null} type={svcType} size={26} iconSize={15} class="node-icon" />
+			</div>
+
+			<div class="node-title-group">
+				<div class="node-title-row">
+					<span class="node-name" title={name}>{name}</span>
+				</div>
 				{#if slug}
-					<span class="node-slug">{slug}</span>
+					<span class="node-slug" title={slug}>{slug}</span>
 				{/if}
+			</div>
+
+			<!-- Status pill badge -->
+			<div class="status-pill status-pill-{tone}">
+				<StatusDot status={toDotStatus(status)} />
+				<span class="status-pill-text">{statusLabel(status)}</span>
 			</div>
 		</div>
 
+		<!-- Card Body: Meta tags & Ports -->
 		<div class="node-body">
-			<div class="node-status">
-				<StatusDot status={toDotStatus(status)} />
-				<span class="status-text">{statusLabel(status)}</span>
-			</div>
-
-			<div class="node-meta">
+			<div class="node-meta-row">
 				{#if svcType}
-					<span class="meta-chip">{svcType}</span>
+					<span class="meta-tag type-tag">{svcType}</span>
 				{/if}
-				<span class="meta-chip replicas-chip" title={replicaStackTitle}>
-					{replicas} replica{replicas === 1 ? '' : 's'}
+
+				<span class="meta-tag replicas-tag" title={replicaStackTitle}>
+					<span class="replica-count-indicator">{runningReplicas}/{replicas}</span> running
 				</span>
 			</div>
 
 			{#if ports.length > 0}
 				<div class="port-row">
 					{#each ports as port (port)}
-						<span class="port-chip">{port}</span>
+						<span class="port-tag">{port}</span>
 					{/each}
 				</div>
 			{/if}
@@ -132,13 +168,39 @@
 	</div>
 </div>
 
-<Handle type="source" position={Position.Right} />
+<!-- Output connection handle (right) -->
+<Handle
+	type="source"
+	position={Position.Right}
+	class="flow-handle flow-handle-source"
+	title="Connect output (e.g. to network, volume, or service)"
+/>
 
 <style>
+	/* Handle custom styles */
+	:global(.svelte-flow__handle.flow-handle) {
+		width: 10px !important;
+		height: 10px !important;
+		background: var(--bg-surface) !important;
+		border: 2px solid var(--border-control) !important;
+		border-radius: 50% !important;
+		transition: all var(--transition-fast) !important;
+		z-index: 10 !important;
+	}
+
+	:global(.svelte-flow__handle.flow-handle:hover) {
+		width: 13px !important;
+		height: 13px !important;
+		background: var(--accent) !important;
+		border-color: var(--accent) !important;
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+	}
+
 	.node-stack-wrapper {
 		position: relative;
 	}
 
+	/* Stack peeks underneath */
 	.stack-layer {
 		position: absolute;
 		inset: 0;
@@ -147,26 +209,44 @@
 		border: 1px solid var(--border);
 		box-shadow: var(--shadow-sm);
 		cursor: pointer;
-		transition: transform var(--transition-fast), opacity var(--transition-fast);
+		transition: transform var(--transition-fast), opacity var(--transition-fast), border-color var(--transition-fast);
 		display: flex;
 		align-items: flex-end;
 		justify-content: center;
-		gap: 3px;
-		padding: 0 8px 3px;
+		gap: 4px;
+		padding: 0 10px 4px;
 		color: var(--text-dim);
 	}
 
-	/* Stack order (nearest → furthest behind the card): replicas, volumes,
-	   domains. Offset is vertical-only so left/right edges stay flush/hidden
-	   behind the main card — only a bottom sliver peeks out. */
-	.replica-stack-peek { transform: translate(0, 14px); opacity: 0.8;  z-index: -1; }
-	.volume-stack-peek  { transform: translate(0, 28px); opacity: 0.65; z-index: -2; }
-	.domain-stack-peek  { transform: translate(0, 42px); opacity: 0.5;  z-index: -3; }
+	.replica-stack-peek { transform: translate(0, 14px); opacity: 0.85; z-index: -1; }
+	.volume-stack-peek  { transform: translate(0, 28px); opacity: 0.70; z-index: -2; }
+	.domain-stack-peek  { transform: translate(0, 42px); opacity: 0.55; z-index: -3; }
+
+	.node-stack-wrapper:hover .replica-stack-peek {
+		transform: translate(0, 18px);
+		opacity: 1;
+		border-color: var(--border-hover);
+	}
+	.node-stack-wrapper:hover .volume-stack-peek  {
+		transform: translate(0, 34px);
+		opacity: 0.9;
+		border-color: var(--border-hover);
+	}
+	.node-stack-wrapper:hover .domain-stack-peek  {
+		transform: translate(0, 50px);
+		opacity: 0.8;
+		border-color: var(--border-hover);
+	}
+
+	.stack-icon {
+		flex-shrink: 0;
+		color: var(--text-dim);
+	}
 
 	.stack-count-label {
-		font-size: 9px;
+		font-size: 10px;
 		font-weight: 600;
-		color: var(--text-dim);
+		color: var(--text-muted);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -174,13 +254,14 @@
 	}
 
 	.stack-link-btn {
-		display: flex;
+		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		flex-shrink: 0;
 		color: var(--text-dim);
-		border-radius: 3px;
-		padding: 1px;
+		border-radius: var(--radius-sm);
+		padding: 1px 3px;
+		transition: all var(--transition-fast);
 	}
 
 	.stack-link-btn:hover {
@@ -188,33 +269,33 @@
 		background: var(--bg-surface);
 	}
 
-	.node-stack-wrapper:hover .replica-stack-peek { transform: translate(0, 18px); opacity: 1; }
-	.node-stack-wrapper:hover .volume-stack-peek  { transform: translate(0, 34px); opacity: 0.85; }
-	.node-stack-wrapper:hover .domain-stack-peek  { transform: translate(0, 50px); opacity: 0.7; }
-
+	/* Main service card */
 	.service-node {
 		position: relative;
 		z-index: 1;
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
-		padding: 10px 14px;
-		min-width: 190px;
-		max-width: 250px;
+		padding: 11px 13px;
+		min-width: 220px;
+		max-width: 280px;
 		cursor: pointer;
-		transition: border-color var(--transition-fast);
+		box-shadow: var(--shadow-sm);
+		transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 		font-family: var(--font-sans);
+		user-select: none;
 	}
 
 	.service-node:hover {
 		border-color: var(--border-hover);
+		box-shadow: var(--shadow-md);
 	}
 
-	/* Selection is the signal colour as a ring, never a glow. */
 	.service-node.selected {
 		border-color: var(--accent);
 		outline: 2px solid var(--accent);
 		outline-offset: 2px;
+		box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent);
 	}
 
 	.service-node.deploying {
@@ -224,11 +305,15 @@
 
 	.service-node.stopping {
 		border-color: var(--accent-yellow);
-		animation: node-deploy-pulse 1.8s ease-in-out infinite;
+		animation: node-stop-pulse 1.8s ease-in-out infinite;
 	}
 
 	.service-node.need-attention {
 		border-color: var(--accent-yellow);
+	}
+
+	.service-node.failed {
+		border-color: var(--accent-red);
 	}
 
 	@keyframes node-deploy-pulse {
@@ -236,26 +321,42 @@
 		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 30%, transparent); }
 	}
 
-	.service-node.stopping {
-		animation-name: node-stop-pulse;
-	}
 	@keyframes node-stop-pulse {
 		0%, 100% { box-shadow: 0 0 0 0 transparent; }
 		50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-yellow) 30%, transparent); }
 	}
 
+	/* Header layout */
 	.node-header {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: 8px;
 		margin-bottom: 8px;
 	}
 
-	.node-title {
+	.node-icon-box {
+		width: 32px;
+		height: 32px;
+		border-radius: var(--radius-sm);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+	}
+
+	.node-title-group {
 		display: flex;
 		flex-direction: column;
-		gap: 1px;
 		min-width: 0;
+		flex: 1;
+	}
+
+	.node-title-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
 	}
 
 	.node-name {
@@ -265,56 +366,109 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		line-height: 1.3;
+		line-height: 1.25;
 	}
 
 	.node-slug {
-		font-size: 11px;
-		color: var(--text-muted);
+		font-size: 10px;
 		font-family: var(--font-mono);
+		color: var(--text-dim);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		line-height: 1.2;
+		margin-top: 1px;
 	}
 
+	/* Status pill badge */
+	.status-pill {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 6px;
+		border-radius: var(--radius-sm);
+		font-size: 10px;
+		font-weight: 500;
+		white-space: nowrap;
+		flex-shrink: 0;
+		border: 1px solid transparent;
+	}
+
+	.status-pill-green {
+		background: var(--accent-green-muted);
+		color: var(--accent-green-text);
+		border-color: color-mix(in srgb, var(--accent-green) 20%, transparent);
+	}
+
+	.status-pill-blue {
+		background: var(--accent-blue-muted);
+		color: var(--accent-blue-text);
+		border-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+	}
+
+	.status-pill-yellow {
+		background: var(--accent-yellow-muted);
+		color: var(--accent-yellow-text);
+		border-color: color-mix(in srgb, var(--accent-yellow) 20%, transparent);
+	}
+
+	.status-pill-red {
+		background: var(--accent-red-muted);
+		color: var(--accent-red-text);
+		border-color: color-mix(in srgb, var(--accent-red) 20%, transparent);
+	}
+
+	.status-pill-neutral {
+		background: var(--bg-elevated);
+		color: var(--text-muted);
+		border-color: var(--border);
+	}
+
+	.status-pill-text {
+		font-size: 10px;
+		line-height: 1;
+	}
+
+	/* Body Layout */
 	.node-body {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		padding-top: 4px;
+		border-top: 1px solid var(--border);
 	}
 
-	.node-status {
+	.node-meta-row {
 		display: flex;
 		align-items: center;
 		gap: 5px;
-	}
-
-	.status-text {
-		font-size: 11px;
-		color: var(--text-muted);
-	}
-
-	.node-meta {
-		display: flex;
-		align-items: center;
-		gap: 4px;
 		flex-wrap: wrap;
 	}
 
-	.meta-chip {
+	.meta-tag {
 		font-size: 10px;
 		font-weight: 500;
-		padding: 1px 6px;
+		padding: 2px 6px;
 		border-radius: var(--radius-sm);
 		background: var(--bg-elevated);
-		color: var(--text-muted);
+		color: var(--text-secondary);
 		border: 1px solid var(--border);
-		text-transform: capitalize;
+		line-height: 1.2;
 	}
 
-	.replicas-chip {
+	.type-tag {
+		text-transform: capitalize;
+		font-weight: 600;
+	}
+
+	.replicas-tag {
+		color: var(--text-muted);
+	}
+
+	.replica-count-indicator {
 		font-family: var(--font-mono);
-		text-transform: none;
+		font-weight: 600;
+		color: var(--text-primary);
 	}
 
 	.port-row {
@@ -322,14 +476,13 @@
 		align-items: center;
 		gap: 4px;
 		flex-wrap: wrap;
-		margin-top: 2px;
 	}
 
-	.port-chip {
-		font-size: 10px;
-		font-weight: 600;
+	.port-tag {
+		font-size: 9.5px;
 		font-family: var(--font-mono);
-		padding: 1px 6px;
+		font-weight: 500;
+		padding: 1px 5px;
 		border-radius: var(--radius-sm);
 		background: var(--bg-elevated);
 		color: var(--text-secondary);

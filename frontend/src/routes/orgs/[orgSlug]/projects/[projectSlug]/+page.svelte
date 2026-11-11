@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { SvelteFlow, Controls, Background, MiniMap, Panel, SelectionMode, type NodeTypes, type Node } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
-	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff, MousePointerSquareDashed, Hand } from '@lucide/svelte';
+	import { Plus, ChevronDown, RefreshCw, Settings2, ShieldOff, MousePointerSquareDashed, Hand, Workflow } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { Button, Badge, Spinner, EmptyState, Dropdown } from '$lib/components/ui';
 
@@ -11,6 +11,7 @@
 	import { projectStore } from '$lib/stores/project.store';
 	import { orgStore } from '$lib/stores/org.store';
 	import { uiStore } from '$lib/stores/ui.store';
+	import { toastStore } from '$lib/stores/toast.store';
 	import { subscribeToTopology } from '$lib/mqtt/subscriptions';
 	import { eventBus } from '$lib/mqtt/eventBus';
 	import type { Topology, MqttPayload } from '$lib/api/types';
@@ -202,21 +203,14 @@
 
 	// ── Node position persistence ──────────────────────────────────────────────
 	// Collect every node's current canvas position and debounce-save to the DB.
-	// 800 ms after the last drag-stop, one PATCH request is sent.
+	// 800 ms after the last drag-stop or layout adjustment, one PATCH request is sent.
 	let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-	function handleNodeDragStop(_: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }) {
+	function persistPositions(positions: Record<string, { x: number; y: number }>) {
 		if (!orgId || !projectId || !canEditProject) return;
 		if (_saveTimer) clearTimeout(_saveTimer);
 
-		// Immediately update the store and LocalStorage for all dragged nodes
-		for (const n of _.nodes) {
-			topologyStore.updateNodePosition(n.id, n.position.x, n.position.y);
-		}
-
 		_saveTimer = setTimeout(async () => {
-			const positions: Record<string, { x: number; y: number }> = {};
-			for (const n of nodes) positions[n.id] = n.position;
 			const res = await api.patchNodePositions(orgId, projectId, positions);
 			if (!res.error) {
 				projectStore.updateNodePositions(projectId, positions);
@@ -225,6 +219,94 @@
 				}
 			}
 		}, 800);
+	}
+
+	function handleNodeDragStop(_: { targetNode: Node | null; nodes: Node[]; event: MouseEvent | TouchEvent }) {
+		if (!orgId || !projectId || !canEditProject) return;
+
+		// Immediately update the store and LocalStorage for all dragged nodes
+		for (const n of _.nodes) {
+			topologyStore.updateNodePosition(n.id, n.position.x, n.position.y);
+		}
+
+		const positions: Record<string, { x: number; y: number }> = {};
+		for (const n of nodes) positions[n.id] = n.position;
+		persistPositions(positions);
+	}
+
+	/**
+	 * Connection handler triggered when user connects handles in the canvas.
+	 * 1. Checks node types and invokes the backend attachment API (Network / Volume).
+	 * 2. Adds the edge to SvelteFlow.
+	 * 3. Auto-positions the target node nearby the source node avoiding collisions.
+	 * 4. Persists the new positions.
+	 */
+	async function handleConnect(connection: import('@xyflow/svelte').Connection) {
+		if (!canEditProject || !orgId || !projectId) return;
+		const { source, target } = connection;
+		if (!source || !target || source === target) return;
+
+		// Attach service ↔ network or service ↔ volume
+		if (source.startsWith('svc_') && target.startsWith('net_')) {
+			const serviceId = source.replace(/^svc_/, '');
+			const networkId = target.replace(/^net_/, '');
+			const res = await api.attachNetwork(projectId, networkId, serviceId);
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Failed to attach network', message: res.error.message });
+				return;
+			}
+			toastStore.add({ type: 'success', title: 'Network Attached', message: 'Service attached to network and auto-positioned nearby.' });
+		} else if (source.startsWith('net_') && target.startsWith('svc_')) {
+			const networkId = source.replace(/^net_/, '');
+			const serviceId = target.replace(/^svc_/, '');
+			const res = await api.attachNetwork(projectId, networkId, serviceId);
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Failed to attach network', message: res.error.message });
+				return;
+			}
+			toastStore.add({ type: 'success', title: 'Network Attached', message: 'Network attached to service and auto-positioned nearby.' });
+		} else if (source.startsWith('svc_') && target.startsWith('vol_')) {
+			const serviceId = source.replace(/^svc_/, '');
+			const volumeId = target.replace(/^vol_/, '');
+			const res = await api.attachVolumeToService(projectId, volumeId, serviceId);
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Failed to attach volume', message: res.error.message });
+				return;
+			}
+			toastStore.add({ type: 'success', title: 'Volume Attached', message: 'Service attached to volume and auto-positioned nearby.' });
+		} else if (source.startsWith('vol_') && target.startsWith('svc_')) {
+			const volumeId = source.replace(/^vol_/, '');
+			const serviceId = target.replace(/^svc_/, '');
+			const res = await api.attachVolumeToService(projectId, volumeId, serviceId);
+			if (res.error) {
+				toastStore.add({ type: 'error', title: 'Failed to attach volume', message: res.error.message });
+				return;
+			}
+			toastStore.add({ type: 'success', title: 'Volume Attached', message: 'Volume attached to service and auto-positioned nearby.' });
+		} else {
+			toastStore.add({ type: 'info', title: 'Nodes Connected', message: 'Connected and auto-positioned nearby.' });
+		}
+
+		// Register edge in store
+		topologyStore.addEdge({
+			id: `edge_${source}_${target}_${Date.now()}`,
+			source,
+			target,
+			type: 'connection'
+		});
+
+		// Auto-position target node nearby source node
+		const updatedPositions = topologyStore.autoPositionConnected(source, target);
+		if (updatedPositions) {
+			persistPositions(updatedPositions);
+		}
+	}
+
+	function handleAutoLayout() {
+		if (!canEditProject) return;
+		const newPositions = topologyStore.recomputeLayout();
+		persistPositions(newPositions);
+		toastStore.add({ type: 'info', title: 'Auto Layout', message: 'Nodes neatly aligned with collision-free nearby spacing.' });
 	}
 
 	let unsubscribeTopology: (() => void) | null = null;
@@ -284,6 +366,13 @@
 			const canvasPositions: Record<string, { x: number; y: number }> = {};
 			for (const n of nodes) canvasPositions[n.id] = n.position;
 			topologyStore.mergeTopology(res.data, canvasPositions);
+
+			// Persist updated positions (e.g. for any newly auto-positioned nodes)
+			setTimeout(() => {
+				const currentPositions: Record<string, { x: number; y: number }> = {};
+				for (const n of nodes) currentPositions[n.id] = n.position;
+				persistPositions(currentPositions);
+			}, 300);
 		}
 	}
 
@@ -426,6 +515,16 @@
 		</Button>
 
 		{#if canEditProject}
+			<Button
+				variant="ghost"
+				size="icon"
+				onclick={handleAutoLayout}
+				title="Auto-align canvas nodes neatly"
+				aria-label="Auto-align canvas nodes"
+			>
+				<Workflow size={14} />
+			</Button>
+
 			<div class="appbar-divider"></div>
 
 			<Button
@@ -498,6 +597,7 @@
 				selectionMode={SelectionMode.Partial}
 				onnodeclick={handleNodeClick}
 				onnodedragstop={handleNodeDragStop}
+				onconnect={handleConnect}
 			>
 				<Controls />
 				<Background />
