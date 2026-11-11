@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
-	import { Globe, HardDrive, Layers, ExternalLink } from '@lucide/svelte';
+	import { Layers } from '@lucide/svelte';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
 	import StatusDot from '$lib/components/ui/StatusDot.svelte';
 	import { toDotStatus } from '$lib/utils/status';
@@ -17,24 +17,13 @@
 	let status          = $derived((data.status as string)          ?? 'stopped');
 	let replicas        = $derived((data.replicas as number)        ?? 0);
 	let runningReplicas = $derived((data.running_replicas as number) ?? 0);
-	let domainCount     = $derived((data.domain_count as number)    ?? 0);
-	let volumeCount     = $derived((data.volume_count as number)    ?? 0);
-	let firstDomain     = $derived((data.first_domain as string | null) ?? null);
-	let firstDomainTls  = $derived((data.first_domain_tls as boolean)   ?? false);
-	let firstDomainUrl  = $derived(firstDomain ? `${firstDomainTls ? 'https' : 'http'}://${firstDomain}` : null);
 	let svcType         = $derived((data.type as string)            ?? '');
 	let ports           = $derived(Array.isArray(data.ports) ? (data.ports as string[]) : []);
 
-	// Stack cards behind the node for attached resources
+	// Replica stack card behind the node
 	let showReplicaStack = $derived(replicas > 0);
-	let showVolumeStack  = $derived(volumeCount > 0);
-	let showDomainStack  = $derived(domainCount > 0);
 	let replicaCountLabel = $derived(`${replicas} replica${replicas === 1 ? '' : 's'}`);
-	let volumeCountLabel  = $derived(`${volumeCount} volume${volumeCount === 1 ? '' : 's'}`);
-	let domainCountLabel  = $derived(`${domainCount} domain${domainCount === 1 ? '' : 's'}`);
 	let replicaStackTitle = $derived(`${runningReplicas}/${replicas} replica${replicas === 1 ? '' : 's'} running`);
-	let volumeStackTitle  = $derived(`${volumeCount} volume${volumeCount === 1 ? '' : 's'} attached`);
-	let domainStackTitle  = $derived(`${domainCount} domain${domainCount === 1 ? '' : 's'} configured`);
 
 	function statusLabel(s: string): string {
 		return ({
@@ -78,34 +67,6 @@
 />
 
 <div class="node-stack-wrapper">
-	<!-- Stack layers peeking from beneath -->
-	{#if showDomainStack}
-		<div class="stack-layer domain-stack-peek" title={domainStackTitle}>
-			<Globe size={11} class="stack-icon" />
-			<span class="stack-count-label">{firstDomain ?? domainCountLabel}</span>
-			{#if firstDomainUrl}
-				<a
-					class="stack-link-btn"
-					href={firstDomainUrl}
-					target="_blank"
-					rel="noopener noreferrer"
-					title="Open {firstDomain} in a new tab"
-					aria-label="Open {firstDomain} in a new tab"
-					onclick={(e) => e.stopPropagation()}
-				>
-					<ExternalLink size={10} />
-				</a>
-			{/if}
-		</div>
-	{/if}
-
-	{#if showVolumeStack}
-		<div class="stack-layer volume-stack-peek" title={volumeStackTitle}>
-			<HardDrive size={11} class="stack-icon" />
-			<span class="stack-count-label">{volumeCountLabel}</span>
-		</div>
-	{/if}
-
 	{#if showReplicaStack}
 		<div class="stack-layer replica-stack-peek" title={replicaStackTitle}>
 			<Layers size={11} class="stack-icon" />
@@ -200,7 +161,7 @@
 		position: relative;
 	}
 
-	/* Stack peeks underneath */
+	/* Replica stack peek underneath */
 	.stack-layer {
 		position: absolute;
 		inset: 0;
@@ -219,22 +180,10 @@
 	}
 
 	.replica-stack-peek { transform: translate(0, 14px); opacity: 0.85; z-index: -1; }
-	.volume-stack-peek  { transform: translate(0, 28px); opacity: 0.70; z-index: -2; }
-	.domain-stack-peek  { transform: translate(0, 42px); opacity: 0.55; z-index: -3; }
 
 	.node-stack-wrapper:hover .replica-stack-peek {
 		transform: translate(0, 18px);
 		opacity: 1;
-		border-color: var(--border-hover);
-	}
-	.node-stack-wrapper:hover .volume-stack-peek  {
-		transform: translate(0, 34px);
-		opacity: 0.9;
-		border-color: var(--border-hover);
-	}
-	.node-stack-wrapper:hover .domain-stack-peek  {
-		transform: translate(0, 50px);
-		opacity: 0.8;
 		border-color: var(--border-hover);
 	}
 
@@ -251,22 +200,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		min-width: 0;
-	}
-
-	.stack-link-btn {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		flex-shrink: 0;
-		color: var(--text-dim);
-		border-radius: var(--radius-sm);
-		padding: 1px 3px;
-		transition: all var(--transition-fast);
-	}
-
-	.stack-link-btn:hover {
-		color: var(--accent);
-		background: var(--bg-surface);
 	}
 
 	/* Main service card */
