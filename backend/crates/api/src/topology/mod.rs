@@ -67,15 +67,19 @@ struct NetworkRow {
 #[derive(Debug, sqlx::FromRow)]
 struct VolumeRow {
     id: Uuid,
+    service_id: Option<Uuid>,
     name: String,
     mount_path: String,
+    size_mb: i32,
 }
 
 #[derive(Debug, sqlx::FromRow)]
 struct DomainRow {
+    id: Uuid,
     service_id: Uuid,
     hostname: String,
     tls_enabled: bool,
+    port: Option<i32>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -185,14 +189,12 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 3. Query standalone volumes only (service_id IS NULL) — volumes attached
-    // to a service are represented by that service's volume-count stack peek
-    // instead of a separate node.
+    // 3. Query all volumes in the project (both service-attached and standalone)
     let volumes = sqlx::query_as::<_, VolumeRow>(
-        "SELECT v.id, v.name, v.mount_path
+        "SELECT v.id, v.service_id, v.name, v.mount_path, v.size_mb
          FROM volumes v
          WHERE v.project_id = $1
-           AND v.service_id IS NULL
+            OR v.service_id IN (SELECT id FROM services WHERE project_id = $1)
          ORDER BY v.created_at ASC",
     )
     .bind(project_id)
@@ -200,13 +202,9 @@ async fn get_topology(
     .await
     .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
 
-    // 4. Query all domains in the project (via service → project join), used
-    // only to build each static site's inline domain list below — regular
-    // services get a domain_count instead (see the services query above).
-    // Edge function group domains are included automatically because each group
-    // now has a synthetic services row (type='edge_functions').
+    // 4. Query all domains in the project (via service → project join)
     let domains = sqlx::query_as::<_, DomainRow>(
-        "SELECT d.service_id, d.hostname, d.tls_enabled
+        "SELECT d.id, d.service_id, d.hostname, d.tls_enabled, d.port
          FROM domains d
          JOIN services s ON s.id = d.service_id
          WHERE s.project_id = $1
@@ -412,13 +410,96 @@ async fn get_topology(
         });
     }
 
+    // Group attached volumes by service_id into ONE volume node per service
+    let mut volumes_by_service: std::collections::HashMap<Uuid, Vec<&VolumeRow>> = std::collections::HashMap::new();
+    let mut standalone_volumes: Vec<&VolumeRow> = Vec::new();
+
     for vol in &volumes {
+        if let Some(sid) = vol.service_id {
+            volumes_by_service.entry(sid).or_default().push(vol);
+        } else {
+            standalone_volumes.push(vol);
+        }
+    }
+
+    for (service_id, vol_list) in &volumes_by_service {
+        let vol_items: Vec<serde_json::Value> = vol_list
+            .iter()
+            .map(|v| {
+                serde_json::json!({
+                    "id": v.id,
+                    "name": v.name,
+                    "mount_path": v.mount_path,
+                    "size_mb": v.size_mb,
+                })
+            })
+            .collect();
+
+        let vol_node_id = format!("vol_svc_{service_id}");
+        nodes.push(TopologyNode {
+            id: vol_node_id,
+            node_type: "volume".to_string(),
+            data: serde_json::json!({
+                "service_id": format!("svc_{service_id}"),
+                "count": vol_list.len(),
+                "volumes": vol_items,
+                "name": vol_list.first().map(|v| v.name.as_str()).unwrap_or(""),
+                "mount_path": vol_list.first().map(|v| v.mount_path.as_str()).unwrap_or(""),
+                "size_mb": vol_list.first().map(|v| v.size_mb).unwrap_or(0),
+            }),
+        });
+    }
+
+    for vol in &standalone_volumes {
         nodes.push(TopologyNode {
             id: format!("vol_{}", vol.id),
             node_type: "volume".to_string(),
             data: serde_json::json!({
+                "id": vol.id,
                 "name": vol.name,
                 "mount_path": vol.mount_path,
+                "size_mb": vol.size_mb,
+                "is_standalone": true,
+                "volumes": [{
+                    "id": vol.id,
+                    "name": vol.name,
+                    "mount_path": vol.mount_path,
+                    "size_mb": vol.size_mb,
+                }],
+                "count": 1,
+            }),
+        });
+    }
+
+    // Group domains by service_id into ONE domain node per service
+    let mut domains_by_service: std::collections::HashMap<Uuid, Vec<&DomainRow>> = std::collections::HashMap::new();
+    for dom in &domains {
+        domains_by_service.entry(dom.service_id).or_default().push(dom);
+    }
+
+    for (service_id, dom_list) in &domains_by_service {
+        let domain_items: Vec<serde_json::Value> = dom_list
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "id": d.id,
+                    "hostname": d.hostname,
+                    "tls_enabled": d.tls_enabled,
+                    "port": d.port,
+                })
+            })
+            .collect();
+
+        let dom_node_id = format!("dom_svc_{service_id}");
+        nodes.push(TopologyNode {
+            id: dom_node_id,
+            node_type: "domain".to_string(),
+            data: serde_json::json!({
+                "service_id": format!("svc_{service_id}"),
+                "count": dom_list.len(),
+                "domains": domain_items,
+                "hostname": dom_list.first().map(|d| d.hostname.as_str()).unwrap_or(""),
+                "tls_enabled": dom_list.first().map(|d| d.tls_enabled).unwrap_or(false),
             }),
         });
     }
@@ -481,6 +562,26 @@ async fn get_topology(
             source: format!("svc_{}", sn.service_id),
             target: format!("net_{}", sn.network_id),
             edge_type: "network".to_string(),
+        });
+    }
+
+    // service ↔ volume edges (for grouped volume nodes)
+    for service_id in volumes_by_service.keys() {
+        stable_edges.push(TopologyEdge {
+            id: format!("e_vol_{service_id}"),
+            source: format!("svc_{service_id}"),
+            target: format!("vol_svc_{service_id}"),
+            edge_type: "volume".to_string(),
+        });
+    }
+
+    // service ↔ domain edges (for grouped domain nodes)
+    for service_id in domains_by_service.keys() {
+        stable_edges.push(TopologyEdge {
+            id: format!("e_dom_{service_id}"),
+            source: format!("svc_{service_id}"),
+            target: format!("dom_svc_{service_id}"),
+            edge_type: "domain".to_string(),
         });
     }
 
