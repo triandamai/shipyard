@@ -161,45 +161,48 @@
 		position: relative;
 	}
 
-	/* Replica stack peek underneath */
+	/* Replica stack peek underneath - static and visible */
 	.stack-layer {
 		position: absolute;
 		inset: 0;
 		border-radius: var(--radius-md);
-		background: var(--bg-elevated);
+		background: color-mix(in srgb, var(--bg-elevated) 85%, var(--bg-surface));
 		border: 1px solid var(--border);
 		box-shadow: var(--shadow-sm);
 		cursor: pointer;
-		transition: transform var(--transition-fast), opacity var(--transition-fast), border-color var(--transition-fast);
+		transition: border-color var(--transition-fast);
 		display: flex;
 		align-items: flex-end;
 		justify-content: center;
-		gap: 4px;
-		padding: 0 10px 4px;
-		color: var(--text-dim);
+		gap: 5px;
+		padding: 0 10px 5px;
+		color: var(--text-secondary);
 	}
 
-	.replica-stack-peek { transform: translate(0, 14px); opacity: 0.85; z-index: -1; }
+	.replica-stack-peek {
+		transform: translateY(20px);
+		opacity: 1;
+		z-index: 0;
+	}
 
 	.node-stack-wrapper:hover .replica-stack-peek {
-		transform: translate(0, 18px);
-		opacity: 1;
 		border-color: var(--border-hover);
 	}
 
 	.stack-icon {
 		flex-shrink: 0;
-		color: var(--text-dim);
+		color: var(--text-muted);
 	}
 
 	.stack-count-label {
 		font-size: 10px;
 		font-weight: 600;
-		color: var(--text-muted);
+		color: var(--text-secondary);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		min-width: 0;
+		line-height: 1;
 	}
 
 	/* Main service card */
