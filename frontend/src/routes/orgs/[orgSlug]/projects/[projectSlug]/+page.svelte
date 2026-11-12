@@ -246,7 +246,18 @@
 				title: (node.data?.name as string) || 'App'
 			});
 		} else if (node.type === 'portal') {
-			// Portal nodes are read-only info — no panel needed
+			const destSlug = (node.data?.source_project_slug as string)
+				?? $projectStore.projects.find((p) => p.id === node.data?.source_project_id)?.slug
+				?? (node.data?.source_project_name as string);
+
+			if (destSlug) {
+				toastStore.add({
+					type: 'info',
+					title: 'Teleporting...',
+					message: `Entering portal to ${node.data?.source_project_name ?? destSlug}…`
+				});
+				goto(`/orgs/${orgSlug}/projects/${destSlug}`);
+			}
 		}
 	}
 
@@ -332,6 +343,8 @@
 				return;
 			}
 			toastStore.add({ type: 'success', title: 'Volume Attached', message: 'Volume attached to service and auto-positioned nearby.' });
+		} else if ((source.startsWith('svc_') && target.startsWith('portal_')) || (source.startsWith('portal_') && target.startsWith('svc_'))) {
+			toastStore.add({ type: 'success', title: 'Portal Connected', message: 'Service connected to cross-project portal.' });
 		} else {
 			toastStore.add({ type: 'info', title: 'Nodes Connected', message: 'Connected and auto-positioned nearby.' });
 		}
@@ -501,11 +514,15 @@
 		eventBus.on('*', handleServiceStatus);
 		eventBus.on('*', handleDeployStatus);
 
+		const handleSyncTopologyEvent = () => syncTopology(oid, pid);
+		window.addEventListener('shipyard:sync-topology', handleSyncTopologyEvent);
+
 		return () => {
 			sub?.();
 			eventBus.off(topoTopic, handleTopologyMqtt);
 			eventBus.off('*', handleServiceStatus);
 			eventBus.off('*', handleDeployStatus);
+			window.removeEventListener('shipyard:sync-topology', handleSyncTopologyEvent);
 			if (_topoDebounce) { clearTimeout(_topoDebounce); _topoDebounce = null; }
 			topologyStore.setLoading(false);
 		};

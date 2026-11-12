@@ -110,6 +110,7 @@ struct EnvRefRow {
     resource_id: Uuid,
     resource_project_id: Uuid,
     resource_project_name: String,
+    resource_project_slug: String,
     resource_name: String,
 }
 
@@ -285,6 +286,7 @@ async fn get_topology(
              er.resource_id,
              er.resource_project_id,
              p.name AS resource_project_name,
+             p.slug AS resource_project_slug,
              COALESCE(
                  CASE er.resource_type
                      WHEN 'service' THEN (SELECT name FROM services WHERE id = er.resource_id)
@@ -614,6 +616,7 @@ async fn get_topology(
                         "resource_name":       er.resource_name,
                         "source_project_id":   er.resource_project_id,
                         "source_project_name": er.resource_project_name,
+                        "source_project_slug": er.resource_project_slug,
                         "env_key":             er.env_key,
                         "full_match":          er.ref_value,
                     }),

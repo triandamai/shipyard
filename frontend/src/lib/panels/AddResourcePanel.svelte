@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap, Code2 } from '@lucide/svelte';
+	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap, Code2, Compass } from '@lucide/svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import type { Service } from '$lib/api/types';
 	import DockerImagePanel from './resources/DockerImagePanel.svelte';
@@ -12,6 +12,7 @@
 	import StaticSitePanel from './resources/StaticSitePanel.svelte';
 	import EdgeFunctionPanel from './resources/EdgeFunctionPanel.svelte';
 	import SandboxAppTemplatePanel from './resources/SandboxAppTemplatePanel.svelte';
+	import PortalAddPanel from './resources/PortalAddPanel.svelte';
 
 	interface Props {
 		projectId: string;
@@ -21,7 +22,7 @@
 
 	let { projectId, orgId, onCreated }: Props = $props();
 
-	type ResourceType = 'docker' | 'git' | 'database' | 'compose' | 'static' | 'volume' | 'network' | 'template' | 'edge-function' | 'sandbox-app';
+	type ResourceType = 'docker' | 'git' | 'database' | 'compose' | 'static' | 'volume' | 'network' | 'template' | 'edge-function' | 'sandbox-app' | 'portal';
 
 	const PANELS: Record<ResourceType, { component: any; title: string }> = {
 		docker:          { component: DockerImagePanel,  title: 'Docker Image' },
@@ -34,6 +35,7 @@
 		template:        { component: TemplatePanel,      title: 'Templates' },
 		'edge-function': { component: EdgeFunctionPanel,  title: 'Edge Function' },
 		'sandbox-app':   { component: SandboxAppTemplatePanel, title: 'App' },
+		portal:          { component: PortalAddPanel,     title: 'Create Portal' },
 	};
 
 	const resourceTypes: { id: ResourceType; label: string; description: string; icon: any }[] = [
@@ -47,6 +49,7 @@
 		{ id: 'network',         label: 'Network',           description: 'Attach services to a network',       icon: Network },
 		{ id: 'template',        label: 'Template',          description: 'Start from a pre-built template',    icon: LayoutTemplate },
 		{ id: 'sandbox-app',     label: 'App',               description: 'Live coding sandbox with an in-browser editor', icon: Code2 },
+		{ id: 'portal',          label: 'Portal',            description: 'Cross-project teleportation & service link', icon: Compass },
 	];
 
 	function open(type: ResourceType) {
