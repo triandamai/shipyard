@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
-	import { Globe, ExternalLink, ShieldCheck, ShieldAlert } from '@lucide/svelte';
+	import { Globe, ExternalLink, ShieldCheck, Plus } from '@lucide/svelte';
+	import { uiStore } from '$lib/stores/ui.store';
+	import DomainAddPanel from '$lib/panels/resources/DomainAddPanel.svelte';
 
 	interface DomainItem {
 		id: string;
@@ -25,6 +27,24 @@
 	let count = $derived(rawDomains.length);
 	let primaryTitle = $derived(count === 1 ? rawDomains[0].hostname : `${count} Custom Domains`);
 	let allTls = $derived(rawDomains.length > 0 && rawDomains.every((d) => d.tls_enabled));
+
+	function openAddDomain(e: MouseEvent) {
+		e.stopPropagation();
+		const sId = ((data.service_id as string) ?? '').replace(/^dom_svc_/, '').replace(/^svc_/, '');
+		if (!sId) return;
+		uiStore.pushPanel({
+			component: DomainAddPanel,
+			title: 'Add Domain',
+			props: {
+				serviceId: sId,
+				onCreated: () => {
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('shipyard:sync-topology'));
+					}
+				}
+			}
+		});
+	}
 </script>
 
 <Handle
@@ -34,52 +54,67 @@
 	title="Connect input"
 />
 
-<div class="domain-node" class:selected>
-	<div class="node-header">
-		<div class="node-icon">
-			<Globe size={14} />
-		</div>
-		<div class="node-title">
-			<span class="node-name" title={primaryTitle}>{primaryTitle}</span>
-			{#if count > 1}
-				<span class="node-sub">{count} domains attached</span>
-			{/if}
-		</div>
-		{#if allTls}
-			<span class="tls-pill" title="TLS / HTTPS enabled">
-				<ShieldCheck size={10} />
-				<span>TLS</span>
-			</span>
-		{/if}
+<div class="node-stack-wrapper">
+	<!-- Stacked peek layer with shortcut button to add a domain -->
+	<div class="stack-layer domain-stack-peek" title="Add domain to this service">
+		<button
+			type="button"
+			class="stack-add-btn"
+			onclick={openAddDomain}
+			title="Add domain to this service"
+		>
+			<Plus size={11} />
+			<span>Add Domain</span>
+		</button>
 	</div>
 
-	{#if count > 0}
-		<div class="domain-list">
-			{#each rawDomains as dom (dom.id || dom.hostname)}
-				{@const url = `${dom.tls_enabled ? 'https' : 'http'}://${dom.hostname}`}
-				<div class="domain-item">
-					<div class="domain-info">
-						<span class="domain-name" title={dom.hostname}>{dom.hostname}</span>
-						{#if dom.port}
-							<span class="port-chip">:{dom.port}</span>
-						{/if}
-					</div>
-
-					<a
-						class="domain-link-btn"
-						href={url}
-						target="_blank"
-						rel="noopener noreferrer"
-						title="Open {dom.hostname} in a new tab"
-						aria-label="Open {dom.hostname} in a new tab"
-						onclick={(e) => e.stopPropagation()}
-					>
-						<ExternalLink size={11} />
-					</a>
-				</div>
-			{/each}
+	<div class="domain-node" class:selected>
+		<div class="node-header">
+			<div class="node-icon">
+				<Globe size={14} />
+			</div>
+			<div class="node-title">
+				<span class="node-name" title={primaryTitle}>{primaryTitle}</span>
+				{#if count > 1}
+					<span class="node-sub">{count} domains attached</span>
+				{/if}
+			</div>
+			{#if allTls}
+				<span class="tls-pill" title="TLS / HTTPS enabled">
+					<ShieldCheck size={10} />
+					<span>TLS</span>
+				</span>
+			{/if}
 		</div>
-	{/if}
+
+		{#if count > 0}
+			<div class="domain-list">
+				{#each rawDomains as dom (dom.id || dom.hostname)}
+					{@const url = `${dom.tls_enabled ? 'https' : 'http'}://${dom.hostname}`}
+					<div class="domain-item">
+						<div class="domain-info">
+							<span class="domain-name" title={dom.hostname}>{dom.hostname}</span>
+							{#if dom.port}
+								<span class="port-chip">:{dom.port}</span>
+							{/if}
+						</div>
+
+						<a
+							class="domain-link-btn"
+							href={url}
+							target="_blank"
+							rel="noopener noreferrer"
+							title="Open {dom.hostname} in a new tab"
+							aria-label="Open {dom.hostname} in a new tab"
+							onclick={(e) => e.stopPropagation()}
+						>
+							<ExternalLink size={11} />
+						</a>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
 </div>
 
 <Handle
@@ -108,7 +143,61 @@
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-green) 25%, transparent) !important;
 	}
 
+	.node-stack-wrapper {
+		position: relative;
+	}
+
+	/* Stacked peek layer underneath domain node */
+	.stack-layer {
+		position: absolute;
+		inset: 0;
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--accent-green-muted) 35%, var(--bg-surface));
+		border: 1px solid var(--border);
+		box-shadow: var(--shadow-sm);
+		transition: border-color var(--transition-fast);
+		display: flex;
+		align-items: flex-end;
+		justify-content: center;
+		padding: 0 10px 4px;
+	}
+
+	.domain-stack-peek {
+		transform: translateY(20px);
+		opacity: 1;
+		z-index: 0;
+	}
+
+	.node-stack-wrapper:hover .domain-stack-peek {
+		border-color: var(--accent-green);
+	}
+
+	.stack-add-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 10px;
+		font-weight: 600;
+		font-family: var(--font-sans);
+		color: var(--accent-green);
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		padding: 2px 8px;
+		border-radius: var(--radius-sm);
+		transition: all var(--transition-fast);
+		line-height: 1;
+	}
+
+	.stack-add-btn:hover {
+		background: var(--accent-green-muted);
+		color: var(--accent-green-text);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-green) 30%, transparent);
+	}
+
 	.domain-node {
+		position: relative;
+		z-index: 1;
 		background: var(--bg-surface);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-md);
