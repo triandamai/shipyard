@@ -5,15 +5,17 @@
 	import { api } from '$lib/api/client';
 	import { orgStore } from '$lib/stores/org.store';
 	import { projectStore } from '$lib/stores/project.store';
+	import { toastStore } from '$lib/stores/toast.store';
 	import {
 		ArrowLeft, Trash2, AlertTriangle, Save, Check,
-		Layers, Network, HardDrive, Globe, ChevronDown, ChevronRight
+		Layers, Network, HardDrive, Globe, ChevronDown, ChevronRight, ArrowLeftRight
 	} from '@lucide/svelte';
 	import {
 		PageHeader, Card, FormField, TextField, Button, InlineAlert,
 		ConfirmDialog, KeyValueList, StatCard, Badge, Spinner
 	} from '$lib/components/ui';
-	import type { Project, Service } from '$lib/api/types';
+	import type { Project, Service, TransferOrgSearchItem } from '$lib/api/types';
+	import TransferTargetOrgModal from '$lib/components/transfers/TransferTargetOrgModal.svelte';
 
 	let orgSlug    = $derived(page.params.orgSlug ?? '');
 	let projectSlug = $derived(page.params.projectSlug ?? '');
@@ -65,6 +67,28 @@
 
 	// Expandable service rows
 	let expandedServices = $state(new Set<string>());
+
+	// Ownership transfer
+	let myRole = $derived($orgStore.myMembership?.role ?? '');
+	let isOwner = $derived(myRole === 'owner');
+	let showTransferModal = $state(false);
+
+	async function handleProjectTransfer(targetOrg: TransferOrgSearchItem) {
+		if (!project || !orgId || !projectId) return;
+		const res = await api.transferProject(orgId, projectId, targetOrg.id);
+		if (res.error) {
+			throw new Error(res.error.message);
+		}
+		toastStore.add({
+			type: 'success',
+			title: 'Transfer initiated',
+			message: `Transferring ${project.name} to ${targetOrg.name} in background.`
+		});
+		projectStore.setProjects(
+			$projectStore.projects.filter(p => p.id !== projectId)
+		);
+		await goto(`/orgs/${orgSlug}/transfers`);
+	}
 
 	function toggleService(id: string) {
 		const next = new Set(expandedServices);
@@ -277,6 +301,31 @@
 			</div>
 		</Card>
 
+		<!-- Transfer ownership -->
+		<Card padding="24px">
+			<div class="card-body">
+				<h2 class="card-title">
+					<ArrowLeftRight size={16} />
+					Transfer project ownership
+				</h2>
+				<div class="transfer-row">
+					<div class="transfer-desc">
+						<strong>Transfer to another organization</strong>
+						<p>Move this project and all its services, volumes, networks, and domains to another organization. The transfer runs in the background without downtime.</p>
+					</div>
+					<Button
+						variant="secondary"
+						disabled={!isOwner}
+						title={!isOwner ? 'Only organization owners can transfer projects' : undefined}
+						onclick={() => (showTransferModal = true)}
+					>
+						<ArrowLeftRight size={13} />
+						Transfer project
+					</Button>
+				</div>
+			</div>
+		</Card>
+
 		<!-- Danger zone -->
 		<Card tone="danger" padding="24px">
 			<div class="card-body">
@@ -310,6 +359,15 @@
 		confirmText={project.name}
 		error={deleteError}
 		onConfirm={confirmDelete}
+	/>
+
+	<TransferTargetOrgModal
+		bind:open={showTransferModal}
+		mode="project"
+		resourceName={project.name}
+		currentOrgId={orgId}
+		onConfirm={handleProjectTransfer}
+		onClose={() => { showTransferModal = false; }}
 	/>
 {/if}
 
@@ -465,6 +523,7 @@
 	/* Danger zone */
 	.danger-title { color: var(--accent-red); }
 
+	.transfer-row,
 	.danger-row {
 		display: flex;
 		align-items: flex-start;
@@ -472,16 +531,20 @@
 		gap: 24px;
 	}
 
+	.transfer-desc,
 	.danger-desc {
 		font-size: 13px;
 		color: var(--text-secondary);
 	}
+	.transfer-desc strong,
 	.danger-desc strong { color: var(--text-primary); display: block; margin-bottom: 4px; font-size: 14px; }
+	.transfer-desc p,
 	.danger-desc p { margin: 0; line-height: 1.5; }
 
 	@media (max-width: 639px) {
 		.settings-page { padding: 16px; }
 		.resource-grid { grid-template-columns: repeat(2, 1fr); }
+		.transfer-row,
 		.danger-row { flex-direction: column; }
 		.detail-row { grid-template-columns: 80px 1fr; }
 	}
