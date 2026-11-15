@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { Modal, Button, SearchInput, InlineAlert, Spinner, Badge } from '$lib/components/ui';
-	import { Building2, ArrowRight, AlertTriangle, Check, ShieldAlert } from '@lucide/svelte';
+	import {
+		Building2, ArrowRight, AlertTriangle, Check, ShieldAlert,
+		HelpCircle, Info, Database, Layers, Globe, HardDrive, Network
+	} from '@lucide/svelte';
 	import { api } from '$lib/api/client';
 	import type { TransferOrgSearchItem } from '$lib/api/types';
 
@@ -52,7 +55,7 @@
 		}
 	});
 
-	function onSearchInput(val: string) {
+	function handleSearchChange(val: string) {
 		searchQuery = val;
 		if (searchTimeout) clearTimeout(searchTimeout);
 		searchTimeout = setTimeout(() => {
@@ -99,6 +102,7 @@
 	title={step === 'select'
 		? `Transfer ${mode === 'project' ? 'Project' : 'Service'}: Select Target Organization`
 		: `Confirm ${mode === 'project' ? 'Project' : 'Service'} Transfer`}
+	maxWidth="560px"
 	onclose={handleCloseModal}
 >
 	<div class="modal-body">
@@ -117,7 +121,7 @@
 				<SearchInput
 					value={searchQuery}
 					placeholder="Search organization by name or slug…"
-					oninput={onSearchInput}
+					oninput={handleSearchChange}
 				/>
 			</div>
 
@@ -169,16 +173,38 @@
 					</div>
 				</div>
 
-				<div class="warning-box">
-					<span class="warn-icon"><AlertTriangle size={16} /></span>
-					<div class="warn-content">
-						{#if mode === 'project'}
-							<strong>This will transfer the entire project and all services</strong>
-							<p>All services, volumes, networks, and domains in this project will move to <strong>{selectedOrg.name}</strong>. This process runs in the background.</p>
-						{:else}
-							<strong>Service transfer requires target organization claim</strong>
-							<p>This service will be put in <em>Pending Claim</em> status. An owner of <strong>{selectedOrg.name}</strong> must claim it from their Transfers page and assign it to a target project. Volumes and data will persist.</p>
-						{/if}
+				<!-- What will happen & What changes -->
+				<div class="transfer-impact">
+					<div class="impact-section">
+						<span class="impact-title">
+							<Info size={14} class="impact-icon-info" /> What will happen:
+						</span>
+						<ul class="impact-list">
+							{#if mode === 'project'}
+								<li>Ownership of this project and all services will be transferred to <strong>{selectedOrg.name}</strong>.</li>
+								<li>The transfer runs asynchronously in the background with <strong>zero downtime</strong>.</li>
+								<li>All existing volumes, networks, environment variables, domains, and deployments stay intact.</li>
+							{:else}
+								<li>This service will be detached from this project and put in <strong>Pending Claim</strong> status.</li>
+								<li>An owner of <strong>{selectedOrg.name}</strong> must claim it from their <em>Transfers</em> page into one of their projects.</li>
+								<li>Persistent volume data and configuration are preserved during claim.</li>
+							{/if}
+						</ul>
+					</div>
+
+					<div class="impact-section">
+						<span class="impact-title">
+							<ShieldAlert size={14} class="impact-icon-warn" /> What will change:
+						</span>
+						<ul class="impact-list">
+							{#if mode === 'project'}
+								<li>Members of this current organization will <strong>lose access</strong> to this project (unless they are also members of the target org).</li>
+								<li>Billing, compute limits, and quota attribution will move to <strong>{selectedOrg.name}</strong>.</li>
+							{:else}
+								<li>Members of this organization will <strong>lose access</strong> once the service transfer is completed.</li>
+								<li>The service will not receive traffic until claimed by the target organization.</li>
+							{/if}
+						</ul>
 					</div>
 				</div>
 
@@ -193,7 +219,7 @@
 							<Spinner size={14} />
 							<span>Transferring…</span>
 						{:else}
-							<span>Confirm Transfer</span>
+							<span>Confirm & Transfer</span>
 						{/if}
 					</Button>
 				</div>
@@ -207,8 +233,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
-		min-width: 440px;
-		max-width: 520px;
+		width: 100%;
+		box-sizing: border-box;
 	}
 
 	.desc {
@@ -359,42 +385,51 @@
 		align-items: center;
 	}
 
-	.warning-box {
+	/* Impact section */
+	.transfer-impact {
 		display: flex;
+		flex-direction: column;
 		gap: 12px;
-		padding: 14px;
-		background: rgba(234, 179, 8, 0.08);
-		border: 1px solid rgba(234, 179, 8, 0.25);
+	}
+
+	.impact-section {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 12px 14px;
 		border-radius: var(--radius-md);
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+	}
+
+	.impact-title {
+		font-size: 12px;
+		font-weight: 600;
 		color: var(--text-primary);
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 
-	:global([data-theme='dark']) .warning-box {
-		background: rgba(234, 179, 8, 0.12);
-		border-color: rgba(234, 179, 8, 0.3);
+	:global(.impact-icon-info) {
+		color: var(--accent);
 	}
 
-	.warn-icon {
+	:global(.impact-icon-warn) {
 		color: var(--accent-yellow);
-		flex-shrink: 0;
-		margin-top: 2px;
 	}
 
-	.warn-content {
-		font-size: 12.5px;
+	.impact-list {
+		margin: 0;
+		padding-left: 18px;
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-		line-height: 1.45;
-	}
-
-	.warn-content strong {
-		font-size: 13px;
-	}
-
-	.warn-content p {
-		margin: 0;
+		font-size: 12.5px;
 		color: var(--text-secondary);
+		line-height: 1.45;
 	}
 
 	.modal-actions {
