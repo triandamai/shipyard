@@ -1034,3 +1034,55 @@ export interface PaginatedAdminOrgs {
 	limit: number;
 	total_pages: number;
 }
+
+// ─── Ownership Transfers ───────────────────────────────────────────────────────
+
+export interface TransferOrgSearchItem {
+	id: string;
+	name: string;
+	slug: string;
+}
+
+export interface ProjectTransferItem {
+	id: string;
+	project_id: string;
+	project_name: string;
+	project_slug: string;
+	source_org_id: string;
+	source_org_name: string;
+	source_org_slug: string;
+	target_org_id: string;
+	target_org_name: string;
+	target_org_slug: string;
+	status: 'in_progress' | 'completed' | 'failed';
+	error_message: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ServiceTransferItem {
+	id: string;
+	service_id: string;
+	service_name: string;
+	service_slug: string;
+	source_project_id: string;
+	source_project_name: string;
+	source_org_id: string;
+	source_org_name: string;
+	source_org_slug: string;
+	target_org_id: string;
+	target_org_name: string;
+	target_org_slug: string;
+	target_project_id: string | null;
+	target_project_name: string | null;
+	status: 'pending_claim' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'failed';
+	error_message: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface OrgTransfersResponse {
+	incoming_service_transfers: ServiceTransferItem[];
+	outgoing_service_transfers: ServiceTransferItem[];
+	project_transfers: ProjectTransferItem[];
+}

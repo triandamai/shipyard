@@ -34,6 +34,7 @@ use crate::artifactory;
 use crate::artifact_source;
 use crate::sandbox_runtime;
 use crate::static_deployments;
+use crate::transfers;
 use shipyard_common::types::ApiResponse;
 
 /// Build the main API router with all route groups.
@@ -89,6 +90,8 @@ pub fn api_router() -> Router<AppState> {
         .merge(static_deployments::api_routes())
         // Static Serving — /dpl/:id/..., /alias/:id/:alias/...
         .merge(static_deployments::serving_routes())
+        // Ownership Transfers — /orgs/search, /orgs/:org_id/projects/:project_id/transfer, /services/:service_id/transfer, etc.
+        .merge(transfers::routes())
         // Artifact source — /services/:service_id/artifact-source
         .merge(artifact_source::routes())
         // Sandbox runtime — /apps/:service_id/sandbox/{start,stop,heartbeat}

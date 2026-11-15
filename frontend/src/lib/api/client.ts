@@ -43,6 +43,8 @@ import type {
 	CreatedIntegrationKey,
 	AdminWebhook,
 	CreatedAdminWebhook,
+	TransferOrgSearchItem,
+	OrgTransfersResponse,
 	WebhookTestResult,
 	PaginatedAdminOrgs,
 } from './types';
@@ -1076,6 +1078,51 @@ class ApiClient {
 		webhookId: string
 	): Promise<ApiResponse<WebhookTestResult>> {
 		return this.post(`/admin/integrations/${integrationId}/webhooks/${webhookId}/test`, {});
+	}
+
+	// ─── Ownership Transfers ───────────────────────────────────────────────────
+
+	async searchOrganizations(query?: string): Promise<ApiResponse<TransferOrgSearchItem[]>> {
+		const q = query ? `?q=${encodeURIComponent(query)}` : '';
+		return this.get(`/orgs/search${q}`);
+	}
+
+	async transferProject(
+		orgId: string,
+		projectId: string,
+		targetOrgId: string
+	): Promise<ApiResponse<{ transfer_id: string; status: string; message: string }>> {
+		return this.post(`/orgs/${orgId}/projects/${projectId}/transfer`, { target_org_id: targetOrgId });
+	}
+
+	async transferService(
+		serviceId: string,
+		targetOrgId: string
+	): Promise<ApiResponse<{ transfer_id: string; status: string; message: string }>> {
+		return this.post(`/services/${serviceId}/transfer`, { target_org_id: targetOrgId });
+	}
+
+	async getOrgTransfers(orgId: string): Promise<ApiResponse<OrgTransfersResponse>> {
+		return this.get(`/orgs/${orgId}/transfers`);
+	}
+
+	async claimServiceTransfer(
+		transferId: string,
+		targetProjectId: string
+	): Promise<ApiResponse<{ transfer_id: string; status: string; message: string }>> {
+		return this.post(`/service-transfers/${transferId}/claim`, { target_project_id: targetProjectId });
+	}
+
+	async cancelServiceTransfer(
+		transferId: string
+	): Promise<ApiResponse<{ transfer_id: string; status: string; message: string }>> {
+		return this.post(`/service-transfers/${transferId}/cancel`, {});
+	}
+
+	async rejectServiceTransfer(
+		transferId: string
+	): Promise<ApiResponse<{ transfer_id: string; status: string; message: string }>> {
+		return this.post(`/service-transfers/${transferId}/reject`, {});
 	}
 }
 

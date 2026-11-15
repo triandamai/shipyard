@@ -7,8 +7,9 @@
 		ChevronRight, CheckCircle, XCircle, Clock, Loader,
 		Eye, EyeOff, Copy, Globe, Plus, Shield, ShieldOff, FileText,
 		CheckCircle2, AlertCircle, Loader2, Network, HardDrive, Database, Activity,
-		Check, Minus, Circle, Undo2, ScrollText, ArrowUpRight
+		Check, Minus, Circle, Undo2, ScrollText, ArrowUpRight, ArrowLeftRight
 	} from '@lucide/svelte';
+	import TransferTargetOrgModal from '$lib/components/transfers/TransferTargetOrgModal.svelte';
 	import DbClientModal from '$lib/components/DbClientModal.svelte';
 	import DuplicateServiceDialog from '$lib/components/DuplicateServiceDialog.svelte';
 	import ServiceDetailPanel from './ServiceDetailPanel.svelte';
@@ -74,6 +75,23 @@
 	let canDeploy = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'deploy')));
 	let canWrite  = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'write')));
 	let canDelete = $derived(can(myRole, myPerms, permProject(orgId, projectId, 'service', 'delete')));
+	let isOwner   = $derived(myRole === 'owner');
+
+	let showTransferModal = $state(false);
+
+	async function handleServiceTransfer(targetOrg: import('$lib/api/types').TransferOrgSearchItem) {
+		if (!service) return;
+		const res = await api.transferService(service.id, targetOrg.id);
+		if (res.error) {
+			throw new Error(res.error.message);
+		}
+		toastStore.add({
+			type: 'success',
+			title: 'Transfer initiated',
+			message: `Service transfer to ${targetOrg.name} initiated. Waiting for target organization to claim.`
+		});
+		uiStore.closePanel();
+	}
 
 	// ── Tabs ─────────────────────────────────────────────────────────
 	type Tab = 'overview' | 'deploy' | 'logs' | 'git' | 'replicas' | 'volumes' | 'domains' | 'settings';
@@ -1326,6 +1344,18 @@
 	</div>
 {/if}
 
+<!-- ─── Transfer Service Modal ────────────────────────────────────────── -->
+{#if showTransferModal && service}
+	<TransferTargetOrgModal
+		bind:open={showTransferModal}
+		mode="service"
+		resourceName={service.name}
+		currentOrgId={orgId}
+		onConfirm={handleServiceTransfer}
+		onClose={() => { showTransferModal = false; }}
+	/>
+{/if}
+
 <!-- ─── Main Panel ────────────────────────────────────────────────────── -->
 <div class="panel-content">
 	{#if isLoadingService}
@@ -1499,6 +1529,22 @@
 								<div class="danger-header">
 									<AlertTriangle size={13} />
 									<span>Danger Zone</span>
+								</div>
+								<div class="danger-row">
+									<div class="danger-info">
+										<span class="danger-title">Transfer service ownership</span>
+										<span class="danger-desc">Transfer to another organization. The target organization must claim it into a project.</span>
+									</div>
+									<Button
+										variant="secondary"
+										size="sm"
+										disabled={!isOwner}
+										title={!isOwner ? 'Only organization owners can transfer services' : undefined}
+										onclick={() => (showTransferModal = true)}
+									>
+										<ArrowLeftRight size={12} />
+										Transfer
+									</Button>
 								</div>
 								<div class="danger-row">
 									<div class="danger-info">
