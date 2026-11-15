@@ -12,9 +12,11 @@
 		footer?: Snippet;
 		/** When false, Escape and scrim clicks do not close the dialog. */
 		dismissible?: boolean;
+		/** Max width override (e.g. '520px', '480px') */
+		maxWidth?: string;
 	}
 
-	let { open = $bindable(), title, children, footer, dismissible = true }: Props = $props();
+	let { open = $bindable(), title, children, footer, dismissible = true, maxWidth }: Props = $props();
 
 	const titleId = `ui-modal-title-${++modalCounter}`;
 	const FOCUSABLE =
@@ -68,6 +70,7 @@
 			aria-modal="true"
 			aria-labelledby={titleId}
 			tabindex="-1"
+			style={maxWidth ? `max-width: ${maxWidth};` : undefined}
 			bind:this={dialogEl}
 			onclick={(e) => e.stopPropagation()}
 			onkeydown={onKeydown}
@@ -106,6 +109,11 @@
 		max-width: 420px;
 		box-shadow: var(--shadow-lg);
 		outline: none;
+		max-height: calc(100vh - 32px);
+		max-height: calc(100dvh - 32px);
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
 	}
 	.ui-modal-header {
 		padding: 14px 16px;
@@ -113,12 +121,16 @@
 		font-size: 13px;
 		font-weight: 700;
 		color: var(--text-primary);
+		flex-shrink: 0;
 	}
 	.ui-modal-body {
 		padding: 16px;
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
+		overflow-y: auto;
+		flex: 1;
+		min-height: 0;
 	}
 	.ui-modal-footer {
 		display: flex;

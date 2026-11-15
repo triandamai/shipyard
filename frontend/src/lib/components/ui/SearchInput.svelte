@@ -4,14 +4,27 @@
 	interface Props {
 		value: string;
 		placeholder?: string;
+		oninput?: (value: string) => void;
 	}
 
-	let { value = $bindable(), placeholder = 'Search…' }: Props = $props();
+	let { value = $bindable(), placeholder = 'Search…', oninput }: Props = $props();
+
+	function handleInput(e: Event) {
+		const target = e.target as HTMLInputElement;
+		value = target.value;
+		oninput?.(target.value);
+	}
 </script>
 
 <div class="ui-search">
 	<Search size={13} class="ui-search-icon" />
-	<input type="text" {placeholder} bind:value class="ui-search-input" />
+	<input
+		type="text"
+		{placeholder}
+		bind:value
+		oninput={handleInput}
+		class="ui-search-input"
+	/>
 </div>
 
 <style>
