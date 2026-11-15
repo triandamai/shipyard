@@ -9,7 +9,7 @@
 	} from '$lib/components/ui';
 	import {
 		ArrowLeftRight, Download, Upload, FolderSync, RefreshCw, CheckCircle2,
-		XCircle, Clock, AlertTriangle, ShieldAlert
+		XCircle, Clock, AlertTriangle, ShieldAlert, History, Layers
 	} from '@lucide/svelte';
 	import type { OrgTransfersResponse, ServiceTransferItem, ProjectTransferItem } from '$lib/api/types';
 	import ClaimServiceModal from '$lib/components/transfers/ClaimServiceModal.svelte';
@@ -27,7 +27,7 @@
 		project_transfers: []
 	});
 
-	// Claim modal state
+	// Claim panel state
 	let claimModalOpen = $state(false);
 	let activeClaimTransfer = $state<ServiceTransferItem | null>(null);
 
@@ -36,6 +36,123 @@
 	let confirmTitle = $state('');
 	let confirmMessage = $state('');
 	let confirmAction = $state<(() => Promise<void>) | null>(null);
+
+	// History filter tabs: 'all' | 'services' | 'projects'
+	let historyFilter = $state<'all' | 'services' | 'projects'>('all');
+
+	interface HistoryItem {
+		id: string;
+		kind: 'service' | 'project';
+		name: string;
+		slug: string;
+		direction: 'incoming' | 'outgoing';
+		sourceOrgName: string;
+		sourceOrgSlug: string;
+		sourceProjectName?: string;
+		targetOrgName: string;
+		targetOrgSlug: string;
+		targetProjectName?: string;
+		status: string;
+		errorMessage?: string | null;
+		date: string;
+	}
+
+	// Active incoming service transfers pending claim
+	let pendingIncomingServices = $derived(
+		transfersData.incoming_service_transfers.filter((t) => t.status === 'pending_claim')
+	);
+
+	// Active outgoing service transfers awaiting claim or in-progress
+	let pendingOutgoingServices = $derived(
+		transfersData.outgoing_service_transfers.filter(
+			(t) => t.status === 'pending_claim' || t.status === 'in_progress'
+		)
+	);
+
+	// Service transfer history: completed, cancelled, rejected, failed
+	let serviceHistory = $derived.by(() => {
+		const items: HistoryItem[] = [];
+
+		for (const t of transfersData.incoming_service_transfers) {
+			if (t.status !== 'pending_claim') {
+				items.push({
+					id: t.id,
+					kind: 'service',
+					name: t.service_name,
+					slug: t.service_slug,
+					direction: 'incoming',
+					sourceOrgName: t.source_org_name,
+					sourceOrgSlug: t.source_org_slug,
+					sourceProjectName: t.source_project_name,
+					targetOrgName: t.target_org_name,
+					targetOrgSlug: t.target_org_slug,
+					targetProjectName: t.target_project_name,
+					status: t.status,
+					errorMessage: t.error_message,
+					date: t.updated_at || t.created_at
+				});
+			}
+		}
+
+		for (const t of transfersData.outgoing_service_transfers) {
+			if (t.status !== 'pending_claim' && t.status !== 'in_progress') {
+				items.push({
+					id: t.id,
+					kind: 'service',
+					name: t.service_name,
+					slug: t.service_slug,
+					direction: 'outgoing',
+					sourceOrgName: t.source_org_name,
+					sourceOrgSlug: t.source_org_slug,
+					sourceProjectName: t.source_project_name,
+					targetOrgName: t.target_org_name,
+					targetOrgSlug: t.target_org_slug,
+					targetProjectName: t.target_project_name,
+					status: t.status,
+					errorMessage: t.error_message,
+					date: t.updated_at || t.created_at
+				});
+			}
+		}
+
+		return items;
+	});
+
+	// Project transfer history
+	let projectHistory = $derived.by(() => {
+		const items: HistoryItem[] = [];
+		for (const pt of transfersData.project_transfers) {
+			const isIncoming = pt.target_org_id === currentOrg?.id;
+			items.push({
+				id: pt.id,
+				kind: 'project',
+				name: pt.project_name,
+				slug: pt.project_slug,
+				direction: isIncoming ? 'incoming' : 'outgoing',
+				sourceOrgName: pt.source_org_name,
+				sourceOrgSlug: pt.source_org_slug,
+				targetOrgName: pt.target_org_name,
+				targetOrgSlug: pt.target_org_slug,
+				status: pt.status,
+				errorMessage: pt.error_message,
+				date: pt.updated_at || pt.created_at
+			});
+		}
+		return items;
+	});
+
+	// Consolidated history sorted newest first
+	let allHistory = $derived(
+		[...serviceHistory, ...projectHistory].sort(
+			(a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+		)
+	);
+
+	let filteredHistory = $derived.by(() => {
+		if (historyFilter === 'services') return serviceHistory;
+		if (historyFilter === 'projects') return projectHistory;
+		return allHistory;
+	});
 
 	async function loadTransfers() {
 		if (!currentOrg?.id) return;
@@ -173,67 +290,60 @@
 			<span>Loading transfers…</span>
 		</div>
 	{:else}
-		<!-- 1. Incoming Service Transfers -->
+		<!-- 1. Incoming Service Transfers (Active pending claim only) -->
 		<Card padding="20px">
 			<div class="section-header">
 				<div class="section-title-wrap">
 					<span class="section-icon"><Download size={16} /></span>
 					<h2 class="section-title">Incoming Service Transfers</h2>
-					{#if transfersData.incoming_service_transfers.filter(t => t.status === 'pending_claim').length > 0}
+					{#if pendingIncomingServices.length > 0}
 						<Badge tone="yellow">
-							{transfersData.incoming_service_transfers.filter(t => t.status === 'pending_claim').length} pending
+							{pendingIncomingServices.length} pending
 						</Badge>
 					{/if}
 				</div>
 				<span class="section-desc">Services transferred to this organization that require claiming into a project.</span>
 			</div>
 
-			{#if transfersData.incoming_service_transfers.length === 0}
+			{#if pendingIncomingServices.length === 0}
 				<div class="empty-state-wrap">
-					<span class="empty-text">No incoming service transfers.</span>
+					<span class="empty-text">No incoming service transfers pending claim.</span>
 				</div>
 			{:else}
 				<div class="transfer-list">
-					{#each transfersData.incoming_service_transfers as item}
+					{#each pendingIncomingServices as item}
 						<div class="transfer-card">
 							<div class="transfer-main">
 								<div class="transfer-title-row">
 									<span class="resource-name">{item.service_name}</span>
 									<span class="resource-slug">{item.service_slug}</span>
-									<Badge tone={statusTone(item.status)}>
-										{item.status.replace('_', ' ')}
-									</Badge>
+									<Badge tone="yellow">Pending claim</Badge>
 								</div>
 								<div class="transfer-meta-row">
 									<span>From: <strong>{item.source_org_name}</strong> ({item.source_org_slug}) &middot; Project: {item.source_project_name}</span>
 									<span>Initiated: {formatDate(item.created_at)}</span>
-									{#if item.target_project_name}
-										<span>Target Project: <strong>{item.target_project_name}</strong></span>
-									{/if}
 								</div>
 								{#if item.error_message}
 									<div class="transfer-error">{item.error_message}</div>
 								{/if}
 							</div>
 							<div class="transfer-actions">
-								{#if item.status === 'pending_claim'}
-									<Button
-										variant="primary"
-										size="sm"
-										disabled={!isOwner}
-										onclick={() => openClaimModal(item)}
-									>
-										Claim Service
-									</Button>
-									<Button
-										variant="ghost"
-										size="sm"
-										disabled={!isOwner}
-										onclick={() => confirmReject(item)}
-									>
-										Decline
-									</Button>
-								{/if}
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={!isOwner}
+									onclick={() => openClaimModal(item)}
+								>
+									Claim Service
+								</Button>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={!isOwner}
+									onclick={() => confirmReject(item)}
+								>
+									Decline
+								</Button>
 							</div>
 						</div>
 					{/each}
@@ -241,23 +351,28 @@
 			{/if}
 		</Card>
 
-		<!-- 2. Outgoing Service Transfers -->
+		<!-- 2. Outgoing Service Transfers (Active pending or migrating only) -->
 		<Card padding="20px">
 			<div class="section-header">
 				<div class="section-title-wrap">
 					<span class="section-icon"><Upload size={16} /></span>
 					<h2 class="section-title">Outgoing Service Transfers</h2>
+					{#if pendingOutgoingServices.length > 0}
+						<Badge tone="yellow">
+							{pendingOutgoingServices.length} active
+						</Badge>
+					{/if}
 				</div>
-				<span class="section-desc">Services from this organization being transferred to other organizations.</span>
+				<span class="section-desc">Services from this organization awaiting claim by target organizations.</span>
 			</div>
 
-			{#if transfersData.outgoing_service_transfers.length === 0}
+			{#if pendingOutgoingServices.length === 0}
 				<div class="empty-state-wrap">
-					<span class="empty-text">No outgoing service transfers.</span>
+					<span class="empty-text">No active outgoing service transfers.</span>
 				</div>
 			{:else}
 				<div class="transfer-list">
-					{#each transfersData.outgoing_service_transfers as item}
+					{#each pendingOutgoingServices as item}
 						<div class="transfer-card">
 							<div class="transfer-main">
 								<div class="transfer-title-row">
@@ -265,6 +380,8 @@
 									<span class="resource-slug">{item.service_slug}</span>
 									{#if item.status === 'pending_claim'}
 										<Badge tone="yellow">Waiting for claim by {item.target_org_name}</Badge>
+									{:else if item.status === 'in_progress'}
+										<Badge tone="blue">Migrating in background</Badge>
 									{:else}
 										<Badge tone={statusTone(item.status)}>
 											{item.status.replace('_', ' ')}
@@ -298,39 +415,99 @@
 			{/if}
 		</Card>
 
-		<!-- 3. Project Transfers -->
+		<!-- 3. Transfer History (Consolidated service + project transfers) -->
 		<Card padding="20px">
-			<div class="section-header">
-				<div class="section-title-wrap">
-					<span class="section-icon"><FolderSync size={16} /></span>
-					<h2 class="section-title">Project Transfers History</h2>
+			<div class="section-header-row">
+				<div class="section-header">
+					<div class="section-title-wrap">
+						<span class="section-icon"><History size={16} /></span>
+						<h2 class="section-title">Transfer History</h2>
+						{#if allHistory.length > 0}
+							<Badge tone="neutral">{allHistory.length} total</Badge>
+						{/if}
+					</div>
+					<span class="section-desc">Completed, rejected, and cancelled service and project transfers.</span>
 				</div>
-				<span class="section-desc">Projects transferred into or out of this organization.</span>
+
+				<div class="filter-tabs">
+					<button
+						type="button"
+						class="filter-tab"
+						class:active={historyFilter === 'all'}
+						onclick={() => (historyFilter = 'all')}
+					>
+						All ({allHistory.length})
+					</button>
+					<button
+						type="button"
+						class="filter-tab"
+						class:active={historyFilter === 'services'}
+						onclick={() => (historyFilter = 'services')}
+					>
+						Services ({serviceHistory.length})
+					</button>
+					<button
+						type="button"
+						class="filter-tab"
+						class:active={historyFilter === 'projects'}
+						onclick={() => (historyFilter = 'projects')}
+					>
+						Projects ({projectHistory.length})
+					</button>
+				</div>
 			</div>
 
-			{#if transfersData.project_transfers.length === 0}
+			{#if filteredHistory.length === 0}
 				<div class="empty-state-wrap">
-					<span class="empty-text">No project transfers found.</span>
+					<span class="empty-text">
+						{historyFilter === 'all'
+							? 'No transfer history found.'
+							: `No ${historyFilter} transfer history found.`}
+					</span>
 				</div>
 			{:else}
 				<div class="transfer-list">
-					{#each transfersData.project_transfers as item}
+					{#each filteredHistory as item (item.id + item.direction)}
 						<div class="transfer-card">
 							<div class="transfer-main">
 								<div class="transfer-title-row">
-									<span class="resource-name">{item.project_name}</span>
-									<span class="resource-slug">{item.project_slug}</span>
+									<span class="history-kind-badge">
+										{#if item.kind === 'service'}
+											<Layers size={13} />
+											<span>Service</span>
+										{:else}
+											<FolderSync size={13} />
+											<span>Project</span>
+										{/if}
+									</span>
+
+									<span class="resource-name">{item.name}</span>
+									<span class="resource-slug">{item.slug}</span>
+
+									{#if item.direction === 'incoming'}
+										<Badge tone="blue">
+											<Download size={11} /> Incoming
+										</Badge>
+									{:else}
+										<Badge tone="neutral">
+											<Upload size={11} /> Outgoing
+										</Badge>
+									{/if}
+
 									<Badge tone={statusTone(item.status)}>
 										{item.status.replace('_', ' ')}
 									</Badge>
 								</div>
 								<div class="transfer-meta-row">
-									<span>From: <strong>{item.source_org_name}</strong></span>
-									<span>To: <strong>{item.target_org_name}</strong></span>
-									<span>Initiated: {formatDate(item.created_at)}</span>
+									{#if item.kind === 'service'}
+										<span>From: <strong>{item.sourceOrgName}</strong> ({item.sourceProjectName || 'Project'}) &rarr; To: <strong>{item.targetOrgName}</strong> {#if item.targetProjectName}({item.targetProjectName}){/if}</span>
+									{:else}
+										<span>From: <strong>{item.sourceOrgName}</strong> &rarr; To: <strong>{item.targetOrgName}</strong></span>
+									{/if}
+									<span>{formatDate(item.date)}</span>
 								</div>
-								{#if item.error_message}
-									<div class="transfer-error">{item.error_message}</div>
+								{#if item.errorMessage}
+									<div class="transfer-error">{item.errorMessage}</div>
 								{/if}
 							</div>
 						</div>
@@ -342,7 +519,7 @@
 </div>
 </div>
 
-<!-- Claim modal -->
+<!-- Claim slide panel -->
 {#if currentOrg}
 	<ClaimServiceModal
 		bind:open={claimModalOpen}
@@ -422,6 +599,19 @@
 		margin-bottom: 16px;
 	}
 
+	.section-header-row {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
+		margin-bottom: 16px;
+		flex-wrap: wrap;
+	}
+
+	.section-header-row .section-header {
+		margin-bottom: 0;
+	}
+
 	.section-title-wrap {
 		display: flex;
 		align-items: center;
@@ -442,6 +632,40 @@
 	.section-desc {
 		font-size: 12.5px;
 		color: var(--text-muted);
+	}
+
+	.filter-tabs {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: var(--bg-base);
+		padding: 3px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+	}
+
+	.filter-tab {
+		background: transparent;
+		border: none;
+		border-radius: calc(var(--radius-sm) - 2px);
+		padding: 4px 10px;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: all var(--transition-fast);
+		font-family: inherit;
+	}
+
+	.filter-tab:hover {
+		color: var(--text-primary);
+	}
+
+	.filter-tab.active {
+		background: var(--bg-surface);
+		color: var(--text-primary);
+		font-weight: 600;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 	}
 
 	.empty-state-wrap {
@@ -494,6 +718,21 @@
 		flex-wrap: wrap;
 	}
 
+	.history-kind-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--text-dim);
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
+		padding: 2px 6px;
+		border-radius: var(--radius-xs, 4px);
+	}
+
 	.resource-name {
 		font-size: 14px;
 		font-weight: 600;
@@ -544,6 +783,18 @@
 	@media (max-width: 639px) {
 		.transfers-page {
 			padding: 16px;
+		}
+		.section-header-row {
+			flex-direction: column;
+			gap: 12px;
+		}
+		.filter-tabs {
+			width: 100%;
+			justify-content: space-between;
+		}
+		.filter-tab {
+			flex: 1;
+			text-align: center;
 		}
 		.transfer-card {
 			flex-direction: column;
