@@ -333,7 +333,7 @@ On failure, `error` names the service and the cause; fetch that deployment ([bel
 
 ### Fast static publish (zero Docker overhead) {#static-publish}
 
-When Nomi builds a purely static frontend (Vite React/Vue, SvelteKit static export, Next.js static export, Astro, HTML/JS), use the dedicated static publish endpoint. It runs with zero Docker overhead, serves instantly from Shipyard's serving layer, provides an immutable preview URL for every build, and atomically updates the requested alias (e.g. `production` or an env name).
+When Nomi builds a purely static frontend (Vite React/Vue, SvelteKit static export, Next.js static export, Astro, HTML/JS), use the dedicated static publish endpoint. It runs with zero Docker overhead, serves instantly from Shipyard's serving layer, provides an immutable preview URL for every build, atomically updates the requested alias (e.g. `production` or an env name), and can optionally bind a custom domain with automated Let's Encrypt TLS and Cloudflare DNS management.
 
 #### POST /openapi/v1/integration/orgs/{org}/static-publish
 
@@ -345,6 +345,7 @@ When Nomi builds a purely static frontend (Vite React/Vue, SvelteKit static expo
 | `project_slug` | URL-safe slug for the project (e.g. `todo-client` or your `app` key) | **Yes** | - |
 | `name` | Human-readable name for the static project | No | Same as `project_slug` |
 | `alias` | Alias to point to this deployment (e.g. `production`, `staging`, `preview-1`) | No | `"production"` |
+| `domain` | Custom domain to bind to this project/alias (e.g. `app.example.com`) | No | - |
 | `spa_fallback` | Whether unknown routes fall back to `/index.html` (for client-side routing) | No | `true` |
 | `entry_file` | Primary entry file to serve and verify | No | `"index.html"` |
 | `metadata` | JSON object of arbitrary metadata (agent ID, prompt, commit) | No | `{"source": "nomi"}` |
@@ -354,6 +355,7 @@ curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/static-publish" \
   -H "Authorization: Bearer $SHIPYARD_KEY" \
   -F "project_slug=todo-client" \
   -F "alias=production" \
+  -F "domain=todo.example.com" \
   -F "spa_fallback=true" \
   -F "artifact=@dist.zip"
 ```
@@ -371,6 +373,8 @@ Response `200`:
     "preview_url": "/dpl/0193309a-5001-7c00-9abc-987654321def",
     "alias": "production",
     "alias_url": "/alias/0193309a-4f5b-7b00-8cb5-123456789abc/production",
+    "domain": "todo.example.com",
+    "domain_url": "https://todo.example.com",
     "archive_size_bytes": 1048576,
     "extracted_size_bytes": 3145728,
     "file_count": 28,
@@ -380,6 +384,7 @@ Response `200`:
 ```
 
 - **Immediate Serving**: The status is `READY` immediately upon response. There is no container start or build delay.
+- **Custom Domain & Auto-SSL**: When `domain` is passed, Shipyard writes a Traefik router binding `Host(domain)` with automatic Let's Encrypt TLS. If the organization has a connected Cloudflare account, the DNS `A` record pointing to Shipyard is created automatically without manual steps.
 - **Auto-Unwrap**: If the zip wraps everything inside a single top-level folder like `dist/` or `build/`, Shipyard automatically unwraps it.
 - **Immutable Previews**: `preview_url` (`/dpl/{deployment_id}`) is immutable and forever pinned to this specific build.
 - **Zero-Downtime Aliases**: `alias_url` (`/alias/{project_id}/{alias}`) atomically switches to the new deployment with zero downtime.

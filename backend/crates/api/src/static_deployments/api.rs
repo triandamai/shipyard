@@ -16,9 +16,10 @@ use crate::AppState;
 
 use super::models::{
     validate_alias_name, validate_project_slug, StaticAlias, StaticDeployment,
-    StaticDeploymentEvent, StaticProject,
+    StaticDeploymentEvent, StaticProject, StaticProjectDomain,
 };
 use super::storage::{LocalStorage, StaticStorageBackend};
+use super::traefik::sync_static_project_traefik_config;
 use super::upload::ZipExtractor;
 use super::verify::{verify_extracted_deployment, VerificationConfig};
 
@@ -72,6 +73,29 @@ pub struct SetAliasRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AddDomainRequest {
+    pub hostname: String,
+    #[serde(default = "default_alias")]
+    pub alias: String,
+    #[serde(default = "default_true")]
+    pub tls_enabled: bool,
+    #[serde(default = "default_letsencrypt")]
+    pub cert_provider: String,
+}
+
+fn default_alias() -> String {
+    "production".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_letsencrypt() -> String {
+    "letsencrypt".to_string()
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PaginationQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -91,6 +115,9 @@ pub fn routes() -> Router<AppState> {
         // Aliases
         .route("/static/projects/:project_id/aliases", get(list_aliases).post(set_alias))
         .route("/static/projects/:project_id/aliases/:alias_name", delete(delete_alias))
+        // Domains
+        .route("/static/projects/:project_id/domains", get(list_project_domains).post(add_project_domain))
+        .route("/static/projects/:project_id/domains/:domain_id", delete(delete_project_domain))
 }
 
 // ─── RBAC Helper ─────────────────────────────────────────────────────────────
@@ -652,6 +679,145 @@ async fn delete_alias(
     if res.rows_affected() == 0 {
         return Err(ApiAppError(AppError::NotFound(format!("Alias '{alias_name}' not found"))));
     }
+
+    Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": true }))))
+}
+
+// ─── Domain Handlers ──────────────────────────────────────────────────────────
+
+async fn list_project_domains(
+    auth_user: AuthUser,
+    AxumPath(project_id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<StaticProjectDomain>>>, ApiAppError> {
+    check_project_access(&state, &auth_user, project_id).await?;
+
+    let domains: Vec<StaticProjectDomain> = sqlx::query_as(
+        "SELECT * FROM static_project_domains WHERE project_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    Ok(Json(ApiResponse::ok(domains)))
+}
+
+async fn add_project_domain(
+    auth_user: AuthUser,
+    AxumPath(project_id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    Json(body): Json<AddDomainRequest>,
+) -> Result<Json<ApiResponse<StaticProjectDomain>>, ApiAppError> {
+    let project = check_project_access(&state, &auth_user, project_id).await?;
+    let org_id = project.org_id;
+
+    let hostname = body
+        .hostname
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+
+    if hostname.is_empty() {
+        return Err(ApiAppError(AppError::BadRequest("Hostname cannot be empty".into())));
+    }
+
+    let router_name = crate::resources::hostname_to_router_name(&hostname);
+    let domain_id = Uuid::now_v7();
+
+    let mut domain: StaticProjectDomain = sqlx::query_as(
+        r#"INSERT INTO static_project_domains
+           (id, project_id, hostname, alias, tls_enabled, cert_provider, traefik_router_name, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+           ON CONFLICT (hostname)
+           DO UPDATE SET project_id = EXCLUDED.project_id, alias = EXCLUDED.alias, updated_at = NOW()
+           RETURNING *"#,
+    )
+    .bind(domain_id)
+    .bind(project_id)
+    .bind(&hostname)
+    .bind(&body.alias)
+    .bind(body.tls_enabled)
+    .bind(&body.cert_provider)
+    .bind(&router_name)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("unique") || msg.contains("duplicate") {
+            ApiAppError(AppError::Conflict(format!("Domain '{hostname}' already exists")))
+        } else {
+            ApiAppError(AppError::Database(msg))
+        }
+    })?;
+
+    // Best-effort Cloudflare DNS record
+    if domain.cloudflare_record_id.is_none() {
+        if let Some((zone_id, record_id)) =
+            crate::resources::try_create_cloudflare_record_for_org(&state.db, org_id, &hostname).await
+        {
+            let _ = sqlx::query(
+                "UPDATE static_project_domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3",
+            )
+            .bind(&zone_id)
+            .bind(&record_id)
+            .bind(domain.id)
+            .execute(&state.db)
+            .await;
+            domain.cloudflare_zone_id = Some(zone_id);
+            domain.cloudflare_record_id = Some(record_id);
+        }
+    }
+
+    // Sync Traefik dynamic config
+    sync_static_project_traefik_config(
+        &state.db,
+        project_id,
+        state.config.traefik.dynamic_config_dir.as_deref(),
+        &state.config.traefik.entrypoint_http,
+        &state.config.traefik.entrypoint_https,
+    )
+    .await;
+
+    Ok(Json(ApiResponse::ok(domain)))
+}
+
+async fn delete_project_domain(
+    auth_user: AuthUser,
+    AxumPath((project_id, domain_id)): AxumPath<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, ApiAppError> {
+    let project = check_project_access(&state, &auth_user, project_id).await?;
+    let org_id = project.org_id;
+
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "DELETE FROM static_project_domains WHERE id = $1 AND project_id = $2 RETURNING cloudflare_zone_id, cloudflare_record_id",
+    )
+    .bind(domain_id)
+    .bind(project_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+    let Some((zone_id, record_id)) = row else {
+        return Err(ApiAppError(AppError::NotFound("Domain not found".into())));
+    };
+
+    if let (Some(zid), Some(rid)) = (zone_id, record_id) {
+        crate::resources::try_delete_cloudflare_record_for_org(&state.db, org_id, &zid, &rid).await;
+    }
+
+    // Sync Traefik dynamic config
+    sync_static_project_traefik_config(
+        &state.db,
+        project_id,
+        state.config.traefik.dynamic_config_dir.as_deref(),
+        &state.config.traefik.entrypoint_http,
+        &state.config.traefik.entrypoint_https,
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(serde_json::json!({ "deleted": true }))))
 }
