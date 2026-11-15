@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap, Code2, Compass } from '@lucide/svelte';
+	import { Container, GitBranch, Database, FileCode, HardDrive, Network, LayoutTemplate, Globe, Zap, Code2, FolderGit2 } from '@lucide/svelte';
 	import { uiStore } from '$lib/stores/ui.store';
 	import type { Service } from '$lib/api/types';
 	import DockerImagePanel from './resources/DockerImagePanel.svelte';
@@ -35,7 +35,7 @@
 		template:        { component: TemplatePanel,      title: 'Templates' },
 		'edge-function': { component: EdgeFunctionPanel,  title: 'Edge Function' },
 		'sandbox-app':   { component: SandboxAppTemplatePanel, title: 'App' },
-		portal:          { component: PortalAddPanel,     title: 'Create Portal' },
+		portal:          { component: PortalAddPanel,     title: 'Link Project' },
 	};
 
 	const resourceTypes: { id: ResourceType; label: string; description: string; icon: any }[] = [
@@ -49,7 +49,7 @@
 		{ id: 'network',         label: 'Network',           description: 'Attach services to a network',       icon: Network },
 		{ id: 'template',        label: 'Template',          description: 'Start from a pre-built template',    icon: LayoutTemplate },
 		{ id: 'sandbox-app',     label: 'App',               description: 'Live coding sandbox with an in-browser editor', icon: Code2 },
-		{ id: 'portal',          label: 'Portal',            description: 'Cross-project teleportation & service link', icon: Compass },
+		{ id: 'portal',          label: 'Project Link',      description: 'Connect services to another project in this organization', icon: FolderGit2 },
 	];
 
 	function open(type: ResourceType) {
