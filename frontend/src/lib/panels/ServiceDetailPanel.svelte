@@ -90,7 +90,8 @@
 			title: 'Transfer initiated',
 			message: `Service transfer to ${targetOrg.name} initiated. Waiting for target organization to claim.`
 		});
-		uiStore.closePanel();
+		uiStore.popPanel();
+		onDeleted?.();
 	}
 
 	// ── Tabs ─────────────────────────────────────────────────────────
