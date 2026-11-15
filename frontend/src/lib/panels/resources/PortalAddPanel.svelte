@@ -7,7 +7,7 @@
 	import { api } from '$lib/api/client';
 	import type { Service, Project, TopologyNode } from '$lib/api/types';
 	import { FormField, Select, Button, InlineAlert, Spinner } from '$lib/components/ui';
-	import { Compass, Sparkles, ArrowRight, ExternalLink } from '@lucide/svelte';
+	import { FolderGit2 } from '@lucide/svelte';
 
 	interface Props {
 		projectId: string;
@@ -32,13 +32,11 @@
 	let submitError = $state('');
 
 	onMount(async () => {
-		// Load local services for current project
 		const locRes = await api.getServices(projectId);
 		if (locRes.data) {
 			localServices = locRes.data;
 		}
 
-		// Pre-select first destination project if available
 		if (availableProjects.length > 0 && !destinationProjectId) {
 			destinationProjectId = availableProjects[0].id;
 		}
@@ -66,7 +64,7 @@
 		};
 	});
 
-	async function handleCreatePortal(e: SubmitEvent) {
+	async function handleCreateLink(e: SubmitEvent) {
 		e.preventDefault();
 		submitError = '';
 
@@ -80,9 +78,9 @@
 			const destProject = $projectStore.projects.find((p: Project) => p.id === destinationProjectId);
 			const destService = remoteServices.find((s) => s.id === destinationServiceId);
 
-			const portalId = `portal_${destinationProjectId}_${destService ? destService.id : 'proj'}_${Date.now()}`;
-			const portalNode: TopologyNode = {
-				id: portalId,
+			const nodeId = `portal_${destinationProjectId}_${destService ? destService.id : 'proj'}_${Date.now()}`;
+			const linkNode: TopologyNode = {
+				id: nodeId,
 				type: 'portal',
 				data: {
 					resource_type: destService ? 'service' : 'project',
@@ -94,27 +92,27 @@
 				}
 			};
 
-			topologyStore.addNode(portalNode);
+			topologyStore.addNode(linkNode);
 
 			if (localServiceId) {
 				topologyStore.addEdge({
-					id: `e_portal_${localServiceId}_${portalId}`,
+					id: `e_link_${localServiceId}_${nodeId}`,
 					source: `svc_${localServiceId}`,
-					target: portalId,
+					target: nodeId,
 					type: 'env_ref'
 				});
 			}
 
 			toastStore.add({
 				type: 'success',
-				title: 'Portal Created',
-				message: `Teleport portal to ${destProject?.name ?? 'destination'} opened!`
+				title: 'Project Linked',
+				message: `Link to ${destProject?.name ?? 'destination project'} added to canvas.`
 			});
 
 			onCreated?.();
 			uiStore.clearPanels();
 		} catch (err: any) {
-			submitError = err?.message || 'Failed to create portal';
+			submitError = err?.message || 'Failed to link project';
 		} finally {
 			isSubmitting = false;
 		}
@@ -122,26 +120,25 @@
 </script>
 
 <div class="panel-wrap">
-	<div class="portal-hero">
-		<div class="portal-badge">
-			<Compass size={14} class="portal-spin" />
-			<span>Cross-Project Teleportation</span>
+	<div class="panel-hero">
+		<div class="panel-badge">
+			<FolderGit2 size={13} />
+			<span>Cross-Project Connection</span>
 		</div>
 		<p class="panel-desc">
-			Create a teleportation portal to connect services across projects.
-			Clicking the portal on canvas teleports you directly to the destination project.
+			Link services across projects in this organization. The linked project card displays destination details and opens a confirmation dialog when clicked.
 		</p>
 	</div>
 
-	<form class="form" onsubmit={handleCreatePortal}>
+	<form class="form" onsubmit={handleCreateLink}>
 		{#if availableProjects.length === 0}
 			<InlineAlert tone="info">
-				No other projects found in this organization. Create another project first to establish a cross-project portal.
+				No other projects found in this organization. Create another project first to establish a cross-project connection.
 			</InlineAlert>
 		{:else}
-			<FormField label="Destination Project" for="portal-dest-proj">
+			<FormField label="Destination Project" for="link-dest-proj">
 				<Select
-					id="portal-dest-proj"
+					id="link-dest-proj"
 					bind:value={destinationProjectId}
 					options={availableProjects.map((p: Project) => ({
 						value: p.id,
@@ -150,7 +147,7 @@
 				/>
 			</FormField>
 
-			<FormField label="Target Service (optional)" for="portal-dest-svc">
+			<FormField label="Target Service (optional)" for="link-dest-svc">
 				{#if isLoadingRemote}
 					<div class="loading-state">
 						<Spinner size={12} />
@@ -158,10 +155,10 @@
 					</div>
 				{:else}
 					<Select
-						id="portal-dest-svc"
+						id="link-dest-svc"
 						bind:value={destinationServiceId}
 						options={[
-							{ value: '', label: 'Entire Project (General Teleport)' },
+							{ value: '', label: 'Entire Project (General Link)' },
 							...remoteServices.map((s) => ({
 								value: s.id,
 								label: `${s.name} (${s.slug})`
@@ -172,9 +169,9 @@
 			</FormField>
 
 			{#if localServices.length > 0}
-				<FormField label="Connect From Local Service (optional)" for="portal-local-svc">
+				<FormField label="Connect From Local Service (optional)" for="link-local-svc">
 					<Select
-						id="portal-local-svc"
+						id="link-local-svc"
 						bind:value={localServiceId}
 						options={[
 							{ value: '', label: 'None (Place standalone on canvas)' },
@@ -199,10 +196,9 @@
 				disabled={isSubmitting || availableProjects.length === 0}
 			>
 				{#if isSubmitting}
-					<Spinner size={12} tone="current" /> Opening Portal…
+					<Spinner size={12} tone="current" /> Linking Project…
 				{:else}
-					<Sparkles size={13} />
-					Open Portal
+					Link Project
 				{/if}
 			</Button>
 		</div>
@@ -217,34 +213,23 @@
 		gap: 16px;
 	}
 
-	.portal-hero {
+	.panel-hero {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
 		padding: 12px;
 		border-radius: var(--radius-md);
-		background: radial-gradient(circle at 10% 20%, color-mix(in srgb, var(--accent-purple) 18%, transparent), var(--bg-elevated));
-		border: 1px solid color-mix(in srgb, var(--accent-purple) 30%, var(--border));
+		background: var(--bg-elevated);
+		border: 1px solid var(--border);
 	}
 
-	.portal-badge {
+	.panel-badge {
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
-		font-size: 10px;
-		font-weight: 700;
-		color: var(--accent-purple);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-
-	:global(.portal-spin) {
-		animation: portal-spin 8s linear infinite;
-	}
-
-	@keyframes portal-spin {
-		from { transform: rotate(0deg); }
-		to { transform: rotate(360deg); }
+		gap: 6px;
+		font-size: 10.5px;
+		font-weight: 600;
+		color: var(--text-secondary);
 	}
 
 	.panel-desc {

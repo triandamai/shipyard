@@ -48,6 +48,7 @@ pub fn routes() -> Router<AppState> {
         .merge(transfer::routes())
         .merge(secrets::routes())
         .merge(webhooks::routes())
+        .merge(crate::static_deployments::nomi_routes())
 }
 
 // ─── Caller ──────────────────────────────────────────────────────────────────
