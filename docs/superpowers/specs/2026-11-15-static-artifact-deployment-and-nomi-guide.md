@@ -35,6 +35,7 @@ Content-Type: multipart/form-data
 | `project_slug` | String | URL-safe project identifier (e.g. `my-nomi-app`) | **Yes** | - |
 | `name` | String | Human-readable project name | No | Same as `project_slug` |
 | `alias` | String | Alias to atomically point to this deployment | No | `"production"` |
+| `domain` | String | Custom domain to bind to this project/alias (e.g. `app.example.com`) | No | - |
 | `spa_fallback` | Boolean | Enable SPA routing (`index.html` on 404s) | No | `true` |
 | `entry_file` | String | Primary entry file to verify and serve | No | `"index.html"` |
 | `metadata` | JSON | Arbitrary JSON metadata (agent ID, prompt, commit) | No | `{"source": "nomi"}` |
@@ -51,6 +52,8 @@ Content-Type: multipart/form-data
     "preview_url": "/dpl/0193309a-5001-7c00-9abc-987654321def",
     "alias": "production",
     "alias_url": "/alias/0193309a-4f5b-7b00-8cb5-123456789abc/production",
+    "domain": "app.example.com",
+    "domain_url": "https://app.example.com",
     "archive_size_bytes": 1048576,
     "extracted_size_bytes": 3145728,
     "file_count": 28,
@@ -104,6 +107,19 @@ Authorization: Bearer <token>
   }
   ```
 - `DELETE /api/static/projects/:project_id/aliases/:alias_name`: Delete an alias
+
+#### Custom Domains
+- `GET /api/static/projects/:project_id/domains`: List attached custom domains
+- `POST /api/static/projects/:project_id/domains`: Attach a custom domain
+  ```json
+  {
+    "hostname": "docs.example.com",
+    "alias": "production",
+    "tls_enabled": true,
+    "cert_provider": "letsencrypt"
+  }
+  ```
+- `DELETE /api/static/projects/:project_id/domains/:domain_id`: Detach a custom domain and clean up DNS/TLS routing
 
 ---
 

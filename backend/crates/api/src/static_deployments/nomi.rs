@@ -11,10 +11,12 @@ use crate::error::ApiAppError;
 use crate::integration::IntegrationCaller;
 use crate::AppState;
 
+use crate::resources::hostname_to_router_name;
 use super::models::{
     validate_alias_name, validate_project_slug, StaticProject,
 };
 use super::storage::{LocalStorage, StaticStorageBackend};
+use super::traefik::sync_static_project_traefik_config;
 use super::upload::ZipExtractor;
 use super::verify::{verify_extracted_deployment, VerificationConfig};
 
@@ -27,6 +29,8 @@ pub struct NomiStaticPublishResponse {
     pub preview_url: String,
     pub alias: Option<String>,
     pub alias_url: Option<String>,
+    pub domain: Option<String>,
+    pub domain_url: Option<String>,
     pub archive_size_bytes: i64,
     pub extracted_size_bytes: i64,
     pub file_count: i32,
@@ -52,6 +56,7 @@ async fn nomi_publish_static(
     let mut project_slug: Option<String> = None;
     let mut project_name: Option<String> = None;
     let mut alias = Some("production".to_string());
+    let mut domain_input: Option<String> = None;
     let mut spa_fallback = true;
     let mut entry_file = "index.html".to_string();
     let mut zip_bytes: Option<Vec<u8>> = None;
@@ -92,6 +97,14 @@ async fn nomi_publish_static(
                     let trimmed = val.trim();
                     if !trimmed.is_empty() {
                         alias = Some(trimmed.to_string());
+                    }
+                }
+            }
+            "domain" | "hostname" | "custom_domain" => {
+                if let Ok(val) = field.text().await {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        domain_input = Some(trimmed.to_string());
                     }
                 }
             }
@@ -206,6 +219,75 @@ async fn nomi_publish_static(
         None
     };
 
+    // 5. Handle Custom Domain (if requested)
+    let (domain_hostname, domain_url) = if let Some(raw_domain) = domain_input {
+        let hostname = raw_domain
+            .trim()
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_ascii_lowercase();
+
+        if !hostname.is_empty() {
+            let target_alias = alias.as_deref().unwrap_or("production");
+            let router_name = hostname_to_router_name(&hostname);
+            let domain_id = Uuid::now_v7();
+
+            // Upsert into static_project_domains
+            let mut domain_row: super::models::StaticProjectDomain = sqlx::query_as(
+                r#"INSERT INTO static_project_domains
+                   (id, project_id, hostname, alias, tls_enabled, cert_provider, traefik_router_name, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, TRUE, 'letsencrypt', $5, NOW(), NOW())
+                   ON CONFLICT (hostname)
+                   DO UPDATE SET project_id = EXCLUDED.project_id, alias = EXCLUDED.alias, updated_at = NOW()
+                   RETURNING *"#,
+            )
+            .bind(domain_id)
+            .bind(project.id)
+            .bind(&hostname)
+            .bind(target_alias)
+            .bind(&router_name)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiAppError(AppError::Database(e.to_string())))?;
+
+            // Best-effort Cloudflare DNS record creation if org has connected Cloudflare
+            if domain_row.cloudflare_record_id.is_none() {
+                if let Some((zone_id, record_id)) =
+                    crate::resources::try_create_cloudflare_record_for_org(&state.db, org_id, &hostname).await
+                {
+                    let _ = sqlx::query(
+                        "UPDATE static_project_domains SET cloudflare_zone_id = $1, cloudflare_record_id = $2 WHERE id = $3",
+                    )
+                    .bind(&zone_id)
+                    .bind(&record_id)
+                    .bind(domain_row.id)
+                    .execute(&state.db)
+                    .await;
+                    domain_row.cloudflare_zone_id = Some(zone_id);
+                    domain_row.cloudflare_record_id = Some(record_id);
+                }
+            }
+
+            // Sync Traefik dynamic configuration
+            sync_static_project_traefik_config(
+                &state.db,
+                project.id,
+                state.config.traefik.dynamic_config_dir.as_deref(),
+                &state.config.traefik.entrypoint_http,
+                &state.config.traefik.entrypoint_https,
+            )
+            .await;
+
+            let full_url = format!("https://{hostname}");
+            (Some(hostname), Some(full_url))
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
     caller.audit(
         &state.db,
         "static_publish",
@@ -215,6 +297,7 @@ async fn nomi_publish_static(
             "project_id": project.id,
             "project_slug": project.slug,
             "alias": alias,
+            "domain": domain_hostname,
         }),
     )
     .await;
@@ -228,6 +311,8 @@ async fn nomi_publish_static(
         preview_url,
         alias,
         alias_url,
+        domain: domain_hostname,
+        domain_url,
         archive_size_bytes: zip_bytes.len() as i64,
         extracted_size_bytes: extract_result.extracted_size_bytes,
         file_count: extract_result.file_count,

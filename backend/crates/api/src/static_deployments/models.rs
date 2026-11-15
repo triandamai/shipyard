@@ -131,6 +131,21 @@ pub struct StaticDeploymentEvent {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct StaticProjectDomain {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub hostname: String,
+    pub alias: String,
+    pub tls_enabled: bool,
+    pub cert_provider: String,
+    pub traefik_router_name: String,
+    pub cloudflare_zone_id: Option<String>,
+    pub cloudflare_record_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 // ─── Validators ──────────────────────────────────────────────────────────────
 
 pub fn validate_project_slug(slug: &str) -> AppResult<()> {

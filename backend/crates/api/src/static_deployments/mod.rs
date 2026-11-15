@@ -3,6 +3,7 @@ pub mod models;
 pub mod nomi;
 pub mod serving;
 pub mod storage;
+pub mod traefik;
 pub mod upload;
 pub mod verify;
 
