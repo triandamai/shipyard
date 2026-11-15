@@ -331,6 +331,60 @@ On failure, `error` names the service and the cause; fetch that deployment ([bel
 - `GET /orgs/{org}/publishes/{publish_id}`: same body, when you only have the id.
 - `GET /orgs/{org}/apps/{app}/publishes?limit=20`: recent publishes, newest first.
 
+### Fast static publish (zero Docker overhead) {#static-publish}
+
+When Nomi builds a purely static frontend (Vite React/Vue, SvelteKit static export, Next.js static export, Astro, HTML/JS), use the dedicated static publish endpoint. It runs with zero Docker overhead, serves instantly from Shipyard's serving layer, provides an immutable preview URL for every build, and atomically updates the requested alias (e.g. `production` or an env name).
+
+#### POST /openapi/v1/integration/orgs/{org}/static-publish
+
+`multipart/form-data`:
+
+| Part | Description | Required | Default |
+|---|---|---|---|
+| `artifact` | Zip archive containing built static files (`index.html`, assets, etc.) | **Yes** | - |
+| `project_slug` | URL-safe slug for the project (e.g. `todo-client` or your `app` key) | **Yes** | - |
+| `name` | Human-readable name for the static project | No | Same as `project_slug` |
+| `alias` | Alias to point to this deployment (e.g. `production`, `staging`, `preview-1`) | No | `"production"` |
+| `spa_fallback` | Whether unknown routes fall back to `/index.html` (for client-side routing) | No | `true` |
+| `entry_file` | Primary entry file to serve and verify | No | `"index.html"` |
+| `metadata` | JSON object of arbitrary metadata (agent ID, prompt, commit) | No | `{"source": "nomi"}` |
+
+```bash
+curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/static-publish" \
+  -H "Authorization: Bearer $SHIPYARD_KEY" \
+  -F "project_slug=todo-client" \
+  -F "alias=production" \
+  -F "spa_fallback=true" \
+  -F "artifact=@dist.zip"
+```
+
+Response `200`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "project_id": "0193309a-4f5b-7b00-8cb5-123456789abc",
+    "project_slug": "todo-client",
+    "deployment_id": "0193309a-5001-7c00-9abc-987654321def",
+    "status": "READY",
+    "preview_url": "/dpl/0193309a-5001-7c00-9abc-987654321def",
+    "alias": "production",
+    "alias_url": "/alias/0193309a-4f5b-7b00-8cb5-123456789abc/production",
+    "archive_size_bytes": 1048576,
+    "extracted_size_bytes": 3145728,
+    "file_count": 28,
+    "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
+```
+
+- **Immediate Serving**: The status is `READY` immediately upon response. There is no container start or build delay.
+- **Auto-Unwrap**: If the zip wraps everything inside a single top-level folder like `dist/` or `build/`, Shipyard automatically unwraps it.
+- **Immutable Previews**: `preview_url` (`/dpl/{deployment_id}`) is immutable and forever pinned to this specific build.
+- **Zero-Downtime Aliases**: `alias_url` (`/alias/{project_id}/{alias}`) atomically switches to the new deployment with zero downtime.
+- **Cache Policy**: HTML and aliases are served with `Cache-Control: no-cache, no-store, must-revalidate`. Content-hashed assets (e.g. `main-a1b2c3d4.js`) are served with `Cache-Control: public, max-age=31536000, immutable`.
+
 ## 4. Environments {#flow-envs}
 
 Each environment is independent: its own Shipyard project with its own services, database, generated secrets, volumes and URL. Publish to any `{env}` name (`production`, `staging`, `dev`, `preview-123`, ...) to create it. You can publish the same manifest and source to each one, and publishing one environment never touches another. To start one from an existing environment:
@@ -737,12 +791,16 @@ Shipyard detects SvelteKit, Next.js, Nuxt, Angular and TanStack Start when there
 
 | Stack | Manifest service | Source requirements |
 |---|---|---|
-| SvelteKit | `{ "name":"web", "kind":"web", "port":3000 }` | `@sveltejs/adapter-node`; set `ORIGIN` to the public URL |
-| Next.js | `{ "name":"web", "kind":"web", "port":3000 }` | `output: "standalone"` |
-| Vite React/Vue (static) | `{ "name":"site", "kind":"static" }` | `npm run build` outputs `dist/`; no port needed. Served by nginx with SPA fallback |
+| SvelteKit (SSR) | `{ "name":"web", "kind":"web", "port":3000 }` | `@sveltejs/adapter-node`; set `ORIGIN` to the public URL |
+| SvelteKit (Static) | *Use `static-publish`* | `@sveltejs/adapter-static`; upload prebuilt `build.zip` directly |
+| Next.js (SSR) | `{ "name":"web", "kind":"web", "port":3000 }` | `output: "standalone"` |
+| Next.js (Static export) | *Use `static-publish`* | `output: "export"`; upload prebuilt `out.zip` directly |
+| Vite React/Vue (prebuilt static) | *Use `static-publish`* | `npm run build` outputs `dist/`; upload `dist.zip` for instant zero-container serving |
+| Vite React/Vue (build on deploy) | `{ "name":"site", "kind":"static" }` | `npm run build` outputs `dist/`; served by nginx with SPA fallback |
 | Node API + worker | two services, one `web`, one `worker` | Worker has no URL or port |
 
-`kind: "static"` builds the site and serves the output with nginx; the port is detected, so omit `port`. A static site has no server env at runtime: bake public config at build time.
+`kind: "static"` builds the site in Docker and serves the output with nginx; the port is detected, so omit `port`.
+Alternatively, if your agent or CI already runs the build, call `POST /orgs/{org}/static-publish` to upload the prebuilt zip directly: it skips Docker entirely, deploys in milliseconds, and provides immutable previews. A static site has no server env at runtime: bake public config at build time.
 
 ## Verifying a Shipyard {#verify}
 

@@ -38,7 +38,7 @@ use shipyard_api::{
     admin, alerts, auth, cache, compose, email, error, routes, setup, orgs, projects, services,
     resources, containers, deployments, topology, logs, middleware, templates, webhooks, settings,
     shorthand, dbclient, static_site, git_providers, billing, nodes, plans, provisioning, compute,
-    edge_functions, artifactory, artifact_source, sandbox_runtime, integration,
+    edge_functions, artifactory, artifact_source, sandbox_runtime, integration, static_deployments,
     AppState, OAuthStates,
 };
 
@@ -745,6 +745,8 @@ async fn async_main() {
         // Cold-preview auto-start — public, no auth, must be outside /api so
         // an anonymous preview visitor isn't blocked by the init gate.
         .nest("/apps", sandbox_runtime::routes::public_routes())
+        // Static artifact previews and aliases — public, zero Docker overhead
+        .merge(static_deployments::serving_routes())
         // OCI artifact registry — nested at /registry so Traefik can route
         // registry-domain.com/* → backend:3001/registry/* with addPrefix middleware.
         // RegistryState is extracted from AppState via FromRef.
