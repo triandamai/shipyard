@@ -38,8 +38,8 @@ mod tests {
     async fn create_test_user(pool: &PgPool, email: &str) -> Uuid {
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, is_active, created_at, updated_at)
-             VALUES ($1, $2, 'hash', true, NOW(), NOW())",
+            "INSERT INTO users (id, email, password_hash, created_at, updated_at)
+             VALUES ($1, $2, 'hash', NOW(), NOW())",
         )
         .bind(user_id)
         .bind(email)
@@ -52,7 +52,7 @@ mod tests {
     async fn add_org_member(pool: &PgPool, org_id: Uuid, user_id: Uuid, role: &str) {
         sqlx::query(
             "INSERT INTO org_members (id, org_id, user_id, role, created_at)
-             VALUES ($1, $2, $3, $4, NOW())",
+             VALUES ($1, $2, $3, $4::member_role, NOW())",
         )
         .bind(Uuid::new_v4())
         .bind(org_id)
