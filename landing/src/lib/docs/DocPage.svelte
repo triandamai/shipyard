@@ -13,6 +13,7 @@
 	let active = $state('');
 	let copied = $state(false);
 	let dark = $state(false);
+	let mobileNavEl: HTMLDetailsElement | undefined = $state();
 
 	const index = $derived(PAGES.findIndex((p) => p.file === doc.file));
 	const prev = $derived(index > 0 ? PAGES[index - 1] : null);
@@ -83,17 +84,17 @@
 	<meta property="og:url" content="{SITE_URL}{doc.path}" />
 </svelte:head>
 
-{#snippet pageNav(withSections: boolean)}
+{#snippet pageNav(withSections: boolean, onNavigate?: () => void)}
 	<nav class="side" aria-label="Documentation">
 		<p class="side-title">Documentation</p>
 		<ul>
 			{#each PAGES as p (p.file)}
 				<li>
-					<a href={href(p.slug)} aria-current={p.file === doc.file ? 'page' : undefined}>{p.label}</a>
+					<a href={href(p.slug)} aria-current={p.file === doc.file ? 'page' : undefined} onclick={() => onNavigate?.()}>{p.label}</a>
 					{#if withSections && p.file === doc.file && doc.toc.length > 1}
 						<ul class="sections">
 							{#each doc.toc as t (t.id)}
-								<li><a href="#{t.id}" class:on={active === t.id}>{t.text}</a></li>
+								<li><a href="#{t.id}" class:on={active === t.id} onclick={() => onNavigate?.()}>{t.text}</a></li>
 							{/each}
 						</ul>
 					{/if}
@@ -134,9 +135,14 @@
 		{@render pageNav(true)}
 
 		<main class="article" id="content">
-			<details class="mobile-nav">
-				<summary>Pages and sections</summary>
-				{@render pageNav(true)}
+			<details class="mobile-nav" bind:this={mobileNavEl}>
+				<summary>
+					<span>Pages &amp; sections</span>
+					<span class="mobile-nav-current">{doc.title}</span>
+				</summary>
+				{@render pageNav(true, () => {
+					if (mobileNavEl) mobileNavEl.open = false;
+				})}
 			</details>
 
 			<header class="page-head">

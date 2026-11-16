@@ -33,6 +33,10 @@ function createUIStore() {
 			update((state) => ({ ...state, sidebarCollapsed: !state.sidebarCollapsed }));
 		},
 
+		setSidebarCollapsed(collapsed: boolean) {
+			update((state) => (state.sidebarCollapsed === collapsed ? state : { ...state, sidebarCollapsed: collapsed }));
+		},
+
 		openCommandPalette() {
 			update((state) => ({ ...state, commandPaletteOpen: true }));
 		},

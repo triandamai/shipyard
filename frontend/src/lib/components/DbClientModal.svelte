@@ -875,5 +875,24 @@
 	@media (max-width: 639px) {
 		.form-grid { grid-template-columns: 1fr; }
 		.field-wide, .field-narrow { grid-column: span 1; }
+		.browser-layout { flex-direction: column; }
+		.browser-sidebar {
+			width: 100%;
+			max-height: 120px;
+			border-right: none;
+			border-bottom: 1px solid var(--border);
+		}
+		.browser-list {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 4px;
+			padding: 6px 8px;
+		}
+		.browser-item {
+			width: auto;
+			border-radius: var(--radius-sm);
+			padding: 4px 8px;
+			border: 1px solid var(--border);
+		}
 	}
 </style>
