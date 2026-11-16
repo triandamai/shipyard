@@ -35,14 +35,20 @@
 	let hasUpdate    = $derived($versionStore.info?.update_available ?? false);
 	let updating     = $derived($versionStore.updating);
 
+	let secondaryActive = $derived(
+		isActive(`/orgs/${orgSlug}/transfers`) ||
+			isActive(`/orgs/${orgSlug}/registry`) ||
+			(isSuperadmin && isActive('/admin'))
+	);
+
 	let groups = $derived([
-		{ key: 'home',     icon: Home,       label: 'Home',     href: `/orgs/${orgSlug}`,          active: isActive(`/orgs/${orgSlug}`, true) },
-		{ key: 'projects', icon: FolderOpen, label: 'Projects', href: `/orgs/${orgSlug}/projects`, active: isActive(`/orgs/${orgSlug}/projects`) },
-		{ key: 'logs',     icon: ScrollText, label: 'Logs',     href: `/orgs/${orgSlug}/logs`,     active: isActive(`/orgs/${orgSlug}/logs`) },
-		{ key: 'transfers', icon: ArrowLeftRight, label: 'Transfers', href: `/orgs/${orgSlug}/transfers`, active: isActive(`/orgs/${orgSlug}/transfers`) },
-		{ key: 'registry', icon: Package,    label: 'Registry', href: `/orgs/${orgSlug}/registry`, active: isActive(`/orgs/${orgSlug}/registry`) },
-		{ key: 'settings', icon: Settings,   label: 'Settings', href: `/orgs/${orgSlug}/settings`, active: isActive(`/orgs/${orgSlug}/settings`) },
-		...(isSuperadmin ? [{ key: 'admin', icon: ShieldAlert, label: 'Admin', href: '/admin', active: isActive('/admin') }] : [])
+		{ key: 'home',      icon: Home,           label: 'Home',      href: `/orgs/${orgSlug}`,           active: isActive(`/orgs/${orgSlug}`, true) },
+		{ key: 'projects',  icon: FolderOpen,     label: 'Projects',  href: `/orgs/${orgSlug}/projects`,  active: isActive(`/orgs/${orgSlug}/projects`) },
+		{ key: 'logs',      icon: ScrollText,     label: 'Logs',      href: `/orgs/${orgSlug}/logs`,      active: isActive(`/orgs/${orgSlug}/logs`) },
+		{ key: 'transfers', icon: ArrowLeftRight, label: 'Transfers', href: `/orgs/${orgSlug}/transfers`, active: isActive(`/orgs/${orgSlug}/transfers`), phoneHidden: true },
+		{ key: 'registry',  icon: Package,        label: 'Registry',  href: `/orgs/${orgSlug}/registry`,  active: isActive(`/orgs/${orgSlug}/registry`),  phoneHidden: true },
+		{ key: 'settings',  icon: Settings,       label: 'Settings',  href: `/orgs/${orgSlug}/settings`,  active: isActive(`/orgs/${orgSlug}/settings`) },
+		...(isSuperadmin ? [{ key: 'admin', icon: ShieldAlert, label: 'Admin', href: '/admin', active: isActive('/admin'), phoneHidden: true }] : [])
 	]);
 
 	const ROLE_LABELS: Record<string, string> = {
@@ -89,7 +95,13 @@
 	}
 </script>
 
-<NavRail {groups} phoneBar>
+<NavRail
+	{groups}
+	phoneBar
+	onNavigate={() => {
+		if (window.matchMedia('(max-width: 639px)').matches) uiStore.setSidebarCollapsed(true);
+	}}
+>
 	{#snippet footer()}
 		<span class="app-nav-hide-phone">
 			<Button variant="ghost" size="icon" aria-label="Open command palette" onclick={() => uiStore.openCommandPalette()}>
@@ -101,10 +113,13 @@
 				{#if isDark}<Sun size={16} />{:else}<Moon size={16} />{/if}
 			</Button>
 		</span>
-		<span class="app-nav-hide-phone">
-			<Button variant="ghost" size="icon" aria-label={collapsed ? 'Show panel' : 'Hide panel'} onclick={() => uiStore.toggleSidebar()}>
+		<span class="app-nav-drawer-toggle" class:app-nav-drawer-toggle--active={!collapsed || secondaryActive}>
+			<Button variant="ghost" size="icon" aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'} onclick={() => uiStore.toggleSidebar()}>
 				{#if collapsed}<PanelLeftOpen size={18} />{:else}<PanelLeftClose size={18} />{/if}
 			</Button>
+			{#if secondaryActive && collapsed}
+				<span class="app-nav-drawer-dot" aria-hidden="true"></span>
+			{/if}
 		</span>
 		<div class="app-nav-account">
 			<Dropdown placement="right-end" triggerLabel={hasUpdate ? 'Account, update available' : 'Account'}>
@@ -151,6 +166,12 @@
 					<button class="ui-dropdown-item" role="menuitem" onclick={() => { close(); goto(`/orgs/${orgSlug}/billing`); }}>
 						<CreditCard size={13} /> Billing & Plan
 					</button>
+					<button class="ui-dropdown-item app-nav-phone-only" role="menuitem" onclick={() => { close(); uiStore.openCommandPalette(); }}>
+						<Command size={13} /> Command palette
+					</button>
+					<button class="ui-dropdown-item app-nav-phone-only" role="menuitem" onclick={() => { close(); goto('/orgs'); }}>
+						<ArrowLeftRight size={13} /> Switch organization
+					</button>
 					<button class="ui-dropdown-item app-nav-phone-only" role="menuitem" onclick={() => { close(); toggleTheme(); }}>
 						{#if isDark}<Sun size={13} /> Light mode{:else}<Moon size={13} /> Dark mode{/if}
 					</button>
@@ -173,6 +194,8 @@
 <style>
 	.app-nav-account { margin-top: 6px; }
 	.app-nav-phone-only { display: none; }
+	.app-nav-drawer-toggle { position: relative; display: inline-flex; }
+	.app-nav-drawer-dot { display: none; }
 	.app-nav-avatar {
 		position: relative;
 		width: 32px;
@@ -210,6 +233,21 @@
 		.app-nav-hide-phone { display: none; }
 		.app-nav-phone-only { display: flex; }
 		.app-nav-account { margin-top: 0; }
+		.app-nav-drawer-toggle--active :global(.ui-btn--ghost) {
+			background: var(--rail-active-bg);
+			color: var(--rail-fg-active);
+		}
+		.app-nav-drawer-dot {
+			display: block;
+			position: absolute;
+			top: 3px;
+			right: 3px;
+			width: 6px;
+			height: 6px;
+			border-radius: 50%;
+			background: var(--accent);
+			pointer-events: none;
+		}
 		.app-nav-account :global(.ui-dropdown-menu) {
 			left: auto;
 			right: 0;

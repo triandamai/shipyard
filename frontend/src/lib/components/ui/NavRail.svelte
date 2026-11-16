@@ -8,6 +8,8 @@
 		label: string;
 		href?: string;
 		active?: boolean;
+		/** Hide this item in the phone bottom bar (<=639px) when it is surfaced in the mobile drawer/menu instead. */
+		phoneHidden?: boolean;
 	}
 
 	interface Props {
@@ -18,6 +20,7 @@
 		/** How a label wider than the rail is handled: truncated with "…" or wrapped onto more lines. */
 		labelOverflow?: 'ellipsis' | 'wrap';
 		onSelectGroup?: (key: string | null) => void;
+		onNavigate?: () => void;
 		footer?: Snippet;
 		/** At ≤639px render as a bottom navigation bar instead of a side rail. */
 		phoneBar?: boolean;
@@ -29,6 +32,7 @@
 		currentGroup = null,
 		labelOverflow = 'ellipsis',
 		onSelectGroup,
+		onNavigate,
 		footer,
 		phoneBar = false
 	}: Props = $props();
@@ -43,7 +47,8 @@
 	}
 
 	function itemClass(g: Group): string {
-		return isHighlighted(g) ? 'ui-nav-rail-item ui-nav-rail-item--active' : 'ui-nav-rail-item';
+		const base = isHighlighted(g) ? 'ui-nav-rail-item ui-nav-rail-item--active' : 'ui-nav-rail-item';
+		return g.phoneHidden ? `${base} ui-nav-rail-item--phone-hidden` : base;
 	}
 </script>
 
@@ -55,7 +60,7 @@
 		{#each groups as g (g.key)}
 			{@const Icon = g.icon}
 			{#if g.href}
-				<a href={g.href} class={itemClass(g)} aria-current={g.active ? 'page' : undefined} title={labelOverflow === 'ellipsis' ? g.label : undefined}>
+				<a href={g.href} class={itemClass(g)} aria-current={g.active ? 'page' : undefined} title={labelOverflow === 'ellipsis' ? g.label : undefined} onclick={() => onNavigate?.()}>
 					<span class="ui-nav-rail-icon"><Icon size={18} strokeWidth={isHighlighted(g) ? 2.25 : 1.75} /></span>
 					<span class="ui-nav-rail-label ui-nav-rail-label--{labelOverflow}">{g.label}</span>
 				</a>
@@ -109,10 +114,16 @@
 		flex-direction: column;
 		gap: 2px;
 		width: 100%;
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		overflow-x: hidden;
+		scrollbar-width: none;
 		margin-top: 12px;
 		padding-top: 12px;
 		border-top: 1px solid var(--rail-hover-bg);
 	}
+	.ui-nav-rail-items::-webkit-scrollbar { display: none; }
 
 	/* One target per destination: icon and label are both inside it. */
 	.ui-nav-rail-item {
@@ -188,6 +199,7 @@
 		align-items: center;
 		gap: 4px;
 		width: 100%;
+		flex-shrink: 0;
 	}
 	/* Footer controls sit on graphite, not on a surface. */
 	.ui-nav-rail-footer :global(.ui-btn--ghost) { color: var(--rail-fg); }
@@ -223,19 +235,24 @@
 			padding: 0;
 			border: none;
 			height: 100%;
+			overflow: hidden;
 		}
 		.ui-nav-rail--phone-bar .ui-nav-rail-item {
 			width: auto;
 			flex: 1;
 			min-width: 0;
+			min-height: 44px;
 			justify-content: center;
 			height: 100%;
-			gap: 2px;
-			padding: 4px 2px;
+			gap: 3px;
+			padding: 5px 4px;
+			-webkit-tap-highlight-color: transparent;
 		}
-		.ui-nav-rail--phone-bar .ui-nav-rail-icon { width: 32px; height: 24px; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-item--phone-hidden { display: none; }
+		.ui-nav-rail--phone-bar .ui-nav-rail-icon { width: 36px; height: 26px; }
 		.ui-nav-rail--phone-bar .ui-nav-rail-label {
-			font-size: 9.5px;
+			font-size: 10px;
+			line-height: 1.15;
 			max-width: 100%;
 			overflow: hidden;
 			text-overflow: ellipsis;
@@ -256,11 +273,16 @@
 		.ui-nav-rail--phone-bar .ui-nav-rail-item--active:hover::before { width: 24px; height: 3px; }
 		.ui-nav-rail--phone-bar .ui-nav-rail-footer {
 			flex-direction: row;
+			align-items: center;
+			align-self: center;
 			margin-top: 0;
-			padding: 0;
-			border: none;
+			margin-left: 2px;
+			padding: 0 4px 0 6px;
+			border-top: none;
+			border-left: 1px solid var(--rail-hover-bg);
 			width: auto;
-			gap: 2px;
+			height: 36px;
+			gap: 4px;
 			flex-shrink: 0;
 		}
 	}

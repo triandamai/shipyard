@@ -5,7 +5,7 @@
 	import FileTree from '$lib/components/FileTree.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SandboxTerminal from '$lib/components/SandboxTerminal.svelte';
-	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone, Share2, Check, Rocket } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, RotateCw, Code2, Globe, Monitor, Smartphone, Share2, Check, Rocket, PanelLeftOpen, PanelLeftClose } from '@lucide/svelte';
 	import { Tabs, Button, Spinner, EmptyState, Badge, InlineAlert } from '$lib/components/ui';
 	import type { SandboxFileEntry, SandboxInstance } from '$lib/api/types';
 
@@ -161,6 +161,7 @@
 	const SIDEBAR_MIN_WIDTH = 140;
 	const SIDEBAR_MAX_WIDTH = 480;
 	let sidebarWidth = $state(220);
+	let mobileSidebarOpen = $state(false);
 	let resizingSidebar = $state(false);
 	let sidebarResizeStartX = 0;
 	let sidebarResizeStartWidth = 0;
@@ -251,6 +252,7 @@
 	}
 
 	async function openFile(path: string) {
+		mobileSidebarOpen = false;
 		const res = await api.readSandboxFile(serviceId, path);
 		if (res.data !== null && res.data !== undefined) {
 			openPath = path;
@@ -346,6 +348,19 @@
 		</div>
 	{:else}
 		<div class="panel-tabs">
+			{#if activeTab === 'editor'}
+				<div class="mobile-tree-btn">
+					<Button
+						variant={mobileSidebarOpen ? 'secondary' : 'ghost'}
+						size="sm"
+						aria-label={mobileSidebarOpen ? 'Hide files sidebar' : 'Show files sidebar'}
+						onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
+					>
+						{#if mobileSidebarOpen}<PanelLeftClose size={14} />{:else}<PanelLeftOpen size={14} />{/if}
+						Files
+					</Button>
+				</div>
+			{/if}
 			<Tabs
 				ariaLabel="Editor panels"
 				tabs={[
@@ -365,7 +380,10 @@
 				</div>
 			{/if}
 			<div class="editor-view">
-				<aside class="sidebar" style="width: {sidebarWidth}px">
+				{#if mobileSidebarOpen}
+					<div class="editor-sidebar-scrim" role="presentation" onclick={() => (mobileSidebarOpen = false)}></div>
+				{/if}
+				<aside class="sidebar" class:mobile-open={mobileSidebarOpen} style="width: {sidebarWidth}px">
 					<FileTree {entries} selectedPath={openPath ?? undefined} onSelect={openFile} onCreateFile={createFile} createError={newFileError} />
 				</aside>
 				<div
@@ -497,10 +515,18 @@
 	.editor-layout {
 		display: grid;
 		grid-template-rows: auto 1fr auto auto;
-		height: 100vh;
+		height: 100%;
 		width: 100%;
 		max-width: 100%;
 		overflow: hidden;
+	}
+	.mobile-tree-btn {
+		display: none;
+		align-items: center;
+		padding-right: 4px;
+	}
+	.editor-sidebar-scrim {
+		display: none;
 	}
 	.editor-layout.resizing-preview,
 	.editor-layout.resizing-tree {
@@ -738,5 +764,39 @@
 		min-height: 0;
 		border-top: 1px solid var(--border);
 		overflow: hidden;
+	}
+	@media (max-width: 639px) {
+		.mobile-tree-btn {
+			display: flex;
+		}
+		.editor-view {
+			position: relative;
+		}
+		.tree-resize-handle {
+			display: none;
+		}
+		.sidebar {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			left: 0;
+			width: min(82vw, 260px) !important;
+			z-index: 20;
+			background: var(--bg-surface);
+			border-right: 1px solid var(--border);
+			box-shadow: var(--shadow-lg);
+			transform: translateX(-100%);
+			transition: transform var(--transition-normal);
+		}
+		.sidebar.mobile-open {
+			transform: translateX(0);
+		}
+		.editor-sidebar-scrim {
+			display: block;
+			position: absolute;
+			inset: 0;
+			background: rgba(0, 0, 0, 0.35);
+			z-index: 19;
+		}
 	}
 </style>

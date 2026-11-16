@@ -604,22 +604,66 @@ body:has(.docs) {
 	}
 	.mobile-nav {
 		display: block;
+		position: sticky;
+		top: 102px;
+		z-index: 15;
 		margin: 16px 0 24px;
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		background: var(--bg-surface);
+		box-shadow: 0 2px 8px rgba(20, 22, 25, 0.08);
 		font-size: 14px;
+		max-height: calc(100dvh - 116px);
+		overflow-y: auto;
 	}
 	.mobile-nav summary {
+		display: flex;
+		align-items: center;
+		gap: 10px;
 		padding: 10px 14px;
 		cursor: pointer;
 		font-weight: 500;
+		list-style: none;
+	}
+	.mobile-nav summary > span:first-child {
+		flex-shrink: 0;
+	}
+	.mobile-nav summary::-webkit-details-marker {
+		display: none;
+	}
+	.mobile-nav summary::after {
+		content: '';
+		width: 6px;
+		height: 6px;
+		border-right: 1.5px solid var(--text-muted);
+		border-bottom: 1.5px solid var(--text-muted);
+		transform: rotate(45deg);
+		transition: transform 0.15s ease;
+		flex-shrink: 0;
+	}
+	.mobile-nav[open] summary::after {
+		transform: rotate(-135deg);
+	}
+	.mobile-nav-current {
+		font-size: 12px;
+		color: var(--text-muted);
+		font-weight: 400;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		margin-left: auto;
 	}
 	.mobile-nav .side {
 		display: block;
 		position: static;
 		max-height: none;
 		padding: 4px 8px 12px;
+	}
+	.mobile-nav .side li a {
+		padding: 8px 10px;
+		min-height: 38px;
+		display: flex;
+		align-items: center;
 	}
 	.bar-inner {
 		padding: 8px 16px;
