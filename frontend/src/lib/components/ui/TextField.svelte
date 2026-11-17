@@ -49,4 +49,7 @@
 		pointer-events: none;
 	}
 	.ui-textfield--with-icon { padding-left: 32px; }
+	@media (max-width: 639px), (hover: none) and (pointer: coarse) {
+		.ui-textfield { font-size: 16px; }
+	}
 </style>

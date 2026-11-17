@@ -39,4 +39,7 @@
 	}
 	.ui-select:disabled { opacity: 0.5; cursor: not-allowed; }
 	.ui-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+	@media (max-width: 639px), (hover: none) and (pointer: coarse) {
+		.ui-select { font-size: 16px; }
+	}
 </style>

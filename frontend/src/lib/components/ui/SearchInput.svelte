@@ -55,4 +55,7 @@
 	}
 	.ui-search-input::placeholder { color: var(--text-dim); }
 	.ui-search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+	@media (max-width: 639px), (hover: none) and (pointer: coarse) {
+		.ui-search-input { font-size: 16px; }
+	}
 </style>

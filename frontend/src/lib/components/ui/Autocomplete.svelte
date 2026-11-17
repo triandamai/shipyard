@@ -181,4 +181,7 @@
 	.ui-ac-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 	.ui-ac-meta { font-size: 10.5px; color: var(--text-dim); flex-shrink: 0; }
 	.ui-ac-empty { padding: 8px 10px; font-size: 12px; color: var(--text-dim); }
+	@media (max-width: 639px), (hover: none) and (pointer: coarse) {
+		.ui-ac-input { font-size: 16px; }
+	}
 </style>

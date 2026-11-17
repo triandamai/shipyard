@@ -29,4 +29,7 @@
 	}
 	.ui-textarea::placeholder { color: var(--text-dim); }
 	.ui-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-muted); }
+	@media (max-width: 639px), (hover: none) and (pointer: coarse) {
+		.ui-textarea { font-size: 16px; }
+	}
 </style>
