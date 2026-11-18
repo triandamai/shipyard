@@ -1131,22 +1131,46 @@ pub async fn publish(
     let publish_id = Uuid::now_v7();
     let mut warnings = vec![];
 
-    // Quota: replicas per service.
-    if let Some(max) =
-        sqlx::query_scalar::<_, i32>("SELECT max_replicas FROM org_quota WHERE org_id = $1")
-            .bind(app.org_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(db_err)?
+    // Quota: replicas, CPU cores, and memory per service.
+    if let Some((max_replicas, max_cpu_cores, max_memory_mb)) =
+        sqlx::query_as::<_, (i32, i32, i32)>(
+            "SELECT max_replicas, cpu_cores, memory_mb FROM org_quota WHERE org_id = $1",
+        )
+        .bind(app.org_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(db_err)?
     {
         if let Some(s) = manifest
             .services
             .iter()
-            .find(|s| max != -1 && s.replicas as i32 > max)
+            .find(|s| max_replicas != -1 && s.replicas as i32 > max_replicas)
         {
             return Err(ApiAppError(AppError::Forbidden(format!(
-                "Plan limit reached: service '{}' asks for {} replicas, the plan allows {max}",
+                "Plan limit reached: service '{}' asks for {} replicas, the plan allows {max_replicas}",
                 s.name, s.replicas
+            ))));
+        }
+        if let Some(s) = manifest
+            .services
+            .iter()
+            .find(|s| max_cpu_cores != -1 && s.cpu.is_some_and(|c| c > max_cpu_cores as f64))
+        {
+            return Err(ApiAppError(AppError::Forbidden(format!(
+                "Plan limit reached: service '{}' asks for {} CPU cores, the plan allows {max_cpu_cores}",
+                s.name,
+                s.cpu.unwrap_or_default()
+            ))));
+        }
+        if let Some(s) = manifest
+            .services
+            .iter()
+            .find(|s| max_memory_mb != -1 && s.memory_mb.is_some_and(|m| m > max_memory_mb as i64))
+        {
+            return Err(ApiAppError(AppError::Forbidden(format!(
+                "Plan limit reached: service '{}' asks for {} MB memory, the plan allows {max_memory_mb} MB",
+                s.name,
+                s.memory_mb.unwrap_or_default()
             ))));
         }
     }
