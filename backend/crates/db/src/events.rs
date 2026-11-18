@@ -147,6 +147,8 @@ pub fn pattern_matches(pattern: &str, event_type: &str) -> bool {
 pub const EVENT_TYPES: &[&str] = &[
     "org.created",
     "org.deleted",
+    "org.plan_changed",
+    "org.quota_updated",
     "app.created",
     "app.terminated",
     "project.created",

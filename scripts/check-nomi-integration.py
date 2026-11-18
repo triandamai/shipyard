@@ -173,12 +173,21 @@ def main():
         check("a wrong key is rejected", bad[0] == 401, errmsg(bad))
 
         print("\nOrganization")
+        r = c.call("GET", "/plans")
+        check("list available plans", r[0] == 200 and isinstance(data(r), list) and len(data(r)) >= 1, errmsg(r))
         r = c.call("PUT", f"/orgs/{org}", {"name": "Shipyard check"})
         created = check("create org (201)", r[0] == 201 and (data(r) or {}).get("created") is True, errmsg(r))
         r = c.call("PUT", f"/orgs/{org}", {"name": "Shipyard check renamed"})
         check("create again is idempotent (200, same org)", r[0] == 200 and (data(r) or {}).get("created") is False, errmsg(r))
         r = c.call("GET", f"/orgs/{org}")
-        check("read org", r[0] == 200 and data(r)["org"]["external_id"] == org, errmsg(r))
+        check("read org", r[0] == 200 and data(r)["org"]["external_id"] == org and "quota" in data(r)["org"], errmsg(r))
+        r = c.call("GET", f"/orgs/{org}/quota")
+        check("read org quota and usage", r[0] == 200 and (data(r) or {}).get("external_id") == org and "max_projects" in (data(r) or {}), errmsg(r))
+        r = c.call("PUT", f"/orgs/{org}/quota", {"max_projects": 12, "max_replicas": 4, "cpu_cores": 4, "memory_mb": 4096})
+        q = data(r) or {}
+        check("update org quota limits", r[0] == 200 and q.get("max_projects") == 12 and q.get("max_replicas") == 4 and q.get("cpu_cores") == 4 and q.get("memory_mb") == 4096, errmsg(r))
+        r = c.call("PATCH", f"/orgs/{org}", {"quota": {"max_projects": 15}})
+        check("patch org quota without resending name", r[0] == 200 and ((data(r) or {}).get("quota") or {}).get("max_projects") == 15, errmsg(r))
         r = c.call("GET", f"/orgs/{uuid.uuid4()}")
         check("an org this key doesn't own is 404", r[0] == 404, errmsg(r))
         if not created:

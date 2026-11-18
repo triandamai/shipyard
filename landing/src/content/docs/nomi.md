@@ -20,7 +20,7 @@ Nomi is an agent orchestrator that builds web apps (SvelteKit, Next.js, React, V
 
 If you read nothing else, this is the whole integration in order:
 
-1. `PUT /orgs/{org}` when Nomi creates an organization.
+1. `PUT /orgs/{org}` when Nomi creates an organization; `PUT /orgs/{org}/quota` when the user upgrades their plan or quota in Nomi.
 2. `PUT /orgs/{org}/apps/{app}` with `"dev_database": true` when a project is created. Keep the two `*_url_ref` values.
 3. Server-side only: reveal `app_url_ref`, set it as `DATABASE_URL` in the dev container.
 4. On publish: zip the source, build the [manifest](#manifest), `POST .../envs/{env}/publish`. You get `202` and a `publish_id`. **The app is not live yet.**
@@ -133,22 +133,123 @@ When an organization (or a user's personal workspace) is created in Nomi, create
 
 ```json
 // request
-{ "name": "Ana's Workspace", "plan": "free", "labels": { "nomi.app/workspace": "personal" } }
+{
+  "name": "Ana's Workspace",
+  "plan": "free",
+  "sub_status": "active",
+  "quota": { "max_projects": 5, "cpu_cores": 2, "memory_mb": 4096 },
+  "labels": { "nomi.app/workspace": "personal" }
+}
 // response 201
 { "data": {
   "id": "01a1...", "external_id": "org_2Nf8sK", "name": "Ana's Workspace",
-  "slug": "ana-s-workspace-k3x9qa", "plan": "free", "created_at": "...",
+  "slug": "ana-s-workspace-k3x9qa", "plan": "free", "sub_status": "active",
+  "quota": {
+    "max_projects": 5, "max_members": 5, "max_replicas": 1,
+    "max_parallel_deployments": 1, "max_git_providers": 1, "max_orgs": 1,
+    "node_count": 1, "cpu_cores": 2, "memory_mb": 4096
+  },
+  "created_at": "...",
   "integration": "nomi",
   "labels": { "shipyard.io/integration": "nomi", "nomi.app/workspace": "personal" },
   "created": true
 } }
 ```
 
-`plan` is optional (`free` on create). Send it again to change the plan. Renames: send the new `name`. `labels` is optional; see [Labels and versions](#labels). `integration` is the integration that created the org, and the Shipyard dashboard shows it as a badge on the org.
+`plan` is optional (`free` on create). Send it again (via `PUT /orgs/{org}`, `PATCH /orgs/{org}`, `PUT /orgs/{org}/plan`, or `PUT /orgs/{org}/quota`) when a user upgrades or downgrades their plan in Nomi. `name` is required on create and optional when updating an existing org. `sub_status` (`active`, `past_due`, `canceled`, `trialing`) and `quota` overrides are optional. `labels` is optional; see [Labels and versions](#labels). `integration` is the integration that created the org, and the Shipyard dashboard shows it as a badge on the org.
+
+### PATCH /openapi/v1/integration/orgs/{org}
+
+Partial update of an existing organization (`name`, `plan`, `sub_status`, `quota`, and/or `labels`) without resending unchanged fields.
 
 ### GET /openapi/v1/integration/orgs/{org}
 
-Returns the org and its apps with their environments.
+Returns the org (including `plan`, `sub_status`, and `quota`) and its apps with their environments.
+
+## Plans and quotas {#flow-quota}
+
+When a user upgrades their plan, changes subscription status, or purchases additional capacity in Nomi, sync the change to Shipyard. Only the integration key (`ship_int_...`) that owns the organization (or a platform superadmin) can change an organization's plan or quota.
+
+### GET /openapi/v1/integration/plans
+
+Lists all enabled Shipyard plans ordered by monthly price, with each plan's default resource quotas.
+
+```json
+// response 200
+{ "data": [
+  {
+    "id": "019f...", "name": "free", "price_monthly": 0.0,
+    "cpu_cores": 1, "memory_mb": 2048, "max_replicas": 1, "node_count": 1,
+    "max_members": 5, "max_projects": 3, "max_orgs": 1,
+    "max_parallel_deployments": 1, "max_git_providers": 1
+  },
+  {
+    "id": "019f...", "name": "pro", "price_monthly": 29.0,
+    "cpu_cores": 4, "memory_mb": 8192, "max_replicas": 5, "node_count": 1,
+    "max_members": 10, "max_projects": 25, "max_orgs": 3,
+    "max_parallel_deployments": 3, "max_git_providers": 3
+  }
+] }
+```
+
+### GET /openapi/v1/integration/orgs/{org}/quota
+
+Returns the organization's current plan, subscription status (`sub_status`), active quota limits, and live usage counts (`projects_used`, `apps_used`, `services_used`, `members_used`). Also reachable at `GET /openapi/v1/integration/orgs/{org}/plan`.
+
+### PUT /openapi/v1/integration/orgs/{org}/quota
+
+Upgrades or changes the organization's plan, updates its billing status (`sub_status`), and/or overrides individual quota limits. Also accepts `PATCH` on the same path, as well as `PUT` / `PATCH` on `/openapi/v1/integration/orgs/{org}/plan`.
+
+```json
+// request: upgrade to 'pro' plan and optionally override individual quota limits (-1 = unlimited)
+{
+  "plan": "pro",
+  "sub_status": "active",
+  "max_projects": 25,
+  "max_replicas": 5,
+  "cpu_cores": 4,
+  "memory_mb": 8192
+}
+// response 200
+{ "data": {
+  "org_id": "01a1...",
+  "external_id": "org_2Nf8sK",
+  "plan": "pro",
+  "plan_id": "019f...",
+  "sub_status": "active",
+  "max_projects": 25,
+  "max_members": 10,
+  "max_replicas": 5,
+  "max_parallel_deployments": 3,
+  "max_git_providers": 3,
+  "max_orgs": 3,
+  "node_count": 1,
+  "cpu_cores": 4,
+  "memory_mb": 8192,
+  "projects_used": 2,
+  "apps_used": 1,
+  "services_used": 3,
+  "members_used": 1
+} }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `plan` | `string` (optional) | Plan name (`"free"`, `"pro"`, `"max"`, etc.) or plan UUID. Snapshots the plan's default limits into `org_quota` before applying any field overrides in the same request |
+| `sub_status` | `string` (optional) | `"active"`, `"past_due"`, `"canceled"`, or `"trialing"`. `"canceled"` blocks new publishes immediately; `"past_due"` allows a 7-day grace window |
+| `quota` | `object` (optional) | Optional wrapper object for the quota fields below (you may send quota fields either top-level or inside `"quota": { ... }`) |
+| `max_projects` | `int` (optional) | Max environments/projects in the org (`-1` = unlimited, or `>= 1`) |
+| `max_replicas` | `int` (optional) | Max replicas per service (`-1` = unlimited, or `>= 1`) |
+| `cpu_cores` | `int` (optional) | Max CPU cores per service (`-1` = unlimited, or `>= 1`) |
+| `memory_mb` | `int` (optional) | Max memory in MB per service (`-1` = unlimited, or `>= 1`) |
+| `max_parallel_deployments` | `int` (optional) | Max concurrent deployments (`-1` = unlimited, or `>= 1`) |
+| `max_members` | `int` (optional) | Max organization members (`-1` = unlimited, or `>= 1`) |
+| `max_git_providers` | `int` (optional) | Max connected Git providers (`-1` = unlimited, or `>= 1`) |
+| `max_orgs` | `int` (optional) | Max organizations (`-1` = unlimited, or `>= 1`) |
+| `node_count` | `int` (optional) | Dedicated compute node count (`-1` = unlimited, or `>= 1`) |
+
+- **Quota-only updates:** Omit `plan` to adjust individual quota limits without changing the org's assigned plan. Unspecified quota fields keep their current values.
+- **Events:** Emits `org.plan_changed` when `plan` or `sub_status` changes, and `org.quota_updated` when custom quota limits are applied.
 
 ## 2. A user creates a project and starts building {#flow-dev}
 
@@ -653,6 +754,7 @@ Reply `2xx` within 10 seconds; do slow work after replying. Anything else is ret
 | Type | When | `data` |
 |---|---|---|
 | `org.created`, `org.deleted` | Org provisioned / deleted | `name`, `plan` / `apps_terminated` |
+| `org.plan_changed`, `org.quota_updated` | Org plan, billing status, or quota updated | `plan`, `sub_status` / `plan`, `quota` |
 | `app.created`, `app.terminated` | App created / terminated | `app`, `environments` |
 | `project.created`, `project.duplicated`, `project.deleted` | Environment created / copied / removed | `app`, `environment`, `from_environment` |
 | `publish.started`, `publish.succeeded`, `publish.failed` | Publish lifecycle | `publish_id`, `urls`, `error`, `deployments` |
@@ -826,7 +928,7 @@ It exercises auth, org and app creation, dev database (refs only), secrets, webh
 | `404 NOT_FOUND` on an org that exists | Org was created in the dashboard, not via this integration | Link it with the claim endpoint ([Credentials](#credentials)) |
 | `403` on `PUT /orgs/{org}` with an org key | Only integration keys create orgs | Use the integration key |
 | `403` on reveal | Key lacks `secrets:reveal` | Use the reveal key, server-side only |
-| Publish `403` | Org billing is canceled or past due | Fix the plan; `PUT /orgs/{org}` with `plan` if you own billing |
+| Publish `403` | Org billing is canceled/past due, or service/environment exceeds `org_quota` (`max_projects`, `max_replicas`, `cpu_cores`, `memory_mb`) | Sync the plan or quota with `PUT /orgs/{org}/quota` |
 | URL shows a Shipyard 502 after publish | You opened `url` before `publish.succeeded` | Wait for the webhook |
 | `publish.failed` at `validate` with "missing secret" | Manifest references `{ "secret": ... }` that was never set | `PUT .../secrets/{name}` first |
 | Container starts then exits | Not listening on `0.0.0.0:$PORT`, or migration error | Read service logs |
@@ -863,7 +965,7 @@ Limits: source zip 200 MB (configurable), 20 services per environment, 1–20 re
 
 - [ ] Server env: `SHIPYARD_URL`, `SHIPYARD_KEY` (manage), `SHIPYARD_REVEAL_KEY` (manage + reveal, never exposed to agent tools), `SHIPYARD_WEBHOOK_SECRET`.
 - [ ] Webhook route: raw body, signature check, dedupe on event `id`, reply `2xx` fast, process async.
-- [ ] Org created in Nomi → `PUT /orgs/{org}`. Org renamed → same call. Org deleted → `DELETE /orgs/{org}` after user confirmation.
+- [ ] Org created in Nomi → `PUT /orgs/{org}`. Org renamed → `PATCH /orgs/{org}`. Plan upgraded, billing status changed, or quota adjusted in Nomi → `PUT /orgs/{org}/quota`. Org deleted → `DELETE /orgs/{org}` after user confirmation.
 - [ ] Project created → `PUT /orgs/{org}/apps/{app}` with `dev_database` when the stack uses Postgres.
 - [ ] Dev container start → reveal `app_url_ref` server-side → `DATABASE_URL` in the container env. Agent sees the name only.
 - [ ] "Database credentials" button → reveal `owner_url_ref` for that user only.

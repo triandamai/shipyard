@@ -555,6 +555,114 @@
           }
         },
         {
+          "name": "List available plans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Returns all enabled Shipyard plans and their default quotas.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/plans",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "plans"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get org plan & quota",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Returns the org's current plan, subscription status, quota limits, and live usage.",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "quota"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Upgrade org plan & update quota",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Upgrades or changes the org's plan (snapshots plan limits) and optionally overrides specific quota limits (-1 = unlimited).",
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1/integration/orgs/{{org}}/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "openapi",
+                "v1",
+                "integration",
+                "orgs",
+                "{{org}}",
+                "quota"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan\": \"pro\",\n  \"sub_status\": \"active\",\n  \"max_projects\": 25,\n  \"max_replicas\": 5,\n  \"cpu_cores\": 4,\n  \"memory_mb\": 8192\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{integrationKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Delete org (terminates every app)",
           "request": {
             "method": "DELETE",
