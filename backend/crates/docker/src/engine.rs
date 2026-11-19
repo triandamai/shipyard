@@ -137,13 +137,13 @@ pub trait DockerEngine: Send + Sync {
     /// `tag` is the full image reference (e.g. `shipyard/my-svc:abc1234`).
     /// `context_path` is the absolute path to the build context directory.
     /// `dockerfile` is the path to the Dockerfile relative to context_path.
-    /// Returns all build output lines (stdout + stderr).
+    /// Returns all build output lines (stdout + stderr) and an optional failure summary.
     async fn build_image(
         &self,
         tag: &str,
         context_path: &str,
         dockerfile: &str,
-    ) -> AppResult<Vec<String>>;
+    ) -> AppResult<DockerBuildOutput>;
 
     /// Tag an existing local image with a new repository and tag.
     async fn tag_image(
@@ -1447,7 +1447,7 @@ impl DockerEngine for BollardDockerEngine {
         tag: &str,
         context_path: &str,
         dockerfile: &str,
-    ) -> AppResult<Vec<String>> {
+    ) -> AppResult<DockerBuildOutput> {
         // Shell out to `docker build` so .dockerignore and all BuildKit
         // features are handled by the Docker CLI transparently.
         let dockerfile_abs = format!("{context_path}/{dockerfile}");
@@ -1468,7 +1468,7 @@ impl DockerEngine for BollardDockerEngine {
         let lines: Vec<String> = stderr
             .lines()
             .chain(stdout.lines())
-            .map(|l| l.to_string())
+            .map(strip_ansi_escapes)
             .collect();
 
         if !output.status.success() {
@@ -1476,26 +1476,15 @@ impl DockerEngine for BollardDockerEngine {
             let stdout_str = stdout.trim();
             tracing::error!("docker build failed. Stderr: {}\nStdout: {}", stderr_str, stdout_str);
 
-            // Collect all non-empty lines from both stdout and stderr, excluding generic "See 'docker" message
-            let filtered_lines: Vec<String> = lines
-                .iter()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty() && !l.contains("See 'docker"))
-                .collect();
-
-            // Take the last 8 lines to capture the error context (like npm / compile errors)
-            let last_lines = if filtered_lines.len() > 8 {
-                &filtered_lines[filtered_lines.len() - 8..]
-            } else {
-                &filtered_lines[..]
-            };
-
-            let summary = last_lines.join(" | ");
-            return Err(AppError::Docker(format!("docker build failed: {summary}")));
+            let summary = summarize_build_failure(&lines);
+            return Ok(DockerBuildOutput {
+                lines,
+                error: Some(format!("docker build failed: {summary}")),
+            });
         }
 
         tracing::info!(%tag, "docker build completed ({} output lines)", lines.len());
-        Ok(lines)
+        Ok(DockerBuildOutput { lines, error: None })
     }
 
     async fn tag_image(
@@ -2417,6 +2406,93 @@ fn task_value_to_detail(v: &serde_json::Value) -> TaskDetail {
     }
 }
 
+/// Strip ANSI CSI / OSC escape sequences and carriage returns from build output.
+pub fn strip_ansi_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    // CSI sequence: parameter bytes 0x30-0x3F, intermediate 0x20-0x2F, final 0x40-0x7E
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    // OSC sequence: terminated by BEL (\x07) or ST (\x1b\\)
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+        } else if ch != '\r' {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Build a concise, actionable failure summary from `docker build` output lines.
+///
+/// Filters out ANSI codes, npm update-notifier banners (`npm notice`), npm
+/// debug log path trailers, and divider lines so the actual error (such as
+/// `npm error code EBADPLATFORM` + package name + wanted/actual platform) is
+/// preserved rather than pushed out of the tail window.
+pub fn summarize_build_failure(lines: &[String]) -> String {
+    let is_noise = |t: &str| -> bool {
+        if t.is_empty() || t.contains("See 'docker") {
+            return true;
+        }
+        // Pure horizontal divider lines (e.g. BuildKit "------")
+        if t.chars().all(|c| c == '-' || c == '=') {
+            return true;
+        }
+        // Strip optional BuildKit step prefix like "#8 1.234 " before checking npm boilerplate
+        let body = if t.starts_with('#') {
+            let mut parts = t.splitn(3, ' ');
+            let _step = parts.next();
+            let _ts = parts.next();
+            parts.next().unwrap_or(t).trim_start()
+        } else {
+            t
+        };
+        body == "npm notice"
+            || body.starts_with("npm notice ")
+            || body.starts_with("npm error A complete log of this run can be found in:")
+            || body.starts_with("npm ERR! A complete log of this run can be found in:")
+    };
+
+    let filtered: Vec<String> = lines
+        .iter()
+        .map(|l| strip_ansi_escapes(l).trim().to_string())
+        .filter(|t| !is_noise(t))
+        .collect();
+
+    const MAX_LINES: usize = 15;
+    let tail = if filtered.len() > MAX_LINES {
+        &filtered[filtered.len() - MAX_LINES..]
+    } else {
+        &filtered[..]
+    };
+
+    tail.join(" | ")
+}
+
 #[cfg(test)]
 mod exec_oneshot_tests {
     use super::*;
@@ -2452,4 +2528,45 @@ mod exec_oneshot_tests {
         assert_eq!(out.stdout_bytes, raw);
         assert!(String::from_utf8(out.stdout_bytes).is_err(), "raw bytes must fail strict UTF-8 decode");
     }
+
+    #[test]
+    fn strip_ansi_escapes_removes_sgr_and_cr() {
+        let raw = "\x1b[0m\x1b[91mnpm error code EBADPLATFORM\x1b[0m\r";
+        assert_eq!(strip_ansi_escapes(raw), "npm error code EBADPLATFORM");
+        assert_eq!(strip_ansi_escapes("\x1b[0m"), "");
+    }
+
+    #[test]
+    fn summarize_build_failure_preserves_ebadplatform_and_drops_npm_notice_spam() {
+        let lines: Vec<String> = vec![
+            "\x1b[91mnpm error code EBADPLATFORM",
+            "npm error notsup Unsupported platform for @esbuild/darwin-arm64@0.25.0: wanted {\"os\":\"darwin\",\"cpu\":\"arm64\"} (current: {\"os\":\"linux\",\"cpu\":\"x64\"})",
+            "npm error notsup Valid os:   darwin",
+            "npm error notsup Actual os:  linux",
+            "npm error notsup Valid cpu:  arm64",
+            "npm error notsup Actual cpu: x64",
+            "\x1b[0m\x1b[91mnpm notice",
+            "npm notice New major version of npm available! 10.9.9 -> 12.2.3",
+            "npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.3",
+            "npm notice To update run: npm install -g npm@12.2.3",
+            "npm notice",
+            "\x1b[0m\x1b[91mnpm error A complete log of this run can be found in: /root/.npm/_logs/2026-11-19T05_41_17_133Z-debug-0.log",
+            "\x1b[0m",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let summary = summarize_build_failure(&lines);
+        assert!(summary.contains("npm error code EBADPLATFORM"), "summary={summary}");
+        assert!(
+            summary.contains("Unsupported platform for @esbuild/darwin-arm64@0.25.0"),
+            "summary={summary}"
+        );
+        assert!(summary.contains("Actual cpu: x64"), "summary={summary}");
+        assert!(!summary.contains("npm notice"), "summary={summary}");
+        assert!(!summary.contains("A complete log of this run"), "summary={summary}");
+        assert!(!summary.contains("\x1b["), "summary={summary}");
+    }
 }
+
