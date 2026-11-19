@@ -292,3 +292,13 @@ pub struct ContainerResourceStats {
     pub blkio_read_bytes: u64,
     pub blkio_write_bytes: u64,
 }
+
+/// Output of `docker build`, carrying all build output lines even when the
+/// build exits non-zero so callers can persist full build logs before failing.
+#[derive(Debug, Clone)]
+pub struct DockerBuildOutput {
+    pub lines: Vec<String>,
+    /// `Some(summary)` when `docker build` exited with a non-zero status.
+    pub error: Option<String>,
+}
+

@@ -8,6 +8,7 @@ pub mod edge_fn_detector;
 pub mod artifact;
 pub mod sandbox_probe;
 pub mod build_workspace;
+pub mod node_platform;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -3248,13 +3249,28 @@ impl DeploymentEngine {
                     }
                 };
 
-                let build_lines = self.docker.build_image(&local_tag, repo_path, &dockerfile).await?;
+                if let Some((target, report)) = crate::node_platform::sanitize_node_platform_for_build(
+                    std::path::Path::new(repo_path),
+                    &dockerfile,
+                ) {
+                    let sanitize_msg = report.summary_message(&target);
+                    tracing::info!(%deployment_id, %sanitize_msg);
+                    self.insert_log(deployment_id, Some(step_id), "info", &sanitize_msg).await;
+                    self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", &sanitize_msg).await;
+                }
 
-                for line in &build_lines {
+                let build_output = self.docker.build_image(&local_tag, repo_path, &dockerfile).await?;
+                let log_level = if build_output.error.is_some() { "warn" } else { "info" };
+
+                for line in &build_output.lines {
                     if !line.trim().is_empty() {
-                        self.insert_log(deployment_id, Some(step_id), "info", line).await;
-                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, "info", line).await;
+                        self.insert_log(deployment_id, Some(step_id), log_level, line).await;
+                        self.publish_step_log(org_id, project_id, service_id, deployment_id, step_id, log_level, line).await;
                     }
+                }
+
+                if let Some(err_msg) = build_output.error {
+                    return Err(AppError::Docker(err_msg));
                 }
 
                 // The image is built — the source checkout is no longer needed.

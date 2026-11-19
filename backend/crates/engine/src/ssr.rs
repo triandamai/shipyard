@@ -162,7 +162,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i --frozen-lockfile; \
   elif [ -f yarn.lock ]; then yarn install --frozen-lockfile; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install --frozen-lockfile; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 
@@ -204,7 +204,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
   elif [ -f yarn.lock ]; then yarn install; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 COPY . .
@@ -237,7 +237,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
   elif [ -f yarn.lock ]; then yarn install; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 COPY . .
@@ -276,7 +276,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i --prod; \
   elif [ -f yarn.lock ]; then yarn install --production; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install --production; \
-  elif [ -f package-lock.json ]; then npm ci --omit=dev; \
+  elif [ -f package-lock.json ]; then npm ci --omit=dev || (rm -f package-lock.json && npm install --omit=dev); \
   else npm install --omit=dev; \
   fi
 COPY --from=builder /app/build ./build
@@ -294,7 +294,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
   elif [ -f yarn.lock ]; then yarn install; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 COPY . .
@@ -327,7 +327,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
   elif [ -f yarn.lock ]; then yarn install; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 COPY . .
@@ -360,7 +360,7 @@ RUN \
   if [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i; \
   elif [ -f yarn.lock ]; then yarn install; \
   elif [ -f bun.lockb ]; then corepack enable bun && bun install; \
-  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f package-lock.json ]; then npm ci || (rm -f package-lock.json && npm install); \
   else npm install; \
   fi
 COPY . .
