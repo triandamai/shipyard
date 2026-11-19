@@ -67,8 +67,8 @@ pub(crate) fn longest_matching_zone<'a>(hostname: &str, zones: &'a [shipyard_clo
 ///
 /// * `upstream_override` — when `Some`, bypasses the service-derived upstream
 ///   host (use for edge functions: `"shipyard-edge-{short}"`).
-/// * `include_error_pages` — set `false` for services whose 404 responses
-///   must not be intercepted by the branded error-page middleware (edge fns).
+/// * `include_error_pages` — set `false` for services whose gateway error responses
+///   must not be intercepted by the branded error-page middleware (e.g. edge fns).
 /// * `filename_override` — when `Some(name)`, writes `{dir}/{name}.yml`
 ///   instead of the default `{dir}/{slug}.yml`. `services.slug` is only
 ///   unique per project, so callers whose service type can collide across

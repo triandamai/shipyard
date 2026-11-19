@@ -513,12 +513,15 @@ ${T_STATIC_TLS}
         prefixes:
           - "/mqtt"
 
+    # Intercepts 5xx gateway errors (502-504) when an app backend is down or starting up.
+    # 404 responses are left to the app itself; only unregistered domains (via default_server)
+    # serve the Shipyard branded 404 page.
     shipyard-error-pages:
       errors:
         status:
-          - "404"
-        service: nginx-static
-        query: "/_errors/{status}.html"
+          - "502-504"
+        service: shipyard-error-backend
+        query: "/_errors/{{status}}.html"
 TRAEFIK_CONF
 
     success "shipyard.yml rewritten — Traefik will hot-reload automatically"

@@ -206,7 +206,30 @@ async fn serve_deployment_inner(
 
     match resolve_path_in_deployment(&storage, project.id, dep.id, req_path, &opts).await {
         Some((bytes, mime, cache)) => build_file_response(bytes, &mime, cache),
-        None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
+        None => not_found_response(&storage, project.id, dep.id).await,
+    }
+}
+
+async fn not_found_response<S: StaticStorageBackend>(
+    storage: &S,
+    project_id: Uuid,
+    deployment_id: Uuid,
+) -> Response {
+    if let Ok(Some((bytes, mime))) = storage.read_file(project_id, deployment_id, "404.html").await {
+        (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate".to_string()),
+                (header::HeaderName::from_static("x-content-type-options"), "nosniff".to_string()),
+                (header::HeaderName::from_static("x-frame-options"), "SAMEORIGIN".to_string()),
+                (header::HeaderName::from_static("referrer-policy"), "strict-origin-when-cross-origin".to_string()),
+            ],
+            Body::from(bytes),
+        )
+            .into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "404 Not Found").into_response()
     }
 }
 
@@ -294,7 +317,7 @@ async fn serve_alias_inner(
 
     match resolve_path_in_deployment(&storage, project.id, dep.id, req_path, &opts).await {
         Some((bytes, mime, cache)) => build_file_response(bytes, &mime, cache),
-        None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
+        None => not_found_response(&storage, project.id, dep.id).await,
     }
 }
 
