@@ -669,7 +669,7 @@ async fn update_org_quota(
 ) -> Result<Json<ApiResponse<OrgQuotaOut>>, ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     validate_external_id(&external_id)?;
-    let org_id = org_by_external(&state.db, &caller, &external_id).await?;
+    let org_id = resolve_or_create_org(&state.db, &caller, &external_id).await?;
     let merged_quota = body.flat_quota.merged_with(body.quota.as_ref());
     apply_plan_and_quota_updates(
         &state.db,
@@ -684,6 +684,93 @@ async fn update_org_quota(
     Ok(Json(ApiResponse::ok(
         load_quota_out(&state.db, org_id).await?,
     )))
+}
+
+/// Resolve an organization by its integration `external_id`, UUID, or slug; if not found and the
+/// caller is an integration key (`ship_int_...`), auto-provision the organization on the default
+/// `'free'` plan so one-shot endpoints (like `POST /orgs/:org/static-publish`) succeed even when
+/// `PUT /orgs/:org` was not called first.
+pub async fn resolve_or_create_org(
+    db: &sqlx::PgPool,
+    caller: &IntegrationCaller,
+    external_id: &str,
+) -> Result<Uuid, ApiAppError> {
+    if let Ok(org_id) = org_by_external(db, caller, external_id).await {
+        return Ok(org_id);
+    }
+
+    let integration_id = caller.integration_id().map_err(|_| {
+        ApiAppError(AppError::NotFound(format!(
+            "Organization '{external_id}' not found"
+        )))
+    })?;
+    validate_external_id(external_id)?;
+
+    // Never collide with or claim an existing unowned org that happens to share this UUID or slug.
+    let external_uuid = Uuid::parse_str(external_id).ok();
+    let conflict: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $1 OR slug = $2)",
+    )
+    .bind(external_uuid)
+    .bind(external_id)
+    .fetch_one(db)
+    .await
+    .map_err(db_err)?;
+    if conflict {
+        return Err(ApiAppError(AppError::NotFound(format!(
+            "Organization '{external_id}' not found"
+        ))));
+    }
+
+    let (plan_id, plan_name) = plan_by_name(db, "free").await?;
+    let org_id = Uuid::now_v7();
+    let mut tx = db.begin().await.map_err(db_err)?;
+    let inserted = sqlx::query(
+        "INSERT INTO organizations (id, name, slug, plan_id, integration_id, external_id, labels, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+                 COALESCE((SELECT jsonb_build_object($7::text, name) FROM integrations WHERE id = $5), '{}'::jsonb), NOW())
+         ON CONFLICT (integration_id, external_id) WHERE integration_id IS NOT NULL DO NOTHING",
+    )
+    .bind(org_id)
+    .bind(external_id)
+    .bind(org_slug(external_id))
+    .bind(plan_id)
+    .bind(integration_id)
+    .bind(external_id)
+    .bind(labels::INTEGRATION)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?
+    .rows_affected();
+
+    if inserted == 0 {
+        tx.rollback().await.ok();
+        return org_by_external(db, caller, external_id).await;
+    }
+
+    crate::orgs::apply_plan(&mut tx, org_id, plan_id, &plan_name)
+        .await
+        .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
+
+    events::emit(
+        db,
+        Scope::org(org_id),
+        "org.created",
+        serde_json::json!({ "name": external_id, "plan": plan_name }),
+    )
+    .await;
+    caller
+        .audit(
+            db,
+            "create_org",
+            "organization",
+            Some(org_id),
+            serde_json::json!({ "external_id": external_id, "plan": plan_name, "auto_created": true }),
+        )
+        .await;
+
+    Ok(org_id)
 }
 
 /// PUT / PATCH /orgs/:external_id — create the org on first call, update its name,

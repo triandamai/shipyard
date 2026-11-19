@@ -1828,7 +1828,30 @@ async fn publish_route(
 ) -> Result<(StatusCode, Json<ApiResponse<PublishOut>>), ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     validate_slug("environment", &env)?;
-    let app = app_ref(&state.db, &caller, &org, &app_key).await?;
+    let app = match app_ref(&state.db, &caller, &org, &app_key).await {
+        Ok(app) => app,
+        Err(ApiAppError(AppError::NotFound(_))) if caller.is_integration() => {
+            validate_slug("app key", &app_key)?;
+            let org_id = super::orgs::resolve_or_create_org(&state.db, &caller, &org).await?;
+            let app_id: Uuid = sqlx::query_scalar(
+                "INSERT INTO integration_apps (id, org_id, app_key, name) VALUES ($1, $2, $3, $3)
+                 ON CONFLICT (org_id, app_key) DO UPDATE SET name = integration_apps.name
+                 RETURNING id",
+            )
+            .bind(Uuid::now_v7())
+            .bind(org_id)
+            .bind(&app_key)
+            .fetch_one(&state.db)
+            .await
+            .map_err(db_err)?;
+            AppRef {
+                org_id,
+                app_id,
+                app_key: app_key.clone(),
+            }
+        }
+        Err(e) => return Err(e),
+    };
     let max_bytes = state.config.integration.max_source_mb * 1024 * 1024;
 
     let work = PathBuf::from(format!(

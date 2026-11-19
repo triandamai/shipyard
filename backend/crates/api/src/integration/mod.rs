@@ -1107,6 +1107,8 @@ mod tests {
             (Method::GET, "/orgs/my-org/apps/my-app/envs/production"),
 
             (Method::POST, "/openapi/v1/integration/orgs/my-org/apps/my-app/envs/production/publish"),
+            (Method::POST, "/openapi/v1/integration/orgs/my-org/static-publish"),
+            (Method::POST, "/orgs/my-org/static-publish"),
             (Method::GET, "/openapi/v1/integration/plans"),
             (Method::GET, "/openapi/v1/integration/orgs/my-org"),
             (Method::PUT, "/openapi/v1/integration/orgs/my-org"),

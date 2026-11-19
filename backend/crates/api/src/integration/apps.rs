@@ -85,7 +85,7 @@ async fn upsert_app(
             "name must be 1-100 characters".into(),
         )));
     }
-    let org_id = org_by_external(&state.db, &caller, &org).await?;
+    let org_id = super::orgs::resolve_or_create_org(&state.db, &caller, &org).await?;
     let (app_id, created): (Uuid, bool) = sqlx::query_as(
         "INSERT INTO integration_apps (id, org_id, app_key, name) VALUES ($1, $2, $3, $4)
          ON CONFLICT (org_id, app_key) DO UPDATE SET name = EXCLUDED.name

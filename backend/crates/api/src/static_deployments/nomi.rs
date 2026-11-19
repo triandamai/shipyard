@@ -43,15 +43,20 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// One-shot static publish handler for Nomi and external AI agents.
-/// Autocreates the static project if missing, extracts & verifies the artifact,
-/// atomically points the requested alias (default: "production"), and returns immediate preview URLs.
+/// Autocreates the org (if missing for an integration key) and the static project if missing,
+/// extracts & verifies the artifact, atomically points the requested alias (default: "production"),
+/// and returns immediate preview URLs.
 async fn nomi_publish_static(
     caller: IntegrationCaller,
-    AxumPath(org_id): AxumPath<Uuid>,
+    AxumPath(org_identifier): AxumPath<String>,
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<NomiStaticPublishResponse>>, ApiAppError> {
     caller.require("manage")?;
+    let org_id =
+        crate::integration::orgs::resolve_or_create_org(&state.db, &caller, &org_identifier)
+            .await?;
+    crate::deployments::check_billing_for_org(&state.db, org_id).await?;
 
     let mut project_slug: Option<String> = None;
     let mut project_name: Option<String> = None;
