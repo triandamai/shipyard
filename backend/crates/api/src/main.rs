@@ -1058,7 +1058,6 @@ async fn write_shipyard_traefik_config(
     shipyard-error-pages:
       errors:
         status:
-          - "404"
           - "502-504"
         service: shipyard-error-backend
         query: "/_errors/{{status}}.html"
@@ -1074,6 +1073,23 @@ async fn write_shipyard_traefik_config(
     // with the real domain. Overwriting it would replace the domain with whatever
     // app_url is set to (which may be localhost in container-internal configs).
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        // If shipyard.yml already exists, ensure shipyard-error-pages does not intercept 404s
+        // so that existing apps can handle their own 404 responses.
+        if let Ok(existing) = tokio::fs::read_to_string(&dest).await {
+            if existing.contains(r#"- "404""#) || existing.contains("- '404'") || existing.contains("          - 404\n") {
+                let updated = existing
+                    .replace("          - \"404\"\n", "")
+                    .replace("          - '404'\n", "")
+                    .replace("          - 404\n", "");
+                if updated != existing {
+                    if let Err(e) = tokio::fs::write(&dest, updated).await {
+                        tracing::warn!("Could not update traefik error pages in '{dest}': {e}");
+                    } else {
+                        tracing::info!("Updated Traefik dynamic config to exclude 404 interception: {dest}");
+                    }
+                }
+            }
+        }
         tracing::info!("Traefik dynamic config already exists, skipping write: {dest}");
         return;
     }

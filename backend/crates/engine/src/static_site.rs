@@ -387,11 +387,12 @@ pub fn render_nginx_site_conf(
         "    error_log /var/log/nginx/shipyard/error-{service_id}.log;\n\n"
     ));
 
-    // Error pages — use shipyard.json override when set, otherwise Shipyard's branded 404.
+    // Error pages — use shipyard.json override when set, otherwise site's /404.html if present.
+    // Never force Shipyard's default 404 page on an existing app; let the app handle it.
     if let Some(p) = &config.error_pages.not_found {
         out.push_str(&format!("    error_page 404 /{p};\n"));
     } else {
-        out.push_str("    error_page 404 /_errors/404.html;\n");
+        out.push_str("    error_page 404 /404.html;\n");
     }
     if let Some(p) = &config.error_pages.server_error {
         out.push_str(&format!("    error_page 500 502 503 504 /{p};\n"));
@@ -814,6 +815,19 @@ mod tests {
         let conf = render_nginx_site_conf("svc-1", &domains, "/d/public", "/d", &custom);
         assert!(conf.contains("error_page 500 502 503 504 /oops.html;"));
         assert!(!conf.contains("/_errors/502.html"));
+    }
+
+    #[test]
+    fn site_conf_does_not_serve_branded_404_unless_specified() {
+        let domains = vec!["a.example.com".to_string()];
+        let conf = render_nginx_site_conf("svc-1", &domains, "/d/public", "/d", &DeployConfig::default());
+        assert!(conf.contains("error_page 404 /404.html;"));
+        assert!(!conf.contains("error_page 404 /_errors/404.html;"));
+
+        let mut custom = DeployConfig::default();
+        custom.error_pages.not_found = Some("custom-404.html".into());
+        let conf = render_nginx_site_conf("svc-1", &domains, "/d/public", "/d", &custom);
+        assert!(conf.contains("error_page 404 /custom-404.html;"));
     }
 
     #[test]

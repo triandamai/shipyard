@@ -744,13 +744,12 @@ ${STATIC_SITE_TLS}
         prefixes:
           - "/mqtt"
 
-    # Intercepts 404 responses from any backend and returns the Shipyard branded
-    # error page served by nginx-static. Works alongside the catch-all router so
-    # every possible path to a 404 shows the same styled page.
+    # Intercepts 5xx gateway errors (502-504) when an app backend is down or starting up.
+    # 404 responses are left to the app itself; only unregistered domains (via default_server)
+    # serve the Shipyard branded 404 page.
     shipyard-error-pages:
       errors:
         status:
-          - "404"
           - "502-504"
         service: shipyard-error-backend
         query: "/_errors/{status}.html"
