@@ -17,7 +17,7 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, FromRequest, Multipart, Path, Request, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -69,6 +69,9 @@ pub struct Manifest {
     pub database: Option<DatabaseIn>,
     #[serde(default)]
     pub domain: Option<DomainIn>,
+    /// Optional remote URL to download source archive from (e.g. S3 pre-signed URL)
+    #[serde(default)]
+    pub source_url: Option<String>,
     /// Labels for the environment's project (e.g. `{"version": "1.4.2"}`);
     /// a null value removes that label.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -206,6 +209,9 @@ pub fn validate_manifest(m: &Manifest) -> Result<(), ApiAppError> {
     }
     if m.services.len() > 20 {
         return bad("at most 20 services per environment".into());
+    }
+    if let Some(ref url) = m.source_url {
+        crate::download::validate_download_url(url).map_err(ApiAppError)?;
     }
     labels::validate(&m.labels).map_err(|e| ApiAppError(AppError::BadRequest(format!("labels: {e}"))))?;
     for s in &m.services {
@@ -1819,12 +1825,12 @@ async fn finish_publish(
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-/// POST /orgs/:org/apps/:app/envs/:env/publish (multipart: manifest, source?)
+/// POST /orgs/:org/apps/:app/envs/:env/publish (multipart: manifest, source? or JSON: manifest, source_url?)
 async fn publish_route(
     caller: IntegrationCaller,
     Path((org, app_key, env)): Path<(String, String, String)>,
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    req: Request,
 ) -> Result<(StatusCode, Json<ApiResponse<PublishOut>>), ApiAppError> {
     caller.require(SCOPE_MANAGE)?;
     validate_slug("environment", &env)?;
@@ -1863,53 +1869,111 @@ async fn publish_route(
         .await
         .map_err(|e| ApiAppError(AppError::Internal(format!("work dir: {e}"))))?;
     let result = async {
+        let (parts, body) = req.into_parts();
+        let content_type = parts
+            .headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
         let mut manifest: Option<Manifest> = None;
         let mut zip_path: Option<PathBuf> = None;
-        while let Some(mut field) = multipart
-            .next_field()
-            .await
-            .map_err(|e| ApiAppError(AppError::BadRequest(format!("multipart: {e}"))))?
-        {
-            match field.name().unwrap_or_default() {
-                "manifest" => {
-                    let text = field
-                        .text()
-                        .await
-                        .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
-                    manifest = Some(serde_json::from_str(&text).map_err(|e| {
-                        ApiAppError(AppError::BadRequest(format!("manifest: {e}")))
-                    })?);
-                }
-                "source" => {
-                    let path = work.join("source.zip");
-                    let mut file = tokio::fs::File::create(&path)
-                        .await
-                        .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
-                    let mut written: u64 = 0;
-                    while let Some(chunk) = field
-                        .chunk()
-                        .await
-                        .map_err(|e| ApiAppError(AppError::BadRequest(format!("upload: {e}"))))?
-                    {
-                        written += chunk.len() as u64;
-                        if written > max_bytes {
-                            return Err(ApiAppError(AppError::BadRequest(format!(
-                                "source is over {} MB",
-                                state.config.integration.max_source_mb
-                            ))));
-                        }
-                        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+        let mut explicit_source_url: Option<String> = None;
+
+        if content_type.contains("application/json") {
+            let max_json_bytes = 2 * 1024 * 1024;
+            let bytes = axum::body::to_bytes(body, max_json_bytes)
+                .await
+                .map_err(|e| ApiAppError(AppError::BadRequest(format!("Failed to read JSON body: {e}"))))?;
+
+            #[derive(Deserialize)]
+            struct PublishJsonPayload {
+                manifest: Option<Manifest>,
+                source_url: Option<String>,
+                artifact_url: Option<String>,
+                download_url: Option<String>,
+                #[serde(flatten)]
+                direct_manifest: Option<Manifest>,
+            }
+
+            let payload: PublishJsonPayload = serde_json::from_slice(&bytes)
+                .map_err(|e| ApiAppError(AppError::BadRequest(format!("Invalid JSON manifest: {e}"))))?;
+
+            explicit_source_url = payload.source_url.or(payload.artifact_url).or(payload.download_url);
+            manifest = payload.manifest.or(payload.direct_manifest);
+        } else {
+            let req = Request::from_parts(parts, body);
+            let mut multipart = Multipart::from_request(req, &state)
+                .await
+                .map_err(|e| ApiAppError(AppError::BadRequest(format!("multipart: {e}"))))?;
+
+            while let Some(mut field) = multipart
+                .next_field()
+                .await
+                .map_err(|e| ApiAppError(AppError::BadRequest(format!("multipart: {e}"))))?
+            {
+                match field.name().unwrap_or_default() {
+                    "manifest" => {
+                        let text = field
+                            .text()
+                            .await
+                            .map_err(|e| ApiAppError(AppError::BadRequest(e.to_string())))?;
+                        manifest = Some(serde_json::from_str(&text).map_err(|e| {
+                            ApiAppError(AppError::BadRequest(format!("manifest: {e}")))
+                        })?);
+                    }
+                    "source" => {
+                        let path = work.join("source.zip");
+                        let mut file = tokio::fs::File::create(&path)
                             .await
                             .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+                        let mut written: u64 = 0;
+                        while let Some(chunk) = field
+                            .chunk()
+                            .await
+                            .map_err(|e| ApiAppError(AppError::BadRequest(format!("upload: {e}"))))?
+                        {
+                            written += chunk.len() as u64;
+                            if written > max_bytes {
+                                return Err(ApiAppError(AppError::BadRequest(format!(
+                                    "source is over {} MB",
+                                    state.config.integration.max_source_mb
+                                ))));
+                            }
+                            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                                .await
+                                .map_err(|e| ApiAppError(AppError::Internal(e.to_string())))?;
+                        }
+                        zip_path = Some(path);
                     }
-                    zip_path = Some(path);
+                    "source_url" | "artifact_url" | "download_url" => {
+                        if let Ok(val) = field.text().await {
+                            let trimmed = val.trim();
+                            if !trimmed.is_empty() {
+                                explicit_source_url = Some(trimmed.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
+
         let manifest = manifest
             .ok_or_else(|| ApiAppError(AppError::BadRequest("missing 'manifest' field".into())))?;
         validate_manifest(&manifest)?;
+
+        if zip_path.is_none() {
+            let download_url = explicit_source_url.or_else(|| manifest.source_url.clone());
+            if let Some(url) = download_url {
+                let path = work.join("source.zip");
+                crate::download::download_url_to_file(&state.http_client, &url, &path, max_bytes)
+                    .await
+                    .map_err(ApiAppError)?;
+                zip_path = Some(path);
+            }
+        }
         let source = match zip_path {
             Some(zip) => {
                 let dest = work.join("src");
@@ -2287,6 +2351,27 @@ mod tests {
             let m: Manifest = serde_json::from_value(bad).unwrap();
             assert!(validate_manifest(&m).is_err());
         }
+    }
+
+    #[test]
+    fn source_url_manifest_validation() {
+        let valid = serde_json::json!({
+            "services": [{ "name": "web", "port": 3000 }],
+            "source_url": "https://s3.amazonaws.com/my-bucket/source.zip?X-Amz-Signature=123"
+        });
+        let m: Manifest = serde_json::from_value(valid).unwrap();
+        assert!(validate_manifest(&m).is_ok());
+        assert_eq!(
+            m.source_url.as_deref(),
+            Some("https://s3.amazonaws.com/my-bucket/source.zip?X-Amz-Signature=123")
+        );
+
+        let invalid = serde_json::json!({
+            "services": [{ "name": "web", "port": 3000 }],
+            "source_url": "ftp://example.com/source.zip"
+        });
+        let m: Manifest = serde_json::from_value(invalid).unwrap();
+        assert!(validate_manifest(&m).is_err());
     }
 
     #[test]
