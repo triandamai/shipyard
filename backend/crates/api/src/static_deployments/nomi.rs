@@ -1,8 +1,8 @@
 use axum::{
-    extract::{Multipart, Path as AxumPath, State},
+    extract::{DefaultBodyLimit, FromRequest, Multipart, Path as AxumPath, Request, State},
     Json, Router, routing::post,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shipyard_common::error::AppError;
 use shipyard_common::types::ApiResponse;
 use uuid::Uuid;
@@ -19,6 +19,27 @@ use super::storage::{LocalStorage, StaticStorageBackend};
 use super::traefik::sync_static_project_traefik_config;
 use super::upload::ZipExtractor;
 use super::verify::{verify_extracted_deployment, VerificationConfig};
+
+#[derive(Debug, Deserialize)]
+pub struct NomiStaticPublishJson {
+    pub project_slug: Option<String>,
+    pub app_key: Option<String>,
+    pub slug: Option<String>,
+    pub name: Option<String>,
+    pub project_name: Option<String>,
+    pub alias: Option<String>,
+    pub env: Option<String>,
+    pub environment: Option<String>,
+    pub domain: Option<String>,
+    pub hostname: Option<String>,
+    pub custom_domain: Option<String>,
+    pub spa_fallback: Option<bool>,
+    pub entry_file: Option<String>,
+    pub artifact_url: Option<String>,
+    pub source_url: Option<String>,
+    pub download_url: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct NomiStaticPublishResponse {
@@ -39,24 +60,35 @@ pub struct NomiStaticPublishResponse {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/orgs/:org_id/static-publish", post(nomi_publish_static))
+        .route(
+            "/orgs/:org_id/static-publish",
+            post(nomi_publish_static).layer(DefaultBodyLimit::disable()),
+        )
 }
 
 /// One-shot static publish handler for Nomi and external AI agents.
 /// Autocreates the org (if missing for an integration key) and the static project if missing,
 /// extracts & verifies the artifact, atomically points the requested alias (default: "production"),
-/// and returns immediate preview URLs.
+/// and returns immediate preview URLs. Supports direct multipart artifact upload or remote artifact_url.
 async fn nomi_publish_static(
     caller: IntegrationCaller,
     AxumPath(org_identifier): AxumPath<String>,
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    req: Request,
 ) -> Result<Json<ApiResponse<NomiStaticPublishResponse>>, ApiAppError> {
     caller.require("manage")?;
     let org_id =
         crate::integration::orgs::resolve_or_create_org(&state.db, &caller, &org_identifier)
             .await?;
     crate::deployments::check_billing_for_org(&state.db, org_id).await?;
+
+    let (parts, body) = req.into_parts();
+    let content_type = parts
+        .headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     let mut project_slug: Option<String> = None;
     let mut project_name: Option<String> = None;
@@ -65,75 +97,115 @@ async fn nomi_publish_static(
     let mut spa_fallback = true;
     let mut entry_file = "index.html".to_string();
     let mut zip_bytes: Option<Vec<u8>> = None;
+    let mut artifact_url: Option<String> = None;
     let mut metadata = serde_json::json!({ "source": "nomi" });
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ApiAppError(AppError::BadRequest(format!("Multipart read error: {e}"))))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "artifact" | "file" | "archive" => {
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| ApiAppError(AppError::BadRequest(format!("Failed to read archive bytes: {e}"))))?;
-                zip_bytes = Some(data.to_vec());
-            }
-            "app_key" | "project_slug" | "slug" => {
-                if let Ok(val) = field.text().await {
-                    let trimmed = val.trim();
-                    if !trimmed.is_empty() {
-                        project_slug = Some(trimmed.to_string());
+    if content_type.contains("application/json") {
+        let max_json_bytes = 2 * 1024 * 1024;
+        let bytes = axum::body::to_bytes(body, max_json_bytes)
+            .await
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("Failed to read JSON body: {e}"))))?;
+        let json: NomiStaticPublishJson = serde_json::from_slice(&bytes)
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("Invalid JSON body: {e}"))))?;
+
+        project_slug = json.project_slug.or(json.app_key).or(json.slug);
+        project_name = json.name.or(json.project_name);
+        if let Some(a) = json.alias.or(json.env).or(json.environment) {
+            alias = Some(a);
+        }
+        domain_input = json.domain.or(json.hostname).or(json.custom_domain);
+        if let Some(spa) = json.spa_fallback {
+            spa_fallback = spa;
+        }
+        if let Some(entry) = json.entry_file {
+            entry_file = entry;
+        }
+        artifact_url = json.artifact_url.or(json.source_url).or(json.download_url);
+        if let Some(meta) = json.metadata {
+            metadata = meta;
+        }
+    } else {
+        let req = Request::from_parts(parts, body);
+        let mut multipart = Multipart::from_request(req, &state)
+            .await
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("Multipart read error: {e}"))))?;
+
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| ApiAppError(AppError::BadRequest(format!("Multipart read error: {e}"))))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+            match name.as_str() {
+                "artifact" | "file" | "archive" => {
+                    let data = field
+                        .bytes()
+                        .await
+                        .map_err(|e| ApiAppError(AppError::BadRequest(format!("Failed to read archive bytes: {e}"))))?;
+                    zip_bytes = Some(data.to_vec());
+                }
+                "artifact_url" | "source_url" | "download_url" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            artifact_url = Some(trimmed.to_string());
+                        }
                     }
                 }
-            }
-            "name" | "project_name" => {
-                if let Ok(val) = field.text().await {
-                    let trimmed = val.trim();
-                    if !trimmed.is_empty() {
-                        project_name = Some(trimmed.to_string());
+                "app_key" | "project_slug" | "slug" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            project_slug = Some(trimmed.to_string());
+                        }
                     }
                 }
-            }
-            "alias" | "env" | "environment" => {
-                if let Ok(val) = field.text().await {
-                    let trimmed = val.trim();
-                    if !trimmed.is_empty() {
-                        alias = Some(trimmed.to_string());
+                "name" | "project_name" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            project_name = Some(trimmed.to_string());
+                        }
                     }
                 }
-            }
-            "domain" | "hostname" | "custom_domain" => {
-                if let Ok(val) = field.text().await {
-                    let trimmed = val.trim();
-                    if !trimmed.is_empty() {
-                        domain_input = Some(trimmed.to_string());
+                "alias" | "env" | "environment" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            alias = Some(trimmed.to_string());
+                        }
                     }
                 }
-            }
-            "spa_fallback" => {
-                if let Ok(val) = field.text().await {
-                    spa_fallback = val.trim().eq_ignore_ascii_case("true") || val.trim() == "1";
-                }
-            }
-            "entry_file" => {
-                if let Ok(val) = field.text().await {
-                    let trimmed = val.trim();
-                    if !trimmed.is_empty() {
-                        entry_file = trimmed.to_string();
+                "domain" | "hostname" | "custom_domain" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            domain_input = Some(trimmed.to_string());
+                        }
                     }
                 }
-            }
-            "metadata" => {
-                if let Ok(val) = field.text().await {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) {
-                        metadata = parsed;
+                "spa_fallback" => {
+                    if let Ok(val) = field.text().await {
+                        spa_fallback = val.trim().eq_ignore_ascii_case("true") || val.trim() == "1";
                     }
                 }
+                "entry_file" => {
+                    if let Ok(val) = field.text().await {
+                        let trimmed = val.trim();
+                        if !trimmed.is_empty() {
+                            entry_file = trimmed.to_string();
+                        }
+                    }
+                }
+                "metadata" => {
+                    if let Ok(val) = field.text().await {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&val) {
+                            metadata = parsed;
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -146,9 +218,21 @@ async fn nomi_publish_static(
         validate_alias_name(a).map_err(ApiAppError)?;
     }
 
-    let zip_bytes = zip_bytes.ok_or_else(|| {
-        ApiAppError(AppError::BadRequest("No 'artifact' or 'file' archive field found in upload".into()))
-    })?;
+    let zip_bytes = match zip_bytes {
+        Some(b) => b,
+        None => {
+            if let Some(ref url) = artifact_url {
+                let max_bytes = state.config.integration.max_source_mb * 1024 * 1024;
+                crate::download::download_url_to_bytes(&state.http_client, url, max_bytes)
+                    .await
+                    .map_err(ApiAppError)?
+            } else {
+                return Err(ApiAppError(AppError::BadRequest(
+                    "No 'artifact' upload or 'artifact_url' provided".into(),
+                )));
+            }
+        }
+    };
 
     let name = project_name.unwrap_or_else(|| slug.clone());
 
@@ -323,4 +407,34 @@ async fn nomi_publish_static(
         file_count: extract_result.file_count,
         checksum_sha256: extract_result.checksum_sha256,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nomi_static_publish_json_deserialization() {
+        let payload = serde_json::json!({
+            "project_slug": "my-app",
+            "artifact_url": "https://s3.amazonaws.com/bucket/dist.zip?sig=123",
+            "alias": "staging",
+            "domain": "app.example.com",
+            "spa_fallback": false,
+            "entry_file": "app.html",
+            "metadata": { "commit": "abc1234" }
+        });
+
+        let parsed: NomiStaticPublishJson = serde_json::from_value(payload).unwrap();
+        assert_eq!(parsed.project_slug.as_deref(), Some("my-app"));
+        assert_eq!(
+            parsed.artifact_url.as_deref(),
+            Some("https://s3.amazonaws.com/bucket/dist.zip?sig=123")
+        );
+        assert_eq!(parsed.alias.as_deref(), Some("staging"));
+        assert_eq!(parsed.domain.as_deref(), Some("app.example.com"));
+        assert_eq!(parsed.spa_fallback, Some(false));
+        assert_eq!(parsed.entry_file.as_deref(), Some("app.html"));
+        assert_eq!(parsed.metadata.unwrap()["commit"], "abc1234");
+    }
 }

@@ -13,7 +13,7 @@ Nomi is an agent orchestrator that builds web apps (SvelteKit, Next.js, React, V
 |---|---|
 | Base URL | `https://<shipyard>/openapi/v1/integration` (also reachable as `/integration`, `/integrations` and the site root; use the first) |
 | Auth | `Authorization: Bearer ship_int_<64 hex>` (see [Credentials](#credentials)) |
-| Content type | `application/json`, except publish (`multipart/form-data`) |
+| Content type | `application/json` or `multipart/form-data` (publish endpoints support both JSON with `source_url` / `artifact_url` and multipart file upload) |
 | Response envelope | `{ "data": ..., "error": null }` or `{ "data": null, "error": { "code", "message" } }` |
 
 ## Quick start for the coding agent {#quickstart}
@@ -290,18 +290,40 @@ When the user clicks publish, send the source and a manifest. Shipyard builds it
 
 ### POST /openapi/v1/integration/orgs/{org}/apps/{app}/envs/{env}/publish
 
-`multipart/form-data` with two parts:
+Accepts either `multipart/form-data` (uploading the zip directly) or `application/json` (referencing an S3 presigned or downloadable URL via `source_url`). For larger codebases or automated pipelines, using `source_url` is recommended to bypass Cloudflare and proxy upload body limits.
+
+#### Option 1: Direct upload via `multipart/form-data`
 
 | Part | Content |
 |---|---|
 | `manifest` | JSON, below |
-| `source` | Zip of the project (optional: omit it to re-apply a changed manifest to the last upload) |
+| `source` | Zip file of the project (optional: omit it to re-apply a changed manifest, or provide `source_url`) |
+| `source_url` | (Optional) Presigned HTTP(S) URL to the zip archive (`artifact_url` and `download_url` are also accepted) |
 
 ```bash
 curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/apps/todo/envs/production/publish" \
   -H "Authorization: Bearer $SHIPYARD_KEY" \
   -F "manifest=<manifest.json" -F "source=@todo.zip"
 ```
+
+#### Option 2: Pre-signed S3 URL via `application/json` (Recommended for large payloads)
+
+Upload your archive to S3 (or any object storage), generate a pre-signed GET URL, and send a standard JSON request. Shipyard streams the download directly:
+
+```bash
+curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/apps/todo/envs/production/publish" \
+  -H "Authorization: Bearer $SHIPYARD_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_url": "https://my-bucket.s3.amazonaws.com/sources/todo.zip?AWSAccessKeyId=...",
+    "manifest": {
+      "services": [{ "name": "web", "kind": "web", "port": 3000 }],
+      "domain": { "hostname": "todo.nomi.app" }
+    }
+  }'
+```
+
+*(Note: `source_url` can also be specified directly inside the `manifest` object).*
 
 Response `202`:
 
@@ -358,6 +380,7 @@ A publish is refused with `403` if the org's billing state doesn't allow deploys
 | `services[].env` | The service's complete env. Keys not listed are removed |
 | `services[].volumes` | Paths whose data survives deploys |
 | `database` | `{ "engine": "postgres" }` gives the environment its own Postgres with a persistent volume |
+| `source_url` | Optional downloadable HTTP(S) URL (e.g. S3 presigned URL) to the zip archive. When provided, Shipyard streams and unpacks this zip archive directly |
 | `domain.hostname` | **Recommended.** The environment's full hostname, e.g. `todo.nomi.app` (lowercased, trailing dot dropped). Use a different one per environment (`todo-staging.nomi.app`). It is used exactly: no suffix is added, and if another app already uses it the publish fails with `409`. Sending a different hostname on a later publish moves the environment to it (new name attached first, old one removed), so changing your domain is just publishing with the new one. Its DNS must point at Shipyard. Can't be combined with `domain.subdomain` |
 | `domain.subdomain` | Legacy, needs `APPS_BASE_DOMAIN`. First label under the apps base domain. Default `<app>` (production) or `<app>-<env>`. If the name is already used by another environment, a non-production environment gets `<subdomain>-<env>` instead (`todo` → `todo-staging`) |
 | `domain.service` | Which web service gets the URL. Default: the first web service |
@@ -907,7 +930,49 @@ Shipyard detects SvelteKit, Next.js, Nuxt, Angular and TanStack Start when there
 | Node API + worker | two services, one `web`, one `worker` | Worker has no URL or port |
 
 `kind: "static"` builds the site in Docker and serves the output with nginx; the port is detected, so omit `port`.
-Alternatively, if your agent or CI already runs the build, call `POST /orgs/{org}/static-publish` to upload the prebuilt zip directly: it skips Docker entirely, deploys in milliseconds, and provides immutable previews. A static site has no server env at runtime: bake public config at build time.
+
+### Static site publish: POST /openapi/v1/integration/orgs/{org}/static-publish
+
+Alternatively, if your agent or CI already runs the build, call `POST /orgs/{org}/static-publish` to deploy the prebuilt zip directly. It skips Docker entirely, deploys in milliseconds, and provides immutable previews. A static site has no server env at runtime: bake public config at build time.
+
+You can supply the prebuilt zip via either direct file upload (`multipart/form-data`) or a presigned S3 download link (`application/json` or `multipart/form-data`). For larger builds or serverless workers, using a presigned `artifact_url` is recommended to bypass proxy upload limits.
+
+#### Method 1: S3 presigned download URL (`application/json`)
+
+```bash
+curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/static-publish" \
+  -H "Authorization: Bearer $SHIPYARD_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app": "docs-site",
+    "environment": "production",
+    "artifact_url": "https://my-bucket.s3.amazonaws.com/artifacts/build.zip?AWSAccessKeyId=..."
+  }'
+```
+
+*(Note: `source_url` or `download_url` are also accepted).*
+
+#### Method 2: Direct file upload (`multipart/form-data`)
+
+```bash
+curl -X POST "$SHIPYARD_URL/orgs/org_2Nf8sK/static-publish" \
+  -H "Authorization: Bearer $SHIPYARD_KEY" \
+  -F "app=docs-site" \
+  -F "environment=production" \
+  -F "file=@build.zip"
+```
+
+Response `200`:
+```json
+{
+  "data": {
+    "project_id": "01a1...",
+    "deployment_id": "01a1...",
+    "preview_url": "https://docs-site-prod.static.example.dev",
+    "status": "ready"
+  }
+}
+```
 
 ## Verifying a Shipyard {#verify}
 
@@ -933,6 +998,7 @@ It exercises auth, org and app creation, dev database (refs only), secrets, webh
 | `publish.failed` at `validate` with "missing secret" | Manifest references `{ "secret": ... }` that was never set | `PUT .../secrets/{name}` first |
 | Container starts then exits | Not listening on `0.0.0.0:$PORT`, or migration error | Read service logs |
 | Webhook signature mismatch | Body was parsed before verifying | Verify against the raw bytes |
+| `413 PAYLOAD_TOO_LARGE` | Direct zip upload exceeded reverse proxy or Cloudflare limits | Upload bundle to S3 and pass presigned download URL via `source_url` (publish) or `artifact_url` (static-publish) |
 
 ## Not available yet {#not-available}
 

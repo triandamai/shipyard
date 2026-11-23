@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Multipart, Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -109,7 +109,12 @@ pub fn routes() -> Router<AppState> {
         .route("/static/orgs/:org_id/projects", post(create_project).get(list_projects))
         .route("/static/projects/:project_id", get(get_project).put(update_project).delete(delete_project))
         // Deployments
-        .route("/static/projects/:project_id/deployments", post(upload_deployment).get(list_deployments))
+        .route(
+            "/static/projects/:project_id/deployments",
+            post(upload_deployment)
+                .layer(DefaultBodyLimit::disable())
+                .get(list_deployments),
+        )
         .route("/static/deployments/:deployment_id", get(get_deployment).delete(delete_deployment))
         .route("/static/deployments/:deployment_id/events", get(list_deployment_events))
         // Aliases
@@ -299,6 +304,7 @@ async fn upload_deployment(
 
     let deployment_id = Uuid::now_v7();
     let mut zip_bytes: Option<Vec<u8>> = None;
+    let mut artifact_url: Option<String> = None;
     let mut entry_file = "index.html".to_string();
     let mut is_private = false;
     let mut assign_alias: Option<String> = None;
@@ -317,6 +323,14 @@ async fn upload_deployment(
                     .await
                     .map_err(|e| ApiAppError(AppError::BadRequest(format!("Failed to read archive bytes: {e}"))))?;
                 zip_bytes = Some(data.to_vec());
+            }
+            "artifact_url" | "source_url" | "download_url" => {
+                if let Ok(val) = field.text().await {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        artifact_url = Some(trimmed.to_string());
+                    }
+                }
             }
             "entry_file" => {
                 if let Ok(val) = field.text().await {
@@ -351,9 +365,21 @@ async fn upload_deployment(
         }
     }
 
-    let zip_bytes = zip_bytes.ok_or_else(|| {
-        ApiAppError(AppError::BadRequest("No 'artifact' or 'file' archive field found in upload".into()))
-    })?;
+    let zip_bytes = match zip_bytes {
+        Some(b) => b,
+        None => {
+            if let Some(ref url) = artifact_url {
+                let max_bytes = state.config.integration.max_source_mb * 1024 * 1024;
+                crate::download::download_url_to_bytes(&state.http_client, url, max_bytes)
+                    .await
+                    .map_err(ApiAppError)?
+            } else {
+                return Err(ApiAppError(AppError::BadRequest(
+                    "No 'artifact' upload or 'artifact_url' provided".into(),
+                )));
+            }
+        }
+    };
 
     let preview_token = if is_private {
         Some(hex::encode(Sha256::digest(Uuid::now_v7().as_bytes())))
